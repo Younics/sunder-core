@@ -17,6 +17,6 @@
     <Project Path="src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />
   </Folder>
   <Folder Name="/Registry Contracts/">
-    <Project Path="src/Registry/Sunder.Registry.Shared/Sunder.Registry.Shared.csproj" />
+    <Project Path="src/Sunder.Registry.Shared/Sunder.Registry.Shared.csproj" />
   </Folder>
 </Solution>

@@ -12,7 +12,7 @@ This repository contains the public Sunder core projects: the desktop app, local
 - `src/Sdk/Sunder.Package.Build` -- MSBuild targets/tasks for generated manifests, `sunder-dev`, and `.sunderpkg` archives.
 - `src/Sdk/Sunder.Package.Templates` -- `dotnet new sunder-package` template.
 - `src/Sunder.PackageManagement` -- shared package archive inspection and validation used by core and private Registry code.
-- `src/Registry/Sunder.Registry.Shared` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
+- `src/Sunder.Registry.Shared` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
 
 ## Boundaries
 

@@ -10,7 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
-    <ProjectReference Include="..\..\Registry\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
+    <ProjectReference Include="..\..\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
     <ProjectReference Include="..\..\Sunder.PackageManagement\Sunder.PackageManagement.csproj" />
   </ItemGroup>
 

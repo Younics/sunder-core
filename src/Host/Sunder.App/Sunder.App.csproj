@@ -31,7 +31,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
-    <ProjectReference Include="..\..\Registry\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
+    <ProjectReference Include="..\..\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>

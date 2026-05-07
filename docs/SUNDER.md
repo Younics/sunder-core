@@ -17,7 +17,7 @@ Primary Sunder Core projects:
 | Build tooling | `src/Sdk/Sunder.Package.Build` | MSBuild targets/tasks for manifests, dev output, and `.sunderpkg` archives |
 | Templates | `src/Sdk/Sunder.Package.Templates` | `dotnet new sunder-package` template |
 | Package management | `src/Sunder.PackageManagement` | Shared `.sunderpkg` archive inspection and validation |
-| Registry contracts | `src/Registry/Sunder.Registry.Shared` | Public DTOs and API contracts used by CLI/app/web/server |
+| Registry contracts | `src/Sunder.Registry.Shared` | Public DTOs and API contracts used by CLI/app/web/server |
 
 First-party Agent packages live in the separate public `Younics/sunder-agent-package` repository. Registry implementation projects live in the separate private `Younics/sunder-registry` repository.
 
