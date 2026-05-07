@@ -6,10 +6,26 @@
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificBuildOutput>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <NoWarn>$(NoWarn);NU5100</NoWarn>
+    <Version>0.8.0</Version>
+    <Title>Sunder.Package.Build</Title>
+    <Authors>Younics</Authors>
+    <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
+    <PackageIcon>icon.png</PackageIcon>
+    <RepositoryUrl>https://github.com/Younics/sunder-core</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="build\Sunder.Package.Build.targets" Pack="true" PackagePath="buildTransitive\Sunder.Package.Build.targets" />
+    <None Include="build\Sunder.Package.Build.targets"
+          Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.targets" />
+    
+    <None Include="icon.png" Pack="true" PackagePath="" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="LICENSE" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <ItemGroup>
