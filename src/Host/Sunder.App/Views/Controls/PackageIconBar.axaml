@@ -1,0 +1,94 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.PackageIconBar"
+             x:DataType="vm:PackageIconBarViewModel"
+             mc:Ignorable="d">
+  <Border x:Name="BarRoot"
+          Classes="package-bar-host"
+          Classes.horizontal="{Binding IsHorizontal}"
+          Classes.vertical="{Binding IsVertical}"
+          ClipToBounds="False">
+    <Grid>
+      <StackPanel IsVisible="{Binding IsVertical}"
+                  Classes="package-bar-vertical-content"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Stretch"
+                  Spacing="10">
+        <ItemsControl ItemsSource="{Binding VisibleItems}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Orientation="Vertical" Spacing="10" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:ShellItemViewModel">
+              <Border Classes="package-bar-item-host"
+                      Classes.drag-preview="{Binding IsDragPreview}"
+                      Classes.horizontal="{Binding IsHorizontalBar}"
+                      Classes.vertical="{Binding IsVerticalBar}"
+                      Tag="{Binding Id}"
+                      ToolTip.Tip="{Binding ToolTipText}">
+                <Grid IsHitTestVisible="False">
+                  <Border Classes="package-bar-button-surface"
+                          Classes.drag-preview="{Binding IsDragPreview}"
+                          Classes.selected="{Binding IsSelected}">
+                    <TextBlock Classes="glyph-text" Text="{Binding Glyph}" />
+                  </Border>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <Button IsVisible="{Binding HasOverflow}"
+                Classes="rail-button package-bar-button overflow-button"
+                Click="OverflowButton_OnClick"
+                ToolTip.Tip="More package views">
+          <TextBlock Classes="glyph-text" Text="⋯" />
+        </Button>
+      </StackPanel>
+
+      <StackPanel IsVisible="{Binding IsHorizontal}"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  Orientation="Horizontal"
+                  Spacing="10">
+        <ItemsControl ItemsSource="{Binding VisibleItems}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Orientation="Horizontal" Spacing="10" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:ShellItemViewModel">
+              <Border Classes="package-bar-item-host"
+                      Classes.drag-preview="{Binding IsDragPreview}"
+                      Classes.horizontal="{Binding IsHorizontalBar}"
+                      Classes.vertical="{Binding IsVerticalBar}"
+                      Tag="{Binding Id}"
+                      ToolTip.Tip="{Binding ToolTipText}">
+                <Grid IsHitTestVisible="False">
+                  <Border Classes="package-bar-button-surface top-bar-surface"
+                          Classes.drag-preview="{Binding IsDragPreview}"
+                          Classes.selected="{Binding IsSelected}">
+                    <TextBlock Classes="glyph-text" Text="{Binding Glyph}" />
+                  </Border>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <Button IsVisible="{Binding HasOverflow}"
+                Classes="rail-button package-bar-button top-bar-button overflow-button"
+                Click="OverflowButton_OnClick"
+                ToolTip.Tip="More package views">
+          <TextBlock Classes="glyph-text" Text="⋯" />
+        </Button>
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

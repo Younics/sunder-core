@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="build\Sunder.Package.Build.targets" Pack="true" PackagePath="buildTransitive\Sunder.Package.Build.targets" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Framework" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" PrivateAssets="all" />
+    <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="_AddSunderPackageBuildTaskFiles">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Sdk.dll" PackagePath="tasks\$(TargetFramework)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

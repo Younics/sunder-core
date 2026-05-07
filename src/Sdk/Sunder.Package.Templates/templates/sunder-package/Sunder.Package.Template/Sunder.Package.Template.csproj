@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Sunder.Sdk" Version="0.1.0-SUNDER" />
+    <PackageReference Include="Sunder.Package.Build" Version="0.1.0-SUNDER" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj"
+                      Condition="Exists('..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
+  </ItemGroup>
+
+  <Import Project="HostContracts.PackageReferences.props"
+          Condition="Exists('HostContracts.PackageReferences.props')" />
+
+</Project>

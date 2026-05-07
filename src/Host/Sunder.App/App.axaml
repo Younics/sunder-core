@@ -1,0 +1,22 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Sunder.App.App"
+             RequestedThemeVariant="Dark">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://Sunder.Sdk/Themes/SunderThemeResources.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+      <x:Double x:Key="Sunder.Layout.RailWidth">72</x:Double>
+      <x:Double x:Key="Sunder.Layout.SideRailWidth">60</x:Double>
+      <x:Double x:Key="Sunder.Layout.ToolbarHeight">56</x:Double>
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    <StyleInclude Source="avares://Sunder.Sdk/Themes/SunderPackageStyles.axaml" />
+    <StyleInclude Source="avares://Sunder.App/Styles/SunderShellStyles.axaml" />
+  </Application.Styles>
+</Application>

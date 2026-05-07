@@ -1,0 +1,119 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Images\app.ico</ApplicationIcon>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Models\" />
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.AvaloniaEdit" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="LiveMarkdown.Avalonia" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Svg.Controls.Skia.Avalonia" />
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
+    <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\Registry\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="BundleRuntimeHostForBuild"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <BundledRuntimeHostProject>$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj</BundledRuntimeHostProject>
+      <BundledRuntimeHostSourceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host\bin\$(Configuration)\$(TargetFramework)\'))</BundledRuntimeHostSourceDir>
+      <BundledRuntimeHostOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'RuntimeHost'))\</BundledRuntimeHostOutputDir>
+    </PropertyGroup>
+
+    <MSBuild Projects="$(BundledRuntimeHostProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework)"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath;PublishDir;RuntimeIdentifier;SelfContained" />
+
+    <ItemGroup>
+      <_BundledRuntimeHostFiles Include="$(BundledRuntimeHostSourceDir)**\*"
+                                Condition="Exists('$(BundledRuntimeHostSourceDir)')" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(BundledRuntimeHostOutputDir)"
+             Condition="Exists('$(BundledRuntimeHostSourceDir)')" />
+
+    <Copy SourceFiles="@(_BundledRuntimeHostFiles)"
+          DestinationFiles="@(_BundledRuntimeHostFiles->'$(BundledRuntimeHostOutputDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_BundledRuntimeHostFiles)' != ''" />
+  </Target>
+
+  <Target Name="BundleCliForBuild"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <BundledCliProject>$(MSBuildProjectDirectory)\..\Sunder.Cli\Sunder.Cli.csproj</BundledCliProject>
+      <BundledCliSourceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Cli\bin\$(Configuration)\$(TargetFramework)\'))</BundledCliSourceDir>
+      <BundledCliOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'Cli'))\</BundledCliOutputDir>
+    </PropertyGroup>
+
+    <MSBuild Projects="$(BundledCliProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework)"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath;PublishDir;RuntimeIdentifier;SelfContained" />
+
+    <ItemGroup>
+      <_BundledCliFiles Include="$(BundledCliSourceDir)**\*"
+                        Condition="Exists('$(BundledCliSourceDir)')" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(BundledCliOutputDir)"
+             Condition="Exists('$(BundledCliSourceDir)')" />
+
+    <Copy SourceFiles="@(_BundledCliFiles)"
+          DestinationFiles="@(_BundledCliFiles->'$(BundledCliOutputDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_BundledCliFiles)' != ''" />
+  </Target>
+
+  <Target Name="BundleRuntimeHostForPublish"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <MSBuild Projects="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishDir=$(PublishDir)RuntimeHost\"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
+  </Target>
+
+  <Target Name="BundleCliForPublish"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <BundledCliPublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</BundledCliPublishSingleFile>
+      <BundledCliPublishSingleFile Condition="'$(BundledCliPublishSingleFile)' == ''">false</BundledCliPublishSingleFile>
+    </PropertyGroup>
+
+    <MSBuild Projects="..\Sunder.Cli\Sunder.Cli.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
+  </Target>
+</Project>

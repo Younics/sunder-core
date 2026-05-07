@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageType>Template</PackageType>
+    <PackageId>Sunder.Package.Templates</PackageId>
+    <Title>Sunder package project templates</Title>
+    <Description>dotnet new templates for creating Sunder package projects.</Description>
+    <Authors>Sunder</Authors>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+    <NoWarn>$(NoWarn);NU5110;NU5111</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="templates\**\*" Pack="true" PackagePath="content" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="templates\sunder-package\Sunder.Package.Template\Assets\icon.png" />
+  </ItemGroup>
+
+</Project>

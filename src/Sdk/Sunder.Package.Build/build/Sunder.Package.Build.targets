@@ -1,0 +1,158 @@
+<Project>
+  <PropertyGroup>
+    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)..\tasks\$(TargetFramework)\Sunder.Package.Build.dll')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\tasks\$(TargetFramework)\Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
+    <SunderPackageBuildTaskAssembly Condition="'$(SunderPackageBuildTaskAssembly)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\bin\$(Configuration)\net10.0\Sunder.Package.Build.dll'))</SunderPackageBuildTaskAssembly>
+    <SunderPackageBuildProject Condition="'$(SunderPackageBuildProject)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Sunder.Package.Build.csproj'))</SunderPackageBuildProject>
+    <SunderPackageBuildTaskShadowDirectory Condition="'$(SunderPackageBuildTaskShadowDirectory)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'sunder-package-build-tasks', '$(Configuration)', '$(TargetFramework)'))))\</SunderPackageBuildTaskShadowDirectory>
+    <SunderPackageBuildTaskShadowAssembly Condition="'$(SunderPackageBuildTaskShadowAssembly)' == ''">$(SunderPackageBuildTaskShadowDirectory)Sunder.Package.Build.dll</SunderPackageBuildTaskShadowAssembly>
+    <SunderGeneratedPackageManifest Condition="'$(SunderGeneratedPackageManifest)' == ''">$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'obj', '$(Configuration)', '$(TargetFramework)', 'sunder-package.json'))</SunderGeneratedPackageManifest>
+  </PropertyGroup>
+
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderPackageManifestTask"
+             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.PackSunderPackageTask"
+             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+
+  <Target Name="_BuildSunderPackageBuildTasks"
+          Condition="Exists('$(SunderPackageBuildProject)') and !Exists('$(SunderPackageBuildTaskAssembly)')">
+    <MSBuild Projects="$(SunderPackageBuildProject)"
+              Targets="Build"
+              Properties="Configuration=$(Configuration);TargetFramework=net10.0" />
+  </Target>
+
+  <Target Name="_PrepareSunderPackageBuildTasks"
+          DependsOnTargets="_BuildSunderPackageBuildTasks">
+    <PropertyGroup>
+      <_SunderPackageBuildTaskSourceDirectory>$([System.IO.Path]::GetDirectoryName('$(SunderPackageBuildTaskAssembly)'))\</_SunderPackageBuildTaskSourceDirectory>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_SunderPackageBuildTaskFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Sunder.Package.Build.dll" />
+      <_SunderPackageBuildTaskFiles Include="$(_SunderPackageBuildTaskSourceDirectory)Sunder.Sdk.dll" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(SunderPackageBuildTaskShadowDirectory)" />
+    <Copy SourceFiles="@(_SunderPackageBuildTaskFiles)"
+          DestinationFolder="$(SunderPackageBuildTaskShadowDirectory)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="GenerateSunderPackageManifest"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks">
+    <GenerateSunderPackageManifestTask TargetAssemblyPath="$(TargetPath)"
+                                       ManifestOutputPath="$(SunderGeneratedPackageManifest)"
+                                       EntryAssembly="$(TargetFileName)"
+                                       PackageVersion="$(Version)"
+                                       ProjectDirectory="$(MSBuildProjectDirectory)"
+                                       TargetFramework="$(TargetFramework)"
+                                       SdkVersion="$(SunderSdkVersion)" />
+  </Target>
+
+  <Target Name="EmitSunderDevOutput"
+          AfterTargets="Build"
+          DependsOnTargets="GenerateSunderPackageManifest">
+    <PropertyGroup>
+      <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine($([System.IO.Path]::GetDirectoryName('$(TargetPath)')), 'sunder-dev'))\</SunderDevOutputPath>
+    </PropertyGroup>
+
+    <RemoveDir Directories="$(SunderDevOutputPath)"
+               Condition="Exists('$(SunderDevOutputPath)')" />
+
+    <MakeDir Directories="$(SunderDevOutputPath)" />
+    <MakeDir Directories="$(SunderDevOutputPath)lib" />
+    <MakeDir Directories="$(SunderDevOutputPath)assets" />
+
+    <ItemGroup>
+      <_SunderRuntimeFiles Include="$(TargetDir)*.dll" />
+      <_SunderRuntimeFiles Include="$(TargetDir)*.pdb" />
+      <_SunderRuntimeFiles Include="$(TargetDir)*.deps.json" />
+      <_SunderRuntimeFiles Include="$(TargetDir)*.runtimeconfig.json" />
+      <_SunderNativeRuntimeFiles Include="$(TargetDir)runtimes\**\*"
+                                 Condition="Exists('$(TargetDir)runtimes')" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Controls.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Controls.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Base.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Base.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Markup.Xaml.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Markup.Xaml.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Markup.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Markup.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Dialogs.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Dialogs.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.DesignerSupport.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.DesignerSupport.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Remote.Protocol.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Remote.Protocol.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Metal.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Metal.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.OpenGL.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.OpenGL.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Vulkan.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Vulkan.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.MicroCom.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.MicroCom.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)MicroCom.Runtime.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)MicroCom.Runtime.pdb" />
+      <_SunderAssetFiles Include="$(MSBuildProjectDirectory)\Assets\**\*"
+                         Condition="Exists('$(MSBuildProjectDirectory)\Assets')" />
+    </ItemGroup>
+
+    <Copy SourceFiles="$(SunderGeneratedPackageManifest)"
+          DestinationFiles="$(SunderDevOutputPath)sunder-package.json"
+          SkipUnchangedFiles="true" />
+
+    <Copy SourceFiles="@(_SunderRuntimeFiles)"
+          DestinationFiles="@(_SunderRuntimeFiles->'$(SunderDevOutputPath)lib\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_SunderRuntimeFiles)' != ''" />
+
+    <Copy SourceFiles="@(_SunderNativeRuntimeFiles)"
+          DestinationFiles="@(_SunderNativeRuntimeFiles->'$(SunderDevOutputPath)lib\runtimes\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_SunderNativeRuntimeFiles)' != ''" />
+
+    <Copy SourceFiles="@(_SunderAssetFiles)"
+          DestinationFolder="$(SunderDevOutputPath)assets\%(RecursiveDir)"
+          SkipUnchangedFiles="true"
+          Condition="'@(_SunderAssetFiles)' != ''" />
+
+    <Message Importance="High"
+             Text="Emitted Sunder dev package to $(SunderDevOutputPath)" />
+  </Target>
+
+  <Target Name="PackSunderPackage"
+          DependsOnTargets="Build;EmitSunderDevOutput">
+    <PropertyGroup>
+      <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
+      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.0.0</_SunderPackageVersion>
+      <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
+      <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', '$(SunderPackageFileName)'))</SunderPackageOutputPath>
+    </PropertyGroup>
+
+    <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)"
+                           PackageOutputPath="$(SunderPackageOutputPath)" />
+  </Target>
+
+  <Target Name="PackSunderPackageOnPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="EmitSunderDevOutput">
+    <PropertyGroup>
+      <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
+      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.0.0</_SunderPackageVersion>
+      <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
+      <SunderPublishPackageOutputPath Condition="'$(SunderPublishPackageOutputPath)' == ''">$([System.IO.Path]::Combine('$(PublishDir)', '$(SunderPackageFileName)'))</SunderPublishPackageOutputPath>
+    </PropertyGroup>
+
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(SunderPublishPackageOutputPath)'))" />
+    <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)"
+                           PackageOutputPath="$(SunderPublishPackageOutputPath)" />
+  </Target>
+</Project>

@@ -1,0 +1,704 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        x:Class="Sunder.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        mc:Ignorable="d"
+        Width="1600"
+        Height="920"
+        MinWidth="1280"
+        MinHeight="760"
+        CanResize="True"
+        Title="Sunder"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        UseLayoutRounding="True"
+        Classes="shell-window">
+  <Grid RowDefinitions="52,*,22">
+    <Grid.Background>
+      <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#202329" />
+        <GradientStop Offset="0.5" Color="#17191D" />
+        <GradientStop Offset="1" Color="#15171A" />
+      </LinearGradientBrush>
+    </Grid.Background>
+    <Border Grid.Row="0"
+            x:Name="ToolbarDragHost"
+            PointerPressed="ToolbarDragHost_OnPointerPressed"
+            Classes="toolbar-surface">
+      <Grid ColumnDefinitions="Auto,*,Auto"
+            Height="40"
+            VerticalAlignment="Center">
+        <StackPanel x:Name="ToolbarLeftMenuHost"
+                    Orientation="Horizontal"
+                    Spacing="14"
+                    Height="40"
+                    VerticalAlignment="Center">
+          <Border Width="36"
+                  Height="36"
+                  CornerRadius="9"
+                  VerticalAlignment="Center"
+                  Padding="3">
+            <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Stretch="Uniform" />
+          </Border>
+
+          <Grid x:Name="ToolbarLeftActionHost"
+                Height="40"
+                VerticalAlignment="Center">
+            <StackPanel x:Name="ToolbarDefaultActions"
+                        Orientation="Horizontal"
+                        Spacing="14"
+                        Height="40"
+                        VerticalAlignment="Center">
+              <Button Classes="toolbar-icon"
+                      Command="{Binding OpenPackagesCommand}"
+                      Content="▣"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Packages" />
+
+              <Button Classes="toolbar-icon"
+                      Command="{Binding OpenSettingsCommand}"
+                      Content="⚙"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Settings" />
+
+              <Button x:Name="MoreActionsButton"
+                      Classes="toolbar-icon"
+                      Content="⋯"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="View and package actions"
+                      Click="MoreActionsButton_OnClick" />
+            </StackPanel>
+
+            <Menu x:Name="ToolbarMainMenu"
+                  Classes="toolbar-main-menu"
+                  IsVisible="False"
+                  Height="40"
+                  VerticalAlignment="Center" />
+          </Grid>
+        </StackPanel>
+
+        <controls:PackageIconBar x:Name="MiddlePackageIconBar"
+                                 Grid.Column="1"
+                                 Width="548"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"
+                                 DataContext="{Binding MiddleBar}" />
+
+        <StackPanel Grid.Column="2"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    VerticalAlignment="Center">
+          <Button Classes="toolbar-icon server-status-button"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="Sunder server">
+            <Button.Content>
+              <Grid Width="16"
+                    Height="16">
+                <TextBlock HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Text="▤" />
+                <Ellipse Width="6"
+                         Height="6"
+                         HorizontalAlignment="Right"
+                         VerticalAlignment="Bottom"
+                         Fill="{Binding RuntimeStatusBrush}" />
+              </Grid>
+            </Button.Content>
+            <Button.Flyout>
+              <Flyout FlyoutPresenterClasses="runtime-flyout-surface">
+                <StackPanel x:DataType="vm:MainWindowViewModel"
+                            Width="340"
+                            Spacing="12">
+                  <StackPanel Spacing="4">
+                    <TextBlock Classes="section-title" Text="Sunder Server" />
+                    <TextBlock Classes="caption" Text="Inspect runtime status and update the API endpoint." />
+                  </StackPanel>
+
+                  <Border Height="1"
+                          Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+                  <Grid ColumnDefinitions="Auto,*"
+                        RowDefinitions="Auto,Auto,Auto"
+                        ColumnSpacing="12"
+                        RowSpacing="6">
+                    <TextBlock Classes="caption" Text="Name" />
+                    <TextBlock Grid.Column="1" Classes="status-text" Text="{Binding RuntimeName}" />
+
+                    <TextBlock Grid.Row="1" Classes="caption" Text="Version" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Classes="status-text" Text="{Binding RuntimeVersion}" />
+
+                    <TextBlock Grid.Row="2" Classes="caption" Text="Status" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Classes="status-text" Text="{Binding RuntimeStatusText}" />
+                  </Grid>
+
+                  <StackPanel Spacing="6"
+                              IsVisible="{Binding ShowRuntimeAddressEditor}">
+                    <TextBlock Classes="caption" Text="API address" />
+                    <TextBox Text="{Binding RuntimeAddressText}"
+                             PlaceholderText="http://127.0.0.1:5275/" />
+                  </StackPanel>
+
+                  <TextBlock Classes="caption runtime-error-text"
+                             IsVisible="{Binding ShowRuntimeError}"
+                             Text="{Binding RuntimeLastError}"
+                             TextWrapping="Wrap" />
+
+                  <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                        ColumnSpacing="8">
+                    <Button Classes="secondary-action compact-action"
+                            Content="Apply"
+                            Command="{Binding ApplyRuntimeAddressCommand}"
+                            IsVisible="{Binding ShowApplyRuntimeButton}"
+                            IsEnabled="{Binding CanManageRuntime}" />
+
+                    <Button Grid.Column="2"
+                            Classes="secondary-action compact-action"
+                            Content="Refresh"
+                            Command="{Binding RefreshRuntimeCommand}"
+                            IsEnabled="{Binding CanManageRuntime}" />
+
+                    <Button Grid.Column="3"
+                            Classes="primary-action compact-action"
+                            Content="Start"
+                            Command="{Binding StartRuntimeCommand}"
+                            IsVisible="{Binding ShowStartRuntimeButton}"
+                            IsEnabled="{Binding CanManageRuntime}" />
+
+                    <Button Grid.Column="3"
+                            Classes="secondary-action compact-action danger-action"
+                            Content="Stop"
+                            Command="{Binding StopRuntimeCommand}"
+                            IsVisible="{Binding ShowStopRuntimeButton}"
+                            IsEnabled="{Binding CanManageRuntime}" />
+                  </Grid>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+
+          <Button Classes="toolbar-icon notification-button"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="Notifications"
+                  Click="NotificationsButton_OnClick">
+            <Button.Content>
+              <Grid Width="16"
+                    Height="16">
+                <Path Width="13"
+                      Height="13"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      Data="M7 1.35 C4.95 1.35 3.45 2.95 3.45 5.1 L3.45 7.45 L2.35 9.35 L11.65 9.35 L10.55 7.45 L10.55 5.1 C10.55 2.95 9.05 1.35 7 1.35 Z M5.85 10.65 C6.15 11.25 6.55 11.55 7 11.55 C7.45 11.55 7.85 11.25 8.15 10.65"
+                      Fill="Transparent"
+                      Stretch="Uniform"
+                      Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
+                      StrokeThickness="1.35" />
+                <Ellipse Width="6"
+                         Height="6"
+                         HorizontalAlignment="Right"
+                         VerticalAlignment="Bottom"
+                         Fill="{DynamicResource Sunder.Brush.Accent}"
+                         IsVisible="{Binding HasUnreadNotifications}" />
+              </Grid>
+            </Button.Content>
+            <Button.Flyout>
+              <Flyout FlyoutPresenterClasses="runtime-flyout-surface">
+                <StackPanel x:DataType="vm:MainWindowViewModel"
+                            Width="360"
+                            Spacing="12">
+                  <StackPanel Spacing="4">
+                    <TextBlock Classes="section-title" Text="Notifications" />
+                    <TextBlock Classes="caption" Text="Recent package and app events." />
+                  </StackPanel>
+
+                  <Border Height="1"
+                          Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+                  <Border Classes="notification-empty-state"
+                          IsVisible="{Binding HasNoNotifications}">
+                    <TextBlock Classes="caption"
+                               Text="No notifications yet."
+                               TextWrapping="Wrap" />
+                  </Border>
+
+                  <ScrollViewer MaxHeight="360"
+                                VerticalScrollBarVisibility="Auto"
+                                IsVisible="{Binding HasNotifications}">
+                    <ItemsControl ItemsSource="{Binding Notifications}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NotificationItemViewModel">
+                          <Border Classes="notification-row">
+                            <Grid ColumnDefinitions="Auto,*"
+                                  RowDefinitions="Auto,Auto,Auto"
+                                  ColumnSpacing="10"
+                                  RowSpacing="4">
+                              <Border Grid.Row="0"
+                                      Classes="notification-severity-dot"
+                                      VerticalAlignment="Top"
+                                      Margin="0,1,0,0">
+                                <TextBlock Classes="notification-severity-glyph"
+                                           Text="{Binding SeverityGlyph}" />
+                              </Border>
+                              <Grid Grid.Column="1"
+                                    ColumnDefinitions="*,Auto"
+                                    ColumnSpacing="8">
+                                <TextBlock Text="{Binding Title}"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                                <Border Grid.Column="1"
+                                        Classes="notification-unread-pill"
+                                        IsVisible="{Binding IsUnread}">
+                                  <TextBlock Text="NEW" />
+                                </Border>
+                              </Grid>
+                              <TextBlock Grid.Row="1"
+                                         Grid.Column="1"
+                                         Text="{Binding Message}"
+                                         TextWrapping="Wrap"
+                                         Foreground="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+                              <TextBlock Grid.Row="2"
+                                         Grid.Column="1"
+                                         Classes="caption"
+                                         Text="{Binding SourceText}" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+
+          <Border Width="1"
+                  Height="18"
+                  Margin="4,0"
+                  Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+          <controls:WindowChromeControls />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="1"
+          Margin="0,4,0,4"
+          Background="{DynamicResource Sunder.Brush.Background.App}"
+          ColumnDefinitions="58,0,*,0,58">
+      <Grid Grid.Column="0"
+            RowDefinitions="*,8,*">
+        <controls:PackageIconBar Grid.Row="0"
+                                 Classes="side-top-lane"
+                                 DataContext="{Binding LeftTopBar}" />
+        <controls:PackageIconBar Grid.Row="2"
+                                 Classes="side-bottom-lane"
+                                 DataContext="{Binding LeftBottomBar}" />
+      </Grid>
+
+      <Grid Grid.Column="2"
+            x:Name="ShellContentGrid"
+            RowDefinitions="560,4,236">
+        <Grid Grid.Row="0"
+              x:Name="TopContentGrid"
+              ColumnDefinitions="280,4,*,4,280">
+          <Border Grid.Column="0"
+                  x:Name="LeftTopPanelBorder"
+                  Classes="side-shell-panel"
+                  IsVisible="{Binding HasLeftTopPanelContent}">
+            <Border Classes="shell-panel-content-clip">
+              <Grid>
+              <Grid Margin="16"
+                    IsVisible="{Binding LeftTopPanel.ShowFallbackLines}"
+                    RowDefinitions="Auto,Auto,*"
+                    RowSpacing="14">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="panel-header-text" Text="{Binding LeftTopPanel.Title}" />
+                  <TextBlock Classes="caption" Text="{Binding LeftTopPanel.Subtitle}" TextWrapping="Wrap" />
+                  <TextBlock Classes="workspace-state-text" Text="{Binding LeftTopPanel.Summary}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+                <ScrollViewer Grid.Row="2">
+                  <ItemsControl ItemsSource="{Binding LeftTopPanel.Lines}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Classes="status-text"
+                                   Margin="0,0,0,8"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+              <ContentControl HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              IsVisible="{Binding LeftTopPanel.HasHostedView}"
+                              Content="{Binding LeftTopPanel.HostedView}" />
+              </Grid>
+            </Border>
+          </Border>
+
+          <GridSplitter x:Name="LeftColumnGridSplitter"
+                        Grid.Column="1"
+                        Width="4"
+                        ResizeDirection="Columns"
+                        ResizeBehavior="PreviousAndNext"
+                        ShowsPreview="False"
+                        Background="Transparent"
+                        IsVisible="{Binding HasLeftTopPanelContent}" />
+
+          <Border Grid.Column="2"
+                  x:Name="MiddlePanelBorder"
+                  Classes="workspace-shell-panel">
+            <Border Classes="shell-panel-content-clip">
+              <Grid>
+              <Border Classes="welcome-card"
+                      IsVisible="{Binding MiddlePanel.ShowFallbackLines}">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+                      RowSpacing="18">
+                  <Border Classes="welcome-logo-frame">
+                    <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+                           RenderOptions.BitmapInterpolationMode="HighQuality"
+                           Stretch="Uniform" />
+                  </Border>
+
+                  <StackPanel Grid.Row="1"
+                              Spacing="8"
+                              HorizontalAlignment="Center">
+                    <TextBlock Classes="welcome-eyebrow"
+                               Text="LOCAL-FIRST AGENT WORKSPACE" />
+                    <TextBlock Classes="welcome-title"
+                               Text="Welcome to Sunder" />
+                    <TextBlock Classes="welcome-subtitle"
+                               Text="Install packages or move package views into the middle bar to shape this workspace around your workflow."
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+
+                  <Border Grid.Row="2"
+                          Height="1"
+                          Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+                  <StackPanel Grid.Row="3"
+                              Orientation="Horizontal"
+                              Spacing="12"
+                              HorizontalAlignment="Center">
+                    <Button Classes="primary-action"
+                            Content="Browse Packages"
+                            Command="{Binding OpenPackagesCommand}" />
+                    <Button Classes="secondary-action"
+                            Content="Open Settings"
+                            Command="{Binding OpenSettingsCommand}" />
+                  </StackPanel>
+                </Grid>
+              </Border>
+              <ContentControl HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              IsVisible="{Binding MiddlePanel.HasHostedView}"
+                              Content="{Binding MiddlePanel.HostedView}" />
+              </Grid>
+            </Border>
+          </Border>
+
+          <GridSplitter x:Name="RightColumnGridSplitter"
+                        Grid.Column="3"
+                        Width="4"
+                        ResizeDirection="Columns"
+                        ResizeBehavior="PreviousAndNext"
+                        ShowsPreview="False"
+                        Background="Transparent"
+                        IsVisible="{Binding HasRightTopPanelContent}" />
+
+          <Border Grid.Column="4"
+                  x:Name="RightTopPanelBorder"
+                  Classes="side-shell-panel"
+                  IsVisible="{Binding HasRightTopPanelContent}">
+            <Border Classes="shell-panel-content-clip">
+              <Grid>
+              <Grid Margin="16"
+                    IsVisible="{Binding RightTopPanel.ShowFallbackLines}"
+                    RowDefinitions="Auto,Auto,*"
+                    RowSpacing="14">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="panel-header-text" Text="{Binding RightTopPanel.Title}" />
+                  <TextBlock Classes="caption" Text="{Binding RightTopPanel.Subtitle}" TextWrapping="Wrap" />
+                  <TextBlock Classes="workspace-state-text" Text="{Binding RightTopPanel.Summary}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+                <ScrollViewer Grid.Row="2">
+                  <ItemsControl ItemsSource="{Binding RightTopPanel.Lines}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Classes="status-text"
+                                   Margin="0,0,0,8"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+              <ContentControl HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              IsVisible="{Binding RightTopPanel.HasHostedView}"
+                              Content="{Binding RightTopPanel.HostedView}" />
+              </Grid>
+            </Border>
+          </Border>
+        </Grid>
+
+        <GridSplitter x:Name="BottomRowGridSplitter"
+                      Grid.Row="1"
+                      Height="4"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="False"
+                      Background="Transparent"
+                      IsVisible="{Binding HasAnyBottomPanelContent}" />
+
+        <Grid Grid.Row="2"
+              x:Name="BottomContentGrid"
+              ColumnDefinitions="*,4,*">
+          <Border Grid.Column="0"
+                  x:Name="LeftBottomPanelBorder"
+                  Classes="bottom-shell-panel"
+                  IsVisible="{Binding HasLeftBottomPanelContent}">
+            <Border Classes="shell-panel-content-clip">
+              <Grid>
+              <Grid Margin="16"
+                    IsVisible="{Binding LeftBottomPanel.ShowFallbackLines}"
+                    RowDefinitions="Auto,Auto,*"
+                    RowSpacing="14">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="panel-header-text" Text="{Binding LeftBottomPanel.Title}" />
+                  <TextBlock Classes="caption" Text="{Binding LeftBottomPanel.Subtitle}" TextWrapping="Wrap" />
+                  <TextBlock Classes="workspace-state-text" Text="{Binding LeftBottomPanel.Summary}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+                <ScrollViewer Grid.Row="2">
+                  <ItemsControl ItemsSource="{Binding LeftBottomPanel.Lines}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Classes="status-text"
+                                   Margin="0,0,0,8"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+              <ContentControl HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              IsVisible="{Binding LeftBottomPanel.HasHostedView}"
+                              Content="{Binding LeftBottomPanel.HostedView}" />
+              </Grid>
+            </Border>
+          </Border>
+
+          <GridSplitter x:Name="BottomColumnGridSplitter"
+                        Grid.Column="1"
+                        Width="4"
+                        ResizeDirection="Columns"
+                        ResizeBehavior="PreviousAndNext"
+                        ShowsPreview="False"
+                        Background="Transparent"
+                        IsVisible="{Binding HasAnyBottomPanelContent}" />
+
+          <Border Grid.Column="2"
+                  x:Name="RightBottomPanelBorder"
+                  Classes="bottom-shell-panel"
+                  IsVisible="{Binding HasRightBottomPanelContent}">
+            <Border Classes="shell-panel-content-clip">
+              <Grid>
+              <Grid Margin="16"
+                    IsVisible="{Binding RightBottomPanel.ShowFallbackLines}"
+                    RowDefinitions="Auto,Auto,*"
+                    RowSpacing="14">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="panel-header-text" Text="{Binding RightBottomPanel.Title}" />
+                  <TextBlock Classes="caption" Text="{Binding RightBottomPanel.Subtitle}" TextWrapping="Wrap" />
+                  <TextBlock Classes="workspace-state-text" Text="{Binding RightBottomPanel.Summary}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+                <ScrollViewer Grid.Row="2">
+                  <ItemsControl ItemsSource="{Binding RightBottomPanel.Lines}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Classes="status-text"
+                                   Margin="0,0,0,8"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+              <ContentControl HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              IsVisible="{Binding RightBottomPanel.HasHostedView}"
+                              Content="{Binding RightBottomPanel.HostedView}" />
+              </Grid>
+            </Border>
+          </Border>
+        </Grid>
+      </Grid>
+
+      <Grid Grid.Column="4"
+            RowDefinitions="*,8,*">
+        <controls:PackageIconBar Grid.Row="0"
+                                 Classes="side-top-lane"
+                                 DataContext="{Binding RightTopBar}" />
+        <controls:PackageIconBar Grid.Row="2"
+                                 Classes="side-bottom-lane"
+                                 DataContext="{Binding RightBottomBar}" />
+      </Grid>
+    </Grid>
+
+    <Border Grid.Row="2"
+            Classes="statusbar-surface">
+      <DockPanel Margin="10,0" LastChildFill="False">
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="12">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <Ellipse Width="8" Height="8" Fill="{Binding RuntimeStatusBrush}" />
+            <TextBlock Classes="status-text" Text="{Binding SystemStatusText}" />
+          </StackPanel>
+          <Border Width="1" Height="12" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Classes="status-text" Text="◔" />
+            <TextBlock Classes="status-text" Text="{Binding SyncStatusText}" />
+          </StackPanel>
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+          <TextBlock Classes="status-text" Text="Default" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Canvas x:Name="PackageDragOverlay"
+            Grid.RowSpan="3"
+            IsHitTestVisible="False"
+            ClipToBounds="False"
+            ZIndex="1000">
+      <Border x:Name="PackageDragGhost"
+              Classes="package-bar-button-surface drag-ghost-surface"
+              IsVisible="False">
+        <TextBlock x:Name="PackageDragGhostGlyph"
+                   Classes="glyph-text" />
+      </Border>
+    </Canvas>
+
+    <ItemsControl Grid.RowSpan="3"
+                  ItemsSource="{Binding Toasts}"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Margin="0,64,18,0"
+                  ZIndex="900">
+      <ItemsControl.ItemsPanel>
+        <ItemsPanelTemplate>
+          <StackPanel Spacing="8" />
+        </ItemsPanelTemplate>
+      </ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:ToastNotificationViewModel">
+          <Border Classes="toast-card">
+            <Grid ColumnDefinitions="Auto,*,Auto"
+                  ColumnSpacing="10">
+              <Border Classes="toast-severity-dot">
+                <TextBlock Classes="notification-severity-glyph"
+                           Text="{Binding SeverityGlyph}" />
+              </Border>
+              <StackPanel Grid.Column="1"
+                          Spacing="2"
+                          Width="280">
+                <TextBlock Text="{Binding Title}"
+                           FontWeight="SemiBold"
+                           TextWrapping="Wrap" />
+                <TextBlock Text="{Binding Message}"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+              </StackPanel>
+              <Button Grid.Column="2"
+                      Classes="toast-close-button"
+                      Content="X"
+                      Command="{Binding $parent[ItemsControl].DataContext.DismissToastNotificationCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Dismiss notification" />
+            </Grid>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+
+    <Border Grid.RowSpan="3"
+            Classes="update-prompt-card"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Margin="0,0,28,42"
+            IsVisible="{Binding ShowUpdatePrompt}"
+            ZIndex="920">
+      <Grid ColumnDefinitions="Auto,*,Auto"
+            RowDefinitions="Auto,Auto"
+            ColumnSpacing="12"
+            RowSpacing="12">
+        <Border Classes="update-prompt-icon">
+          <TextBlock Text="↓"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center" />
+        </Border>
+
+        <StackPanel Grid.Column="1"
+                    Spacing="5"
+                    Width="320">
+          <TextBlock Classes="update-prompt-title"
+                     Text="Update available" />
+          <TextBlock Classes="caption"
+                     Text="{Binding UpdatePromptMessage}"
+                     TextWrapping="Wrap" />
+          <TextBlock Classes="caption"
+                     Text="{Binding UpdatePromptStatus}"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Button Grid.Column="2"
+                Classes="update-prompt-close-button"
+                Content="X"
+                Command="{Binding DismissAppUpdatePromptCommand}"
+                IsEnabled="{Binding CanInstallAppUpdate}"
+                ToolTip.Tip="Dismiss update" />
+
+        <StackPanel Grid.Row="1"
+                    Grid.Column="1"
+                    Grid.ColumnSpan="2"
+                    Orientation="Horizontal"
+                    Spacing="12">
+          <Button Classes="update-prompt-primary-action"
+                  Content="Install and restart"
+                  Command="{Binding InstallAvailableAppUpdateCommand}"
+                  IsEnabled="{Binding CanInstallAppUpdate}" />
+          <Button Classes="update-prompt-secondary-action"
+                  Content="Not yet"
+                  Command="{Binding DismissAppUpdatePromptCommand}"
+                  IsEnabled="{Binding CanInstallAppUpdate}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

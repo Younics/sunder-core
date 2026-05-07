@@ -1,0 +1,375 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        x:Class="Sunder.App.Views.SettingsWindow"
+        x:DataType="vm:SettingsWindowViewModel"
+        mc:Ignorable="d"
+        Width="1180"
+        Height="800"
+        MinWidth="980"
+        MinHeight="680"
+        CanResize="True"
+        Title="Settings"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        Classes="secondary-window">
+  <Window.DataTemplates>
+    <DataTemplate DataType="vm:TextSettingsFieldViewModel">
+      <StackPanel Spacing="8"
+                  IsVisible="{Binding IsVisible}">
+        <TextBlock Classes="section-title" Text="{Binding Label}" />
+        <TextBlock Classes="caption"
+                   Text="{Binding Description}"
+                   TextWrapping="Wrap" />
+        <TextBox Text="{Binding Value}"
+                 PlaceholderText="{Binding Placeholder}" />
+      </StackPanel>
+    </DataTemplate>
+    <DataTemplate DataType="vm:SecretSettingsFieldViewModel">
+      <StackPanel Spacing="8"
+                  IsVisible="{Binding IsVisible}">
+        <TextBlock Classes="section-title" Text="{Binding Label}" />
+        <TextBlock Classes="caption"
+                   Text="{Binding Description}"
+                   TextWrapping="Wrap" />
+        <TextBox Text="{Binding Value}"
+                 PlaceholderText="{Binding Placeholder}" />
+      </StackPanel>
+    </DataTemplate>
+    <DataTemplate DataType="vm:BooleanSettingsFieldViewModel">
+      <StackPanel Spacing="8"
+                  IsVisible="{Binding IsVisible}">
+        <CheckBox Content="{Binding Label}"
+                  IsChecked="{Binding Value}" />
+        <TextBlock Classes="caption"
+                   Text="{Binding Description}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+    </DataTemplate>
+    <DataTemplate DataType="vm:SelectSettingsFieldViewModel">
+      <StackPanel Spacing="8"
+                  IsVisible="{Binding IsVisible}">
+        <TextBlock Classes="section-title" Text="{Binding Label}" />
+        <TextBlock Classes="caption"
+                   Text="{Binding Description}"
+                   TextWrapping="Wrap" />
+        <ComboBox ItemsSource="{Binding Options}"
+                  SelectedItem="{Binding SelectedOption}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:SettingsOptionItem">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </StackPanel>
+    </DataTemplate>
+  </Window.DataTemplates>
+
+  <Grid RowDefinitions="52,*,Auto"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <Border Grid.Row="0"
+            x:Name="ToolbarDragHost"
+            PointerPressed="ToolbarDragHost_OnPointerPressed"
+            Classes="toolbar-surface">
+      <Grid ColumnDefinitions="Auto,*,Auto"
+            VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal"
+                    Spacing="10"
+                    VerticalAlignment="Center">
+          <Border Width="32"
+                  Height="32"
+                  CornerRadius="8"
+                  Padding="3">
+            <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Stretch="Uniform" />
+          </Border>
+          <TextBlock Classes="section-title"
+                     VerticalAlignment="Center"
+                     Text="Settings" />
+        </StackPanel>
+
+        <controls:WindowChromeControls Grid.Column="2" />
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1"
+            Margin="20,12,20,0"
+            Classes="panel-surface"
+            Padding="0">
+      <Border Classes="secondary-panel-content-clip">
+        <Grid x:Name="SettingsContentGrid">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="250" MinWidth="180" MaxWidth="900" />
+          <ColumnDefinition Width="4" />
+          <ColumnDefinition Width="*" MinWidth="420" />
+        </Grid.ColumnDefinitions>
+        <Border Grid.Column="0"
+                x:Name="SettingsSidebarPane"
+                Background="{DynamicResource Sunder.Brush.Surface.Base}"
+                Padding="16">
+          <ScrollViewer>
+            <StackPanel Spacing="10">
+              <TextBlock Classes="section-title" Text="Categories" />
+              <ItemsControl ItemsSource="{Binding CoreSections}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
+                    <Button Classes="secondary-action settings-nav-button"
+                            Classes.selected="{Binding IsSelected}"
+                            Click="SectionButton_OnClick"
+                            CommandParameter="{Binding}"
+                            HorizontalAlignment="Stretch"
+                            Content="{Binding Title}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <StackPanel IsVisible="{Binding HasPackageSections}">
+                <Border Height="1"
+                        Margin="0,8,0,8"
+                        Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+                <TextBlock Classes="section-title" Text="Packages" />
+              </StackPanel>
+
+              <ItemsControl ItemsSource="{Binding PackageSections}"
+                            IsVisible="{Binding HasPackageSections}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
+                    <Button Classes="secondary-action settings-nav-button"
+                            Classes.selected="{Binding IsSelected}"
+                            Click="SectionButton_OnClick"
+                            CommandParameter="{Binding}"
+                            HorizontalAlignment="Stretch"
+                            Content="{Binding Title}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+        </Border>
+
+        <GridSplitter Grid.Column="1"
+                      Width="4"
+                      ResizeDirection="Columns"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="False"
+                      Background="{DynamicResource Sunder.Brush.Border.Subtle}"
+                      DragCompleted="SettingsSplitter_OnDragCompleted" />
+
+        <Border Grid.Column="2"
+                Classes="workspace-surface"
+                Margin="16">
+          <Grid RowDefinitions="Auto,*"
+                RowSpacing="14">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="page-title" Text="{Binding SelectedTitle}" />
+              <TextBlock Classes="caption" Text="{Binding SelectedDescription}" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1"
+                          IsVisible="{Binding ShowScrollableSelectionContent}">
+              <StackPanel Spacing="16">
+                <Border Classes="card-surface"
+                        IsVisible="{Binding ShowPlainCoreSelection}">
+                  <ItemsControl ItemsSource="{Binding SelectedCoreLines}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Classes="muted"
+                                   Margin="0,0,0,8"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </Border>
+
+                <StackPanel Spacing="16"
+                            IsVisible="{Binding ShowCliSettings}">
+                  <Border Classes="card-surface">
+                    <StackPanel Spacing="14">
+                      <StackPanel Spacing="4">
+                        <TextBlock Classes="section-title" Text="Command Status" />
+                        <TextBlock Classes="page-title" Text="{Binding CliStatusText}" TextWrapping="Wrap" />
+                        <TextBlock Classes="caption" Text="{Binding CliStatusDescription}" TextWrapping="Wrap" />
+                      </StackPanel>
+
+                      <Border IsVisible="{Binding HasCliWarning}"
+                              Padding="12"
+                              CornerRadius="10"
+                              Background="{DynamicResource Sunder.Brush.Surface.Raised}">
+                        <TextBlock Classes="muted"
+                                   Text="{Binding CliWarningText}"
+                                   TextWrapping="Wrap" />
+                      </Border>
+
+                      <StackPanel Orientation="Horizontal"
+                                  Spacing="12">
+                        <Button Classes="primary-action"
+                                Content="Install or Repair CLI"
+                                IsEnabled="{Binding CanInstallOrRepairCli}"
+                                Click="InstallOrRepairCliButton_OnClick" />
+                        <Button Classes="secondary-action"
+                                Content="Refresh Status"
+                                Click="RefreshCliStatusButton_OnClick" />
+                        <Button Classes="secondary-action"
+                                Content="Copy PATH Instructions"
+                                IsEnabled="{Binding HasCliPathInstructions}"
+                                Click="CopyCliPathInstructionsButton_OnClick" />
+                        <Button Classes="secondary-action"
+                                Content="Uninstall CLI"
+                                IsEnabled="{Binding CanUninstallCli}"
+                                Click="UninstallCliButton_OnClick" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+
+                  <Border Classes="card-surface">
+                    <Grid ColumnDefinitions="160,*"
+                          RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                          RowSpacing="10"
+                          ColumnSpacing="16">
+                      <TextBlock Grid.Row="0" Grid.Column="0" Classes="section-title" Text="Platform" />
+                      <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted" Text="{Binding CliPlatformText}" TextWrapping="Wrap" />
+
+                      <TextBlock Grid.Row="1" Grid.Column="0" Classes="section-title" Text="Bundled CLI" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted" Text="{Binding CliBundledPath}" TextWrapping="Wrap" />
+
+                      <TextBlock Grid.Row="2" Grid.Column="0" Classes="section-title" Text="Installed CLI" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Classes="muted" Text="{Binding CliInstalledPath}" TextWrapping="Wrap" />
+
+                      <TextBlock Grid.Row="3" Grid.Column="0" Classes="section-title" Text="Command Shim" />
+                      <TextBlock Grid.Row="3" Grid.Column="1" Classes="muted" Text="{Binding CliShimPath}" TextWrapping="Wrap" />
+
+                      <TextBlock Grid.Row="4" Grid.Column="0" Classes="section-title" Text="PATH" />
+                      <TextBlock Grid.Row="4" Grid.Column="1" Classes="muted" Text="{Binding CliPathStateText}" TextWrapping="Wrap" />
+                    </Grid>
+                  </Border>
+
+                  <Border Classes="card-surface"
+                          IsVisible="{Binding HasCliPathInstructions}">
+                    <StackPanel Spacing="8">
+                      <TextBlock Classes="section-title" Text="PATH Instructions" />
+                      <TextBox Text="{Binding CliPathInstructions}"
+                               IsReadOnly="True"
+                               AcceptsReturn="True"
+                               TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+
+                <StackPanel Spacing="16"
+                            IsVisible="{Binding ShowUpdateSettings}">
+                  <Border Classes="card-surface">
+                    <StackPanel Spacing="14">
+                      <StackPanel Spacing="4">
+                        <TextBlock Classes="section-title" Text="Automatic Updates" />
+                        <TextBlock Classes="caption"
+                                   Text="Sunder can download new app versions in the background and apply them the next time the app starts."
+                                   TextWrapping="Wrap" />
+                      </StackPanel>
+
+                      <CheckBox Content="Download updates automatically"
+                                IsChecked="{Binding DownloadUpdatesAutomatically}" />
+
+                      <Border Classes="settings-note-card">
+                        <TextBlock Classes="muted"
+                                   Text="Automatic downloads never restart the app while you are working. Manual updates can still be installed immediately from the update prompt."
+                                   TextWrapping="Wrap" />
+                      </Border>
+                    </StackPanel>
+                  </Border>
+
+                  <Border Classes="card-surface">
+                    <StackPanel Spacing="14">
+                      <Grid ColumnDefinitions="*,Auto"
+                            ColumnSpacing="12">
+                        <StackPanel Spacing="4">
+                          <TextBlock Classes="section-title" Text="App Version" />
+                          <TextBlock Classes="caption" Text="Check the configured GitHub Releases feed for a newer Sunder build." TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                Classes="secondary-action"
+                                Content="Check Now"
+                                IsEnabled="{Binding CanCheckForAppUpdates}"
+                                Click="CheckForUpdatesButton_OnClick" />
+                      </Grid>
+
+                      <Grid ColumnDefinitions="160,*"
+                            RowDefinitions="Auto,Auto,Auto"
+                            RowSpacing="10"
+                            ColumnSpacing="16">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Classes="section-title" Text="Current Version" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted" Text="{Binding UpdateCurrentVersionText}" TextWrapping="Wrap" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Classes="section-title" Text="Source" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted" Text="{Binding UpdateSourceText}" TextWrapping="Wrap" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Classes="section-title" Text="Status" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Classes="muted" Text="{Binding UpdateStatusText}" TextWrapping="Wrap" />
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+
+                <ItemsControl ItemsSource="{Binding SelectedPackageSections}"
+                               IsVisible="{Binding ShowGenericPackageSettings}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SettingsFieldSectionViewModel">
+                      <Border Classes="card-surface">
+                        <StackPanel Spacing="12">
+                          <StackPanel Spacing="4">
+                            <TextBlock Classes="section-title" Text="{Binding Title}" />
+                            <TextBlock Classes="caption"
+                                       Text="{Binding Description}"
+                                       TextWrapping="Wrap" />
+                          </StackPanel>
+                          <ItemsControl ItemsSource="{Binding Fields}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <ContentControl Content="{Binding}" />
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+              </StackPanel>
+            </ScrollViewer>
+
+            <ContentControl Grid.Row="1"
+                            Content="{Binding HostedSettingsView}"
+                            IsVisible="{Binding HasHostedSettingsView}" />
+          </Grid>
+        </Border>
+        </Grid>
+      </Border>
+    </Border>
+
+    <Grid Grid.Row="2"
+          ColumnDefinitions="*,Auto"
+          Margin="20,16,20,16">
+      <StackPanel Grid.Column="1"
+                  Orientation="Horizontal"
+                  Spacing="12">
+        <Button Classes="secondary-action"
+                Content="Cancel"
+                Click="CancelButton_OnClick" />
+        <Button Classes="secondary-action"
+                IsVisible="{Binding ShowApplySaveButtons}"
+                Content="Apply"
+                Click="ApplyButton_OnClick" />
+        <Button Classes="primary-action"
+                IsVisible="{Binding ShowApplySaveButtons}"
+                Content="Save"
+                Click="SaveButton_OnClick" />
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>

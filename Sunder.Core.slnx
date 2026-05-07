@@ -1,0 +1,22 @@
+<Solution>
+  <Folder Name="/Host/">
+    <Project Path="src/Host/Sunder.App/Sunder.App.csproj" />
+    <Project Path="src/Host/Sunder.Cli/Sunder.Cli.csproj" />
+    <Project Path="src/Host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj" />
+    <Project Path="src/Sunder.PackageManagement/Sunder.PackageManagement.csproj" />
+    <Project Path="tests/Sunder.App.Tests/Sunder.App.Tests.csproj" />
+    <Project Path="tests/Sunder.PackageManagement.Tests/Sunder.PackageManagement.Tests.csproj" />
+    <Project Path="tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Sdk/">
+    <Project Path="src/Host/Sunder.Protocol/Sunder.Protocol.csproj" />
+    <Project Path="src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj" />
+    <Project Path="src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj" />
+  </Folder>
+  <Folder Name="/Templates/">
+    <Project Path="src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />
+  </Folder>
+  <Folder Name="/Registry Contracts/">
+    <Project Path="src/Registry/Sunder.Registry.Shared/Sunder.Registry.Shared.csproj" />
+  </Folder>
+</Solution>

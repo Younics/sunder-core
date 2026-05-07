@@ -1,0 +1,166 @@
+using System.Collections.ObjectModel;
+using Avalonia.Layout;
+using Sunder.App.Models;
+
+namespace Sunder.App.ViewModels;
+
+public sealed partial class PackageIconBarViewModel : ViewModelBase
+{
+    private readonly Action<string, RailPlacement, int?> _onMove;
+    private int _visibleCapacity = int.MaxValue;
+    private string? _previewDraggedViewId;
+    private string? _previewGlyph;
+    private int? _previewInsertIndex;
+
+    public PackageIconBarViewModel(RailPlacement placement, Orientation orientation, Action<string, RailPlacement, int?> onMove)
+    {
+        Placement = placement;
+        LayoutOrientation = orientation;
+        _onMove = onMove;
+    }
+
+    public RailPlacement Placement { get; }
+
+    public Orientation LayoutOrientation { get; }
+
+    public ObservableCollection<ShellItemViewModel> Items { get; } = [];
+
+    public ObservableCollection<ShellItemViewModel> VisibleItems { get; } = [];
+
+    public ObservableCollection<ShellItemViewModel> OverflowItems { get; } = [];
+
+    public bool HasOverflow => OverflowItems.Count > 0;
+
+    public bool IsHorizontal => LayoutOrientation == Orientation.Horizontal;
+
+    public bool IsVertical => LayoutOrientation == Orientation.Vertical;
+
+    public bool ShowEmptyDropHint => Items.Count == 0;
+
+    public void SetItems(IEnumerable<ShellItemViewModel> items)
+    {
+        ReplaceCollection(Items, items);
+        RefreshVisibleItems();
+        OnPropertyChanged(nameof(ShowEmptyDropHint));
+    }
+
+    public void UpdateVisibleCapacity(int visibleCapacity)
+    {
+        var normalizedCapacity = Math.Max(0, visibleCapacity);
+        if (_visibleCapacity == normalizedCapacity)
+        {
+            return;
+        }
+
+        _visibleCapacity = normalizedCapacity;
+        RefreshVisibleItems();
+    }
+
+    public void MoveItem(string viewId, int? targetIndex)
+    {
+        _onMove(viewId, Placement, targetIndex);
+    }
+
+    public void ShowPreviewItem(string? draggedViewId, string glyph, int? insertIndex)
+    {
+        if (string.IsNullOrWhiteSpace(draggedViewId) || string.IsNullOrWhiteSpace(glyph))
+        {
+            ClearPreviewItem();
+            return;
+        }
+
+        if (string.Equals(_previewDraggedViewId, draggedViewId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_previewGlyph, glyph, StringComparison.Ordinal)
+            && _previewInsertIndex == insertIndex)
+        {
+            return;
+        }
+
+        _previewDraggedViewId = draggedViewId;
+        _previewGlyph = glyph;
+        _previewInsertIndex = insertIndex;
+        RefreshVisibleItems();
+    }
+
+    public void ClearPreviewItem()
+    {
+        if (_previewDraggedViewId is null && _previewGlyph is null && _previewInsertIndex is null)
+        {
+            return;
+        }
+
+        _previewDraggedViewId = null;
+        _previewGlyph = null;
+        _previewInsertIndex = null;
+        RefreshVisibleItems();
+    }
+
+    private void RefreshVisibleItems()
+    {
+        var itemCount = Items.Count;
+        if (itemCount == 0)
+        {
+            ReplaceCollection(VisibleItems, BuildVisibleItems([]));
+            ReplaceCollection(OverflowItems, []);
+            OnPropertyChanged(nameof(HasOverflow));
+            return;
+        }
+
+        if (_visibleCapacity <= 0)
+        {
+            ReplaceCollection(VisibleItems, BuildVisibleItems([]));
+            ReplaceCollection(OverflowItems, Items);
+            OnPropertyChanged(nameof(HasOverflow));
+            return;
+        }
+
+        if (itemCount <= _visibleCapacity)
+        {
+            ReplaceCollection(VisibleItems, BuildVisibleItems(Items));
+            ReplaceCollection(OverflowItems, []);
+            OnPropertyChanged(nameof(HasOverflow));
+            return;
+        }
+
+        var visibleCount = Math.Max(0, _visibleCapacity - 1);
+        ReplaceCollection(VisibleItems, BuildVisibleItems(Items.Take(visibleCount)));
+        ReplaceCollection(OverflowItems, Items.Skip(visibleCount));
+        OnPropertyChanged(nameof(HasOverflow));
+    }
+
+    private IEnumerable<ShellItemViewModel> BuildVisibleItems(IEnumerable<ShellItemViewModel> items)
+    {
+        var visibleItems = items.ToList();
+        if (string.IsNullOrWhiteSpace(_previewDraggedViewId) || string.IsNullOrWhiteSpace(_previewGlyph))
+        {
+            return visibleItems;
+        }
+
+        visibleItems = visibleItems
+            .Where(item => !string.Equals(item.Id, _previewDraggedViewId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var normalizedIndex = _previewInsertIndex.HasValue
+            ? Math.Clamp(_previewInsertIndex.Value, 0, visibleItems.Count)
+            : visibleItems.Count;
+        visibleItems.Insert(normalizedIndex, new ShellItemViewModel(
+            id: "__drag-preview__",
+            glyph: _previewGlyph,
+            title: string.Empty,
+            packageDisplayName: string.Empty,
+            toolTipText: string.Empty,
+            placement: Placement,
+            onSelect: _ => { },
+            isDragPreview: true));
+        return visibleItems;
+    }
+
+    private static void ReplaceCollection<T>(ObservableCollection<T> target, IEnumerable<T> items)
+    {
+        target.Clear();
+        foreach (var item in items)
+        {
+            target.Add(item);
+        }
+    }
+}

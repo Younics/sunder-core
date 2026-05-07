@@ -1,0 +1,108 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sunder.App.Views.PackageImageGalleryWindow"
+        WindowDecorations="None"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        CanResize="False"
+        Title="Package image gallery"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        Background="#E603060C">
+  <Window.Styles>
+    <Style Selector="Button.gallery-close-button, Button.gallery-side-button">
+      <Setter Property="Background" Value="#B810151D" />
+      <Setter Property="BorderBrush" Value="#29FFFFFF" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="Button.gallery-close-button:pointerover, Button.gallery-side-button:pointerover">
+      <Setter Property="Background" Value="#24FFB44C" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+    </Style>
+
+    <Style Selector="Button.gallery-close-button">
+      <Setter Property="Width" Value="44" />
+      <Setter Property="Height" Value="44" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="CornerRadius" Value="22" />
+      <Setter Property="FontSize" Value="26" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style Selector="Button.gallery-side-button">
+      <Setter Property="Width" Value="52" />
+      <Setter Property="Height" Value="52" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="CornerRadius" Value="26" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+      <Setter Property="FontSize" Value="40" />
+    </Style>
+  </Window.Styles>
+
+  <Grid x:Name="Backdrop"
+        Background="#CC03060C"
+        PointerPressed="Backdrop_OnPointerPressed">
+    <Button Classes="gallery-close-button"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Margin="18"
+            Content="×"
+            Click="CloseButton_OnClick"
+            PointerPressed="GalleryContent_OnPointerPressed"
+            ZIndex="3" />
+
+    <Button x:Name="PreviousButton"
+            Classes="gallery-side-button"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Center"
+            Margin="32,0,0,0"
+            Content="‹"
+            Click="PreviousButton_OnClick"
+            PointerPressed="GalleryContent_OnPointerPressed"
+            ZIndex="2" />
+
+    <Button x:Name="NextButton"
+            Classes="gallery-side-button"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Center"
+            Margin="0,0,32,0"
+            Content="›"
+            Click="NextButton_OnClick"
+            PointerPressed="GalleryContent_OnPointerPressed"
+            ZIndex="2" />
+
+    <StackPanel HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="14"
+                PointerPressed="GalleryContent_OnPointerPressed">
+      <Border MaxWidth="1120"
+              MaxHeight="760"
+              BorderBrush="#24FFFFFF"
+              BorderThickness="1"
+              CornerRadius="24"
+              Background="#66000000"
+              ClipToBounds="True"
+              BoxShadow="0 28 100 0 #66000000">
+        <Image x:Name="GalleryImage"
+               Stretch="Uniform"
+               MaxWidth="1120"
+               MaxHeight="760" />
+      </Border>
+
+      <StackPanel HorizontalAlignment="Center"
+                  Spacing="4">
+        <TextBlock x:Name="CaptionText"
+                   HorizontalAlignment="Center"
+                   Foreground="{DynamicResource Sunder.Brush.Foreground.Primary}"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap" />
+        <TextBlock x:Name="CountText"
+                   HorizontalAlignment="Center"
+                   Foreground="{DynamicResource Sunder.Brush.Foreground.Muted}" />
+      </StackPanel>
+    </StackPanel>
+  </Grid>
+</Window>

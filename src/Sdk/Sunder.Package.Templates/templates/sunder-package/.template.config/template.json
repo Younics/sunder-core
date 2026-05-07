@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Sunder",
+  "classifications": ["Sunder", "Package", "Avalonia"],
+  "identity": "Sunder.Package",
+  "name": "Sunder Package",
+  "shortName": "sunder-package",
+  "sourceName": "Sunder.Package.Template",
+  "preferNameDirectory": true,
+  "symbols": {
+    "packageId": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "sunder.package.template",
+      "description": "The runtime package id written into generated package metadata.",
+      "replaces": "sunder.package.template"
+    },
+    "packageName": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "Sunder Package Template",
+      "description": "The package name shown in Sunder.",
+      "replaces": "Sunder Package Template"
+    },
+    "sunderVersion": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "1.0.0",
+      "description": "The Sunder SDK/build package version to reference.",
+      "replaces": "0.1.0-SUNDER"
+    },
+    "withContracts": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Generate a sibling *.Contracts project for public extension points."
+    },
+    "withHostDependency": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Scaffold package dependency metadata and integration notes for extending another package."
+    },
+    "withHostContracts": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Add a PackageReference to the host package's published *.Contracts package and generate a compile-safe extension stub."
+    },
+    "hostPackageId": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "sunder.host.package",
+      "description": "The package id of the host package this package extends.",
+      "replaces": "sunder.host.package"
+    },
+    "hostContractsPackageId": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "Sunder.Host.Package.Contracts",
+      "description": "The NuGet package id of the host package's published contracts package.",
+      "replaces": "Sunder.Host.Package.Contracts"
+    },
+    "hostContractsVersion": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "1.0.0",
+      "description": "The version of the host package's published contracts package.",
+      "replaces": "1.0.0-HOST-CONTRACTS"
+    },
+    "noDefaultView": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Generate no default shell-visible package view."
+    }
+  },
+  "primaryOutputs": [
+    {
+      "path": "Sunder.Package.Template/Sunder.Package.Template.csproj"
+    }
+  ],
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "condition": "(!withContracts)",
+          "exclude": [
+            "Sunder.Package.Template.Contracts/**/*"
+          ]
+        },
+        {
+          "condition": "(!withHostDependency)",
+          "exclude": [
+            "Sunder.Package.Template/Extensions/**/*",
+            "Sunder.Package.Template/PackageMetadata.host.cs"
+          ],
+          "rename": {
+            "Sunder.Package.Template/PackageMetadata.no-host.cs": "Sunder.Package.Template/PackageMetadata.cs"
+          }
+        },
+        {
+          "condition": "(withHostDependency)",
+          "exclude": [
+            "Sunder.Package.Template/PackageMetadata.no-host.cs"
+          ],
+          "rename": {
+            "Sunder.Package.Template/PackageMetadata.host.cs": "Sunder.Package.Template/PackageMetadata.cs"
+          }
+        },
+        {
+          "condition": "(!withHostContracts)",
+          "exclude": [
+            "Sunder.Package.Template/HostContracts.PackageReferences.props",
+            "Sunder.Package.Template/Extensions/HostContractContributionStub.cs"
+          ]
+        },
+        {
+          "condition": "(noDefaultView && !withHostDependency)",
+          "exclude": [
+            "Sunder.Package.Template/PackageViews/**/*",
+            "Sunder.Package.Template/PackageModule.with-view.cs"
+          ],
+          "rename": {
+            "Sunder.Package.Template/PackageModule.no-view.cs": "Sunder.Package.Template/PackageModule.cs"
+          }
+        },
+        {
+          "condition": "(!noDefaultView && !withHostDependency)",
+          "exclude": [
+            "Sunder.Package.Template/PackageModule.no-view.cs"
+          ],
+          "rename": {
+            "Sunder.Package.Template/PackageModule.with-view.cs": "Sunder.Package.Template/PackageModule.cs"
+          }
+        },
+        {
+          "condition": "(noDefaultView && withHostDependency)",
+          "exclude": [
+            "Sunder.Package.Template/PackageViews/**/*",
+            "Sunder.Package.Template/PackageModule.with-view.cs"
+          ],
+          "rename": {
+            "Sunder.Package.Template/PackageModule.no-view.cs": "Sunder.Package.Template/PackageModule.cs"
+          }
+        },
+        {
+          "condition": "(!noDefaultView && withHostDependency)",
+          "exclude": [
+            "Sunder.Package.Template/PackageModule.no-view.cs"
+          ],
+          "rename": {
+            "Sunder.Package.Template/PackageModule.with-view.cs": "Sunder.Package.Template/PackageModule.cs"
+          }
+        }
+      ]
+    }
+  ]
+}

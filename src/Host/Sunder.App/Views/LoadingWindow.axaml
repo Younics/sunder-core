@@ -1,0 +1,87 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        x:Class="Sunder.App.Views.LoadingWindow"
+        x:DataType="vm:LoadingWindowViewModel"
+        mc:Ignorable="d"
+        Width="820"
+        Height="460"
+        CanResize="False"
+        ShowInTaskbar="True"
+        WindowDecorations="None"
+        WindowStartupLocation="CenterScreen"
+        Title="Sunder"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        Classes="loading-window">
+  <Border Classes="loading-splash-surface"
+          Padding="0">
+    <Grid RowDefinitions="*,Auto"
+          ClipToBounds="True">
+      <Image Grid.RowSpan="2"
+             Source="avares://Sunder.App/Assets/Images/load_background.png"
+             Stretch="UniformToFill" />
+
+      <Border Grid.RowSpan="2">
+        <Border.Background>
+          <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+            <GradientStop Offset="0" Color="#D21D2128" />
+            <GradientStop Offset="0.38" Color="#AA1D2128" />
+            <GradientStop Offset="0.72" Color="#421D2128" />
+            <GradientStop Offset="1" Color="#141D2128" />
+          </LinearGradientBrush>
+        </Border.Background>
+      </Border>
+
+      <Grid Margin="48,38,48,32"
+            ColumnDefinitions="Auto,*">
+        <StackPanel Spacing="10"
+                    VerticalAlignment="Top">
+          <TextBlock Classes="loading-title"
+                     Text="{Binding Title}" />
+          <TextBlock Classes="loading-version"
+                     Text="{Binding Version}" />
+          <TextBlock Classes="loading-subtitle"
+                     Margin="0,8,0,0"
+                     Text="{Binding Subtitle}" />
+        </StackPanel>
+
+        <StackPanel Grid.ColumnSpan="2"
+                    VerticalAlignment="Bottom"
+                    Spacing="12">
+          <TextBlock Classes="loading-caption"
+                     Text="{Binding StatusMessage}" />
+
+          <Border Classes="loading-progress-track">
+            <Border Classes="loading-progress-fill"
+                    Width="{Binding ProgressWidth}"
+                    HorizontalAlignment="Left" />
+          </Border>
+
+          <StackPanel Orientation="Horizontal"
+                      Spacing="10"
+                      Margin="0,18,0,0">
+            <Border Width="26"
+                    Height="26"
+                    Classes="loading-logo-badge"
+                    Padding="2">
+              <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+                     RenderOptions.BitmapInterpolationMode="HighQuality"
+                     Stretch="Uniform" />
+            </Border>
+
+            <TextBlock Classes="loading-footer"
+                       VerticalAlignment="Center"
+                       Text="{Binding FooterText}" />
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+
+      <Border Grid.Row="1"
+              Height="1"
+              Background="{DynamicResource Sunder.Brush.Border.Subtle}"
+              Opacity="0.9" />
+    </Grid>
+  </Border>
+</Window>
