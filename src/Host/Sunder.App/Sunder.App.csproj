@@ -29,7 +29,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
   </ItemGroup>
@@ -42,15 +44,9 @@
           AfterTargets="Build"
           Condition="'$(DesignTimeBuild)' != 'true'">
     <PropertyGroup>
-      <BundledRuntimeHostProject>$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj</BundledRuntimeHostProject>
       <BundledRuntimeHostSourceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host\bin\$(Configuration)\$(TargetFramework)\'))</BundledRuntimeHostSourceDir>
       <BundledRuntimeHostOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'RuntimeHost'))\</BundledRuntimeHostOutputDir>
     </PropertyGroup>
-
-    <MSBuild Projects="$(BundledRuntimeHostProject)"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework)"
-             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath;PublishDir;RuntimeIdentifier;SelfContained" />
 
     <ItemGroup>
       <_BundledRuntimeHostFiles Include="$(BundledRuntimeHostSourceDir)**\*"
@@ -70,15 +66,9 @@
           AfterTargets="Build"
           Condition="'$(DesignTimeBuild)' != 'true'">
     <PropertyGroup>
-      <BundledCliProject>$(MSBuildProjectDirectory)\..\Sunder.Cli\Sunder.Cli.csproj</BundledCliProject>
       <BundledCliSourceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Cli\bin\$(Configuration)\$(TargetFramework)\'))</BundledCliSourceDir>
       <BundledCliOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'Cli'))\</BundledCliOutputDir>
     </PropertyGroup>
-
-    <MSBuild Projects="$(BundledCliProject)"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework)"
-             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath;PublishDir;RuntimeIdentifier;SelfContained" />
 
     <ItemGroup>
       <_BundledCliFiles Include="$(BundledCliSourceDir)**\*"
