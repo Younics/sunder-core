@@ -375,7 +375,7 @@
                               Spacing="8"
                               HorizontalAlignment="Center">
                     <TextBlock Classes="welcome-eyebrow"
-                               Text="LOCAL-FIRST AGENT WORKSPACE" />
+                               Text="YOUR NEW WORKSPACE" />
                     <TextBlock Classes="welcome-title"
                                Text="Welcome to Sunder" />
                     <TextBlock Classes="welcome-subtitle"

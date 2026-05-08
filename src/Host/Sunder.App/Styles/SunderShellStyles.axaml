@@ -621,11 +621,6 @@
     <Setter Property="VerticalAlignment" Value="Center" />
     <Setter Property="MaxWidth" Value="720" />
     <Setter Property="Padding" Value="42" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="22" />
-    <Setter Property="BoxShadow" Value="0 24 80 0 #66000000" />
   </Style>
 
   <Style Selector="Border.welcome-logo-frame">
