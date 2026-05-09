@@ -159,8 +159,8 @@ jobs:
           }
           $metadata | ConvertTo-Json -Depth 4 | Out-File -FilePath $metadataPath -Encoding utf8
 
-          $signParams = "/fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib `"$($dlib.FullName)`" /dmdf `"$metadataPath`""
-          "sign_params=$signParams" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "dlib_path=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "metadata_path=$metadataPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Configure Apple signing and notarization
         id: apple-signing
@@ -244,12 +244,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $dlibPath = "${{ steps.windows-signing.outputs.dlib_path }}"
+          $metadataPath = "${{ steps.windows-signing.outputs.metadata_path }}"
+          $windowsSignParams = "/fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib `"$dlibPath`" /dmdf `"$metadataPath`""
+
           $packageArgs = @(
             "-Version", "${{ needs.prepare.outputs.version }}",
             "-Runtime", "${{ matrix.runtime }}",
             "-Channel", "${{ env.RELEASE_CHANNEL }}",
             "-GitHubRepositoryUrl", "${{ env.RELEASE_REPO_URL }}",
-            "-WindowsSignParams", "${{ steps.windows-signing.outputs.sign_params }}"
+            "-WindowsSignParams", $windowsSignParams
           )
 
           if ("${{ needs.prepare.outputs.is_prerelease }}" -eq "true") {
