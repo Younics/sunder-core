@@ -1,0 +1,172 @@
+name: Sunder Runtime Host Release
+
+on:
+  push:
+    tags:
+      - "host/v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sunder-host-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "10.0.x"
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+    steps:
+      - name: Validate release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^host/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "Runtime Host release tags must use SemVer format, for example host/v0.1.0 or host/v0.1.0-beta.1." >&2
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          is_prerelease="false"
+          if [[ "$version" == *-* ]]; then
+            is_prerelease="true"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Package ${{ matrix.runtime }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            os: windows-latest
+          - runtime: win-arm64
+            os: windows-latest
+          - runtime: linux-x64
+            os: ubuntu-24.04
+          - runtime: linux-arm64
+            os: ubuntu-24.04-arm
+          - runtime: osx-x64
+            os: macos-14
+          - runtime: osx-arm64
+            os: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish Runtime Host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = "${{ needs.prepare.outputs.version }}"
+          $runtime = "${{ matrix.runtime }}"
+          $projectPath = "src/Host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj"
+          $publishDir = "artifacts/publish/host/$runtime"
+          $assetDir = "artifacts/release/host/$runtime"
+
+          dotnet restore $projectPath -r $runtime -p:Configuration=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          dotnet publish $projectPath `
+            -c Release `
+            -r $runtime `
+            --no-restore `
+            --self-contained true `
+            -p:Version=$version `
+            -p:InformationalVersion=$version `
+            -p:ContinuousIntegrationBuild=true `
+            -p:PublishSingleFile=false `
+            -o $publishDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if (-not $IsWindows) {
+            $executablePath = Join-Path $publishDir "Sunder.Runtime.Host"
+            if (Test-Path -LiteralPath $executablePath) {
+              chmod +x $executablePath
+            }
+          }
+
+          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+          if ($IsWindows) {
+            $assetPath = Join-Path $assetDir "sunder-runtime-host-$version-$runtime.zip"
+            if (Test-Path -LiteralPath $assetPath) { Remove-Item -LiteralPath $assetPath -Force }
+            Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $assetPath
+          } else {
+            $assetPath = Join-Path $assetDir "sunder-runtime-host-$version-$runtime.tar.gz"
+            if (Test-Path -LiteralPath $assetPath) { Remove-Item -LiteralPath $assetPath -Force }
+            tar -czf $assetPath -C $publishDir .
+          }
+
+      - name: Upload Runtime Host artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunder-runtime-host-${{ matrix.runtime }}
+          path: artifacts/release/host/${{ matrix.runtime }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Runtime Host artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tag="host/v$VERSION"
+          assets=(release-assets/sunder-runtime-host-*/*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No Runtime Host release assets were downloaded." >&2
+            exit 1
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            create_args=(
+              release create "$tag"
+              --title "Sunder Runtime Host $VERSION"
+              --notes "Automated Sunder Runtime Host release for $VERSION."
+            )
+
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              create_args+=(--prerelease)
+            fi
+
+            gh "${create_args[@]}" "${assets[@]}"
+          fi
