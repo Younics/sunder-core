@@ -64,7 +64,7 @@ jobs:
           - runtime: linux-arm64
             os: ubuntu-24.04-arm
           - runtime: osx-x64
-            os: macos-13
+            os: macos-14
           - runtime: osx-arm64
             os: macos-14
     steps:
@@ -117,17 +117,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          prerelease_args=()
+          package_args=(
+            ./scripts/release/package-sunder.sh
+            --version "${{ needs.prepare.outputs.version }}"
+            --runtime "${{ matrix.runtime }}"
+            --channel "${RELEASE_CHANNEL}"
+            --github-repository-url "${RELEASE_REPO_URL}"
+          )
+
           if [[ "${{ needs.prepare.outputs.is_prerelease }}" == "true" ]]; then
-            prerelease_args+=(--include-prerelease-updates)
+            package_args+=(--include-prerelease-updates)
           fi
 
-          bash ./scripts/release/package-sunder.sh \
-            --version "${{ needs.prepare.outputs.version }}" \
-            --runtime "${{ matrix.runtime }}" \
-            --channel "${RELEASE_CHANNEL}" \
-            --github-repository-url "${RELEASE_REPO_URL}" \
-            "${prerelease_args[@]}"
+          bash "${package_args[@]}"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
