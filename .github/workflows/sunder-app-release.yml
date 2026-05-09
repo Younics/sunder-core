@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: sunder-app-release-${{ github.ref }}
@@ -51,6 +52,7 @@ jobs:
     name: Package ${{ matrix.runtime }}
     needs: prepare
     runs-on: ${{ matrix.os }}
+    environment: sunder-app-signing
     strategy:
       fail-fast: false
       matrix:
@@ -74,7 +76,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-version: |
+            ${{ env.DOTNET_VERSION }}
+            8.0.x
 
       - name: Add .NET tools to PATH
         shell: pwsh
@@ -91,29 +95,178 @@ jobs:
         shell: pwsh
         run: dotnet tool install --global vpk --version $env:VELOPACK_VERSION
 
+      - name: Azure login for Windows signing
+        if: startsWith(matrix.runtime, 'win-')
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure Azure Trusted Signing
+        id: windows-signing
+        if: startsWith(matrix.runtime, 'win-')
+        shell: pwsh
+        env:
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT || secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $requiredVariables = @(
+            "AZURE_TRUSTED_SIGNING_ENDPOINT",
+            "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME",
+            "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME"
+          )
+
+          foreach ($variableName in $requiredVariables) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($variableName))) {
+              throw "Azure Trusted Signing value '$variableName' is not configured on the GitHub environment."
+            }
+          }
+
+          $nugetPath = Join-Path $env:RUNNER_TEMP "nuget.exe"
+          $clientRoot = Join-Path $env:RUNNER_TEMP "artifact-signing-client"
+          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile $nugetPath
+          & $nugetPath install Microsoft.ArtifactSigning.Client -OutputDirectory $clientRoot -ExcludeVersion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $dlib = Get-ChildItem -Path $clientRoot -Filter "Azure.CodeSigning.Dlib.dll" -Recurse |
+            Where-Object { $_.FullName -match "[\\/]x64[\\/]" } |
+            Select-Object -First 1
+          if ($null -eq $dlib) {
+            throw "Azure.CodeSigning.Dlib.dll was not found in the Artifact Signing client package."
+          }
+
+          $metadataPath = Join-Path $env:RUNNER_TEMP "trusted-signing-metadata.json"
+          $metadata = [ordered]@{
+            Endpoint = $env:AZURE_TRUSTED_SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME
+            CertificateProfileName = $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME
+            CorrelationId = "sunder-app-${{ github.run_id }}-${{ matrix.runtime }}"
+            ExcludeCredentials = @(
+              "EnvironmentCredential",
+              "ManagedIdentityCredential",
+              "WorkloadIdentityCredential",
+              "SharedTokenCacheCredential",
+              "VisualStudioCredential",
+              "VisualStudioCodeCredential",
+              "AzurePowerShellCredential",
+              "AzureDeveloperCliCredential",
+              "InteractiveBrowserCredential"
+            )
+          }
+          $metadata | ConvertTo-Json -Depth 4 | Out-File -FilePath $metadataPath -Encoding utf8
+
+          $signParams = "/fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib `"$($dlib.FullName)`" /dmdf `"$metadataPath`""
+          "sign_params=$signParams" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Configure Apple signing and notarization
+        id: apple-signing
+        if: startsWith(matrix.runtime, 'osx-')
+        shell: bash
+        env:
+          APPLE_BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_BUILD_CERTIFICATE_BASE64 }}
+          APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_SIGNING_KEYCHAIN_PASSWORD }}
+          APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
+          APPLE_SIGN_INSTALL_IDENTITY: ${{ secrets.APPLE_SIGN_INSTALL_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          required_vars=(
+            APPLE_BUILD_CERTIFICATE_BASE64
+            APPLE_INSTALLER_CERTIFICATE_BASE64
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_ID
+            APPLE_APP_SPECIFIC_PASSWORD
+            APPLE_TEAM_ID
+            APPLE_SIGNING_KEYCHAIN_PASSWORD
+            APPLE_SIGN_APP_IDENTITY
+            APPLE_SIGN_INSTALL_IDENTITY
+          )
+
+          for var_name in "${required_vars[@]}"; do
+            if [[ -z "${!var_name:-}" ]]; then
+              echo "Apple signing secret '$var_name' is not configured." >&2
+              exit 1
+            fi
+          done
+
+          decode_base64() {
+            local value="$1"
+            local output="$2"
+
+            if printf '%s' "$value" | base64 --decode > "$output" 2>/dev/null; then
+              return 0
+            fi
+
+            printf '%s' "$value" | base64 -D > "$output"
+          }
+
+          build_cert_path="$RUNNER_TEMP/apple-build-certificate.p12"
+          installer_cert_path="$RUNNER_TEMP/apple-installer-certificate.p12"
+          keychain_path="$RUNNER_TEMP/sunder-app-signing.keychain-db"
+          notary_profile="sunder-app-notary"
+
+          decode_base64 "$APPLE_BUILD_CERTIFICATE_BASE64" "$build_cert_path"
+          decode_base64 "$APPLE_INSTALLER_CERTIFICATE_BASE64" "$installer_cert_path"
+
+          security create-keychain -p "$APPLE_SIGNING_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$APPLE_SIGNING_KEYCHAIN_PASSWORD" "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          security import "$build_cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security import "$installer_cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$APPLE_SIGNING_KEYCHAIN_PASSWORD" "$keychain_path" >/dev/null
+
+          rm -f "$build_cert_path" "$installer_cert_path"
+
+          xcrun notarytool store-credentials "$notary_profile" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --keychain "$keychain_path"
+
+          echo "keychain_path=$keychain_path" >> "$GITHUB_OUTPUT"
+          echo "notary_profile=$notary_profile" >> "$GITHUB_OUTPUT"
+
       - name: Package Sunder for Windows
         if: startsWith(matrix.runtime, 'win-')
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $prereleaseArgs = @()
+          $packageArgs = @(
+            "-Version", "${{ needs.prepare.outputs.version }}",
+            "-Runtime", "${{ matrix.runtime }}",
+            "-Channel", "${{ env.RELEASE_CHANNEL }}",
+            "-GitHubRepositoryUrl", "${{ env.RELEASE_REPO_URL }}",
+            "-WindowsSignParams", "${{ steps.windows-signing.outputs.sign_params }}"
+          )
+
           if ("${{ needs.prepare.outputs.is_prerelease }}" -eq "true") {
-            $prereleaseArgs += "-IncludePrereleaseUpdates"
+            $packageArgs += "-IncludePrereleaseUpdates"
           }
 
-          ./scripts/release/package-sunder.ps1 `
-            -Version "${{ needs.prepare.outputs.version }}" `
-            -Runtime "${{ matrix.runtime }}" `
-            -Channel "${{ env.RELEASE_CHANNEL }}" `
-            -GitHubRepositoryUrl "${{ env.RELEASE_REPO_URL }}" `
-            @prereleaseArgs
+          ./scripts/release/package-sunder.ps1 @packageArgs
 
       - name: Package Sunder for Unix
         if: ${{ !startsWith(matrix.runtime, 'win-') }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
+          APPLE_SIGN_INSTALL_IDENTITY: ${{ secrets.APPLE_SIGN_INSTALL_IDENTITY }}
+          APPLE_NOTARY_PROFILE: ${{ steps.apple-signing.outputs.notary_profile }}
+          APPLE_KEYCHAIN_PATH: ${{ steps.apple-signing.outputs.keychain_path }}
         run: |
           set -euo pipefail
 
@@ -124,6 +277,16 @@ jobs:
             --channel "${RELEASE_CHANNEL}"
             --github-repository-url "${RELEASE_REPO_URL}"
           )
+
+          if [[ "${{ startsWith(matrix.runtime, 'osx-') }}" == "true" ]]; then
+            package_args+=(
+              --mac-bundle-id com.younics.sunder
+              --mac-sign-app-identity "$APPLE_SIGN_APP_IDENTITY"
+              --mac-sign-install-identity "$APPLE_SIGN_INSTALL_IDENTITY"
+              --mac-notary-profile "$APPLE_NOTARY_PROFILE"
+              --mac-keychain "$APPLE_KEYCHAIN_PATH"
+            )
+          fi
 
           if [[ "${{ needs.prepare.outputs.is_prerelease }}" == "true" ]]; then
             package_args+=(--include-prerelease-updates)
@@ -138,6 +301,18 @@ jobs:
           path: artifacts/velopack/${{ env.RELEASE_CHANNEL }}/${{ matrix.runtime }}/*
           if-no-files-found: error
           retention-days: 7
+
+      - name: Clean up Apple signing keychain
+        if: ${{ always() && startsWith(matrix.runtime, 'osx-') }}
+        shell: bash
+        env:
+          APPLE_KEYCHAIN_PATH: ${{ steps.apple-signing.outputs.keychain_path }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${APPLE_KEYCHAIN_PATH:-}" && -f "$APPLE_KEYCHAIN_PATH" ]]; then
+            security delete-keychain "$APPLE_KEYCHAIN_PATH"
+          fi
 
   publish:
     name: Publish GitHub Release

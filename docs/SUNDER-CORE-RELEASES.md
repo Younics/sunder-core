@@ -33,6 +33,8 @@ The App workflow packages these runtimes:
 
 The App release uses Velopack. Each runtime uses its own App Velopack channel to avoid release-feed collisions, for example `app-win-x64-stable` and `app-osx-arm64-stable`.
 
+Windows App builds are signed with Azure Trusted Signing. macOS App builds use bundle id `com.younics.sunder` and are signed/notarized with Apple Developer ID certificates. Linux AppImage builds are currently unsigned.
+
 ## Publish CLI
 
 Create and push a CLI SemVer tag:
@@ -77,6 +79,33 @@ Windows Runtime Host artifacts are `.zip` files. Linux and macOS Runtime Host ar
 
 The App installer bundles CLI and Runtime Host outputs from the same commit as the App release. The App tag controls the Velopack app version. Standalone CLI and Runtime Host releases keep their own tags and GitHub Releases.
 
-## Signing And Notarization
+## App Signing And Notarization
 
-Release packages are currently unsigned. Windows code signing and macOS signing/notarization can be added later without changing the release tag flow.
+Do not commit certificates, private keys, provisioning material, app-specific passwords, or signing passwords to this public repository. Store signing material only in GitHub Actions secrets.
+
+Required Windows App signing environment values:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `AZURE_TRUSTED_SIGNING_ENDPOINT`
+- `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
+- `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
+
+These values are produced by the private workspace Terraform setup in `infra/windows-signing`. They can be stored as GitHub environment variables for `sunder-app-signing`; no Windows private key, PFX file, or signing password is stored in GitHub.
+
+Required macOS App signing and notarization secrets:
+
+- `APPLE_BUILD_CERTIFICATE_BASE64`
+- `APPLE_INSTALLER_CERTIFICATE_BASE64`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_ID`
+- `APPLE_APP_SPECIFIC_PASSWORD`
+- `APPLE_TEAM_ID`
+- `APPLE_SIGNING_KEYCHAIN_PASSWORD`
+- `APPLE_SIGN_APP_IDENTITY`
+- `APPLE_SIGN_INSTALL_IDENTITY`
+
+The macOS identity secret values should match the certificate subjects available after import, for example `Developer ID Application: Company Name (TEAMID)` and `Developer ID Installer: Company Name (TEAMID)`.
+
+CLI and Runtime Host standalone releases are not signed yet.

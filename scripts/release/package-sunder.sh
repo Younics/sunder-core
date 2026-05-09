@@ -9,11 +9,19 @@ output_root="artifacts"
 github_repository_url=""
 github_token=""
 include_prerelease_updates="false"
+mac_bundle_id="com.younics.sunder"
+mac_sign_app_identity=""
+mac_sign_install_identity=""
+mac_notary_profile=""
+mac_keychain=""
 
 usage() {
   cat <<'USAGE'
 Usage: package-sunder.sh --version <semver> [--runtime <rid>] [--channel stable|beta|nightly]
                          [--github-repository-url <url>] [--include-prerelease-updates]
+                         [--mac-bundle-id <id>]
+                         [--mac-sign-app-identity <identity>] [--mac-sign-install-identity <identity>]
+                         [--mac-notary-profile <profile>] [--mac-keychain <path>]
 
 Examples:
   ./scripts/release/package-sunder.sh --version 0.1.0 --runtime linux-x64
@@ -55,6 +63,26 @@ while [[ $# -gt 0 ]]; do
       include_prerelease_updates="true"
       shift
       ;;
+    --mac-bundle-id)
+      mac_bundle_id="${2:-}"
+      shift 2
+      ;;
+    --mac-sign-app-identity)
+      mac_sign_app_identity="${2:-}"
+      shift 2
+      ;;
+    --mac-sign-install-identity)
+      mac_sign_install_identity="${2:-}"
+      shift 2
+      ;;
+    --mac-notary-profile)
+      mac_notary_profile="${2:-}"
+      shift 2
+      ;;
+    --mac-keychain)
+      mac_keychain="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -81,6 +109,24 @@ fi
 if [[ "$channel" != "stable" && "$channel" != "beta" && "$channel" != "nightly" ]]; then
   echo "Channel must be stable, beta, or nightly." >&2
   exit 2
+fi
+
+if [[ -z "$mac_bundle_id" ]]; then
+  echo "macOS bundle id must not be empty." >&2
+  exit 2
+fi
+
+if [[ "$runtime" == osx-* ]]; then
+  mac_signing_arg_count=0
+  [[ -n "$mac_sign_app_identity" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
+  [[ -n "$mac_sign_install_identity" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
+  [[ -n "$mac_notary_profile" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
+  [[ -n "$mac_keychain" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
+
+  if [[ "$mac_signing_arg_count" -ne 0 && "$mac_signing_arg_count" -ne 4 ]]; then
+    echo "macOS signing requires app identity, installer identity, notary profile, and keychain." >&2
+    exit 2
+  fi
 fi
 
 if ! command -v vpk >/dev/null 2>&1; then
@@ -194,7 +240,15 @@ case "$runtime" in
     ;;
   osx-*)
     macos_icon="$(create_macos_icon)"
-    pack_args+=(--icon "$macos_icon" --bundleId dev.sunder.app)
+    pack_args+=(--icon "$macos_icon" --bundleId "$mac_bundle_id")
+    if [[ -n "$mac_sign_app_identity" ]]; then
+      pack_args+=(
+        --signAppIdentity "$mac_sign_app_identity"
+        --signInstallIdentity "$mac_sign_install_identity"
+        --notaryProfile "$mac_notary_profile"
+        --keychain "$mac_keychain"
+      )
+    fi
     ;;
 esac
 

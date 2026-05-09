@@ -16,7 +16,9 @@ param(
 
     [string]$GitHubToken = "",
 
-    [switch]$IncludePrereleaseUpdates
+    [switch]$IncludePrereleaseUpdates,
+
+    [string]$WindowsSignParams = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,6 +125,11 @@ $packArgs = @(
 
 if (Test-Path -LiteralPath $iconPath) {
     $packArgs += @("--icon", $iconPath)
+}
+
+if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)
+    -and -not [string]::IsNullOrWhiteSpace($WindowsSignParams)) {
+    $packArgs += @("--signParams", $WindowsSignParams)
 }
 
 & $vpk.Source @packArgs
