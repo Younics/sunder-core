@@ -1,0 +1,199 @@
+name: Sunder App Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sunder-app-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  VELOPACK_VERSION: "0.0.1298"
+  RELEASE_CHANNEL: stable
+  RELEASE_REPO_URL: https://github.com/${{ github.repository }}
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+    steps:
+      - name: Validate release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "Release tags must use SemVer format, for example v0.1.0 or v0.1.0-beta.1." >&2
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          is_prerelease="false"
+          if [[ "$version" == *-* ]]; then
+            is_prerelease="true"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Package ${{ matrix.runtime }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            os: windows-latest
+          - runtime: win-arm64
+            os: windows-latest
+          - runtime: linux-x64
+            os: ubuntu-24.04
+          - runtime: linux-arm64
+            os: ubuntu-24.04-arm
+          - runtime: osx-x64
+            os: macos-13
+          - runtime: osx-arm64
+            os: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Add .NET tools to PATH
+        shell: pwsh
+        run: |
+          $toolsPath = if ($IsWindows) {
+            Join-Path $env:USERPROFILE ".dotnet\tools"
+          } else {
+            Join-Path $env:HOME ".dotnet/tools"
+          }
+
+          $toolsPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Velopack CLI
+        shell: pwsh
+        run: dotnet tool install --global vpk --version $env:VELOPACK_VERSION
+
+      - name: Package Sunder for Windows
+        if: startsWith(matrix.runtime, 'win-')
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $prereleaseArgs = @()
+          if ("${{ needs.prepare.outputs.is_prerelease }}" -eq "true") {
+            $prereleaseArgs += "-IncludePrereleaseUpdates"
+          }
+
+          ./scripts/release/package-sunder.ps1 `
+            -Version "${{ needs.prepare.outputs.version }}" `
+            -Runtime "${{ matrix.runtime }}" `
+            -Channel "${{ env.RELEASE_CHANNEL }}" `
+            -GitHubRepositoryUrl "${{ env.RELEASE_REPO_URL }}" `
+            @prereleaseArgs
+
+      - name: Package Sunder for Unix
+        if: ${{ !startsWith(matrix.runtime, 'win-') }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          prerelease_args=()
+          if [[ "${{ needs.prepare.outputs.is_prerelease }}" == "true" ]]; then
+            prerelease_args+=(--include-prerelease-updates)
+          fi
+
+          bash ./scripts/release/package-sunder.sh \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --runtime "${{ matrix.runtime }}" \
+            --channel "${RELEASE_CHANNEL}" \
+            --github-repository-url "${RELEASE_REPO_URL}" \
+            "${prerelease_args[@]}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunder-${{ matrix.runtime }}
+          path: artifacts/velopack/${{ env.RELEASE_CHANNEL }}/${{ matrix.runtime }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Add .NET tools to PATH
+        shell: bash
+        run: echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Install Velopack CLI
+        shell: bash
+        run: dotnet tool install --global vpk --version "$VELOPACK_VERSION"
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+
+          upload_args=(
+            upload github
+            --repoUrl "$RELEASE_REPO_URL"
+            --token "$GITHUB_TOKEN"
+            --publish
+            --merge
+            --releaseName "Sunder $VERSION"
+            --tag "v$VERSION"
+          )
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            upload_args+=(--pre)
+          fi
+
+          runtimes=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
+          for runtime in "${runtimes[@]}"; do
+            output_dir="release-assets/sunder-$runtime"
+            channel="$runtime-$RELEASE_CHANNEL"
+
+            if [[ ! -d "$output_dir" ]]; then
+              echo "Missing packaged artifact directory: $output_dir" >&2
+              exit 1
+            fi
+
+            vpk "${upload_args[@]}" --channel "$channel" --outputDir "$output_dir"
+          done

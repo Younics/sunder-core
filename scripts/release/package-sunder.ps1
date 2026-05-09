@@ -10,12 +10,18 @@ param(
 
     [string]$Configuration = "Release",
 
-    [string]$OutputRoot = "artifacts"
+    [string]$OutputRoot = "artifacts",
+
+    [string]$GitHubRepositoryUrl = "",
+
+    [string]$GitHubToken = "",
+
+    [switch]$IncludePrereleaseUpdates
 )
 
 $ErrorActionPreference = "Stop"
 
-if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$') {
+if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
     throw "Version '$Version' is not a valid SemVer value for Velopack. Use a value like 0.1.0 or 0.1.0-beta.1."
 }
 
@@ -30,8 +36,17 @@ $runtimeHostProjectPath = Join-Path $repoRoot "src\Host\Sunder.Runtime.Host\Sund
 $cliProjectPath = Join-Path $repoRoot "src\Host\Sunder.Cli\Sunder.Cli.csproj"
 $artifactRoot = if ([System.IO.Path]::IsPathRooted($OutputRoot)) { $OutputRoot } else { Join-Path $repoRoot $OutputRoot }
 $publishDir = Join-Path $artifactRoot "publish\sunder\$Runtime"
+$velopackChannel = "$Runtime-$Channel"
 $releaseDir = Join-Path $artifactRoot "velopack\$Channel\$Runtime"
 $mainExe = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) { "Sunder.App.exe" } else { "Sunder.App" }
+$imageDir = Join-Path $repoRoot "src\Host\Sunder.App\Assets\Images"
+$iconPath = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) {
+    Join-Path $imageDir "app.ico"
+} elseif ($Runtime.StartsWith("linux-", [StringComparison]::OrdinalIgnoreCase)) {
+    Join-Path $imageDir "logo.png"
+} else {
+    Join-Path $imageDir "app.icns"
+}
 
 foreach ($restoreProject in @($projectPath, $runtimeHostProjectPath, $cliProjectPath)) {
     & dotnet restore $restoreProject -r $Runtime -p:Configuration=$Configuration
@@ -50,6 +65,30 @@ if (Test-Path -LiteralPath $releaseDir) {
 
 New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+
+if (-not [string]::IsNullOrWhiteSpace($GitHubRepositoryUrl)) {
+    $effectiveGitHubToken = if (-not [string]::IsNullOrWhiteSpace($GitHubToken)) { $GitHubToken } else { $env:GITHUB_TOKEN }
+    $downloadArgs = @(
+        "download",
+        "github",
+        "--repoUrl", $GitHubRepositoryUrl.Trim(),
+        "--channel", $velopackChannel,
+        "--outputDir", $releaseDir
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($effectiveGitHubToken)) {
+        $downloadArgs += @("--token", $effectiveGitHubToken)
+    }
+
+    if ($IncludePrereleaseUpdates) {
+        $downloadArgs += "--pre"
+    }
+
+    & $vpk.Source @downloadArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Existing Velopack assets for channel '$velopackChannel' could not be downloaded. Continuing without delta history."
+    }
+}
 
 $publishArgs = @(
     "publish",
@@ -78,13 +117,17 @@ $packArgs = @(
     "--packDir", $publishDir,
     "--mainExe", $mainExe,
     "--runtime", $Runtime,
-    "--channel", $Channel,
+    "--channel", $velopackChannel,
     "--outputDir", $releaseDir
 )
+
+if (Test-Path -LiteralPath $iconPath) {
+    $packArgs += @("--icon", $iconPath)
+}
 
 & $vpk.Source @packArgs
 if ($LASTEXITCODE -ne 0) {
     throw "vpk pack failed for runtime $Runtime."
 }
 
-"Sunder Velopack release created: $releaseDir"
+"Sunder Velopack release created: $releaseDir ($velopackChannel)"
