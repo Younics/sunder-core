@@ -249,16 +249,16 @@ jobs:
           $metadataPath = "${{ steps.windows-signing.outputs.metadata_path }}"
           $windowsSignParams = "/fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib `"$dlibPath`" /dmdf `"$metadataPath`""
 
-          $packageArgs = @(
-            "-Version", "${{ needs.prepare.outputs.version }}",
-            "-Runtime", "${{ matrix.runtime }}",
-            "-Channel", "${{ env.RELEASE_CHANNEL }}",
-            "-GitHubRepositoryUrl", "${{ env.RELEASE_REPO_URL }}",
-            "-WindowsSignParams", $windowsSignParams
-          )
+          $packageArgs = @{
+            Version = "${{ needs.prepare.outputs.version }}"
+            Runtime = "${{ matrix.runtime }}"
+            Channel = "${{ env.RELEASE_CHANNEL }}"
+            GitHubRepositoryUrl = "${{ env.RELEASE_REPO_URL }}"
+            WindowsSignParams = $windowsSignParams
+          }
 
           if ("${{ needs.prepare.outputs.is_prerelease }}" -eq "true") {
-            $packageArgs += "-IncludePrereleaseUpdates"
+            $packageArgs.IncludePrereleaseUpdates = $true
           }
 
           ./scripts/release/package-sunder.ps1 @packageArgs
