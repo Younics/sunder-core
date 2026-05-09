@@ -5,9 +5,7 @@ on:
     tags:
       - "app/v*"
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: sunder-app-release-${{ github.ref }}
@@ -53,6 +51,9 @@ jobs:
     needs: prepare
     runs-on: ${{ matrix.os }}
     environment: sunder-app-signing
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -324,6 +325,8 @@ jobs:
       - prepare
       - package
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

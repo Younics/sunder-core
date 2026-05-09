@@ -5,8 +5,7 @@ on:
     tags:
       - "cli/v*"
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: sunder-cli-release-${{ github.ref }}
@@ -48,6 +47,8 @@ jobs:
     name: Package ${{ matrix.runtime }}
     needs: prepare
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -132,6 +133,8 @@ jobs:
       - prepare
       - package
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download CLI artifacts
         uses: actions/download-artifact@v4

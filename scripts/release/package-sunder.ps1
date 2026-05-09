@@ -127,8 +127,10 @@ if (Test-Path -LiteralPath $iconPath) {
     $packArgs += @("--icon", $iconPath)
 }
 
-if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)
-    -and -not [string]::IsNullOrWhiteSpace($WindowsSignParams)) {
+$isWindowsRuntime = $Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)
+$hasWindowsSignParams = -not [string]::IsNullOrWhiteSpace($WindowsSignParams)
+
+if ($isWindowsRuntime -and $hasWindowsSignParams) {
     $packArgs += @("--signParams", $WindowsSignParams)
 }
 
