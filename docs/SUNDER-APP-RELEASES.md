@@ -5,19 +5,25 @@ The release workflow currently builds and packages the app only; automated tests
 
 ## Publish a release
 
-Create and push a SemVer tag:
+Create and push an App SemVer tag:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag app/v0.1.0
+git push origin app/v0.1.0
 ```
 
 Prerelease tags are supported and are published as GitHub prereleases:
 
 ```powershell
-git tag v0.1.0-beta.1
-git push origin v0.1.0-beta.1
+git tag app/v0.1.0-beta.1
+git push origin app/v0.1.0-beta.1
 ```
+
+The Sunder core repository has separate version streams for releasable host components:
+
+- `app/vX.Y.Z` publishes the bundled Sunder desktop app.
+- `cli/vX.Y.Z` is reserved for standalone CLI releases.
+- `host/vX.Y.Z` is reserved for standalone Runtime Host releases.
 
 ## Build outputs
 
@@ -30,7 +36,7 @@ The release workflow packages these runtimes:
 - `osx-x64`
 - `osx-arm64`
 
-Each runtime uses its own Velopack channel to avoid release-feed collisions, for example `win-x64-stable` and `osx-arm64-stable`.
+Each runtime uses its own App Velopack channel to avoid release-feed collisions, for example `app-win-x64-stable` and `app-osx-arm64-stable`.
 
 ## Signing
 

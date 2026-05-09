@@ -3,7 +3,7 @@ name: Sunder App Release
 on:
   push:
     tags:
-      - "v*"
+      - "app/v*"
 
 permissions:
   contents: write
@@ -33,8 +33,8 @@ jobs:
           set -euo pipefail
 
           tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
-            echo "Release tags must use SemVer format, for example v0.1.0 or v0.1.0-beta.1." >&2
+          if [[ ! "$tag" =~ ^app/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "App release tags must use SemVer format, for example app/v0.1.0 or app/v0.1.0-beta.1." >&2
             exit 1
           fi
 
@@ -177,8 +177,8 @@ jobs:
             --token "$GITHUB_TOKEN"
             --publish
             --merge
-            --releaseName "Sunder $VERSION"
-            --tag "v$VERSION"
+            --releaseName "Sunder App $VERSION"
+            --tag "app/v$VERSION"
           )
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
@@ -188,7 +188,7 @@ jobs:
           runtimes=(win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64)
           for runtime in "${runtimes[@]}"; do
             output_dir="release-assets/sunder-$runtime"
-            channel="$runtime-$RELEASE_CHANNEL"
+            channel="app-$runtime-$RELEASE_CHANNEL"
 
             if [[ ! -d "$output_dir" ]]; then
               echo "Missing packaged artifact directory: $output_dir" >&2

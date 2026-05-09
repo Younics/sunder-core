@@ -29,9 +29,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
-    <ProjectReference Include="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
   </ItemGroup>

@@ -133,7 +133,7 @@ create_macos_icon() {
 
 publish_dir="$artifact_root/publish/sunder/$runtime"
 release_dir="$artifact_root/velopack/$channel/$runtime"
-velopack_channel="$runtime-$channel"
+velopack_channel="app-$runtime-$channel"
 main_exe="Sunder.App"
 
 if [[ "$runtime" == win-* ]]; then
