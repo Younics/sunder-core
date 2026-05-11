@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Theming;
 
+[SunderSdkCapability(SunderSdkCapabilities.ThemingV1)]
 public static class SunderThemeKeys
 {
     public const string BackgroundAppBrush = "Sunder.Brush.Background.App";

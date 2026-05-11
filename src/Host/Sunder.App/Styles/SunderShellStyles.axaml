@@ -282,6 +282,33 @@
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
+  <Style Selector="MenuItem.package-bar-context-menu-item">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Padding" Value="10,7" />
+    <Setter Property="MinWidth" Value="132" />
+  </Style>
+
+  <Style Selector="MenuItem.package-bar-context-menu-item:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Border.toolbar-menu-icon-badge">
+    <Setter Property="Width" Value="20" />
+    <Setter Property="Height" Value="20" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="TextBlock.toolbar-menu-icon-text">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
   <Style Selector="Button.close-button:pointerover">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Danger.Soft}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.OnDanger}" />

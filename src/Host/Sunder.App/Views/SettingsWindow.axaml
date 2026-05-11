@@ -216,10 +216,6 @@
                                 Content="Refresh Status"
                                 Click="RefreshCliStatusButton_OnClick" />
                         <Button Classes="secondary-action"
-                                Content="Copy PATH Instructions"
-                                IsEnabled="{Binding HasCliPathInstructions}"
-                                Click="CopyCliPathInstructionsButton_OnClick" />
-                        <Button Classes="secondary-action"
                                 Content="Uninstall CLI"
                                 IsEnabled="{Binding CanUninstallCli}"
                                 Click="UninstallCliButton_OnClick" />
@@ -229,7 +225,7 @@
 
                   <Border Classes="card-surface">
                     <Grid ColumnDefinitions="160,*"
-                          RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                          RowDefinitions="Auto,Auto,Auto,Auto"
                           RowSpacing="10"
                           ColumnSpacing="16">
                       <TextBlock Grid.Row="0" Grid.Column="0" Classes="section-title" Text="Platform" />
@@ -243,16 +239,34 @@
 
                       <TextBlock Grid.Row="3" Grid.Column="0" Classes="section-title" Text="Command Shim" />
                       <TextBlock Grid.Row="3" Grid.Column="1" Classes="muted" Text="{Binding CliShimPath}" TextWrapping="Wrap" />
-
-                      <TextBlock Grid.Row="4" Grid.Column="0" Classes="section-title" Text="PATH" />
-                      <TextBlock Grid.Row="4" Grid.Column="1" Classes="muted" Text="{Binding CliPathStateText}" TextWrapping="Wrap" />
                     </Grid>
                   </Border>
 
                   <Border Classes="card-surface"
                           IsVisible="{Binding HasCliPathInstructions}">
                     <StackPanel Spacing="8">
-                      <TextBlock Classes="section-title" Text="PATH Instructions" />
+                      <Grid ColumnDefinitions="*,Auto"
+                            ColumnSpacing="12">
+                        <TextBlock Classes="section-title"
+                                   Text="PATH Instructions"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                Classes="toolbar-icon"
+                                Width="28"
+                                Height="28"
+                                IsEnabled="{Binding HasCliPathInstructions}"
+                                Click="CopyCliPathInstructionsButton_OnClick"
+                                ToolTip.Tip="Copy PATH instructions">
+                          <Path Width="14"
+                                Height="14"
+                                Data="M5.25 4.75 L11 4.75 L11 12.75 L5.25 12.75 Z M7 3.25 L9.25 3.25 L10 4.75 M7 6.75 L9.25 6.75 M7 8.75 L9.25 8.75 M4 6.25 L3.25 6.25 L3.25 10.75 L4 10.75"
+                                Fill="Transparent"
+                                Stretch="Uniform"
+                                Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
+                                StrokeLineCap="Round"
+                                StrokeThickness="1.35" />
+                        </Button>
+                      </Grid>
                       <TextBox Text="{Binding CliPathInstructions}"
                                IsReadOnly="True"
                                AcceptsReturn="True"

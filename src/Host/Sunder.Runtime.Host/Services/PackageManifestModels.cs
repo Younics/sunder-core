@@ -28,6 +28,15 @@ internal sealed class DevPackageManifest
     [JsonPropertyName("dependsOn")]
     public IReadOnlyList<DevPackageDependencyManifest>? DependsOn { get; init; }
 
+    [JsonPropertyName("sdkApiVersion")]
+    public int? SdkApiVersion { get; init; }
+
+    [JsonPropertyName("sdkPackageVersion")]
+    public string? SdkPackageVersion { get; init; }
+
+    [JsonPropertyName("requiredSdkCapabilities")]
+    public IReadOnlyList<string>? RequiredSdkCapabilities { get; init; }
+
     [JsonPropertyName("sdkVersion")]
     public string? SdkVersion { get; init; }
 

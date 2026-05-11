@@ -1,6 +1,9 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Packaging;
 
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
+[SunderSdkCapability(SunderSdkCapabilities.PackagingV1)]
 public sealed class SunderPackageAttribute : Attribute
 {
     public string Id { get; set; } = string.Empty;

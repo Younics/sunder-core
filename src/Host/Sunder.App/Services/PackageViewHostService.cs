@@ -88,6 +88,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         NotificationCenterService? notificationCenter = null,
         CancellationToken cancellationToken = default)
     {
+        AppPackageSessionDirectories.CleanupStaleSessions();
+        var sessionFolder = activePackages.Count > 0 ? AppPackageSessionDirectories.CreateSessionFolder() : null;
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
             new AppPackageBackgroundServiceCoordinator(),
@@ -95,7 +97,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             [],
             [],
             faultReporter,
-            sessionFolder: null,
+            sessionFolder,
             new AppSharedAssemblyRegistry([]),
             new AppPackageExtensionCatalog(),
             shellViewService,
@@ -186,6 +188,13 @@ public sealed class PackageViewHostService : IAsyncDisposable
             _disabledPackageIds.Contains,
             (packageId, message, exception) => DisablePackage(packageId, message, PackageFailureOrigin.AppHostedView, exception));
 
+    public Control? ReloadView(string viewId)
+    {
+        ThrowIfDisposed();
+        _viewRegistry.RemoveCachedView(viewId);
+        return GetOrCreateView(viewId);
+    }
+
     public async ValueTask NotifyViewNavigatedAsync(
         string viewId,
         IReadOnlyDictionary<string, string?>? parameters,
@@ -238,7 +247,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
         await _backgroundServices.StopAllAsync();
         await DisposeLegacyOwnedInstancesAsync();
-        TryDeleteSessionFolder();
+        // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
         GC.SuppressFinalize(this);
     }
 
@@ -398,8 +407,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
                     _loadContexts.Remove(loadContext);
                     TryUnloadLoadContext(loadContext, package.PackageId);
                 }
-
-                TryDeleteDirectory(preparedSource.Folder);
             }
         }
     }
@@ -413,7 +420,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
         _disabledPackageIds.Remove(packageId);
         _viewRegistry.UnregisterPackage(packageId);
-        _extensionCatalog.RemovePackage(packageId);
+        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
         await _backgroundServices.StopAsync(packageId, cancellationToken);
 
         _ownedDisposables.Remove(handle.ServiceProvider);
@@ -423,7 +430,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
         TryUnloadLoadContext(handle.LoadContext, packageId);
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        TryDeleteDirectory(handle.Folder);
     }
 
     private bool TryMarkPackageDisabled(
@@ -440,7 +446,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppSessionLog.WriteError($"Disabled package '{packageId}' for the current app session. {message}", exception);
         _faultReporter?.ReportPackageFault(packageId, origin, message);
 
-        _extensionCatalog.RemovePackage(packageId);
+        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
         _viewRegistry.RemoveCachedViews(packageId);
 
         var args = new PackageViewHostFaultEventArgs(packageId, message, origin);
@@ -537,24 +543,16 @@ public sealed class PackageViewHostService : IAsyncDisposable
         return null;
     }
 
-    private void TryDeleteSessionFolder()
-    {
-        if (string.IsNullOrWhiteSpace(_sessionFolder) || !Directory.Exists(_sessionFolder))
-        {
-            return;
-        }
-
-        TryDeleteDirectory(_sessionFolder);
-    }
-
-    private static AppPreparedPackageSource? PreparePackageSource(int index, PackageSourceDescriptor source)
+    private AppPreparedPackageSource? PreparePackageSource(int index, PackageSourceDescriptor source)
     {
         if (string.IsNullOrWhiteSpace(source.Folder) || !Directory.Exists(source.Folder))
         {
             return null;
         }
 
-        var shadowFolder = Path.Combine(CreatePackageShadowRoot(), $"{index:D2}-{SanitizeFolderName(source.PackageId)}");
+        var shadowRoot = _sessionFolder ?? AppPackageSessionDirectories.CreateSessionFolder();
+        Directory.CreateDirectory(shadowRoot);
+        var shadowFolder = Path.Combine(shadowRoot, $"{index:D2}-{SanitizeFolderName(source.PackageId)}");
         Directory.CreateDirectory(shadowFolder);
         switch (source.Kind)
         {
@@ -629,17 +627,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
             File.Copy(sourceFile, destinationPath, overwrite: true);
         }
-    }
-
-    private static string CreatePackageShadowRoot()
-    {
-        var sessionFolder = Path.Combine(
-            Path.GetTempPath(),
-            "Sunder.App",
-            "package-sessions",
-            $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(sessionFolder);
-        return sessionFolder;
     }
 
     private static void TryDeleteDirectory(string path)

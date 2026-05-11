@@ -213,10 +213,30 @@
                 <StackPanel x:DataType="vm:MainWindowViewModel"
                             Width="360"
                             Spacing="12">
-                  <StackPanel Spacing="4">
-                    <TextBlock Classes="section-title" Text="Notifications" />
-                    <TextBlock Classes="caption" Text="Recent package and app events." />
-                  </StackPanel>
+                  <Grid ColumnDefinitions="*,Auto"
+                        ColumnSpacing="12">
+                    <StackPanel Spacing="4">
+                      <TextBlock Classes="section-title" Text="Notifications" />
+                      <TextBlock Classes="caption" Text="Recent package and app events." />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Classes="toolbar-icon"
+                            Width="28"
+                            Height="28"
+                            VerticalAlignment="Top"
+                            Command="{Binding ClearNotificationsCommand}"
+                            IsVisible="{Binding HasNotifications}"
+                            ToolTip.Tip="Clear notifications">
+                      <Path Width="14"
+                            Height="14"
+                            Data="M4 4.75 L12 4.75 M6.5 3.25 L9.5 3.25 M5.25 4.75 L5.75 12.75 L10.25 12.75 L10.75 4.75 M7.15 6.75 L7.15 10.75 M8.85 6.75 L8.85 10.75"
+                            Fill="Transparent"
+                            Stretch="Uniform"
+                            Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
+                            StrokeLineCap="Round"
+                            StrokeThickness="1.35" />
+                    </Button>
+                  </Grid>
 
                   <Border Height="1"
                           Background="{DynamicResource Sunder.Brush.Border.Subtle}" />

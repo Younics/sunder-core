@@ -72,6 +72,10 @@ public sealed class PackageAuthSessionCoordinatorTests
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(Path.Combine(tempDirectory, "secrets.json")),
             authHandler,
+            new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
+            {
+                [((IPackageCallbackHandler)authHandler).CallbackHandlerId] = (IPackageCallbackHandler)authHandler,
+            },
             BackgroundServices: [],
             new ServiceCollection().BuildServiceProvider(),
             new ActiveDevPackageLoadContext(
@@ -96,6 +100,8 @@ public sealed class PackageAuthSessionCoordinatorTests
 
     private sealed class TestPackageAuthHandler : IPackageAuthHandler
     {
+        private bool _connected;
+
         public int StartCount { get; private set; }
 
         public string? CompletedCode { get; private set; }
@@ -103,10 +109,12 @@ public sealed class PackageAuthSessionCoordinatorTests
         public ValueTask<PackageAuthStatus> GetStatusAsync(CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new PackageAuthStatus(
                 "test.package",
-                Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected,
-                "Not connected.",
-                CanAuthorize: true,
-                CanDisconnect: false));
+                _connected
+                    ? Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected
+                    : Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected,
+                _connected ? "Connected." : "Not connected.",
+                CanAuthorize: !_connected,
+                CanDisconnect: _connected));
 
         public Task<PackageAuthSessionStartResult?> StartAuthorizationAsync(
             PackageAuthSessionStartContext context,
@@ -126,6 +134,7 @@ public sealed class PackageAuthSessionCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             CompletedCode = context.QueryValues.TryGetValue("code", out var code) ? code : null;
+            _connected = true;
             return Task.FromResult(new PackageAuthStatus(
                 "test.package",
                 Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected,
@@ -135,11 +144,14 @@ public sealed class PackageAuthSessionCoordinatorTests
         }
 
         public Task<PackageAuthStatus> DisconnectAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(new PackageAuthStatus(
-                "test.package",
-                Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected,
-                "Disconnected.",
-                CanAuthorize: true,
-                CanDisconnect: false));
+        {
+            _connected = false;
+            return Task.FromResult(new PackageAuthStatus(
+                    "test.package",
+                    Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected,
+                    "Disconnected.",
+                    CanAuthorize: true,
+                    CanDisconnect: false));
+        }
     }
 }

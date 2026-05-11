@@ -11,11 +11,15 @@ internal sealed record ActiveLoadedDevPackage(
     IPackageKeyValueStore StateStore,
     JsonPackageSecretsStore SecretsStore,
     IPackageAuthHandler? AuthHandler,
+    IReadOnlyDictionary<string, IPackageCallbackHandler> CallbackHandlers,
     IReadOnlyList<IPackageBackgroundService> BackgroundServices,
     IServiceProvider ServiceProvider,
     ActiveDevPackageLoadContext LoadContext)
 {
     public IReadOnlyList<string> SecretKeys => SecretsStore.ListKeys();
+
+    public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
+        => CallbackHandlers.TryGetValue(callbackHandlerId, out var handler) ? handler : null;
 }
 
 internal sealed class ActiveDevPackageSession
@@ -131,7 +135,7 @@ internal sealed class ActiveDevPackageSession
 
         _sessionPackageMap[packageId] = updatedPackage;
         _loadedPackageMap.Remove(packageId, out packageToDeactivate);
-        _extensionCatalog.RemovePackage(packageId);
+        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
 
         return true;
     }
@@ -153,7 +157,7 @@ internal sealed class ActiveDevPackageSession
             LastFailureAtUtc = null,
         };
         _loadedPackageMap.Remove(packageId, out packageToDeactivate);
-        _extensionCatalog.RemovePackage(packageId);
+        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDisabled);
         return true;
     }
 
@@ -163,7 +167,7 @@ internal sealed class ActiveDevPackageSession
         var removedLoadedPackage = _loadedPackageMap.Remove(packageId, out packageToDeactivate);
         if (removedSessionPackage || removedLoadedPackage)
         {
-            _extensionCatalog.RemovePackage(packageId);
+            _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageUninstalled);
             return true;
         }
 
@@ -225,19 +229,7 @@ internal sealed class ActiveDevPackageSession
             GC.WaitForPendingFinalizers();
         }
 
-        if (string.IsNullOrWhiteSpace(SessionFolder) || !Directory.Exists(SessionFolder))
-        {
-            return;
-        }
-
-        try
-        {
-            Directory.Delete(SessionFolder, recursive: true);
-        }
-        catch
-        {
-            // A failed cleanup should not block the next dev-package session.
-        }
+        // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
 
         if (disposeErrors is { Count: > 0 })
         {

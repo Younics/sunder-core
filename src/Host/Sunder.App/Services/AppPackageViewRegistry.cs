@@ -154,6 +154,17 @@ internal sealed class AppPackageViewRegistry
         }
     }
 
+    public bool RemoveCachedView(string viewId)
+    {
+        if (!_viewCache.Remove(viewId, out var cachedView))
+        {
+            return false;
+        }
+
+        DisposeCachedControl(cachedView);
+        return true;
+    }
+
     public IReadOnlyList<string> UnregisterPackage(string packageId)
     {
         var removedViewIds = ListPackageViewIds(packageId);

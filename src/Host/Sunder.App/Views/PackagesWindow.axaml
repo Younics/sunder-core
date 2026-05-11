@@ -68,7 +68,7 @@
             <TextBox Grid.Column="1"
                      Classes="search-box"
                      Text="{Binding RegistryUrlText}"
-                     PlaceholderText="https://registry.sunder.dev/" />
+                     PlaceholderText="https://hub.sunderapp.io/" />
           </Grid>
         </Border>
 

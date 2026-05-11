@@ -60,13 +60,7 @@ public static class CliStartupNotificationPolicy
 {
     public static bool TryCreateWarning(CliInstallationResult result, out string warning)
     {
-        if (result.UpdatedUserPath)
-        {
-            warning = "Sunder CLI was added to your user PATH. Restart open terminals before running sunder.";
-            return true;
-        }
-
-        if (!result.Status.IsFullyInstalled && !string.IsNullOrWhiteSpace(result.Status.Warning))
+        if (!string.IsNullOrWhiteSpace(result.Status.Warning))
         {
             warning = result.Status.Warning;
             return true;
@@ -210,21 +204,15 @@ public sealed class CliInstallationService
             paths.ShimDirectory);
         var isShimDirectoryOnUserPath = IsWindows
             && PathListContains(_environment.GetUserEnvironmentVariable("Path"), paths.ShimDirectory);
-        var isShimDirectoryOnAnyPath = isShimDirectoryOnCurrentProcessPath || isShimDirectoryOnUserPath;
-        var requiresTerminalRestart = IsWindows
-            && isShimDirectoryOnUserPath
-            && !isShimDirectoryOnCurrentProcessPath;
-        var requiresManualPathConfiguration = !IsWindows && !isShimDirectoryOnCurrentProcessPath;
-        var isFullyInstalled = installedCli is not null && isShimCurrent && isShimDirectoryOnAnyPath;
+        var requiresTerminalRestart = false;
+        var requiresManualPathConfiguration = false;
+        var isFullyInstalled = installedCli is not null && isShimCurrent;
         var canInstallOrRepair = bundledCli is not null;
         var warning = CreateWarning(
             bundledCli,
             installedCli,
             isShimInstalled,
-            isShimCurrent,
-            isShimDirectoryOnAnyPath,
-            requiresTerminalRestart,
-            requiresManualPathConfiguration);
+            isShimCurrent);
 
         return new CliInstallationStatus(
             paths,
@@ -239,7 +227,7 @@ public sealed class CliInstallationService
             requiresManualPathConfiguration,
             canInstallOrRepair,
             isFullyInstalled,
-            CreateSummary(isFullyInstalled, requiresTerminalRestart, requiresManualPathConfiguration, warning),
+            CreateSummary(isFullyInstalled, warning),
             warning,
             CreatePathInstructions(paths.ShimDirectory));
     }
@@ -487,10 +475,7 @@ public sealed class CliInstallationService
         CliFileDescriptor? bundledCli,
         CliFileDescriptor? installedCli,
         bool isShimInstalled,
-        bool isShimCurrent,
-        bool isShimDirectoryOnAnyPath,
-        bool requiresTerminalRestart,
-        bool requiresManualPathConfiguration)
+        bool isShimCurrent)
     {
         if (bundledCli is null)
         {
@@ -512,45 +497,19 @@ public sealed class CliInstallationService
             return "Sunder CLI command shim needs repair.";
         }
 
-        if (!isShimDirectoryOnAnyPath)
-        {
-            return requiresManualPathConfiguration
-                ? "Sunder CLI is installed, but the shim directory is not on PATH."
-                : "Sunder CLI shim directory is not on PATH.";
-        }
-
-        if (requiresTerminalRestart)
-        {
-            return "Sunder CLI is installed in your user PATH. Restart open terminals if they cannot find sunder.";
-        }
-
         return string.Empty;
     }
 
-    private static string CreateSummary(
-        bool isFullyInstalled,
-        bool requiresTerminalRestart,
-        bool requiresManualPathConfiguration,
-        string? warning)
+    private static string CreateSummary(bool isFullyInstalled, string? warning)
     {
-        if (isFullyInstalled && requiresTerminalRestart)
-        {
-            return "Installed. Restart open terminals before running sunder.";
-        }
-
         if (isFullyInstalled)
         {
-            return "Installed and available on PATH.";
+            return "Sunder CLI is installed.";
         }
 
         if (!string.IsNullOrWhiteSpace(warning))
         {
             return warning;
-        }
-
-        if (requiresManualPathConfiguration)
-        {
-            return "Installed, but PATH needs manual shell configuration.";
         }
 
         return "Not installed.";

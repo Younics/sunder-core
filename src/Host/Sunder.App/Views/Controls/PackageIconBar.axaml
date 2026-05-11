@@ -35,7 +35,16 @@
                   <Border Classes="package-bar-button-surface"
                           Classes.drag-preview="{Binding IsDragPreview}"
                           Classes.selected="{Binding IsSelected}">
-                    <TextBlock Classes="glyph-text" Text="{Binding Glyph}" />
+                    <Grid>
+                      <Image Source="{Binding IconImage}"
+                             RenderOptions.BitmapInterpolationMode="HighQuality"
+                             Stretch="Uniform"
+                             Margin="5"
+                             IsVisible="{Binding HasIconImage}" />
+                      <TextBlock Classes="glyph-text"
+                                 Text="{Binding Glyph}"
+                                 IsVisible="{Binding ShowGlyphFallback}" />
+                    </Grid>
                   </Border>
                 </Grid>
               </Border>
@@ -74,7 +83,16 @@
                   <Border Classes="package-bar-button-surface top-bar-surface"
                           Classes.drag-preview="{Binding IsDragPreview}"
                           Classes.selected="{Binding IsSelected}">
-                    <TextBlock Classes="glyph-text" Text="{Binding Glyph}" />
+                    <Grid>
+                      <Image Source="{Binding IconImage}"
+                             RenderOptions.BitmapInterpolationMode="HighQuality"
+                             Stretch="Uniform"
+                             Margin="5"
+                             IsVisible="{Binding HasIconImage}" />
+                      <TextBlock Classes="glyph-text"
+                                 Text="{Binding Glyph}"
+                                 IsVisible="{Binding ShowGlyphFallback}" />
+                    </Grid>
                   </Border>
                 </Grid>
               </Border>

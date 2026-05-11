@@ -156,7 +156,20 @@ public partial class PackageIconBar : UserControl
 
     private void BarRoot_OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        var point = e.GetCurrentPoint(this);
+        if (point.Properties.IsRightButtonPressed)
+        {
+            if (TryResolveItemFromSource(e.Source, out var contextHost, out var contextItem) && contextHost is not null && contextItem is not null)
+            {
+                ClearPendingGesture();
+                ShowItemContextMenu(contextHost, contextItem);
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        if (!point.Properties.IsLeftButtonPressed)
         {
             return;
         }
@@ -173,6 +186,38 @@ public partial class PackageIconBar : UserControl
         _draggedViewId = null;
         ClearDropIndicators();
         e.Handled = true;
+    }
+
+    private void ShowItemContextMenu(Control host, ShellItemViewModel item)
+    {
+        var reloadItem = new MenuItem
+        {
+            Header = "Reload",
+            Classes = { "package-bar-context-menu-item" },
+        };
+        reloadItem.Click += async (_, _) =>
+        {
+            if (ViewModel is not null)
+            {
+                await ViewModel.ReloadItemAsync(item.Id);
+            }
+        };
+
+        var removeItem = new MenuItem
+        {
+            Header = "Remove",
+            Classes = { "package-bar-context-menu-item" },
+        };
+        removeItem.Click += (_, _) => ViewModel?.RemoveItem(item.Id);
+
+        var menu = new ContextMenu
+        {
+            ItemsSource = new[] { reloadItem, removeItem },
+            Classes = { "package-bar-context-menu" },
+        };
+
+        host.ContextMenu = menu;
+        menu.Open(host);
     }
 
     private void BarRoot_OnPointerMoved(object? sender, PointerEventArgs e)

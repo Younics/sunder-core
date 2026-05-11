@@ -58,6 +58,64 @@ public sealed class PackageViewHostServiceTests
         Assert.Equal(1, backgroundService.StopCount);
     }
 
+    [Fact]
+    public async Task DisposeAsync_LeavesSessionFolderForProcessLifetime()
+    {
+        var sessionFolder = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionFolder);
+        try
+        {
+            var hostService = new PackageViewHostService(
+                new AppPackageViewRegistry(),
+                new AppPackageBackgroundServiceCoordinator(),
+                [],
+                [],
+                [],
+                faultReporter: null,
+                sessionFolder);
+
+            await hostService.DisposeAsync();
+
+            Assert.True(Directory.Exists(sessionFolder));
+        }
+        finally
+        {
+            TryDeleteDirectory(sessionFolder);
+        }
+    }
+
+    [Fact]
+    public void CleanupStaleSessions_RemovesFoldersWithoutRunningOwner()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var activeFolder = Path.Combine(rootPath, $"20260511190000-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var staleFolder = Path.Combine(rootPath, $"20260511190001-{int.MaxValue}-{Guid.NewGuid():N}");
+        var legacyFolder = Path.Combine(rootPath, $"20260511190002-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(activeFolder);
+        Directory.CreateDirectory(staleFolder);
+        Directory.CreateDirectory(legacyFolder);
+        try
+        {
+            AppPackageSessionDirectories.CleanupStaleSessions(rootPath);
+
+            Assert.True(Directory.Exists(activeFolder));
+            Assert.False(Directory.Exists(staleFolder));
+            Assert.False(Directory.Exists(legacyFolder));
+        }
+        finally
+        {
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+    }
+
     private sealed class BlockingBackgroundService : IPackageBackgroundService
     {
         public TaskCompletionSource StopStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -2,6 +2,8 @@
 
 This is the package-author manual for creating, debugging, packaging, validating, and publishing Sunder packages.
 
+See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for Host/SDK/package versioning rules. `Sunder.Package.Build` generates SDK compatibility metadata automatically from SDK usage.
+
 ## Prerequisites
 
 - .NET 10 SDK.
@@ -103,6 +105,194 @@ Rules:
 - Package projects do not reference `Sunder.Runtime.Host`.
 - Extension packages depend on host contracts packages when they need typed host extension APIs.
 
+## Sunder SDK Overview
+
+`Sunder.Sdk` is the package-author contract layer between a package and the installed Sunder Host. Packages use it to declare metadata, define a module entrypoint, register UI/runtime contributions, access package-scoped state, and integrate with Host services without referencing Host implementation projects.
+
+SDK areas:
+
+| Area | Primary Types | What It Provides |
+| --- | --- | --- |
+| Packaging metadata | `SunderPackageAttribute`, `SunderPackageDependencyAttribute` | Package identity and runtime package dependencies |
+| Module lifecycle | `ISunderPackageModule` | Package startup, service registration, and contribution registration |
+| Package context | `IPackageContext` | Package id, version, install path, storage, configuration, secrets, logging |
+| Contributions | `IPackageContributionRegistry` | Views, settings views, background services, extensions, configuration schemas |
+| Views | `PackageViewRegistration`, `PackageViewPlacement` | Shell-visible Avalonia package views |
+| Workspaces | `IPackageWorkspaceFactory` | Factory-created package workspaces/views |
+| Extensions | `PackageExtensionPoint<T>`, `IPackageExtensionCatalog` | Typed package-to-package contribution points and active contribution discovery |
+| Extension changes | `IPackageExtensionCatalogMonitor` | Structured change events when packages activate, deactivate, install, update, or fault |
+| Configuration | `PackageConfigurationSchema`, `IPackageConfiguration` | Host-rendered settings schema and package configuration values |
+| Storage | `IPackageStorageContext`, `IPackageFileStore`, `IPackageKeyValueStore` | Package-scoped mutable files and key-value state |
+| Secrets | `IPackageSecrets` | Package-scoped secret values |
+| Logging | `IPackageLogging`, `IPackageEventLogger` | Package event logging and `ILoggerFactory` access |
+| Notifications | `IPackageNotificationService` | User-visible package notifications |
+| Shell integration | `IPackageShellViewService`, `IPackageViewNavigationTarget` | Shell navigation and hotbar/workspace integration |
+| Callbacks | `IPackageCallbackHandler` | Generic browser/local callback sessions |
+| Auth | `IPackageAuthHandler` | Auth status and disconnect integration |
+| Theme resources | `SunderThemeKeys` | Semantic resource keys for package UI |
+| Compatibility | `SunderSdkCapabilities`, generated manifest fields | Host/package SDK compatibility metadata |
+
+Minimal package module:
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+using Sunder.Sdk.Abstractions;
+
+namespace MyCompany.Package;
+
+public sealed class PackageModule : ISunderPackageModule
+{
+    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    {
+        services.AddTransient<MyViewModel>();
+    }
+
+    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    {
+        registry.RegisterPackageView<MyView>(new PackageViewRegistration(
+            id: "my.company.package.main",
+            name: "My Package"));
+    }
+}
+```
+
+Register a Host-rendered configuration schema:
+
+```csharp
+using Sunder.Sdk.Configuration;
+
+registry.RegisterConfigurationSchema(new PackageConfigurationSchema(
+    PackageId: "my.company.package",
+    PackageDisplayName: "My Package",
+    Summary: "Package settings.",
+    Sections:
+    [
+        new PackageConfigurationSection(
+            SectionId: "general",
+            Title: "General",
+            Description: null,
+            Fields:
+            [
+                new PackageConfigurationField(
+                    Key: "enabled",
+                    Label: "Enabled",
+                    Kind: PackageConfigurationFieldKind.Boolean,
+                    DefaultValue: "true")
+            ])
+    ]));
+```
+
+Use package-scoped configuration, state, and secrets:
+
+```csharp
+var enabled = context.Configuration.GetValue("enabled");
+await context.Storage.State.SetValueAsync("last-run", DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
+context.Secrets.SetSecret("api-key", apiKey);
+```
+
+Define and consume a typed extension point:
+
+```csharp
+public interface IMyProvider
+{
+    string ProviderId { get; }
+}
+
+public static class MyExtensionPoints
+{
+    public static readonly PackageExtensionPoint<IMyProvider> Providers = new("my.company.package:providers");
+}
+
+registry.RegisterExtension(
+    MyExtensionPoints.Providers,
+    services.GetRequiredService<MyProvider>());
+```
+
+Discover active extension contributions:
+
+```csharp
+var providers = extensionCatalog.GetExtensions(MyExtensionPoints.Providers);
+foreach (var provider in providers)
+{
+    Console.WriteLine(provider.ProviderId);
+}
+```
+
+Observe extension catalog changes when open UI or cached state depends on other packages:
+
+```csharp
+if (extensionCatalog is IPackageExtensionCatalogMonitor monitor)
+{
+    monitor.Changed += (_, args) =>
+    {
+        if (args.IncludesExtensionPoint(MyExtensionPoints.Providers.Id))
+        {
+            RefreshProviders();
+        }
+    };
+}
+```
+
+Publish a package notification:
+
+```csharp
+await notificationService.PublishAsync(new PackageNotificationRequest(
+    Title: "Import complete",
+    Message: "Your package import finished successfully.",
+    Severity: PackageNotificationSeverity.Success),
+    cancellationToken);
+```
+
+Register callback and auth integration:
+
+```csharp
+services.AddSingleton<MyOAuthHandler>();
+services.AddSingleton<IPackageCallbackHandler>(serviceProvider => serviceProvider.GetRequiredService<MyOAuthHandler>());
+services.AddSingleton<IPackageAuthHandler>(serviceProvider => serviceProvider.GetRequiredService<MyOAuthHandler>());
+```
+
+`IPackageCallbackHandler` is generic callback/session handling. `IPackageAuthHandler` is auth-specific status and disconnect integration. OAuth-style packages commonly use both; non-auth callback flows only need `IPackageCallbackHandler`.
+
+## SDK Compatibility Metadata
+
+`Sunder.Package.Build` generates SDK compatibility metadata into `sunder-package.json`. Package authors should not normally maintain this manually.
+
+Generated compatibility fields:
+
+| Field | Meaning |
+| --- | --- |
+| `sdkApiVersion` | Broad SDK activation generation, currently `1` |
+| `sdkPackageVersion` | Informational `Sunder.Sdk` package/build version used at build time |
+| `requiredSdkCapabilities` | Granular Host-required SDK capabilities inferred from SDK usage |
+
+Example generated manifest fragment:
+
+```json
+{
+  "sdkApiVersion": 1,
+  "sdkPackageVersion": "1.0.0",
+  "requiredSdkCapabilities": [
+    "core.v1",
+    "packaging.v1",
+    "contributions.v1",
+    "views.v1",
+    "extensions.v1"
+  ]
+}
+```
+
+The Runtime Host validates SDK compatibility before package activation. Older Hosts reject packages that require unsupported SDK API versions or capabilities with a clear compatibility error.
+
+Manual capability entries are reserved for unusual reflection or dynamic scenarios where build-time inference cannot see a required SDK feature:
+
+```xml
+<ItemGroup>
+  <SunderSdkCapability Include="callbacks.v1" />
+</ItemGroup>
+```
+
+See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for Host/SDK/package versioning rules and the process for future SDK capability versions.
+
 ## Package Metadata
 
 Edit `PackageMetadata.cs` to define identity, summary, icon, and runtime dependencies.
@@ -169,6 +359,10 @@ Current module rules:
 - The module type has a public parameterless constructor.
 - Services are registered in `ConfigureServices`.
 - Views, settings, background services, configuration schemas, and extensions are registered in `RegisterContributions`.
+
+Open package UI that depends on other packages should observe `IPackageExtensionCatalogMonitor.Changed` and refresh only when relevant extension points change. The event identifies the lifecycle reason and extension point additions/removals.
+
+Use `IPackageCallbackHandler` for generic callback flows. Auth packages can also implement `IPackageAuthHandler` for auth-specific status and disconnect behavior.
 
 ## Package Context
 

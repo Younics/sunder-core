@@ -2,6 +2,8 @@
 
 This document describes the current Sunder package standard implemented by `Sunder.Sdk`, `Sunder.Package.Build`, `Sunder.PackageManagement`, `Sunder.Runtime.Host`, and the Registry.
 
+See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for Host/SDK/package versioning rules.
+
 ## Core Rules
 
 - Sunder has one runtime extension unit: `Package`.
@@ -98,7 +100,13 @@ Current manifest shape:
       "versionRange": ">=1.0.0 <2.0.0"
     }
   ],
-  "sdkVersion": "1.0.0",
+  "sdkApiVersion": 1,
+  "sdkPackageVersion": "1.0.0",
+  "requiredSdkCapabilities": [
+    "core.v1",
+    "packaging.v1",
+    "views.v1"
+  ],
   "targetFramework": "net10.0"
 }
 ```
@@ -116,7 +124,9 @@ Optional fields:
 - `summary`: package description.
 - `icon`: package icon asset path.
 - `dependsOn`: runtime package dependency list.
-- `sdkVersion`: referenced Sunder SDK version when available.
+- `sdkApiVersion`: SDK activation generation, currently `1`.
+- `sdkPackageVersion`: referenced Sunder SDK package/build version when available.
+- `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`.
 - `targetFramework`: package target framework.
 
 Fields not used by the current generated manifest:
@@ -168,6 +178,10 @@ Current contribution registry capabilities:
 - `RegisterBackgroundService<TService>()`
 - `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
 - `RegisterConfigurationSchema(PackageConfigurationSchema schema)`
+
+`IPackageExtensionCatalog` lets packages discover active extension contributions. Hosts that support live package activation also implement `IPackageExtensionCatalogMonitor`; its `Changed` event includes a revision, lifecycle reason, and per-extension-point additions/removals.
+
+Callback and auth flows are modeled separately. `IPackageCallbackHandler` is the generic callback-session contract. `IPackageAuthHandler` is the auth-specific status/disconnect contract.
 
 View registrations use stable view ids and user-facing view names:
 

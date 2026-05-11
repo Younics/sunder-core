@@ -106,6 +106,18 @@ public sealed class NotificationCenterService
         NotificationsChanged?.Invoke();
     }
 
+    public void ClearAll(DateTimeOffset? clearedAtUtc = null)
+    {
+        lock (_syncRoot)
+        {
+            _notifications.Clear();
+            _lastReadAtUtc = clearedAtUtc ?? DateTimeOffset.UtcNow;
+            SaveStateCore();
+        }
+
+        NotificationsChanged?.Invoke();
+    }
+
     private static AppNotificationRecord CreateNotification(
         string sourcePackageId,
         string sourceDisplayName,

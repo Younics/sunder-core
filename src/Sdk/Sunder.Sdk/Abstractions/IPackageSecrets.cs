@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Abstractions;
 
+[SunderSdkCapability(SunderSdkCapabilities.SecretsV1)]
 public interface IPackageSecrets
 {
     string? GetSecret(string key);

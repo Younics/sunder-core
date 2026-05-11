@@ -8,8 +8,8 @@ Default production settings come from `src/Host/Sunder.Cli/appsettings.json`:
 
 | Setting | Default |
 | --- | --- |
-| `Registry:ApiUrl` | `https://registry.sunder.dev/` |
-| `Registry:WebUrl` | `https://registry.sunder.dev/` |
+| `Registry:ApiUrl` | `https://hub.sunderapp.io/` |
+| `Registry:WebUrl` | `https://hub.sunderapp.io/` |
 | `Runtime:Url` | `http://127.0.0.1:5275/` |
 
 Debug builds load `appsettings.Development.json` by default, which points Registry API/web URLs at `http://localhost:5288/`.

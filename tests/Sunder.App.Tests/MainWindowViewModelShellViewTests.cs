@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Models;
 using Sunder.App.Services;
@@ -55,6 +56,38 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.False(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
         Assert.False(harness.ViewModel.HasRightTopPanelContent);
         Assert.DoesNotContain(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.subsessions");
+    }
+
+    [Fact]
+    public async Task ReloadPackageViewAsync_ReplacesOpenHostedView()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService();
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
+        var originalView = Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+
+        var reloaded = await harness.ViewModel.ReloadPackageViewAsync("agent.chat");
+        var reloadedView = Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+
+        Assert.True(reloaded);
+        Assert.True(originalView.IsDisposed);
+        Assert.NotSame(originalView, reloadedView);
+        Assert.True(harness.ViewModel.HasMiddleSelection);
+        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.chat" && view.IsOpen);
+    }
+
+    [Fact]
+    public void GetPackageViewGroups_IncludesGlyphsAndHotbarState()
+    {
+        using var harness = CreateHarness();
+
+        var group = Assert.Single(harness.ViewModel.GetPackageViewGroups());
+
+        Assert.Equal("A", group.PackageGlyph);
+        Assert.Contains(group.Views, view => view.ViewId == "agent.chat" && view.Glyph == "A" && view.IsInHotbar);
+        Assert.Contains(group.Views, view => view.ViewId == "agent.workspaces" && view.Glyph == "W" && view.IsInHotbar);
+        Assert.Contains(group.Views, view => view.ViewId == "agent.subsessions" && view.Glyph == "S" && !view.IsInHotbar);
     }
 
     [Fact]
@@ -199,9 +232,9 @@ public sealed class MainWindowViewModelShellViewTests
         };
         var snapshot = new ShellSnapshot(
             [
-                new ShellPackageView("agent.chat", "agent", "Agent", "1.0.0", "Chat", "A", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true),
-                new ShellPackageView("agent.workspaces", "agent", "Agent", "1.0.0", "Workspaces", "W", RailPlacement.RightTop, PackageReadinessState.Ready, ShowInHotbarByDefault: true),
-                new ShellPackageView("agent.subsessions", "agent", "Agent", "1.0.0", "Subsessions", "S", RailPlacement.RightTop, PackageReadinessState.Ready, ShowInHotbarByDefault: false),
+                new ShellPackageView("agent.chat", "agent", "Agent", "1.0.0", "Chat", "A", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "A"),
+                new ShellPackageView("agent.workspaces", "agent", "Agent", "1.0.0", "Workspaces", "W", RailPlacement.RightTop, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "A"),
+                new ShellPackageView("agent.subsessions", "agent", "Agent", "1.0.0", "Subsessions", "S", RailPlacement.RightTop, PackageReadinessState.Ready, ShowInHotbarByDefault: false, PackageGlyph: "A"),
             ],
             state,
             StartupWarnings: [],
@@ -245,6 +278,21 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             faultReporter: null,
             sessionFolder: null);
+
+    private static PackageViewHostService CreateRegisteredPackageViewHostService()
+    {
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        registry.RegisterPackageView<DisposablePackageView>("agent", "agent.chat", serviceProvider);
+        return new PackageViewHostService(
+            registry,
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder: null);
+    }
 
     private static string CreateAppPackageSource(string rootPath, string packageId)
     {
@@ -412,6 +460,16 @@ public sealed class MainWindowViewModelShellViewTests
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class DisposablePackageView : Control, IDisposable
+    {
+        public bool IsDisposed { get; private set; }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
         }
     }
 }

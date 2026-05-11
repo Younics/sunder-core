@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Notifications;
 
+[SunderSdkCapability(SunderSdkCapabilities.NotificationsV1)]
 public enum PackageNotificationSeverity
 {
     Information = 0,

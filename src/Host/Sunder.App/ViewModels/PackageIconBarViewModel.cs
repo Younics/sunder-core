@@ -7,16 +7,25 @@ namespace Sunder.App.ViewModels;
 public sealed partial class PackageIconBarViewModel : ViewModelBase
 {
     private readonly Action<string, RailPlacement, int?> _onMove;
+    private readonly Func<string, ValueTask<bool>> _onReload;
+    private readonly Func<string, bool> _onRemove;
     private int _visibleCapacity = int.MaxValue;
     private string? _previewDraggedViewId;
     private string? _previewGlyph;
     private int? _previewInsertIndex;
 
-    public PackageIconBarViewModel(RailPlacement placement, Orientation orientation, Action<string, RailPlacement, int?> onMove)
+    public PackageIconBarViewModel(
+        RailPlacement placement,
+        Orientation orientation,
+        Action<string, RailPlacement, int?> onMove,
+        Func<string, ValueTask<bool>> onReload,
+        Func<string, bool> onRemove)
     {
         Placement = placement;
         LayoutOrientation = orientation;
         _onMove = onMove;
+        _onReload = onReload;
+        _onRemove = onRemove;
     }
 
     public RailPlacement Placement { get; }
@@ -39,6 +48,11 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
 
     public void SetItems(IEnumerable<ShellItemViewModel> items)
     {
+        foreach (var item in Items)
+        {
+            item.Dispose();
+        }
+
         ReplaceCollection(Items, items);
         RefreshVisibleItems();
         OnPropertyChanged(nameof(ShowEmptyDropHint));
@@ -60,6 +74,12 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     {
         _onMove(viewId, Placement, targetIndex);
     }
+
+    public ValueTask<bool> ReloadItemAsync(string viewId)
+        => _onReload(viewId);
+
+    public bool RemoveItem(string viewId)
+        => _onRemove(viewId);
 
     public void ShowPreviewItem(string? draggedViewId, string glyph, int? insertIndex)
     {
@@ -146,6 +166,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
         visibleItems.Insert(normalizedIndex, new ShellItemViewModel(
             id: "__drag-preview__",
             glyph: _previewGlyph,
+            iconUri: null,
             title: string.Empty,
             packageDisplayName: string.Empty,
             toolTipText: string.Empty,

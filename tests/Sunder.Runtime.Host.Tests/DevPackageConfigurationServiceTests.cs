@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Protocol;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Storage;
 using Xunit;
 
@@ -80,6 +81,7 @@ public sealed class DevPackageConfigurationServiceTests
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(Path.Combine(tempDirectory, "secrets.json")),
             AuthHandler: null,
+            CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             BackgroundServices: [],
             new ServiceCollection().BuildServiceProvider(),
             new ActiveDevPackageLoadContext(

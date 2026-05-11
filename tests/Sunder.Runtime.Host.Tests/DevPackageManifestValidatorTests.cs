@@ -40,7 +40,36 @@ public sealed class DevPackageManifestValidatorTests
         Assert.Empty(errors);
     }
 
-    private static DevPackageManifest CreateManifest(string entryAssembly = "Test.Package.dll")
+    [Fact]
+    public void Validate_WhenSdkApiVersionIsUnsupported_ReturnsCompatibilityError()
+    {
+        var shadowFolder = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
+        File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
+
+        var errors = DevPackageManifestValidator.Validate(CreateManifest(sdkApiVersion: 2), shadowFolder);
+
+        Assert.Contains(errors, error => error.Contains("requires SDK API version 2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_WhenSdkCapabilityIsUnsupported_ReturnsCompatibilityError()
+    {
+        var shadowFolder = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
+        File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
+
+        var errors = DevPackageManifestValidator.Validate(
+            CreateManifest(requiredSdkCapabilities: ["callbacks.v2"]),
+            shadowFolder);
+
+        Assert.Contains(errors, error => error.Contains("requires SDK capability 'callbacks.v2'", StringComparison.Ordinal));
+    }
+
+    private static DevPackageManifest CreateManifest(
+        string entryAssembly = "Test.Package.dll",
+        int? sdkApiVersion = null,
+        IReadOnlyList<string>? requiredSdkCapabilities = null)
         => new()
         {
             ManifestVersion = 1,
@@ -48,6 +77,8 @@ public sealed class DevPackageManifestValidatorTests
             Name = "Test Package",
             Version = "1.0.0",
             EntryAssembly = entryAssembly,
+            SdkApiVersion = sdkApiVersion,
+            RequiredSdkCapabilities = requiredSdkCapabilities,
         };
 
     private static string CreateTempDirectory()

@@ -4,6 +4,8 @@
 
 Use this package when you want to create a package that can be loaded by the Sunder runtime, contribute Avalonia views to the Sunder shell, register background services, expose typed extension points, or consume package-scoped storage, configuration, secrets, logging, and theme resources.
 
+SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
+
 ## Install
 
 ```powershell
@@ -140,6 +142,24 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 - `Logging`
 
 Use package storage, configuration, and secrets abstractions for mutable package data. Do not write mutable state into the installed package folder.
+
+## Extension Catalog
+
+Packages can query installed/active contributions through `IPackageExtensionCatalog`:
+
+```csharp
+var providers = extensionCatalog.GetExtensions(MyExtensionPoints.Providers);
+```
+
+When a package needs to update open UI or cached capability lists as other packages activate/deactivate, inject `IPackageExtensionCatalog` and cast to `IPackageExtensionCatalogMonitor`. `Changed` provides a revision, lifecycle reason, and extension-point changes including package id and contribution type.
+
+Use the change details to refresh only affected state, for example execution-target UI when `sunder.package.agent:execution-targets` changes.
+
+## Callback Sessions
+
+`IPackageCallbackHandler` is the generic host callback contract for browser or local callback flows. `IPackageAuthHandler` remains the auth-specific status/disconnect surface.
+
+Register callback handlers in `ConfigureServices`. Auth-capable packages can register the same implementation as both `IPackageAuthHandler` and `IPackageCallbackHandler`.
 
 ## Theme Resources
 

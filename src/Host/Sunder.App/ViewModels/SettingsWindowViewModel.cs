@@ -28,7 +28,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         [
             new("appearance", "Appearance", "Theme, startup behavior, and shell presentation.", false),
             new("runtime", "Runtime", "Shell composition, package loading, and local runtime behavior.", false),
-            new("cli", "CLI", "Terminal command installation and PATH integration.", false),
+            new("cli", "CLI", "Terminal command installation and shell profile instructions.", false),
             new("updates", "Updates", "Package updates and future managed rollout behavior.", false),
             new("notifications", "Notifications", "Notification preferences and attention management.", false),
             new("privacy", "Privacy", "Local-first data handling and package trust decisions.", false),
@@ -122,9 +122,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _cliShimPath = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliPathStateText = string.Empty;
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _cliWarningText = string.Empty;
@@ -295,9 +292,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         {
             var result = await _cliInstallationService.EnsureInstalledAsync();
             ApplyCliStatus(result.Status);
-            StatusText = result.UpdatedUserPath
-                ? "CLI installed. Restart open terminals before running sunder."
-                : result.Status.Summary;
+            StatusText = result.Status.Summary;
         }
         catch (Exception ex)
         {
@@ -562,13 +557,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     {
         CliStatusText = status.Summary;
         CliStatusDescription = status.IsFullyInstalled
-            ? "The sunder command is installed for this user."
+            ? "Sunder installs the command shim for this user but does not verify shell-profile PATH entries. Use the PATH instructions below, then run sunder --help in your terminal to confirm."
             : status.Warning ?? "The sunder command is not fully configured.";
         CliPlatformText = status.PlatformName;
         CliBundledPath = status.Paths.BundledCliPath ?? "Not found";
         CliInstalledPath = status.Paths.InstalledCliPath;
         CliShimPath = status.Paths.ShimPath;
-        CliPathStateText = CreateCliPathStateText(status);
         CliWarningText = status.Warning ?? string.Empty;
         CliPathInstructions = status.PathInstructions;
         CanInstallOrRepairCli = status.CanInstallOrRepair;
@@ -611,21 +605,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         {
             IsBusy = false;
         }
-    }
-
-    private static string CreateCliPathStateText(CliInstallationStatus status)
-    {
-        if (status.IsShimDirectoryOnCurrentProcessPath)
-        {
-            return "Current PATH includes the Sunder shim directory.";
-        }
-
-        if (status.IsShimDirectoryOnUserPath)
-        {
-            return "User PATH includes the Sunder shim directory. Restart open terminals to pick it up.";
-        }
-
-        return "PATH does not include the Sunder shim directory.";
     }
 
     private static IReadOnlyList<string> GetCoreSectionLines(string sectionId)

@@ -26,10 +26,13 @@ public sealed class ShellCompositionService : IShellCompositionService
                         activePackage.DisplayName,
                         activePackage.Version,
                         view.Title,
-                        ResolveGlyph(view),
+                        ResolveGlyph(view.Icon, view.Title),
                         ResolvePlacement(view, state),
                         activePackage.Readiness,
-                        view.ShowInHotbarByDefault
+                        view.ShowInHotbarByDefault,
+                        view.Icon,
+                        ResolveGlyph(activePackage.Icon, activePackage.DisplayName),
+                        activePackage.Icon
                     )
                 );
             }
@@ -164,15 +167,15 @@ public sealed class ShellCompositionService : IShellCompositionService
         };
     }
 
-    private static string ResolveGlyph(PackageViewDescriptor view)
+    private static string ResolveGlyph(PackageIconDescriptor? icon, string? fallbackName)
     {
-        if (!string.IsNullOrWhiteSpace(view.Icon?.Glyph))
+        if (!string.IsNullOrWhiteSpace(icon?.Glyph))
         {
-            return view.Icon.Glyph!;
+            return icon.Glyph!;
         }
 
-        return string.IsNullOrWhiteSpace(view.Title)
+        return string.IsNullOrWhiteSpace(fallbackName)
             ? "?"
-            : view.Title.Trim()[0].ToString().ToUpperInvariant();
+            : fallbackName.Trim()[0].ToString().ToUpperInvariant();
     }
 }

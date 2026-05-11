@@ -58,6 +58,49 @@ public sealed class ShellCompositionServiceTests
     }
 
     [Fact]
+    public void Compose_UsesPackageIconGlyphForPackageMenuMetadata()
+    {
+        var service = new ShellCompositionService();
+        var packageIcon = new PackageIconDescriptor("P", AssetPath: "Assets/icon.png");
+
+        var snapshot = service.Compose(
+            [new ActivePackageDescriptor(
+                "agent",
+                "Agent",
+                "1.0.0",
+                packageIcon,
+                IsEnabled: true,
+                PackageReadinessState.Ready,
+                [CreateView("agent.chat", "Chat", "middle")])],
+            new ShellState(),
+            systemStatus: null,
+            warnings: [],
+            errors: []);
+
+        var view = Assert.Single(snapshot.PackageViews);
+        Assert.Equal("P", view.PackageGlyph);
+        Assert.Same(packageIcon, view.PackageIcon);
+    }
+
+    [Fact]
+    public void Compose_PreservesViewIconAssetPathForHotbarRendering()
+    {
+        var service = new ShellCompositionService();
+        var viewIcon = new PackageIconDescriptor("C", AssetPath: "Assets/chat-icon.png");
+
+        var snapshot = service.Compose(
+            [CreatePackage("agent", "Agent", [CreateView("agent.chat", "Chat", "middle", icon: viewIcon)])],
+            new ShellState(),
+            systemStatus: null,
+            warnings: [],
+            errors: []);
+
+        var view = Assert.Single(snapshot.PackageViews);
+        Assert.Equal("C", view.Glyph);
+        Assert.Same(viewIcon, view.Icon);
+    }
+
+    [Fact]
     public void Compose_HidesNewViewsThatAreNotShownInHotbarByDefault()
     {
         var service = new ShellCompositionService();
@@ -81,6 +124,11 @@ public sealed class ShellCompositionServiceTests
         IReadOnlyList<PackageViewDescriptor> views)
         => new(packageId, displayName, "1.0.0", Icon: null, IsEnabled: true, PackageReadinessState.Ready, views);
 
-    private static PackageViewDescriptor CreateView(string viewId, string title, string defaultPlacement, bool showInHotbarByDefault = true)
-        => new(viewId, "package", title, Icon: null, defaultPlacement, showInHotbarByDefault);
+    private static PackageViewDescriptor CreateView(
+        string viewId,
+        string title,
+        string defaultPlacement,
+        bool showInHotbarByDefault = true,
+        PackageIconDescriptor? icon = null)
+        => new(viewId, "package", title, icon, defaultPlacement, showInHotbarByDefault);
 }

@@ -40,6 +40,30 @@ public sealed class AppPackageViewRegistryTests
     }
 
     [Fact]
+    public void RemoveCachedView_DisposesOnlyRequestedCachedView()
+    {
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        registry.RegisterPackageView<DisposableDataContextPackageView>("test.package", "test.one", serviceProvider);
+        registry.RegisterPackageView<DisposableDataContextPackageView>("test.package", "test.two", serviceProvider);
+
+        var first = Assert.IsType<DisposableDataContextPackageView>(registry.GetOrCreateView("test.one", _ => false, ReportFailure));
+        var second = Assert.IsType<DisposableDataContextPackageView>(registry.GetOrCreateView("test.two", _ => false, ReportFailure));
+        var firstDataContext = Assert.IsType<DisposableDataContext>(first.DataContext);
+        var secondDataContext = Assert.IsType<DisposableDataContext>(second.DataContext);
+
+        var removed = registry.RemoveCachedView("test.one");
+        var reloadedFirst = registry.GetOrCreateView("test.one", _ => false, ReportFailure);
+        var cachedSecond = registry.GetOrCreateView("test.two", _ => false, ReportFailure);
+
+        Assert.True(removed);
+        Assert.True(firstDataContext.IsDisposed);
+        Assert.False(secondDataContext.IsDisposed);
+        Assert.NotSame(first, reloadedFirst);
+        Assert.Same(second, cachedSecond);
+    }
+
+    [Fact]
     public void UnregisterPackage_DisposesCachedViewDataContext()
     {
         var registry = new AppPackageViewRegistry();

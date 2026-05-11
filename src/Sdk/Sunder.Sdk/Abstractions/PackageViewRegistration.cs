@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Abstractions;
 
+[SunderSdkCapability(SunderSdkCapabilities.ViewsV1)]
 public sealed record PackageViewRegistration
 {
     public PackageViewRegistration(
@@ -27,6 +30,7 @@ public sealed record PackageViewRegistration
     public bool ShowInHotbarByDefault { get; init; }
 }
 
+[SunderSdkCapability(SunderSdkCapabilities.ViewsV1)]
 public enum PackageViewPlacement
 {
     LeftTop = 0,

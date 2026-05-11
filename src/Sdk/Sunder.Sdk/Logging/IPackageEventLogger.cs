@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Logging;
 
+[SunderSdkCapability(SunderSdkCapabilities.LoggingV1)]
 public interface IPackageEventLogger
 {
     ValueTask WriteAsync(

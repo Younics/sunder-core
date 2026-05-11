@@ -17,6 +17,8 @@ internal static class DevPackageManifestValidator
             errors.Add($"Dev package manifest for '{manifest.Id ?? shadowFolder}' must declare 'manifestVersion' 1.");
         }
 
+        errors.AddRange(SunderSdkCompatibilityProfile.Validate(manifest));
+
         if (string.IsNullOrWhiteSpace(manifest.Id))
         {
             errors.Add($"Dev package manifest at '{shadowFolder}' is missing 'id'.");

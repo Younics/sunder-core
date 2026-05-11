@@ -161,6 +161,19 @@ public static class SunderPackageArchiveInspector
                 errors.Add($"Dependency '{dependency.PackageId ?? "unknown"}' is missing versionRange.");
             }
         }
+
+        if (manifest.SdkApiVersion is <= 0)
+        {
+            errors.Add($"Package manifest for '{manifest.Id ?? stagingPath}' has an invalid sdkApiVersion.");
+        }
+
+        foreach (var capability in manifest.RequiredSdkCapabilities ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(capability))
+            {
+                errors.Add($"Package manifest for '{manifest.Id ?? stagingPath}' declares an empty requiredSdkCapabilities entry.");
+            }
+        }
     }
 
     private static void ValidateContentIndex(SunderPackageContentIndex? contentIndex, string stagingPath, ICollection<string> errors)

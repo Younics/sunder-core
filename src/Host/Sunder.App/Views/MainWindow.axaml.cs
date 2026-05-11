@@ -4,9 +4,12 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Sunder.App.Models;
+using Sunder.App.Services;
 using Sunder.App.ViewModels;
 
 namespace Sunder.App.Views;
@@ -440,27 +443,98 @@ public partial class MainWindow : Window
 
     private MenuItem BuildPackageGroupMenuItem(PackageViewMenuGroup group)
     {
-        var menuItem = CreateToolbarMenuItem(group.PackageDisplayName);
+        var menuItem = CreateToolbarMenuItem(group.PackageDisplayName, group.PackageGlyph, group.PackageIconUri);
         menuItem.ItemsSource = group.Views.Select(BuildPackageViewMenuItem).ToArray();
         return menuItem;
     }
 
     private MenuItem BuildPackageViewMenuItem(PackageViewMenuItem item)
     {
-        var menuItem = CreateToolbarMenuItem(item.Title);
-        menuItem.Click += async (_, _) =>
+        var menuItem = CreateToolbarMenuItem(item.Title, item.Glyph, item.IconUri);
+        menuItem.IsEnabled = !item.IsInHotbar;
+        if (!item.IsInHotbar)
         {
-            HideToolbarMainMenu();
-            if (ViewModel is not null)
+            menuItem.Click += async (_, _) =>
             {
-                await ViewModel.OpenPackageViewPanelAsync(item.ViewId);
-            }
-        };
+                HideToolbarMainMenu();
+                if (ViewModel is not null)
+                {
+                    await ViewModel.OpenPackageViewPanelAsync(item.ViewId);
+                }
+            };
+        }
+
         return menuItem;
     }
 
-    private static MenuItem CreateToolbarMenuItem(string header)
-        => new() { Header = header, Classes = { "toolbar-menu-item" } };
+    private static MenuItem CreateToolbarMenuItem(string header, string? glyph = null, Uri? iconUri = null)
+        => new() { Header = CreateToolbarMenuHeader(header, glyph, iconUri), Classes = { "toolbar-menu-item" } };
+
+    private static object CreateToolbarMenuHeader(string header, string? glyph, Uri? iconUri)
+    {
+        if (string.IsNullOrWhiteSpace(glyph) && iconUri is null)
+        {
+            return header;
+        }
+
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var iconImage = new Image
+        {
+            Width = 16,
+            Height = 16,
+            Stretch = Stretch.Uniform,
+            IsVisible = false,
+        };
+        var glyphText = new TextBlock
+        {
+            Text = glyph,
+            Classes = { "toolbar-menu-icon-text" },
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = !string.IsNullOrWhiteSpace(glyph),
+        };
+        var iconContent = new Grid();
+        iconContent.Children.Add(iconImage);
+        iconContent.Children.Add(glyphText);
+        content.Children.Add(new Border
+        {
+            Classes = { "toolbar-menu-icon-badge" },
+            Child = iconContent,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = header,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        if (iconUri is not null)
+        {
+            _ = LoadToolbarMenuIconAsync(iconImage, glyphText, iconUri);
+        }
+
+        return content;
+    }
+
+    private static async Task LoadToolbarMenuIconAsync(Image iconImage, TextBlock glyphText, Uri iconUri)
+    {
+        var result = await PackageIconImageLoader.LoadAsync(iconUri);
+        if (result.Image is null)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            iconImage.Source = result.Image;
+            iconImage.IsVisible = true;
+            glyphText.IsVisible = false;
+        });
+    }
 
     public void ShowPackageDragGhost(string glyph, bool compact, Point centerPosition)
     {

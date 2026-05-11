@@ -12,6 +12,7 @@
     <Project Path="src/Host/Sunder.Protocol/Sunder.Protocol.csproj" />
     <Project Path="src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj" />
     <Project Path="src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj" />
+    <Project Path="tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj" />
   </Folder>
   <Folder Name="/Templates/">
     <Project Path="src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />

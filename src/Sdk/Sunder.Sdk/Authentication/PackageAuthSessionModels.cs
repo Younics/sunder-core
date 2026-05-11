@@ -1,10 +1,14 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Authentication;
 
+[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 public enum PackageAuthFlowKind
 {
     Browser = 0,
 }
 
+[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 public enum PackageAuthSessionState
 {
     Pending = 0,
@@ -13,10 +17,12 @@ public enum PackageAuthSessionState
     Cancelled = 3,
 }
 
+[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 public sealed record PackageAuthSessionStartContext(
     string AuthSessionId,
     Uri CallbackUri);
 
+[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 public sealed record PackageAuthSessionStartResult(
     string PackageId,
     string AuthSessionId,
@@ -24,10 +30,12 @@ public sealed record PackageAuthSessionStartResult(
     string LaunchUrl,
     string Message);
 
+[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 public sealed record PackageAuthSessionCompletionContext(
     string AuthSessionId,
     IReadOnlyDictionary<string, string?> QueryValues);
 
+[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 public sealed record PackageAuthSessionStatus(
     string PackageId,
     string AuthSessionId,

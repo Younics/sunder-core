@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Abstractions;
 
+[SunderSdkCapability(SunderSdkCapabilities.StorageV1)]
 public interface IPackageKeyValueStore
 {
     string? GetValue(string key);

@@ -1,5 +1,8 @@
+using Sunder.Sdk.Compatibility;
+
 namespace Sunder.Sdk.Abstractions;
 
+[SunderSdkCapability(SunderSdkCapabilities.ShellViewV1)]
 public interface IPackageShellViewService
 {
     IReadOnlyList<PackageHotbarView> ListHotbarViews();
@@ -34,6 +37,7 @@ public interface IPackageShellViewService
         CancellationToken cancellationToken = default);
 }
 
+[SunderSdkCapability(SunderSdkCapabilities.ShellViewV1)]
 public sealed record PackageHotbarView(
     string ViewId,
     string PackageId,
@@ -44,6 +48,7 @@ public sealed record PackageHotbarView(
     int Order,
     bool IsOpen);
 
+[SunderSdkCapability(SunderSdkCapabilities.ShellViewV1)]
 public enum PackageHotbarPlacement
 {
     LeftTop = 0,

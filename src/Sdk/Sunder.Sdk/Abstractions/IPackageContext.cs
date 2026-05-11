@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Logging;
+using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Logging;
 
 namespace Sunder.Sdk.Abstractions;
 
+[SunderSdkCapability(SunderSdkCapabilities.CoreV1)]
 public interface IPackageContext
 {
     string PackageId { get; }

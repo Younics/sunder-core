@@ -17,12 +17,8 @@ internal sealed class DevPackageLoadService(ILogger logger)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
-        var sessionFolder = Path.Combine(
-            Path.GetTempPath(),
-            "Sunder.Runtime.Host",
-            "dev-sessions",
-            $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}"
-        );
+        RuntimePackageSessionDirectories.CleanupStaleSessions();
+        var sessionFolder = RuntimePackageSessionDirectories.CreateDevSessionFolder();
 
         Directory.CreateDirectory(sessionFolder);
         var fileMaterializer = new DevSessionFileMaterializer();
@@ -49,12 +45,8 @@ internal sealed class DevPackageLoadService(ILogger logger)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
-        var sessionFolder = Path.Combine(
-            Path.GetTempPath(),
-            "Sunder.Runtime.Host",
-            "installed-sessions",
-            $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}"
-        );
+        RuntimePackageSessionDirectories.CleanupStaleSessions();
+        var sessionFolder = RuntimePackageSessionDirectories.CreateInstalledSessionFolder();
 
         Directory.CreateDirectory(sessionFolder);
         var fileMaterializer = new DevSessionFileMaterializer();
@@ -298,6 +290,26 @@ internal sealed class DevPackageLoadService(ILogger logger)
                 .ToArray(),
         };
 
+    private static IReadOnlyDictionary<string, IPackageCallbackHandler> CollectCallbackHandlers(IServiceProvider serviceProvider)
+    {
+        var handlers = new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase);
+        foreach (var handler in serviceProvider.GetServices<IPackageCallbackHandler>())
+        {
+            if (!string.IsNullOrWhiteSpace(handler.CallbackHandlerId))
+            {
+                handlers[handler.CallbackHandlerId] = handler;
+            }
+        }
+
+        if (serviceProvider.GetService<IPackageAuthHandler>() is { } authHandler)
+        {
+            var callbackHandler = (IPackageCallbackHandler)authHandler;
+            handlers[callbackHandler.CallbackHandlerId] = callbackHandler;
+        }
+
+        return handlers;
+    }
+
     private async Task<PackageActivationResult> TryActivatePackageAsync(
         PreparedDevPackage preparedPackage,
         RuntimeSharedAssemblyRegistry sharedAssemblyRegistry,
@@ -369,6 +381,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
                 packageContext.Storage.State,
                 packageContext.SecretsStore,
                 serviceProvider.GetService<IPackageAuthHandler>(),
+                CollectCallbackHandlers(serviceProvider),
                 contributionRegistry.BackgroundServices,
                 serviceProvider,
                 loadContext
@@ -397,7 +410,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
                 await DevPackageLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
             }
             loadContext?.Unload();
-            extensionCatalog.RemovePackage(preparedPackage.PackageId);
+            extensionCatalog.RemovePackage(preparedPackage.PackageId, PackageExtensionCatalogChangeReason.PackageFaulted);
             logger.LogError(ex, "Failed to activate dev package {PackageId}", preparedPackage.PackageId);
             errors.Add($"Failed to activate dev package '{preparedPackage.PackageId}': {ex.Message}");
             var sessionPackage = BuildSessionDescriptor(

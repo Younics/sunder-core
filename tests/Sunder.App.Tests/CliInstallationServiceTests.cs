@@ -53,7 +53,9 @@ public sealed class CliInstallationServiceTests
         Assert.True(result.Status.IsInstalled);
         Assert.True(result.Status.IsShimCurrent);
         Assert.True(result.Status.IsShimDirectoryOnUserPath);
-        Assert.True(result.Status.RequiresTerminalRestart);
+        Assert.False(result.Status.RequiresTerminalRestart);
+        Assert.True(result.Status.IsFullyInstalled);
+        Assert.True(string.IsNullOrWhiteSpace(result.Status.Warning));
         Assert.Equal(1, environment.UserPathSetCount);
         Assert.Equal(1, environment.BroadcastCount);
         Assert.Equal("v1", File.ReadAllText(result.Status.Paths.InstalledCliPath));
@@ -83,7 +85,7 @@ public sealed class CliInstallationServiceTests
     }
 
     [Fact]
-    public async Task StartupNotificationPolicy_DoesNotWarnAgainWhenUserPathAlreadyContainsShim()
+    public async Task StartupNotificationPolicy_DoesNotWarnForPathOnlyUpdates()
     {
         var testRoot = CreateTempDirectory();
         CreateBundledCli(testRoot, CliInstallPlatform.Windows, "v1");
@@ -96,15 +98,27 @@ public sealed class CliInstallationServiceTests
         var first = await service.EnsureInstalledAsync();
         var second = await service.EnsureInstalledAsync();
 
-        Assert.True(CliStartupNotificationPolicy.TryCreateWarning(first, out var firstWarning));
-        Assert.Contains("was added", firstWarning, StringComparison.OrdinalIgnoreCase);
+        Assert.False(CliStartupNotificationPolicy.TryCreateWarning(first, out _));
         Assert.False(second.UpdatedUserPath);
-        Assert.True(second.Status.RequiresTerminalRestart);
+        Assert.False(second.Status.RequiresTerminalRestart);
         Assert.False(CliStartupNotificationPolicy.TryCreateWarning(second, out _));
     }
 
     [Fact]
-    public async Task GetStatusAsync_WhenUserPathContainsShimUsesNonActionRestartWarning()
+    public async Task StartupNotificationPolicy_WarnsForRealInstallProblems()
+    {
+        var testRoot = CreateTempDirectory();
+        var environment = new FakeCliEnvironmentVariableStore();
+        var service = CreateService(testRoot, CliInstallPlatform.Windows, environment);
+
+        var result = await service.EnsureInstalledAsync();
+
+        Assert.True(CliStartupNotificationPolicy.TryCreateWarning(result, out var warning));
+        Assert.Contains("Bundled Sunder CLI", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetStatusAsync_WhenUserPathContainsShimDoesNotReportPathWarning()
     {
         var testRoot = CreateTempDirectory();
         CreateBundledCli(testRoot, CliInstallPlatform.Windows, "v1");
@@ -118,9 +132,10 @@ public sealed class CliInstallationServiceTests
 
         var status = await service.GetStatusAsync();
 
-        Assert.True(status.RequiresTerminalRestart);
-        Assert.DoesNotContain("was added", status.Warning ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("installed in your user PATH", status.Warning, StringComparison.OrdinalIgnoreCase);
+        Assert.False(status.RequiresTerminalRestart);
+        Assert.True(status.IsFullyInstalled);
+        Assert.True(string.IsNullOrWhiteSpace(status.Warning));
+        Assert.Equal("Sunder CLI is installed.", status.Summary);
     }
 
     [Fact]
@@ -158,7 +173,7 @@ public sealed class CliInstallationServiceTests
     }
 
     [Fact]
-    public async Task EnsureInstalledAsync_UnixCreatesShimAndReportsManualPathInstructionsWhenMissingPath()
+    public async Task EnsureInstalledAsync_UnixCreatesShimAndProvidesPathInstructionsWithoutWarning()
     {
         var testRoot = CreateTempDirectory();
         CreateBundledCli(testRoot, CliInstallPlatform.Linux, "v1");
@@ -170,7 +185,9 @@ public sealed class CliInstallationServiceTests
         Assert.True(result.InstalledOrUpdatedCli);
         Assert.True(result.CreatedOrUpdatedShim);
         Assert.False(result.UpdatedUserPath);
-        Assert.True(result.Status.RequiresManualPathConfiguration);
+        Assert.False(result.Status.RequiresManualPathConfiguration);
+        Assert.True(result.Status.IsFullyInstalled);
+        Assert.True(string.IsNullOrWhiteSpace(result.Status.Warning));
         Assert.Contains("export PATH=", result.Status.PathInstructions, StringComparison.Ordinal);
 
         var shimContent = File.ReadAllText(result.Status.Paths.ShimPath);

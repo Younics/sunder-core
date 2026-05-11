@@ -79,11 +79,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             concreteWindowLauncher.AttachShell(this);
         }
 
-        LeftTopBar = new PackageIconBarViewModel(RailPlacement.LeftTop, Orientation.Vertical, MovePackageView);
-        MiddleBar = new PackageIconBarViewModel(RailPlacement.Middle, Orientation.Horizontal, MovePackageView);
-        RightTopBar = new PackageIconBarViewModel(RailPlacement.RightTop, Orientation.Vertical, MovePackageView);
-        LeftBottomBar = new PackageIconBarViewModel(RailPlacement.LeftBottom, Orientation.Vertical, MovePackageView);
-        RightBottomBar = new PackageIconBarViewModel(RailPlacement.RightBottom, Orientation.Vertical, MovePackageView);
+        LeftTopBar = new PackageIconBarViewModel(RailPlacement.LeftTop, Orientation.Vertical, MovePackageView, ReloadPackageViewAsync, RemovePackageViewFromHotbar);
+        MiddleBar = new PackageIconBarViewModel(RailPlacement.Middle, Orientation.Horizontal, MovePackageView, ReloadPackageViewAsync, RemovePackageViewFromHotbar);
+        RightTopBar = new PackageIconBarViewModel(RailPlacement.RightTop, Orientation.Vertical, MovePackageView, ReloadPackageViewAsync, RemovePackageViewFromHotbar);
+        LeftBottomBar = new PackageIconBarViewModel(RailPlacement.LeftBottom, Orientation.Vertical, MovePackageView, ReloadPackageViewAsync, RemovePackageViewFromHotbar);
+        RightBottomBar = new PackageIconBarViewModel(RailPlacement.RightBottom, Orientation.Vertical, MovePackageView, ReloadPackageViewAsync, RemovePackageViewFromHotbar);
 
         LeftTopPanel = new ShellPanelViewModel();
         MiddlePanel = new ShellPanelViewModel();
@@ -240,6 +240,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public void MarkNotificationsRead()
         => _notificationCenter.MarkAllRead();
+
+    [RelayCommand]
+    private void ClearNotifications()
+        => _notificationCenter.ClearAll();
 
     public async Task CheckForAppUpdatesOnStartupAsync()
     {
@@ -688,7 +692,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 return new PackageViewMenuGroup(
                     first.PackageId,
                     first.PackageDisplayName,
-                    group.Select(view => new PackageViewMenuItem(view.ViewId, view.Title, view.Placement)).ToArray());
+                    first.PackageGlyph,
+                    CreatePackageIconUri(first.PackageId, first.PackageIcon),
+                    group.Select(view => new PackageViewMenuItem(
+                        view.ViewId,
+                        view.Title,
+                        view.Glyph,
+                        CreatePackageIconUri(view.PackageId, view.Icon),
+                        view.Placement,
+                        IsViewInHotbar(view.ViewId))).ToArray());
             })
             .ToArray();
     }
@@ -835,6 +847,35 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         RebuildRailCollections();
         PersistShellState();
         return true;
+    }
+
+    public async ValueTask<bool> ReloadPackageViewAsync(string viewId)
+    {
+        if (!_viewsById.TryGetValue(viewId, out var packageView))
+        {
+            return false;
+        }
+
+        var placement = packageView.Placement;
+        var panel = GetPanel(placement);
+        var isOpen = string.Equals(GetSelectedViewId(placement), viewId, StringComparison.OrdinalIgnoreCase);
+        if (isOpen)
+        {
+            panel.HostedView = null;
+        }
+
+        var reloadedView = _packageViewHostService.ReloadView(viewId);
+        if (isOpen)
+        {
+            panel.HostedView = reloadedView;
+        }
+
+        if (reloadedView is not null)
+        {
+            await _packageViewHostService.NotifyViewNavigatedAsync(viewId, parameters: null);
+        }
+
+        return reloadedView is not null;
     }
 
     public async ValueTask<bool> OpenPackageViewPanelAsync(
@@ -1338,11 +1379,30 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         return new ShellItemViewModel(
             packageView.ViewId,
             packageView.Glyph,
+            CreatePackageIconUri(packageView.PackageId, packageView.Icon),
             packageView.Title,
             packageView.PackageDisplayName,
             tooltip,
             packageView.Placement,
             onSelect);
+    }
+
+    private Uri? CreatePackageIconUri(string packageId, PackageIconDescriptor? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon?.AssetPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+            return runtimeApiClient.CreatePackageAssetUri(packageId, icon.AssetPath!);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private PackageIconBarViewModel GetBar(RailPlacement placement)

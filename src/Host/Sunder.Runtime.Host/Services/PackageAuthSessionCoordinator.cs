@@ -1,6 +1,7 @@
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Authentication;
+using Sunder.Sdk.Callbacks;
 using static Sunder.Runtime.Host.Services.DevPackageProtocolMapper;
 
 namespace Sunder.Runtime.Host.Services;
@@ -39,7 +40,8 @@ internal sealed class PackageAuthSessionCoordinator(
         CancellationToken cancellationToken = default)
     {
         var loadedPackage = getLoadedPackage(packageId);
-        if (loadedPackage?.AuthHandler is null)
+        var callbackHandler = loadedPackage is null ? null : ResolveAuthCallbackHandler(loadedPackage);
+        if (loadedPackage?.AuthHandler is null || callbackHandler is null)
         {
             return null;
         }
@@ -64,7 +66,8 @@ internal sealed class PackageAuthSessionCoordinator(
         CancellationToken cancellationToken = default)
     {
         var loadedPackage = getLoadedPackage(packageId);
-        if (loadedPackage?.AuthHandler is null)
+        var callbackHandler = loadedPackage is null ? null : ResolveAuthCallbackHandler(loadedPackage);
+        if (loadedPackage?.AuthHandler is null || callbackHandler is null)
         {
             return null;
         }
@@ -93,8 +96,8 @@ internal sealed class PackageAuthSessionCoordinator(
         try
         {
             var callbackUri = packageAuthCallbackServer.CallbackUri;
-            var result = await loadedPackage.AuthHandler.StartAuthorizationAsync(
-                new PackageAuthSessionStartContext(authSessionId, callbackUri),
+            var result = await callbackHandler.StartCallbackAsync(
+                new PackageCallbackStartContext(authSessionId, callbackUri, PackageCallbackHandlerIds.Authentication),
                 cancellationToken);
 
             if (result is null)
@@ -115,7 +118,7 @@ internal sealed class PackageAuthSessionCoordinator(
 
             lock (_syncRoot)
             {
-                _authSessions[authSessionId] = new ActivePackageAuthSession(packageId, loadedPackage.AuthHandler, sessionStatus);
+                _authSessions[authSessionId] = new ActivePackageAuthSession(packageId, loadedPackage.AuthHandler, callbackHandler, sessionStatus);
             }
 
             return ToProtocolAuthSessionStart(sessionStatus);
@@ -165,9 +168,17 @@ internal sealed class PackageAuthSessionCoordinator(
         PackageAuthStatus finalStatus;
         try
         {
-            finalStatus = await session.AuthHandler.CompleteAuthorizationAsync(
-                new PackageAuthSessionCompletionContext(authSessionId, queryValues),
+            var completion = await session.CallbackHandler.CompleteCallbackAsync(
+                new PackageCallbackCompletionContext(authSessionId, queryValues),
                 cancellationToken);
+            finalStatus = completion.State == PackageCallbackCompletionState.Completed
+                ? await session.AuthHandler.GetStatusAsync(cancellationToken)
+                : new PackageAuthStatus(
+                    session.PackageId,
+                    Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed,
+                    completion.Message,
+                    CanAuthorize: true,
+                    CanDisconnect: false);
         }
         catch (OperationCanceledException)
         {
@@ -257,5 +268,10 @@ internal sealed class PackageAuthSessionCoordinator(
     private sealed record ActivePackageAuthSession(
         string PackageId,
         IPackageAuthHandler AuthHandler,
+        IPackageCallbackHandler CallbackHandler,
         PackageAuthSessionStatus Status);
+
+    private static IPackageCallbackHandler? ResolveAuthCallbackHandler(ActiveLoadedDevPackage loadedPackage)
+        => loadedPackage.GetCallbackHandler(PackageCallbackHandlerIds.Authentication)
+           ?? (loadedPackage.AuthHandler as IPackageCallbackHandler);
 }

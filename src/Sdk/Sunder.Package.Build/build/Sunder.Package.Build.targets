@@ -16,6 +16,7 @@
     <SunderPackageBuildTaskShadowDirectory Condition="'$(SunderPackageBuildTaskShadowDirectory)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'sunder-package-build-tasks', '$(Configuration)', '$(TargetFramework)', '$(SunderPackageBuildTaskShadowStamp)'))))\</SunderPackageBuildTaskShadowDirectory>
     <SunderPackageBuildTaskShadowAssembly Condition="'$(SunderPackageBuildTaskShadowAssembly)' == ''">$(SunderPackageBuildTaskShadowDirectory)Sunder.Package.Build.dll</SunderPackageBuildTaskShadowAssembly>
     <SunderGeneratedPackageManifest Condition="'$(SunderGeneratedPackageManifest)' == ''">$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'obj', '$(Configuration)', '$(TargetFramework)', 'sunder-package.json'))</SunderGeneratedPackageManifest>
+    <SunderSdkApiVersion Condition="'$(SunderSdkApiVersion)' == ''">1</SunderSdkApiVersion>
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('$(SunderPackageBuildProject)') and '$(MSBuildProjectFullPath)' != '$(SunderPackageBuildProject)'">
@@ -43,12 +44,11 @@
     </PropertyGroup>
 
     <MakeDir Directories="$(SunderPackageBuildTaskShadowDirectory)" />
-    <Copy SourceFiles="$(_SunderPackageBuildTaskSourceDirectory)Sunder.Package.Build.dll"
-          DestinationFiles="$(SunderPackageBuildTaskShadowDirectory)Sunder.Package.Build.dll"
-          Condition="!Exists('$(SunderPackageBuildTaskShadowDirectory)Sunder.Package.Build.dll')" />
-    <Copy SourceFiles="$(_SunderPackageBuildTaskSourceDirectory)Sunder.Sdk.dll"
-          DestinationFiles="$(SunderPackageBuildTaskShadowDirectory)Sunder.Sdk.dll"
-          Condition="!Exists('$(SunderPackageBuildTaskShadowDirectory)Sunder.Sdk.dll')" />
+    <ItemGroup>
+      <_SunderPackageBuildTaskDependencyFiles Include="$(_SunderPackageBuildTaskSourceDirectory)*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_SunderPackageBuildTaskDependencyFiles)"
+          DestinationFiles="@(_SunderPackageBuildTaskDependencyFiles->'$(SunderPackageBuildTaskShadowDirectory)%(Filename)%(Extension)')" />
   </Target>
 
   <Target Name="GenerateSunderPackageManifest"
@@ -57,9 +57,12 @@
                                        ManifestOutputPath="$(SunderGeneratedPackageManifest)"
                                        EntryAssembly="$(TargetFileName)"
                                        PackageVersion="$(Version)"
-                                       ProjectDirectory="$(MSBuildProjectDirectory)"
-                                       TargetFramework="$(TargetFramework)"
-                                       SdkVersion="$(SunderSdkVersion)" />
+                                        ProjectDirectory="$(MSBuildProjectDirectory)"
+                                        TargetFramework="$(TargetFramework)"
+                                        SdkVersion="$(SunderSdkVersion)"
+                                        SdkApiVersion="$(SunderSdkApiVersion)"
+                                        SdkPackageVersion="$(SunderSdkPackageVersion)"
+                                        SdkCapabilities="@(SunderSdkCapability)" />
   </Target>
 
   <Target Name="EmitSunderDevOutput"

@@ -2,12 +2,15 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog, IPackageExtensionCatalogChangeNotifier
+internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog, IPackageExtensionCatalogChangeNotifier, IPackageExtensionCatalogMonitor
 {
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, List<RuntimePackageExtensionContribution>> _extensions = new(StringComparer.OrdinalIgnoreCase);
+    private long _revision;
 
-    public event Action? ExtensionsChanged;
+    public event EventHandler? ExtensionsChanged;
+
+    public event EventHandler<PackageExtensionCatalogChangedEventArgs>? Changed;
 
     public void Add<TContract>(string packageId, PackageExtensionPoint<TContract> extensionPoint, TContract contribution)
     {
@@ -22,18 +25,38 @@ internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog,
             contributions.Add(new RuntimePackageExtensionContribution(packageId, contribution!));
         }
 
-        ExtensionsChanged?.Invoke();
+        RaiseChanged(
+            PackageExtensionCatalogChangeReason.PackageActivated,
+            [new PackageExtensionChange(packageId, extensionPoint.Id, PackageExtensionChangeKind.Added, contribution?.GetType())]);
     }
 
-    public void RemovePackage(string packageId)
+    public void RemovePackage(
+        string packageId,
+        PackageExtensionCatalogChangeReason reason = PackageExtensionCatalogChangeReason.PackageDeactivated)
     {
-        var removed = false;
+        var changes = new List<PackageExtensionChange>();
         lock (_syncRoot)
         {
             foreach (var extensionId in _extensions.Keys.ToArray())
             {
                 var contributions = _extensions[extensionId];
-                removed |= contributions.RemoveAll(contribution => string.Equals(contribution.PackageId, packageId, StringComparison.OrdinalIgnoreCase)) > 0;
+                var removedContributions = contributions
+                    .Where(contribution => string.Equals(contribution.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                foreach (var removedContribution in removedContributions)
+                {
+                    changes.Add(new PackageExtensionChange(
+                        removedContribution.PackageId,
+                        extensionId,
+                        PackageExtensionChangeKind.Removed,
+                        removedContribution.Instance.GetType()));
+                }
+
+                if (removedContributions.Length > 0)
+                {
+                    contributions.RemoveAll(contribution => string.Equals(contribution.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+                }
+
                 if (contributions.Count == 0)
                 {
                     _extensions.Remove(extensionId);
@@ -41,10 +64,7 @@ internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog,
             }
         }
 
-        if (removed)
-        {
-            ExtensionsChanged?.Invoke();
-        }
+        RaiseChanged(reason, changes);
     }
 
     public IReadOnlyList<TContract> GetExtensions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
@@ -58,4 +78,17 @@ internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog,
     }
 
     private sealed record RuntimePackageExtensionContribution(string PackageId, object Instance);
+
+    private void RaiseChanged(PackageExtensionCatalogChangeReason reason, IReadOnlyList<PackageExtensionChange> changes)
+    {
+        if (changes.Count == 0)
+        {
+            return;
+        }
+
+        var revision = Interlocked.Increment(ref _revision);
+        var args = new PackageExtensionCatalogChangedEventArgs(revision, reason, changes);
+        ExtensionsChanged?.Invoke(this, EventArgs.Empty);
+        Changed?.Invoke(this, args);
+    }
 }

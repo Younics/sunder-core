@@ -36,8 +36,7 @@
 
   <Target Name="_AddSunderPackageBuildTaskFiles">
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="tasks\$(TargetFramework)" />
-      <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Sdk.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)*.dll" PackagePath="tasks\$(TargetFramework)" />
     </ItemGroup>
   </Target>
 

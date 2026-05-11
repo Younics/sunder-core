@@ -121,6 +121,52 @@ public sealed class ActiveDevPackageSessionTests
         Assert.False(session.TryGetLoadedPackage("test.package", out _));
     }
 
+    [Fact]
+    public async Task DisposeAsync_LeavesSessionFolderForProcessLifetime()
+    {
+        var sessionFolder = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionFolder);
+        try
+        {
+            var session = new ActiveDevPackageSession(
+                sessionFolder,
+                new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase),
+                new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase));
+
+            await session.DisposeAsync();
+
+            Assert.True(Directory.Exists(sessionFolder));
+        }
+        finally
+        {
+            TryDeleteDirectory(sessionFolder);
+        }
+    }
+
+    [Fact]
+    public void CleanupStaleSessions_RemovesFoldersWithoutRunningOwner()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var activeFolder = Path.Combine(rootPath, $"20260511190000-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var staleFolder = Path.Combine(rootPath, $"20260511190001-{int.MaxValue}-{Guid.NewGuid():N}");
+        var legacyFolder = Path.Combine(rootPath, $"20260511190002-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(activeFolder);
+        Directory.CreateDirectory(staleFolder);
+        Directory.CreateDirectory(legacyFolder);
+        try
+        {
+            RuntimePackageSessionDirectories.CleanupStaleSessions(rootPath);
+
+            Assert.True(Directory.Exists(activeFolder));
+            Assert.False(Directory.Exists(staleFolder));
+            Assert.False(Directory.Exists(legacyFolder));
+        }
+        finally
+        {
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
     private static ActiveLoadedDevPackage CreateLoadedPackage(string packageId)
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
@@ -135,6 +181,7 @@ public sealed class ActiveDevPackageSessionTests
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(Path.Combine(tempDirectory, "secrets.json")),
             AuthHandler: null,
+            CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             BackgroundServices: [new TestBackgroundService()],
             serviceProvider,
             new ActiveDevPackageLoadContext(
@@ -148,6 +195,14 @@ public sealed class ActiveDevPackageSessionTests
         bool isEnabled,
         PackageReadinessState readiness)
         => new(packageId, packageId, "1.0.0", Icon: null, isEnabled, readiness, Views: []);
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+    }
 
     private static SessionPackageDescriptor CreateSessionPackage(string packageId, bool isEnabled)
         => new(

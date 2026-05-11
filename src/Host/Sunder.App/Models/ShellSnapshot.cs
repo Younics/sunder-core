@@ -11,7 +11,10 @@ public sealed record ShellPackageView(
     string Glyph,
     RailPlacement Placement,
     PackageReadinessState Readiness,
-    bool ShowInHotbarByDefault);
+    bool ShowInHotbarByDefault,
+    PackageIconDescriptor? Icon = null,
+    string PackageGlyph = "?",
+    PackageIconDescriptor? PackageIcon = null);
 
 public sealed record ShellSnapshot(
     IReadOnlyList<ShellPackageView> PackageViews,

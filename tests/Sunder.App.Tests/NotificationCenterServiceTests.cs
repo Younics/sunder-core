@@ -82,6 +82,31 @@ public sealed class NotificationCenterServiceTests
         Assert.False(reloaded.HasUnreadTrayNotifications());
     }
 
+    [Fact]
+    public async Task ClearAll_RemovesPersistedNotificationsAndClearsUnreadAfterReload()
+    {
+        var statePath = Path.Combine(CreateTempDirectory(), "notifications.json");
+        var service = new NotificationCenterService(statePath);
+
+        await service.PublishAsync(
+            "agent",
+            "Agent",
+            new PackageNotificationRequest("Package loaded", "Agent is ready."));
+        Assert.NotEmpty(service.ListNotifications());
+
+        var clearedAtUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+        service.ClearAll(clearedAtUtc);
+
+        Assert.Empty(service.ListNotifications());
+        Assert.Equal(clearedAtUtc, service.LastReadAtUtc);
+        Assert.False(service.HasUnreadTrayNotifications());
+
+        var reloaded = new NotificationCenterService(statePath);
+        Assert.Empty(reloaded.ListNotifications());
+        Assert.Equal(clearedAtUtc, reloaded.LastReadAtUtc);
+        Assert.False(reloaded.HasUnreadTrayNotifications());
+    }
+
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));

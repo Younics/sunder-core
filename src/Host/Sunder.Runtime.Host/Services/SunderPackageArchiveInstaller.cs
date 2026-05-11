@@ -36,6 +36,12 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths, I
             }
 
             var manifest = validation.Manifest;
+            var compatibilityErrors = SunderSdkCompatibilityProfile.Validate(manifest);
+            if (compatibilityErrors.Count > 0)
+            {
+                return new PackageOperationResult(false, "Package SDK compatibility validation failed.", false, validation.Warnings, compatibilityErrors);
+            }
+
             installedPath = paths.GetInstalledPackagePath(manifest.Id!, manifest.Version!);
             if (Directory.Exists(installedPath))
             {
@@ -115,6 +121,12 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths, I
             }
 
             var manifest = validation.Manifest;
+            var compatibilityErrors = SunderSdkCompatibilityProfile.Validate(manifest);
+            if (compatibilityErrors.Count > 0)
+            {
+                return new PackageOperationResult(false, "Package SDK compatibility validation failed.", false, validation.Warnings, compatibilityErrors);
+            }
+
             if (!string.Equals(manifest.Id, packageId, StringComparison.OrdinalIgnoreCase))
             {
                 return PackageOperationResults.Failure($"Package archive '{manifest.Id}' does not match selected package '{packageId}'.");
