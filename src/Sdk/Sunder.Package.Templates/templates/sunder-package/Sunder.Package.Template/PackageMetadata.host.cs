@@ -4,8 +4,7 @@ using Sunder.Sdk.Packaging;
     Id = "sunder.package.template",
     Name = "Sunder Package Template",
     Summary = "Adds a custom Sunder package extension.",
-    Icon = "assets/icon.png")]
+    Icon = "assets/icon.png"
+)]
 
-[assembly: SunderPackageDependency(
-    PackageId = "sunder.host.package",
-    VersionRange = ">=1.0.0")]
+[assembly: SunderPackageDependency(PackageId = "sunder.host.package", VersionRange = ">=1.0.0")]
