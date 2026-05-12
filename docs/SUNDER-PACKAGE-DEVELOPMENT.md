@@ -29,7 +29,7 @@ dotnet new install Sunder.Package.Templates::1.0.0
 Create a standard package with a default shell view:
 
 ```powershell
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --sunderVersion 1.0.0
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
 ```
 
 Create a package with no default view:
@@ -60,20 +60,19 @@ Template options:
 
 | Option | Meaning |
 | --- | --- |
-| `--packageId <id>` | Runtime package id written into generated metadata |
-| `--packageName <name>` | Display name written into generated metadata and starter view |
-| `--sunderVersion <version>` | Version used for `Sunder.Sdk` and `Sunder.Package.Build` package references |
+| `--packageId <id>` | Required runtime package id written into generated metadata |
+| `--packageName <name>` | Required display name written into generated metadata and starter view |
 | `--withContracts` | Adds a sibling `*.Contracts` project for public extension points |
 | `--noDefaultView` | Omits the default shell-visible package view |
 | `--withHostDependency` | Adds runtime dependency metadata for another package |
-| `--hostPackageId <id>` | Runtime package id that this package depends on |
-| `--withHostContracts` | Adds a NuGet reference to the host package's contracts package |
-| `--hostContractsPackageId <id>` | NuGet package id for host contracts |
-| `--hostContractsVersion <version>` | NuGet package version for host contracts |
+| `--hostPackageId <id>` | Required with `--withHostDependency`; runtime package id that this package depends on |
+| `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub |
+| `--hostContractsPackageId <id>` | Required with `--withHostContracts`; NuGet package id for host contracts |
+| `--hostContractsVersion <version>` | Required with `--withHostContracts`; NuGet package version for host contracts |
 
 ## Project Files
 
-Generated package projects reference `Sunder.Sdk` and `Sunder.Package.Build`.
+Generated package projects reference `Sunder.Sdk` and `Sunder.Package.Build` with floating versions so restores resolve the latest stable Sunder SDK/build tooling from configured package sources.
 
 Current generated package project shape:
 
@@ -88,9 +87,9 @@ Current generated package project shape:
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" />
-    <PackageReference Include="Sunder.Sdk" Version="1.0.0" />
-    <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
+    <PackageReference Include="Avalonia" Version="12.0.2" />
+    <PackageReference Include="Sunder.Sdk" Version="*" />
+    <PackageReference Include="Sunder.Package.Build" Version="*" PrivateAssets="all" />
   </ItemGroup>
 </Project>
 ```

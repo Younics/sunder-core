@@ -19,4 +19,6 @@
                       Condition="Exists('..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
   </ItemGroup>
 
+  <Import Project="HostContracts.PackageReferences.props" />
+
 </Project>

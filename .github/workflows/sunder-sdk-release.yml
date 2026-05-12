@@ -1,0 +1,291 @@
+name: Sunder SDK Release
+
+on:
+  push:
+    tags:
+      - "sdk/v*"
+
+permissions: {}
+
+concurrency:
+  group: sunder-sdk-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  NUGET_SOURCE: https://api.nuget.org/v3/index.json
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Validate release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^sdk/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "SDK release tags must use SemVer format, for example sdk/v0.9.0 or sdk/v0.9.0-beta.1." >&2
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          is_prerelease="false"
+          if [[ "$version" == *-* ]]; then
+            is_prerelease="true"
+          fi
+
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Build and pack NuGet packages
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore solution
+        shell: bash
+        run: dotnet restore Sunder.Core.slnx
+
+      - name: Build SDK packages
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          common_args=(
+            -c Release
+            --no-restore
+            -m:1
+            -p:Version="$VERSION"
+            -p:PackageVersion="$VERSION"
+            -p:InformationalVersion="$VERSION"
+            -p:ContinuousIntegrationBuild=true
+          )
+
+          dotnet build src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj "${common_args[@]}"
+          dotnet build src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj "${common_args[@]}"
+          dotnet build src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj "${common_args[@]}"
+
+      - name: Test package build tooling
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj \
+            -c Release \
+            --no-restore \
+            -p:Version="$VERSION" \
+            -p:PackageVersion="$VERSION" \
+            -p:InformationalVersion="$VERSION" \
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Pack NuGet packages
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          output_dir="$PWD/artifacts/release/sdk"
+          mkdir -p "$output_dir"
+
+          common_args=(
+            -c Release
+            --no-restore
+            -o "$output_dir"
+            -p:Version="$VERSION"
+            -p:PackageVersion="$VERSION"
+            -p:InformationalVersion="$VERSION"
+            -p:ContinuousIntegrationBuild=true
+          )
+
+          dotnet pack src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj "${common_args[@]}"
+          dotnet pack src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj "${common_args[@]}"
+          dotnet pack src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj "${common_args[@]}"
+
+          packages=("$output_dir"/*.nupkg)
+          if [[ ${#packages[@]} -ne 3 ]]; then
+            echo "Expected exactly three NuGet packages in '$output_dir', found ${#packages[@]}." >&2
+            exit 1
+          fi
+
+      - name: Validate generated template variants
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          package_dir="$PWD/artifacts/release/sdk"
+          nuget_config="$RUNNER_TEMP/sunder-template-sample.nuget.config"
+
+          dotnet new install "$package_dir/Sunder.Package.Templates.$VERSION.nupkg"
+
+          cat > "$nuget_config" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="local-sdk-release" value="$package_dir" />
+              <add key="nuget.org" value="$NUGET_SOURCE" />
+            </packageSources>
+          </configuration>
+          EOF
+
+          expect_template_failure() {
+            local name="$1"
+            shift
+
+            local sample_dir="$RUNNER_TEMP/sunder-template-negative-$name"
+            rm -rf "$sample_dir"
+
+            if dotnet new sunder-package --output "$sample_dir" "$@"; then
+              echo "Template unexpectedly accepted invalid options for '$name'." >&2
+              exit 1
+            fi
+          }
+
+          expect_template_failure "missing-identity" --name MissingIdentity
+          expect_template_failure "missing-host-package" --name MissingHostPackage --packageId sample.missinghost --packageName "Missing Host" --withHostDependency
+          expect_template_failure "host-contracts-without-host" --name HostContractsWithoutHost --packageId sample.badcontracts --packageName "Bad Contracts" --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion 10.0.7
+          expect_template_failure "missing-host-contracts-package" --name MissingHostContractsPackage --packageId sample.missingcontracts --packageName "Missing Contracts" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts
+
+          validate_template() {
+            local name="$1"
+            local package_id="$2"
+            local package_name="$3"
+            shift 3
+
+            local sample_dir="$RUNNER_TEMP/sunder-template-$name"
+            rm -rf "$sample_dir"
+
+            dotnet new sunder-package \
+              --name "$name" \
+              --packageId "$package_id" \
+              --packageName "$package_name" \
+              --output "$sample_dir" \
+              "$@"
+
+            local project_path
+            project_path="$(find "$sample_dir" -name "$name.csproj" -print -quit)"
+            if [[ -z "$project_path" ]]; then
+              echo "Generated sample project '$name' was not found under '$sample_dir'." >&2
+              exit 1
+            fi
+
+            dotnet restore "$project_path" --configfile "$nuget_config"
+            dotnet build "$project_path" -c Release --no-restore -m:1
+          }
+
+          validate_template "Sample.Base" "sample.base" "Sample Base"
+          validate_template "Sample.Headless" "sample.headless" "Sample Headless" --noDefaultView
+          validate_template "Sample.Contracts" "sample.contracts" "Sample Contracts" --withContracts
+          validate_template "Sample.Extension" "sample.extension" "Sample Extension" --withHostDependency --hostPackageId sunder.package.agent
+          validate_template "Sample.TypedExtension" "sample.typedextension" "Sample Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion 10.0.7
+
+      - name: Upload NuGet package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunder-sdk-nuget-packages
+          path: artifacts/release/sdk/*.nupkg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release and NuGet.org
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Download NuGet package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sunder-sdk-nuget-packages
+          path: release-assets
+
+      - name: Upload GitHub release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tag="sdk/v$VERSION"
+          assets=(release-assets/*.nupkg)
+          if [[ ${#assets[@]} -ne 3 ]]; then
+            echo "Expected exactly three NuGet release assets, found ${#assets[@]}." >&2
+            exit 1
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            create_args=(
+              release create "$tag"
+              --title "Sunder SDK $VERSION"
+              --notes "Automated Sunder SDK, package build tooling, and package templates release for $VERSION."
+            )
+
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              create_args+=(--prerelease)
+            fi
+
+            gh "${create_args[@]}" "${assets[@]}"
+          fi
+
+      - name: Push packages to NuGet.org
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [[ -z "${NUGET_API_KEY:-}" ]]; then
+            echo "Repository secret NUGET_API_KEY is not configured." >&2
+            exit 1
+          fi
+
+          packages=(release-assets/*.nupkg)
+          if [[ ${#packages[@]} -ne 3 ]]; then
+            echo "Expected exactly three NuGet packages to push, found ${#packages[@]}." >&2
+            exit 1
+          fi
+
+          for package in "${packages[@]}"; do
+            dotnet nuget push "$package" \
+              --source "$NUGET_SOURCE" \
+              --api-key "$NUGET_API_KEY"
+          done

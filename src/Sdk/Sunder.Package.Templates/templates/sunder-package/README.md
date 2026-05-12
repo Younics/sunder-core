@@ -5,11 +5,11 @@ Creates a Sunder runtime package project that can be built into a `sunder-dev` f
 ## Common commands
 
 ```bash
-dotnet new sunder-package --name MyPackage
-dotnet new sunder-package --name MyPackage --withContracts
-dotnet new sunder-package --name MyPackage --noDefaultView
-dotnet new sunder-package --name MyExtension --withHostDependency --hostPackageId sunder.agent.core
-dotnet new sunder-package --name MyTypedExtension --withHostDependency --hostPackageId sunder.agent.core --withHostContracts --hostContractsPackageId Sunder.Agent.Core.Contracts --hostContractsVersion 1.0.0
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --noDefaultView
+dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion 1.0.0
 ```
 
 Generated package projects reference:
@@ -30,3 +30,5 @@ Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder
 Use `--withHostDependency` when the generated package should declare a dependency on another package and scaffold integration notes.
 
 Use `--withHostContracts` together with `--hostContractsPackageId` and `--hostContractsVersion` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately.
+
+`--packageId` and `--packageName` are required so generated packages do not keep template runtime identity metadata.
