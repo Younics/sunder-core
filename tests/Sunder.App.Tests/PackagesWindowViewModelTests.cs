@@ -2,6 +2,7 @@ using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Protocol;
+using Sunder.Registry.Shared;
 using Sunder.Sdk.Notifications;
 using Xunit;
 
@@ -89,6 +90,30 @@ public sealed class PackagesWindowViewModelTests
         Assert.True(viewModel.ShowSelectedPackageIcon);
         Assert.Equal("A", viewModel.SelectedPackageGlyph);
         Assert.True(viewModel.SelectedPackageShowGlyphFallback);
+    }
+
+    [Fact]
+    public void MarketplacePackages_UseRegistryIconUrlWhenAvailable()
+    {
+        var iconUri = new Uri("http://127.0.0.1:1/api/packages/sunder.package.agent/versions/1.0.0/icon");
+        using var package = new RegistryPackageSearchItemViewModel(
+            new RegistryPackageSummary(
+                "sunder.package.agent",
+                "Sunder Agent",
+                "Adds local agent profiles.",
+                "1.0.0",
+                iconUri.ToString(),
+                IsYanked: false,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow),
+            installedVersion: null,
+            update: null,
+            _ => Task.CompletedTask,
+            loadIcon: false);
+
+        Assert.Equal(iconUri, package.IconUri);
+        Assert.Equal("S", package.Glyph);
+        Assert.True(package.ShowGlyphFallback);
     }
 
     private static PackagesWindowViewModel CreateViewModel(

@@ -146,18 +146,24 @@
                               RowDefinitions="Auto,Auto,Auto"
                               ColumnSpacing="12"
                               RowSpacing="3">
-                          <Border Width="30"
-                                  Height="30"
-                                  CornerRadius="8"
-                                  Padding="3"
-                                  Background="{DynamicResource Sunder.Brush.Surface.Raised}">
-                            <TextBlock Text="{Binding Glyph}"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       FontSize="13"
-                                       FontWeight="SemiBold"
-                                       Foreground="{DynamicResource Sunder.Brush.Accent}" />
-                          </Border>
+                          <Grid Width="30"
+                                Height="30">
+                            <Image Source="{Binding IconImage}"
+                                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                                   Stretch="Uniform"
+                                   IsVisible="{Binding HasIconImage}" />
+                            <Border CornerRadius="8"
+                                    Padding="3"
+                                    Background="{DynamicResource Sunder.Brush.Surface.Raised}"
+                                    IsVisible="{Binding ShowGlyphFallback}">
+                              <TextBlock Text="{Binding Glyph}"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"
+                                         FontSize="13"
+                                         FontWeight="SemiBold"
+                                         Foreground="{DynamicResource Sunder.Brush.Accent}" />
+                            </Border>
+                          </Grid>
                           <TextBlock Grid.Column="1" Classes="section-title" Text="{Binding Name}" TextWrapping="Wrap" />
                           <TextBlock Grid.Column="2" Classes="caption" Text="{Binding LatestVersionText}" />
                           <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="caption" Text="{Binding PackageId}" TextWrapping="Wrap" />

@@ -140,6 +140,27 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task ApplyPackageLifecycleChangesAsync_WhenPackageRemoved_DisposesCachedPackageViewsOnCallingThread()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var packageViewHostService = CreatePackageViewHostService();
+        await packageViewHostService.ApplyPackageDeltaAsync(
+            [CreateActiveAgentPackage()],
+            [new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder)]);
+        using var harness = CreateHarness(rootPath, new EmptyRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
+        var hostedView = harness.ViewModel.MiddlePanel.HostedView;
+        Assert.NotNull(hostedView);
+        var ownerThreadId = Assert.IsType<int>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.OwnerThreadId))?.GetValue(hostedView));
+
+        await harness.ViewModel.ApplyPackageLifecycleChangesAsync();
+
+        Assert.True(Assert.IsType<bool>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))?.GetValue(hostedView)));
+        Assert.Equal(ownerThreadId, Assert.IsType<int>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.DisposeThreadId))?.GetValue(hostedView)));
+    }
+
+    [Fact]
     public async Task ApplyPackageLifecycleChangesAsync_WhenImpactedPackageRemainsActive_PreservesShellLayout()
     {
         using var harness = CreateActivePackageHarness();
@@ -482,5 +503,21 @@ public sealed class ShellLifecycleTestPackageModule : ISunderPackageModule
 
     public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
     {
+        registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration("agent.chat", "Chat"));
+    }
+}
+
+public sealed class ShellLifecycleThreadAffinedPackageView : Control, IDisposable
+{
+    public int OwnerThreadId { get; } = Environment.CurrentManagedThreadId;
+
+    public bool IsDisposed { get; private set; }
+
+    public int DisposeThreadId { get; private set; }
+
+    public void Dispose()
+    {
+        IsDisposed = true;
+        DisposeThreadId = Environment.CurrentManagedThreadId;
     }
 }

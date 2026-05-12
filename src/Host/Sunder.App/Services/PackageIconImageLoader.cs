@@ -1,4 +1,3 @@
-using System.Text;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Svg.Skia;
@@ -16,12 +15,20 @@ public static class PackageIconImageLoader
             using var response = await ImageHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
 
+            var format = ResolveIconFormat(response.Content.Headers.ContentType?.MediaType);
+            if (format == PackageIconImageFormat.Unsupported)
+            {
+                var error = $"Unsupported package icon content type '{response.Content.Headers.ContentType?.MediaType ?? "unknown"}' for '{uri}'.";
+                AppSessionLog.WriteError(error);
+                return PackageIconImageLoadResult.Failed(error);
+            }
+
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var memory = new MemoryStream();
             await source.CopyToAsync(memory, cancellationToken);
             memory.Position = 0;
 
-            if (ShouldLoadAsSvg(uri, memory))
+            if (format == PackageIconImageFormat.Svg)
             {
                 return PackageIconImageLoadResult.Success(new SvgImage
                 {
@@ -39,50 +46,25 @@ public static class PackageIconImageLoader
         }
     }
 
-    private static bool ShouldLoadAsSvg(Uri uri, Stream stream)
+    internal static PackageIconImageFormat ResolveIconFormat(string? contentType)
     {
-        return ResolveIconFormat(uri) switch
+        if (string.Equals(contentType, "image/svg+xml", StringComparison.OrdinalIgnoreCase))
         {
-            PackageIconImageFormat.Svg => true,
-            PackageIconImageFormat.Raster => false,
-            _ => HasSvgHeader(stream),
-        };
-    }
-
-    private static PackageIconImageFormat ResolveIconFormat(Uri uri)
-    {
-        return Path.GetExtension(Uri.UnescapeDataString(uri.AbsolutePath)).ToLowerInvariant() switch
-        {
-            ".svg" or ".svgz" => PackageIconImageFormat.Svg,
-            ".bmp" or ".gif" or ".ico" or ".jpg" or ".jpeg" or ".png" or ".webp" => PackageIconImageFormat.Raster,
-            _ => PackageIconImageFormat.Unknown,
-        };
-    }
-
-    private static bool HasSvgHeader(Stream stream)
-    {
-        if (!stream.CanSeek || stream.Length == 0)
-        {
-            return false;
+            return PackageIconImageFormat.Svg;
         }
 
-        var originalPosition = stream.Position;
-        try
+        if (!string.IsNullOrWhiteSpace(contentType)
+            && contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
         {
-            Span<byte> buffer = stackalloc byte[(int)Math.Min(512, stream.Length)];
-            var bytesRead = stream.Read(buffer);
-            var header = Encoding.UTF8.GetString(buffer[..bytesRead]);
-            return header.Contains("<svg", StringComparison.OrdinalIgnoreCase);
+            return PackageIconImageFormat.Raster;
         }
-        finally
-        {
-            stream.Position = originalPosition;
-        }
+
+        return PackageIconImageFormat.Unsupported;
     }
 
-    private enum PackageIconImageFormat
+    internal enum PackageIconImageFormat
     {
-        Unknown,
+        Unsupported,
         Raster,
         Svg,
     }

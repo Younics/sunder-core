@@ -736,9 +736,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             RebuildRailCollections();
         }
 
-        await Task.Run(
-            async () => await _packageViewHostService.ApplyPackageDeltaAsync(activePackages, packageSources, impactedPackages, cancellationToken),
-            cancellationToken);
+        await _packageViewHostService.ApplyPackageDeltaAsync(activePackages, packageSources, impactedPackages, cancellationToken);
 
         var enabledPackages = _packageViewHostService.FilterEnabledPackages(activePackages);
         ApplyActivePackagesToShell(enabledPackages);

@@ -32,6 +32,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private PackageCatalogItemViewModel? _selectedInstalledPackage;
     private PackageCatalogItemViewModel? _observedSelectedInstalledPackage;
     private RegistryPackageSearchItemViewModel? _selectedMarketplacePackage;
+    private RegistryPackageSearchItemViewModel? _observedSelectedMarketplacePackage;
     private RegistryPackageVersionItemViewModel? _selectedMarketplaceVersion;
 
     public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? MarketplaceImageGalleryRequested;
@@ -657,13 +658,14 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                 StatusText = "Searching marketplace...";
                 await RefreshInstalledPackageStateOnlyAsync();
                 var packages = await registryClient.SearchAsync(SearchText, skip: 0, take: 50);
-                ReplaceItems(
-                    MarketplacePackages,
-                    packages.Select(package => new RegistryPackageSearchItemViewModel(
+                var packageItems = packages.Select(package => new RegistryPackageSearchItemViewModel(
                         package,
                         GetInstalledPackage(package.PackageId)?.Version,
                         GetPackageUpdate(package.PackageId),
-                        SelectMarketplacePackageAsync)).ToArray());
+                        SelectMarketplacePackageAsync)).ToArray();
+                ObserveSelectedMarketplacePackage(null);
+                DisposeMarketplacePackageItems();
+                ReplaceItems(MarketplacePackages, packageItems);
                 OnPropertyChanged(nameof(HasMarketplacePackages));
                 OnPropertyChanged(nameof(ShowNoMarketplacePackages));
 
@@ -782,6 +784,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
 
         _selectedInstalledPackage = item;
+        ObserveSelectedMarketplacePackage(null);
         ObserveSelectedInstalledPackage(item);
         SelectedPackageTitle = item.DisplayName;
         SelectedPackageSubtitle = $"{item.PackageId} · v{item.Version} · {item.SourceLabel}";
@@ -799,6 +802,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private void ClearInstalledSelection()
     {
         _selectedInstalledPackage = null;
+        ObserveSelectedMarketplacePackage(null);
         ObserveSelectedInstalledPackage(null);
         SelectedPackageTitle = "No package selected";
         SelectedPackageSubtitle = "No installed packages match the current filter.";
@@ -823,12 +827,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
         _selectedMarketplacePackage = item;
         ObserveSelectedInstalledPackage(null);
+        ObserveSelectedMarketplacePackage(item);
         SelectedPackageTitle = item.Name;
         SelectedPackageSubtitle = item.PackageId;
         SelectedPackageSummary = item.Summary ?? "No package summary provided.";
-        SelectedPackageGlyph = item.Glyph;
-        SelectedPackageIconImage = null;
-        SelectedPackageIconLoadError = string.Empty;
         ApplyMarketplaceProfile(null);
         MarketplaceLatestVersion = item.LatestVersion ?? "-";
         MarketplaceInstalledVersion = item.InstalledVersion ?? "Not installed";
@@ -898,6 +900,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     {
         _selectedMarketplacePackage = null;
         _selectedMarketplaceVersion = null;
+        ObserveSelectedInstalledPackage(null);
+        ObserveSelectedMarketplacePackage(null);
         MarketplaceVersions.Clear();
         ApplyMarketplaceProfile(null);
         SelectedPackageTitle = "No package selected";
@@ -1222,7 +1226,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        ObserveSelectedInstalledPackage(null);
+        ObserveSelectedMarketplacePackage(null);
         DisposeInstalledPackageItems();
+        DisposeMarketplacePackageItems();
         DisposeMarketplaceProfileMedia();
         _runtimeApiClient.Dispose();
     }
@@ -1230,6 +1237,14 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private void DisposeInstalledPackageItems()
     {
         foreach (var package in InstalledPackages)
+        {
+            package.Dispose();
+        }
+    }
+
+    private void DisposeMarketplacePackageItems()
+    {
+        foreach (var package in MarketplacePackages)
         {
             package.Dispose();
         }
@@ -1264,6 +1279,37 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         SelectedPackageGlyph = _observedSelectedInstalledPackage?.Glyph ?? "?";
         SelectedPackageIconImage = _observedSelectedInstalledPackage?.IconImage;
         SelectedPackageIconLoadError = _observedSelectedInstalledPackage?.IconLoadError ?? string.Empty;
+    }
+
+    private void ObserveSelectedMarketplacePackage(RegistryPackageSearchItemViewModel? item)
+    {
+        if (_observedSelectedMarketplacePackage is not null)
+        {
+            _observedSelectedMarketplacePackage.PropertyChanged -= SelectedMarketplacePackage_OnPropertyChanged;
+        }
+
+        _observedSelectedMarketplacePackage = item;
+        if (_observedSelectedMarketplacePackage is not null)
+        {
+            _observedSelectedMarketplacePackage.PropertyChanged += SelectedMarketplacePackage_OnPropertyChanged;
+        }
+
+        RefreshSelectedMarketplacePackageIcon();
+    }
+
+    private void SelectedMarketplacePackage_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(RegistryPackageSearchItemViewModel.IconImage) or nameof(RegistryPackageSearchItemViewModel.IconLoadError))
+        {
+            RefreshSelectedMarketplacePackageIcon();
+        }
+    }
+
+    private void RefreshSelectedMarketplacePackageIcon()
+    {
+        SelectedPackageGlyph = _observedSelectedMarketplacePackage?.Glyph ?? "?";
+        SelectedPackageIconImage = _observedSelectedMarketplacePackage?.IconImage;
+        SelectedPackageIconLoadError = _observedSelectedMarketplacePackage?.IconLoadError ?? string.Empty;
     }
 
     private async Task OpenMarketplaceImageGalleryAsync(RegistryPackageMediaItemViewModel media)
@@ -1548,25 +1594,33 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
     }
 }
 
-public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase
+public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase, IDisposable
 {
     private readonly Func<RegistryPackageSearchItemViewModel, Task> _onSelectAsync;
+    private bool _isDisposed;
 
     public RegistryPackageSearchItemViewModel(
         RegistryPackageSummary package,
         string? installedVersion,
         RegistryPackageUpdate? update,
-        Func<RegistryPackageSearchItemViewModel, Task> onSelectAsync)
+        Func<RegistryPackageSearchItemViewModel, Task> onSelectAsync,
+        bool loadIcon = true)
     {
         PackageId = package.PackageId;
         Name = package.Name;
         Glyph = ToGlyph(package.Name);
+        IconUri = TryCreateIconUri(package.IconUrl);
         Summary = package.Summary;
         LatestVersion = package.LatestVersion;
         IsYanked = package.IsYanked;
         InstalledVersion = installedVersion;
         Update = update;
         _onSelectAsync = onSelectAsync;
+
+        if (loadIcon && IconUri is not null)
+        {
+            _ = LoadIconAsync(IconUri);
+        }
     }
 
     public string PackageId { get; }
@@ -1574,6 +1628,14 @@ public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase
     public string Name { get; }
 
     public string Glyph { get; }
+
+    public Uri? IconUri { get; }
+
+    public bool HasIconImage => IconImage is not null;
+
+    public bool ShowGlyphFallback => IconImage is null;
+
+    public bool HasIconLoadError => !string.IsNullOrWhiteSpace(IconLoadError);
 
     public string? Summary { get; }
 
@@ -1598,6 +1660,12 @@ public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isSelected;
 
+    [ObservableProperty]
+    private IImage? _iconImage;
+
+    [ObservableProperty]
+    private string _iconLoadError = string.Empty;
+
     partial void OnInstalledVersionChanged(string? value)
     {
         OnPropertyChanged(nameof(InstalledVersionText));
@@ -1610,8 +1678,85 @@ public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase
         OnPropertyChanged(nameof(ActionText));
     }
 
+    partial void OnIconImageChanged(IImage? value)
+    {
+        OnPropertyChanged(nameof(HasIconImage));
+        OnPropertyChanged(nameof(ShowGlyphFallback));
+    }
+
+    partial void OnIconLoadErrorChanged(string value)
+        => OnPropertyChanged(nameof(HasIconLoadError));
+
     [RelayCommand]
     private async Task SelectAsync() => await _onSelectAsync(this);
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        if (IconImage is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+
+        IconImage = null;
+    }
+
+    private async Task LoadIconAsync(Uri iconUri)
+    {
+        var result = await PackageIconImageLoader.LoadAsync(iconUri);
+        await RunOnUiThreadAsync(() =>
+        {
+            if (_isDisposed)
+            {
+                if (result.Image is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+
+                return;
+            }
+
+            IconLoadError = result.Error ?? string.Empty;
+            IconImage = result.Image;
+        });
+    }
+
+    private static Task RunOnUiThreadAsync(Action action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        var completion = new TaskCompletionSource();
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                action();
+                completion.SetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+        return completion.Task;
+    }
+
+    private static Uri? TryCreateIconUri(string? iconUrl)
+    {
+        if (!Uri.TryCreate(iconUrl?.Trim(), UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        return string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            ? uri
+            : null;
+    }
 
     private static string ToGlyph(string name)
         => string.IsNullOrWhiteSpace(name)

@@ -1,5 +1,5 @@
-using Avalonia;
 using System;
+using Avalonia;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Velopack;
@@ -22,20 +22,22 @@ sealed class Program
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.
-    public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
+    public static AppBuilder BuildAvaloniaApp() =>
+        AppBuilder
+            .Configure<App>()
             .UsePlatformDetect()
-            .With(new AvaloniaNativePlatformOptions
-            {
-                RenderingMode =
-                [
-                    // put OpenGL first, to have higher priority over Metal (remove later when Metal issue with resize flickering is fixed)
-                    AvaloniaNativeRenderingMode.OpenGl,
-                    AvaloniaNativeRenderingMode.Metal,
-                    AvaloniaNativeRenderingMode.Software
-                ]
-            })
+            .With(
+                new AvaloniaNativePlatformOptions
+                {
+                    RenderingMode =
+                    [
+                        // put OpenGL first, to have higher priority over Metal (remove later when Metal issue with resize flickering is fixed)
+                        AvaloniaNativeRenderingMode.OpenGl,
+                        AvaloniaNativeRenderingMode.Metal,
+                        AvaloniaNativeRenderingMode.Software,
+                    ],
+                }
+            )
             .WithInterFont()
-            .WithDeveloperTools()
             .LogToTrace();
 }
