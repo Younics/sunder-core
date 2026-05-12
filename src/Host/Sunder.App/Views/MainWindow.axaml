@@ -620,8 +620,15 @@
       <Border x:Name="PackageDragGhost"
               Classes="package-bar-button-surface drag-ghost-surface"
               IsVisible="False">
-        <TextBlock x:Name="PackageDragGhostGlyph"
-                   Classes="glyph-text" />
+        <Grid>
+          <Image x:Name="PackageDragGhostIcon"
+                 RenderOptions.BitmapInterpolationMode="HighQuality"
+                 Stretch="Uniform"
+                 Margin="5"
+                 IsVisible="False" />
+          <TextBlock x:Name="PackageDragGhostGlyph"
+                     Classes="glyph-text" />
+        </Grid>
       </Border>
     </Canvas>
 

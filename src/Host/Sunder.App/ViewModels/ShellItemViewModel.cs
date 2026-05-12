@@ -9,6 +9,7 @@ namespace Sunder.App.ViewModels;
 public partial class ShellItemViewModel : ViewModelBase, IDisposable
 {
     private readonly Action<ShellItemViewModel> _onSelect;
+    private readonly bool _ownsIconImage;
     private bool _isDisposed;
 
     public ShellItemViewModel(
@@ -20,7 +21,9 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
         string toolTipText,
         Models.RailPlacement placement,
         Action<ShellItemViewModel> onSelect,
-        bool isDragPreview = false)
+        bool isDragPreview = false,
+        IImage? iconImage = null,
+        bool ownsIconImage = true)
     {
         Id = id;
         Glyph = glyph;
@@ -31,8 +34,10 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
         Placement = placement;
         _onSelect = onSelect;
         IsDragPreview = isDragPreview;
+        _ownsIconImage = ownsIconImage;
+        IconImage = iconImage;
 
-        if (IconUri is not null)
+        if (IconUri is not null && IconImage is null)
         {
             _ = LoadIconAsync(IconUri);
         }
@@ -92,7 +97,7 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         _isDisposed = true;
-        if (IconImage is IDisposable disposable)
+        if (_ownsIconImage && IconImage is IDisposable disposable)
         {
             disposable.Dispose();
         }

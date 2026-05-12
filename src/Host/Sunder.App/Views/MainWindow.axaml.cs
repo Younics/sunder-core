@@ -536,9 +536,12 @@ public partial class MainWindow : Window
         });
     }
 
-    public void ShowPackageDragGhost(string glyph, bool compact, Point centerPosition)
+    public void ShowPackageDragGhost(ShellItemViewModel item, bool compact, Point centerPosition)
     {
-        PackageDragGhostGlyph.Text = glyph;
+        PackageDragGhostIcon.Source = item.IconImage;
+        PackageDragGhostIcon.IsVisible = item.HasIconImage;
+        PackageDragGhostGlyph.Text = item.Glyph;
+        PackageDragGhostGlyph.IsVisible = item.ShowGlyphFallback;
         PackageDragGhost.Classes.Set("top-bar-surface", compact);
         PackageDragGhost.IsVisible = true;
         MovePackageDragGhost(centerPosition);
@@ -560,5 +563,7 @@ public partial class MainWindow : Window
     public void HidePackageDragGhost()
     {
         PackageDragGhost.IsVisible = false;
+        PackageDragGhostIcon.Source = null;
+        PackageDragGhostGlyph.Text = string.Empty;
     }
 }

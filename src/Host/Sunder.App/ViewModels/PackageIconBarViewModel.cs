@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Sunder.App.Models;
 
 namespace Sunder.App.ViewModels;
@@ -12,6 +13,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     private int _visibleCapacity = int.MaxValue;
     private string? _previewDraggedViewId;
     private string? _previewGlyph;
+    private IImage? _previewIconImage;
     private int? _previewInsertIndex;
 
     public PackageIconBarViewModel(
@@ -81,36 +83,39 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     public bool RemoveItem(string viewId)
         => _onRemove(viewId);
 
-    public void ShowPreviewItem(string? draggedViewId, string glyph, int? insertIndex)
+    public void ShowPreviewItem(ShellItemViewModel? draggedItem, int? insertIndex)
     {
-        if (string.IsNullOrWhiteSpace(draggedViewId) || string.IsNullOrWhiteSpace(glyph))
+        if (draggedItem is null)
         {
             ClearPreviewItem();
             return;
         }
 
-        if (string.Equals(_previewDraggedViewId, draggedViewId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(_previewGlyph, glyph, StringComparison.Ordinal)
+        if (string.Equals(_previewDraggedViewId, draggedItem.Id, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_previewGlyph, draggedItem.Glyph, StringComparison.Ordinal)
+            && ReferenceEquals(_previewIconImage, draggedItem.IconImage)
             && _previewInsertIndex == insertIndex)
         {
             return;
         }
 
-        _previewDraggedViewId = draggedViewId;
-        _previewGlyph = glyph;
+        _previewDraggedViewId = draggedItem.Id;
+        _previewGlyph = draggedItem.Glyph;
+        _previewIconImage = draggedItem.IconImage;
         _previewInsertIndex = insertIndex;
         RefreshVisibleItems();
     }
 
     public void ClearPreviewItem()
     {
-        if (_previewDraggedViewId is null && _previewGlyph is null && _previewInsertIndex is null)
+        if (_previewDraggedViewId is null && _previewGlyph is null && _previewIconImage is null && _previewInsertIndex is null)
         {
             return;
         }
 
         _previewDraggedViewId = null;
         _previewGlyph = null;
+        _previewIconImage = null;
         _previewInsertIndex = null;
         RefreshVisibleItems();
     }
@@ -172,7 +177,9 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
             toolTipText: string.Empty,
             placement: Placement,
             onSelect: _ => { },
-            isDragPreview: true));
+            isDragPreview: true,
+            iconImage: _previewIconImage,
+            ownsIconImage: false));
         return visibleItems;
     }
 

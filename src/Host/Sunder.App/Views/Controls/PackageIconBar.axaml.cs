@@ -93,9 +93,8 @@ public partial class PackageIconBar : UserControl
     private Point? _dragStartPoint;
     private ShellItemViewModel? _pendingDragItem;
     private Border? _pressedHost;
+    private ShellItemViewModel? _draggedItem;
     private string? _draggedViewId;
-    private string? _draggedGlyph;
-    private bool _draggedCompact;
     private PackageIconBar? _targetBar;
     private Border? _previewAnchorHost;
     private int? _targetIndex;
@@ -302,7 +301,7 @@ public partial class PackageIconBar : UserControl
         menu.Open(control);
     }
 
-    private void ApplyDropPreview(int? targetIndex, string? previewViewId, string? previewGlyph)
+    private void ApplyDropPreview(int? targetIndex, ShellItemViewModel? previewItem)
     {
         ClearDropIndicators();
 
@@ -314,7 +313,7 @@ public partial class PackageIconBar : UserControl
         BarRoot.Classes.Add("drag-over");
         if (ViewModel.IsHorizontal)
         {
-            ViewModel.ShowPreviewItem(previewViewId, previewGlyph ?? string.Empty, targetIndex);
+            ViewModel.ShowPreviewItem(previewItem, targetIndex);
             return;
         }
 
@@ -482,8 +481,7 @@ public partial class PackageIconBar : UserControl
         }
 
         _draggedViewId = item.Id;
-        _draggedGlyph = item.Glyph;
-        _draggedCompact = item.IsHorizontalBar;
+        _draggedItem = item;
         if (_pressedHost is not null)
         {
             _pressedHost.IsVisible = false;
@@ -493,7 +491,7 @@ public partial class PackageIconBar : UserControl
         if (ownerWindow is not null)
         {
             PrepareDragLayoutSnapshots(ownerWindow);
-            ownerWindow.ShowPackageDragGhost(item.Glyph, item.IsHorizontalBar, GetRootPosition(e));
+            ownerWindow.ShowPackageDragGhost(item, item.IsHorizontalBar, GetRootPosition(e));
         }
 
         UpdateDragTarget(e);
@@ -553,7 +551,7 @@ public partial class PackageIconBar : UserControl
             return;
         }
 
-        targetBar.ApplyDropPreview(targetIndex, _draggedViewId, _draggedGlyph);
+        targetBar.ApplyDropPreview(targetIndex, _draggedItem);
     }
 
     private void CompleteLocalDrag()
@@ -575,9 +573,8 @@ public partial class PackageIconBar : UserControl
         _targetBar?.ClearDropIndicators();
         _targetBar = null;
         _targetIndex = null;
+        _draggedItem = null;
         _draggedViewId = null;
-        _draggedGlyph = null;
-        _draggedCompact = false;
         var ownerWindow = GetOwnerWindow();
         if (ownerWindow is not null)
         {
@@ -619,9 +616,9 @@ public partial class PackageIconBar : UserControl
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(_draggedGlyph))
+        if (_draggedItem is not null)
         {
-            ownerWindow.ShowPackageDragGhost(_draggedGlyph, _draggedCompact, GetRootPosition(e));
+            ownerWindow.ShowPackageDragGhost(_draggedItem, _draggedItem.IsHorizontalBar, GetRootPosition(e));
         }
 
         if (_targetBar?.TryGetPreviewGhostCenter(_targetIndex, out var previewCenter) == true)
