@@ -4,87 +4,27 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Sunder / Avalonia -->
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.2.4" />
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.22.2" />
-    <PackageVersion Include="Avalonia" Version="12.0.2" />
+    <!-- App / SDK -->
+    <PackageVersion Include="Avalonia" Version="12.0.3" />
     <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
-    <PackageVersion Include="Avalonia.Desktop" Version="12.0.2" />
-    <PackageVersion Include="AvaloniaEdit.TextMate" Version="12.0.0" />
-    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.2" />
-    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.2" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.0.3" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.3" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.3" />
     <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageVersion Include="CommunityToolkit.Aspire.Hosting.Minio" Version="13.1.1" />
-    <PackageVersion Include="LiveMarkdown.Avalonia" Version="2.0.0" />
-    <PackageVersion Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.6" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
+    <PackageVersion Include="LiveMarkdown.Avalonia" Version="2.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.7" />
+    <PackageVersion Include="Velopack" Version="0.0.1298" />
+    <!-- Package build tooling -->
     <PackageVersion Include="Microsoft.Build.Framework" Version="18.4.0" />
     <PackageVersion Include="Microsoft.Build.Utilities.Core" Version="18.4.0" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.7" />
-    <PackageVersion Include="Octokit" Version="14.0.0" />
-    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.93.0" />
-    <PackageVersion Include="Velopack" Version="0.0.1298" />
-    <!-- Cloud API -->
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.7" />
-    <!-- Shared UI Library -->
-    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.7" />
-    <!-- Blazor WASM -->
-    <PackageVersion Include="Markdig" Version="1.1.3" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Authentication" Version="10.0.7" />
-    <PackageVersion Include="PSC.Blazor.Components.MarkdownEditor" Version="10.0.7" />
-    <PackageVersion Include="Anthropic" Version="12.17.0" />
-    <PackageVersion Include="Cronos" Version="0.13.0" />
-    <PackageVersion Include="Google.GenAI" Version="1.6.1" />
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.3.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.Abstractions" Version="1.3.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.Anthropic" Version="1.3.0-preview.260423.1" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.3.0" />
-    <PackageVersion Include="Microsoft.Agents.Storage" Version="1.5.181" />
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.5.1" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.1" />
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.5.1" />
-    <PackageVersion Include="Mediator.Abstractions" Version="3.0.2" />
-    <PackageVersion Include="Mediator.SourceGenerator" Version="3.0.2" />
-    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.2.4" />
-    <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="13.2.4" />
-    <PackageVersion Include="Discord.Net" Version="3.19.1" />
-    <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.5.0" />
-    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.1" />
-    <PackageVersion Include="OpenAI" Version="2.10.0" />
-    <PackageVersion Include="Pgvector" Version="0.3.2" />
-    <PackageVersion Include="Pgvector.EntityFrameworkCore" Version="0.3.0" />
-    <!-- MCP (Model Context Protocol) -->
-    <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.7" />
-    <PackageVersion Include="Z.Blazor.Diagrams" Version="3.0.4.1" />
-    <!-- LSP (Language Server Protocol) -->
-    <PackageVersion Include="StreamJsonRpc" Version="2.24.84" />
-    <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
-    <!-- Validation -->
-    <PackageVersion Include="FluentValidation" Version="12.1.1" />
     <!-- Tests -->
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.7" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <!-- Security: Override transitive dependency from Mediator.SourceGenerator -->
-    <PackageVersion Include="Scriban" Version="7.1.0" />
   </ItemGroup>
 </Project>
