@@ -10,11 +10,13 @@ namespace Sunder.Cli;
 internal sealed class RegistryClient : IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly TimeSpan _timeout;
 
-    public RegistryClient(Uri registryUrl)
+    public RegistryClient(Uri registryUrl, TimeSpan timeout)
     {
         RegistryUrl = registryUrl;
-        _httpClient = new HttpClient { BaseAddress = registryUrl };
+        _timeout = timeout;
+        _httpClient = new HttpClient { BaseAddress = registryUrl, Timeout = timeout };
     }
 
     public Uri RegistryUrl { get; }
@@ -92,15 +94,18 @@ internal sealed class RegistryClient : IDisposable
         bool setLatest,
         CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.PostAsJsonAsync(
-            "api/dev/packages/publish/local",
-            new RegistryPublishLocalPackageRequest(packagePath, setLatest),
-            cancellationToken);
+        return await RunPublishRequestAsync(async () =>
+        {
+            using var response = await _httpClient.PostAsJsonAsync(
+                "api/dev/packages/publish/local",
+                new RegistryPublishLocalPackageRequest(packagePath, setLatest),
+                cancellationToken);
 
-        return await ReadPublishResponseAsync(
-            response,
-            "Development publish endpoint was not found. Start the registry in Development or use the authenticated publish endpoint.",
-            cancellationToken);
+            return await ReadPublishResponseAsync(
+                response,
+                "Development publish endpoint was not found. Start the registry in Development or use the authenticated publish endpoint.",
+                cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<RegistryPublishPackageResponse> PublishPackageAsync(
@@ -109,22 +114,25 @@ internal sealed class RegistryClient : IDisposable
         string bearerToken,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "api/packages/publish");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        return await RunPublishRequestAsync(async () =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/packages/publish");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
 
-        using var content = new MultipartFormDataContent();
-        await using var packageStream = File.OpenRead(packagePath);
-        using var packageContent = new StreamContent(packageStream);
-        packageContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(packageContent, "package", Path.GetFileName(packagePath));
-        content.Add(new StringContent(setLatest ? "true" : "false"), "setLatest");
-        request.Content = content;
+            using var content = new MultipartFormDataContent();
+            await using var packageStream = File.OpenRead(packagePath);
+            using var packageContent = new StreamContent(packageStream);
+            packageContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            content.Add(packageContent, "package", Path.GetFileName(packagePath));
+            content.Add(new StringContent(setLatest ? "true" : "false"), "setLatest");
+            request.Content = content;
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        return await ReadPublishResponseAsync(
-            response,
-            "Authenticated publish endpoint was not found on this registry.",
-            cancellationToken);
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            return await ReadPublishResponseAsync(
+                response,
+                "Authenticated publish endpoint was not found on this registry.",
+                cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<RegistryPackageManagementOperationResponse> SetVersionYankedAsync(
@@ -327,6 +335,20 @@ internal sealed class RegistryClient : IDisposable
         return response.IsSuccessStatusCode
             ? new RegistryPublishPackageResponse(true, null, null, "Package published.", [], [])
             : new RegistryPublishPackageResponse(false, null, null, null, [], [response.ReasonPhrase ?? "Package publish failed."]);
+    }
+
+    private async Task<RegistryPublishPackageResponse> RunPublishRequestAsync(
+        Func<Task<RegistryPublishPackageResponse>> operation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await operation();
+        }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new CliTimeoutException("Registry publish", _timeout, ex);
+        }
     }
 
     private static async Task<RegistryPackageManagementOperationResponse> ReadManagementResponseAsync(

@@ -1,4 +1,3 @@
-using System.Reflection;
 using Velopack;
 using Velopack.Sources;
 
@@ -30,7 +29,7 @@ public sealed class SunderUpdateService
         var source = string.IsNullOrWhiteSpace(_appSettings.UpdateGitHubRepositoryUrl)
             ? "Not configured"
             : _appSettings.UpdateGitHubRepositoryUrl.Trim();
-        var currentVersion = manager?.CurrentVersion?.ToString() ?? GetAssemblyVersionText();
+        var currentVersion = manager?.CurrentVersion?.ToString() ?? SunderAppVersion.CurrentText;
 
         if (manager is null)
         {
@@ -140,19 +139,6 @@ public sealed class SunderUpdateService
                 prerelease: _appSettings.IncludePrereleaseUpdates == true));
             return _updateManager;
         }
-    }
-
-    private static string GetAssemblyVersionText()
-    {
-        var informationalVersion = Assembly.GetEntryAssembly()?
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion;
-        if (!string.IsNullOrWhiteSpace(informationalVersion))
-        {
-            return informationalVersion;
-        }
-
-        return Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "Development";
     }
 }
 

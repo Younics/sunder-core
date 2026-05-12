@@ -20,7 +20,7 @@ Environment selection uses:
 - `DOTNET_ENVIRONMENT`
 - `ASPNETCORE_ENVIRONMENT`
 
-Global URL options:
+Global options:
 
 | Option | Meaning |
 | --- | --- |
@@ -28,6 +28,7 @@ Global URL options:
 | `--registry-web-url <url>` | Registry web URL used by browser auth |
 | `--registry-url <url>` | Back-compatible alias that sets both Registry URLs |
 | `--runtime-url <url>` | Local runtime host URL |
+| `--timeout <duration>` | Registry request timeout. Defaults to `15m`; accepts values like `15m`, `900s`, `900`, or `00:15:00` |
 
 Environment overrides:
 
@@ -214,10 +215,17 @@ Publish to a development Registry endpoint:
 sunder publish --file .\MyPackage.1.0.0.sunderpkg --dev-local --registry-url http://localhost:5288/
 ```
 
+Publish a large package with a longer Registry request timeout:
+
+```powershell
+sunder publish --file .\MyPackage.1.0.0.sunderpkg --timeout 30m
+```
+
 Publish behavior:
 
 - The CLI validates the package archive before upload.
 - Authenticated publish requires sign-in, `SUNDER_REGISTRY_TOKEN`, or `--token`.
+- Publish uses the global Registry request timeout; the default is 15 minutes.
 - `--dev-local` calls the development-only local publish endpoint and does not require an auth token.
 - The Registry rejects duplicate package versions.
 - Package ownership is enforced for non-development publish.

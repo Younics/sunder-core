@@ -1,9 +1,12 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace Sunder.Cli;
 
-internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri RuntimeUrl)
+internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri RuntimeUrl, TimeSpan RegistryTimeout)
 {
+    public static readonly TimeSpan DefaultRegistryTimeout = TimeSpan.FromMinutes(15);
+
     public static CliOptions Parse(List<string> args)
     {
         var settings = CliAppSettings.Load();
@@ -23,11 +26,71 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
         registryApiUrl = CommandLine.ConsumeOption(args, "--registry-api-url") ?? registryUrlAlias ?? registryApiUrl;
         registryWebUrl = CommandLine.ConsumeOption(args, "--registry-web-url") ?? registryUrlAlias ?? registryWebUrl;
         runtimeUrl = CommandLine.ConsumeOption(args, "--runtime-url") ?? runtimeUrl;
+        var timeout = ParseTimeout(CommandLine.ConsumeOption(args, "--timeout"));
 
         return new CliOptions(
             NormalizeUrl(RequireUrl(registryApiUrl, "Registry:ApiUrl"), "registry API"),
             NormalizeUrl(RequireUrl(registryWebUrl, "Registry:WebUrl"), "registry web"),
-            NormalizeUrl(runtimeUrl, "runtime"));
+            NormalizeUrl(runtimeUrl, "runtime"),
+            timeout);
+    }
+
+    private static TimeSpan ParseTimeout(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return DefaultRegistryTimeout;
+        }
+
+        var normalized = value.Trim().ToLowerInvariant();
+        if (TryParseNumber(normalized, out var bareSeconds))
+        {
+            return CreatePositiveTimeout(bareSeconds, TimeSpan.FromSeconds, value);
+        }
+
+        if (normalized.EndsWith('s')
+            && TryParseNumber(normalized[..^1], out var seconds))
+        {
+            return CreatePositiveTimeout(seconds, TimeSpan.FromSeconds, value);
+        }
+
+        if (normalized.EndsWith('m')
+            && TryParseNumber(normalized[..^1], out var minutes))
+        {
+            return CreatePositiveTimeout(minutes, TimeSpan.FromMinutes, value);
+        }
+
+        if (TimeSpan.TryParse(normalized, CultureInfo.InvariantCulture, out var timeSpan)
+            && timeSpan > TimeSpan.Zero)
+        {
+            return timeSpan;
+        }
+
+        throw new ArgumentException("Option '--timeout' must be a positive duration like 15m, 900s, 900, or 00:15:00.");
+    }
+
+    private static bool TryParseNumber(string value, out double result)
+        => double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out result)
+           && double.IsFinite(result);
+
+    private static TimeSpan CreatePositiveTimeout(
+        double value,
+        Func<double, TimeSpan> factory,
+        string originalValue)
+    {
+        if (value <= 0)
+        {
+            throw new ArgumentException("Option '--timeout' must be a positive duration like 15m, 900s, 900, or 00:15:00.");
+        }
+
+        try
+        {
+            return factory(value);
+        }
+        catch (OverflowException)
+        {
+            throw new ArgumentException($"Option '--timeout' value '{originalValue}' is too large.");
+        }
     }
 
     private static string RequireUrl(string? value, string settingName)

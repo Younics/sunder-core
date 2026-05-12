@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
 
@@ -12,7 +13,7 @@ public partial class LoadingWindowViewModel : ViewModelBase
 
     public string Title { get; } = "Sunder";
 
-    public string Version { get; } = "v0.1";
+    public string Version { get; } = SunderAppVersion.CurrentDisplayText;
 
     public string Subtitle { get; } = "Local package platform";
 

@@ -22,6 +22,16 @@ internal static class Program
         {
             return await RunAsync(args.ToList(), cancellation.Token);
         }
+        catch (CliTimeoutException ex)
+        {
+            ConsoleOutput.WriteError(ex.Message);
+            return Failure;
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+        {
+            ConsoleOutput.WriteError("Operation timed out. Use --timeout <duration> to increase the registry request timeout.");
+            return Failure;
+        }
         catch (OperationCanceledException)
         {
             ConsoleOutput.WriteWarning("Operation cancelled.");
@@ -62,7 +72,7 @@ internal static class Program
         var command = args[0].ToLowerInvariant();
         args.RemoveAt(0);
 
-        using var registryClient = new RegistryClient(options.RegistryApiUrl);
+        using var registryClient = new RegistryClient(options.RegistryApiUrl, options.RegistryTimeout);
         using var runtimeClient = new RuntimeClient(options.RuntimeUrl);
 
         return command switch
@@ -368,10 +378,10 @@ internal static class Program
         var setLatest = !CommandLine.ConsumeFlag(args, "--no-latest");
         if (string.IsNullOrWhiteSpace(packagePath))
         {
-            throw new ArgumentException("Usage: sunder publish --file <package.sunderpkg> [--token <token>] [--no-latest] [--dev-local]");
+            throw new ArgumentException("Usage: sunder publish --file <package.sunderpkg> [--token <token>] [--no-latest] [--dev-local] [--timeout <duration>]");
         }
 
-        CommandLine.EnsureNoExtraArguments(args, "Usage: sunder publish --file <package.sunderpkg> [--token <token>] [--no-latest] [--dev-local]");
+        CommandLine.EnsureNoExtraArguments(args, "Usage: sunder publish --file <package.sunderpkg> [--token <token>] [--no-latest] [--dev-local] [--timeout <duration>]");
 
         var fullPath = Path.GetFullPath(packagePath);
         if (!File.Exists(fullPath))
@@ -1002,7 +1012,7 @@ internal static class Program
         Console.WriteLine("  sunder install <package-id> [--version <version>|--tag <tag>] [--allow-downgrade] [--reinstall]");
         Console.WriteLine("  sunder install --file <package.sunderpkg> [--allow-downgrade] [--reinstall]");
         Console.WriteLine("  sunder update [package-id|--all] [--include-prerelease]");
-        Console.WriteLine("  sunder publish --file <package.sunderpkg> [--token <token>] [--no-latest] [--dev-local]");
+        Console.WriteLine("  sunder publish --file <package.sunderpkg> [--token <token>] [--no-latest] [--dev-local] [--timeout <duration>]");
         Console.WriteLine("  sunder yank <package-id> <version> [--token <token>]");
         Console.WriteLine("  sunder unyank <package-id> <version> [--token <token>]");
         Console.WriteLine("  sunder deprecate <package-id> <version> --message <message> [--token <token>]");
@@ -1017,6 +1027,7 @@ internal static class Program
         Console.WriteLine("  --registry-web-url <url>  Registry Web URL for browser auth. Debug default: http://localhost:5288/");
         Console.WriteLine("  --registry-url <url>      Back-compatible alias that sets both registry URLs");
         Console.WriteLine("  --runtime-url <url>       Defaults to SUNDER_RUNTIME_URL or appsettings Runtime:Url");
+        Console.WriteLine("  --timeout <duration>      Registry request timeout. Default: 15m. Examples: 15m, 900s, 900");
         Console.WriteLine("  SUNDER_REGISTRY_API_URL   Registry API URL override");
         Console.WriteLine("  SUNDER_REGISTRY_WEB_URL   Registry Web URL override");
         Console.WriteLine("  SUNDER_REGISTRY_TOKEN   Bearer token override for authenticated publish and package management");
