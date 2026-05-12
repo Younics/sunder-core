@@ -21,9 +21,9 @@
   <Grid RowDefinitions="52,*,22">
     <Grid.Background>
       <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-        <GradientStop Offset="0" Color="#202329" />
-        <GradientStop Offset="0.5" Color="#17191D" />
-        <GradientStop Offset="1" Color="#15171A" />
+        <GradientStop Offset="0" Color="{DynamicResource Sunder.Color.AppGradient.Start}" />
+        <GradientStop Offset="0.5" Color="{DynamicResource Sunder.Color.AppGradient.Middle}" />
+        <GradientStop Offset="1" Color="{DynamicResource Sunder.Color.AppGradient.End}" />
       </LinearGradientBrush>
     </Grid.Background>
     <Border Grid.Row="0"
@@ -196,7 +196,7 @@
                       HorizontalAlignment="Center"
                       VerticalAlignment="Center"
                       Data="M7 1.35 C4.95 1.35 3.45 2.95 3.45 5.1 L3.45 7.45 L2.35 9.35 L11.65 9.35 L10.55 7.45 L10.55 5.1 C10.55 2.95 9.05 1.35 7 1.35 Z M5.85 10.65 C6.15 11.25 6.55 11.55 7 11.55 C7.45 11.55 7.85 11.25 8.15 10.65"
-                      Fill="Transparent"
+                      Fill="{DynamicResource Sunder.Brush.Transparent}"
                       Stretch="Uniform"
                       Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
                       StrokeThickness="1.35" />
@@ -230,7 +230,7 @@
                       <Path Width="14"
                             Height="14"
                             Data="M4 4.75 L12 4.75 M6.5 3.25 L9.5 3.25 M5.25 4.75 L5.75 12.75 L10.25 12.75 L10.75 4.75 M7.15 6.75 L7.15 10.75 M8.85 6.75 L8.85 10.75"
-                            Fill="Transparent"
+                            Fill="{DynamicResource Sunder.Brush.Transparent}"
                             Stretch="Uniform"
                             Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
                             StrokeLineCap="Round"
@@ -373,7 +373,7 @@
                         ResizeDirection="Columns"
                         ResizeBehavior="PreviousAndNext"
                         ShowsPreview="False"
-                        Background="Transparent"
+                        Background="{DynamicResource Sunder.Brush.Transparent}"
                         IsVisible="{Binding HasLeftTopPanelContent}" />
 
           <Border Grid.Column="2"
@@ -436,7 +436,7 @@
                         ResizeDirection="Columns"
                         ResizeBehavior="PreviousAndNext"
                         ShowsPreview="False"
-                        Background="Transparent"
+                        Background="{DynamicResource Sunder.Brush.Transparent}"
                         IsVisible="{Binding HasRightTopPanelContent}" />
 
           <Border Grid.Column="4"
@@ -485,7 +485,7 @@
                       ResizeDirection="Rows"
                       ResizeBehavior="PreviousAndNext"
                       ShowsPreview="False"
-                      Background="Transparent"
+                      Background="{DynamicResource Sunder.Brush.Transparent}"
                       IsVisible="{Binding HasAnyBottomPanelContent}" />
 
         <Grid Grid.Row="2"
@@ -536,7 +536,7 @@
                         ResizeDirection="Columns"
                         ResizeBehavior="PreviousAndNext"
                         ShowsPreview="False"
-                        Background="Transparent"
+                        Background="{DynamicResource Sunder.Brush.Transparent}"
                         IsVisible="{Binding HasAnyBottomPanelContent}" />
 
           <Border Grid.Column="2"

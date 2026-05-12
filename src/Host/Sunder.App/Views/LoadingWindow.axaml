@@ -26,10 +26,10 @@
       <Border Grid.RowSpan="2">
         <Border.Background>
           <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-            <GradientStop Offset="0" Color="#D21D2128" />
-            <GradientStop Offset="0.38" Color="#AA1D2128" />
-            <GradientStop Offset="0.72" Color="#421D2128" />
-            <GradientStop Offset="1" Color="#141D2128" />
+            <GradientStop Offset="0" Color="{DynamicResource Sunder.Color.Loading.Overlay.Start}" />
+            <GradientStop Offset="0.38" Color="{DynamicResource Sunder.Color.Loading.Overlay.Middle}" />
+            <GradientStop Offset="0.72" Color="{DynamicResource Sunder.Color.Loading.Overlay.Soft}" />
+            <GradientStop Offset="1" Color="{DynamicResource Sunder.Color.Loading.Overlay.End}" />
           </LinearGradientBrush>
         </Border.Background>
       </Border>

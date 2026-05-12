@@ -207,10 +207,14 @@ internal sealed class CliBrowserAuthFlow(Uri registryUrl, RegistryClient registr
                     <style>
                         :root {
                             color-scheme: dark;
-                            --bg: #080b10;
-                            --text: #f2efe8;
-                            --muted: #9ea8b7;
-                            --accent-strong: #ffcf7d;
+                            --bg: #15171a;
+                            --bg-lifted: #1d2025;
+                            --text: #dedad3;
+                            --muted: #ccc7be;
+                            --accent-strong: #e7b765;
+                            --accent-rgb: 217, 154, 58;
+                            --success-rgb: 110, 231, 183;
+                            --white-rgb: 255, 255, 255;
                             font-family: "IBM Plex Sans", system-ui, sans-serif;
                         }
 
@@ -222,9 +226,9 @@ internal sealed class CliBrowserAuthFlow(Uri registryUrl, RegistryClient registr
                             margin: 0;
                             min-height: 100vh;
                             background:
-                                radial-gradient(circle at 20% 10%, rgba(255, 180, 76, 0.18), transparent 28rem),
-                                radial-gradient(circle at 85% 0%, rgba(110, 231, 183, 0.12), transparent 24rem),
-                                linear-gradient(180deg, #0d1118 0%, var(--bg) 42rem);
+                                radial-gradient(circle at 20% 10%, rgba(var(--accent-rgb), 0.18), transparent 28rem),
+                                radial-gradient(circle at 85% 0%, rgba(var(--success-rgb), 0.12), transparent 24rem),
+                                linear-gradient(180deg, var(--bg-lifted) 0%, var(--bg) 42rem);
                             color: var(--text);
                         }
 
@@ -241,9 +245,9 @@ internal sealed class CliBrowserAuthFlow(Uri registryUrl, RegistryClient registr
                             width: 44px;
                             height: 44px;
                             place-items: center;
-                            border: 1px solid rgba(255, 180, 76, 0.46);
+                            border: 1px solid rgba(var(--accent-rgb), 0.46);
                             border-radius: 14px;
-                            background: linear-gradient(135deg, rgba(255, 180, 76, 0.2), rgba(255, 255, 255, 0.04));
+                            background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(var(--white-rgb), 0.04));
                             color: var(--accent-strong);
                             font-weight: 800;
                         }

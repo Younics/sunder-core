@@ -44,6 +44,33 @@ public static class SunderThemeKeys
     public const string FocusBrush = "Sunder.Brush.Focus";
     public const string SelectionBrush = "Sunder.Brush.Selection";
     public const string DisabledBrush = "Sunder.Brush.Disabled";
+    public const string TransparentBrush = "Sunder.Brush.Transparent";
+    public const string OverlayBackdropBrush = "Sunder.Brush.Overlay.Backdrop";
+    public const string OverlayBackdropStrongBrush = "Sunder.Brush.Overlay.Backdrop.Strong";
+    public const string OverlaySurfaceBrush = "Sunder.Brush.Overlay.Surface";
+    public const string OverlayBorderBrush = "Sunder.Brush.Overlay.Border";
+    public const string AccentOverlayBrush = "Sunder.Brush.Accent.Overlay";
+
+    public const string BackgroundAppColor = "Sunder.Color.Background.App";
+    public const string SurfaceBaseColor = "Sunder.Color.Surface.Base";
+    public const string SurfaceRaisedColor = "Sunder.Color.Surface.Raised";
+    public const string SurfaceWorkspaceColor = "Sunder.Color.Surface.Workspace";
+    public const string AppGradientStartColor = "Sunder.Color.AppGradient.Start";
+    public const string AppGradientMiddleColor = "Sunder.Color.AppGradient.Middle";
+    public const string AppGradientEndColor = "Sunder.Color.AppGradient.End";
+    public const string LoadingOverlayStartColor = "Sunder.Color.Loading.Overlay.Start";
+    public const string LoadingOverlayMiddleColor = "Sunder.Color.Loading.Overlay.Middle";
+    public const string LoadingOverlaySoftColor = "Sunder.Color.Loading.Overlay.Soft";
+    public const string LoadingOverlayEndColor = "Sunder.Color.Loading.Overlay.End";
+
+    public const string ShadowWorkspacePanel = "Sunder.Shadow.WorkspacePanel";
+    public const string ShadowShellPanel = "Sunder.Shadow.ShellPanel";
+    public const string ShadowToast = "Sunder.Shadow.Toast";
+    public const string ShadowPrompt = "Sunder.Shadow.Prompt";
+    public const string ShadowWelcomeLogo = "Sunder.Shadow.WelcomeLogo";
+    public const string ShadowPackagePanel = "Sunder.Shadow.PackagePanel";
+    public const string ShadowPackageCard = "Sunder.Shadow.PackageCard";
+    public const string ShadowOverlay = "Sunder.Shadow.Overlay";
 
     public const string RadiusSmall = "Sunder.Radius.Small";
     public const string RadiusMedium = "Sunder.Radius.Medium";
@@ -98,5 +125,11 @@ public static class SunderThemeKeys
         FocusBrush,
         SelectionBrush,
         DisabledBrush,
+        TransparentBrush,
+        OverlayBackdropBrush,
+        OverlayBackdropStrongBrush,
+        OverlaySurfaceBrush,
+        OverlayBorderBrush,
+        AccentOverlayBrush,
     ];
 }

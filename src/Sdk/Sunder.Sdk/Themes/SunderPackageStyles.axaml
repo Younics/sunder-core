@@ -7,7 +7,7 @@
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
     <Setter Property="Padding" Value="{DynamicResource Sunder.Padding.Panel}" />
-    <Setter Property="BoxShadow" Value="0 18 48 0 #33000000" />
+    <Setter Property="BoxShadow" Value="{DynamicResource Sunder.Shadow.PackagePanel}" />
   </Style>
 
   <Style Selector="Border.workspace-surface">
@@ -24,7 +24,7 @@
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
     <Setter Property="Padding" Value="{DynamicResource Sunder.Padding.Card}" />
-    <Setter Property="BoxShadow" Value="0 10 30 0 #26000000" />
+    <Setter Property="BoxShadow" Value="{DynamicResource Sunder.Shadow.PackageCard}" />
   </Style>
 
   <Style Selector="Button.primary-action">
@@ -171,7 +171,7 @@
   </Style>
 
   <Style Selector="ListBoxItem">
-    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
     <Setter Property="Padding" Value="10,8" />
     <Setter Property="Margin" Value="0,1" />

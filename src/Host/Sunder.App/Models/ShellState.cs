@@ -48,7 +48,7 @@ public sealed class ShellState
 
     public ShellWindowPlacement? PackagesWindowPlacement { get; set; }
 
-    public string ThemeId { get; set; } = SunderThemeDefinition.DefaultDark.Id;
+    public string ThemeId { get; set; } = SunderThemeDefinition.GraphiteDark.Id;
 
     public string? PreferredRuntimeUrl { get; set; }
 }

@@ -17,7 +17,7 @@ public sealed class ShellStateServiceTests
         var state = service.Load();
 
         Assert.Equal(ShellState.CurrentLayoutVersion, state.LayoutVersion);
-        Assert.Equal(SunderThemeDefinition.DefaultDark.Id, state.ThemeId);
+        Assert.Equal(SunderThemeDefinition.GraphiteDark.Id, state.ThemeId);
         Assert.Empty(state.ViewPlacements);
         Assert.Empty(state.ViewOrder);
         Assert.Empty(state.HiddenHotbarViewIds);

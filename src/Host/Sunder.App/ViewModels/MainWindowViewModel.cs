@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -9,6 +10,7 @@ using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
+using Sunder.Sdk.Theming;
 
 namespace Sunder.App.ViewModels;
 
@@ -18,11 +20,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private const double MinimumPanelWidth = 180;
     private const double MaximumPanelWidth = 1200;
     private const double MaximumTopRowRatio = 1.0;
-    private static readonly IBrush RuntimeReadyBrush = new SolidColorBrush(Color.Parse("#22C55E"));
-    private static readonly IBrush RuntimeWarningBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
-    private static readonly IBrush RuntimeErrorBrush = new SolidColorBrush(Color.Parse("#EF4444"));
-    private static readonly IBrush RuntimeUnavailableBrush = new SolidColorBrush(Color.Parse("#94A3B8"));
-    private static readonly IBrush RuntimeBusyBrush = new SolidColorBrush(Color.Parse("#3B82F6"));
+    private static IBrush? RuntimeReadyBrush => ResolveThemeBrush(SunderThemeKeys.SuccessBrush);
+    private static IBrush? RuntimeWarningBrush => ResolveThemeBrush(SunderThemeKeys.WarningBrush);
+    private static IBrush? RuntimeErrorBrush => ResolveThemeBrush(SunderThemeKeys.DangerBrush);
+    private static IBrush? RuntimeUnavailableBrush => ResolveThemeBrush(SunderThemeKeys.ForegroundMutedBrush);
+    private static IBrush? RuntimeBusyBrush => ResolveThemeBrush(SunderThemeKeys.AccentBrush);
 
     private readonly IWindowLauncher _windowLauncher;
     private readonly ShellStateService _shellStateService;
@@ -201,7 +203,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private bool _isRuntimeBusy;
 
     [ObservableProperty]
-    private IBrush _runtimeStatusBrush = RuntimeUnavailableBrush;
+    private IBrush? _runtimeStatusBrush = RuntimeUnavailableBrush;
 
     public bool CanManageRuntime => !IsRuntimeBusy;
 
@@ -512,7 +514,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IsRuntimeBusy = false;
     }
 
-    private static IBrush ResolveRuntimeStatusBrush(bool isRunning, bool isReady, string lastError)
+    private static IBrush? ResolveRuntimeStatusBrush(bool isRunning, bool isReady, string lastError)
     {
         if (!string.IsNullOrWhiteSpace(lastError))
         {
@@ -525,6 +527,18 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         return isRunning ? RuntimeWarningBrush : RuntimeUnavailableBrush;
+    }
+
+    private static IBrush? ResolveThemeBrush(string resourceKey)
+    {
+        var application = Application.Current;
+        if (application?.Resources.TryGetResource(resourceKey, application.ActualThemeVariant, out var resource) == true
+            && resource is IBrush brush)
+        {
+            return brush;
+        }
+
+        return null;
     }
 
     public void AdjustLiveLeftPanelWidth(double delta, double maximumWidth)

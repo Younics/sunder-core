@@ -35,7 +35,7 @@ public sealed class ShellStateService
                 state.ViewPlacements ??= [];
                 state.ViewOrder ??= [];
                 state.HiddenHotbarViewIds = new HashSet<string>(state.HiddenHotbarViewIds ?? [], StringComparer.OrdinalIgnoreCase);
-                state.ThemeId = string.IsNullOrWhiteSpace(state.ThemeId) ? SunderThemeDefinition.DefaultDark.Id : state.ThemeId;
+                state.ThemeId = string.IsNullOrWhiteSpace(state.ThemeId) ? SunderThemeDefinition.GraphiteDark.Id : state.ThemeId;
 
                 if (state.LayoutVersion != ShellState.CurrentLayoutVersion)
                 {

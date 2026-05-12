@@ -7,11 +7,11 @@
         CanResize="False"
         Title="Package image gallery"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
-        Background="#E603060C">
+        Background="{DynamicResource Sunder.Brush.Overlay.Backdrop}">
   <Window.Styles>
     <Style Selector="Button.gallery-close-button, Button.gallery-side-button">
-      <Setter Property="Background" Value="#B810151D" />
-      <Setter Property="BorderBrush" Value="#29FFFFFF" />
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Overlay.Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Overlay.Border}" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -19,7 +19,7 @@
     </Style>
 
     <Style Selector="Button.gallery-close-button:pointerover, Button.gallery-side-button:pointerover">
-      <Setter Property="Background" Value="#24FFB44C" />
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Accent.Overlay}" />
       <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
     </Style>
 
@@ -43,7 +43,7 @@
   </Window.Styles>
 
   <Grid x:Name="Backdrop"
-        Background="#CC03060C"
+        Background="{DynamicResource Sunder.Brush.Overlay.Backdrop.Strong}"
         PointerPressed="Backdrop_OnPointerPressed">
     <Button Classes="gallery-close-button"
             HorizontalAlignment="Right"
@@ -80,12 +80,12 @@
                 PointerPressed="GalleryContent_OnPointerPressed">
       <Border MaxWidth="1120"
               MaxHeight="760"
-              BorderBrush="#24FFFFFF"
+              BorderBrush="{DynamicResource Sunder.Brush.Overlay.Border}"
               BorderThickness="1"
               CornerRadius="24"
-              Background="#66000000"
+              Background="{DynamicResource Sunder.Brush.Overlay.Surface}"
               ClipToBounds="True"
-              BoxShadow="0 28 100 0 #66000000">
+              BoxShadow="{DynamicResource Sunder.Shadow.Overlay}">
         <Image x:Name="GalleryImage"
                Stretch="Uniform"
                MaxWidth="1120"
