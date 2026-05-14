@@ -50,6 +50,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly IPackageShellViewService? _shellViewService;
     private readonly NotificationCenterService? _notificationCenter;
     private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _lifecycleSemaphore = new(1, 1);
+    private readonly object _stateLock = new();
     private bool _disposed;
 
     internal PackageViewHostService(
@@ -116,6 +118,9 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        await _lifecycleSemaphore.WaitAsync(cancellationToken);
+        try
+        {
         var forceReloadPackages = forceReloadPackageIds is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(forceReloadPackageIds, StringComparer.OrdinalIgnoreCase);
@@ -124,7 +129,13 @@ public sealed class PackageViewHostService : IAsyncDisposable
             .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-        foreach (var loadedPackageId in _loadedPackages.Keys.Where(packageId => !activePackagesById.ContainsKey(packageId)).ToArray())
+        string[] loadedPackageIds;
+        lock (_stateLock)
+        {
+            loadedPackageIds = _loadedPackages.Keys.Where(packageId => !activePackagesById.ContainsKey(packageId)).ToArray();
+        }
+
+        foreach (var loadedPackageId in loadedPackageIds)
         {
             await UnloadPackageAsync(loadedPackageId, cancellationToken);
         }
@@ -143,27 +154,44 @@ public sealed class PackageViewHostService : IAsyncDisposable
             }
 
             var forceReload = forceReloadPackages.Contains(activePackage.PackageId);
-            if (!forceReload
-                && _loadedPackages.TryGetValue(activePackage.PackageId, out var loadedPackage)
-                && IsSameLoadedPackage(loadedPackage, activePackage, source))
+            var isSameLoadedPackage = false;
+            var isLoadedPackage = false;
+            lock (_stateLock)
+            {
+                if (_loadedPackages.TryGetValue(activePackage.PackageId, out var loadedPackage) && loadedPackage is not null)
+                {
+                    isLoadedPackage = true;
+                    isSameLoadedPackage = IsSameLoadedPackage(loadedPackage, activePackage, source);
+                }
+            }
+
+            if (!forceReload && isSameLoadedPackage)
             {
                 continue;
             }
 
-            if (_loadedPackages.ContainsKey(activePackage.PackageId))
+            if (isLoadedPackage)
             {
                 await UnloadPackageAsync(activePackage.PackageId, cancellationToken);
             }
 
             await LoadPackageAsync(activePackage, source, cancellationToken);
         }
+        }
+        finally
+        {
+            _lifecycleSemaphore.Release();
+        }
     }
 
     public IReadOnlyList<ActivePackageDescriptor> FilterEnabledPackages(IReadOnlyList<ActivePackageDescriptor> activePackages)
     {
-        return activePackages
-            .Where(package => !_disabledPackageIds.Contains(package.PackageId))
-            .ToArray();
+        lock (_stateLock)
+        {
+            return activePackages
+                .Where(package => !_disabledPackageIds.Contains(package.PackageId))
+                .ToArray();
+        }
     }
 
     public bool TryHandleUnhandledException(Exception exception)
@@ -185,7 +213,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     public Control? GetOrCreateView(string viewId)
         => _viewRegistry.GetOrCreateView(
             viewId,
-            _disabledPackageIds.Contains,
+            IsPackageDisabled,
             (packageId, message, exception) => DisablePackage(packageId, message, PackageFailureOrigin.AppHostedView, exception));
 
     public Control? ReloadView(string viewId)
@@ -224,12 +252,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
         => _viewRegistry.HasSettingsView(packageId);
 
     public IReadOnlyList<PackageSettingsViewDescriptor> ListSettingsViewPackages()
-        => _viewRegistry.ListSettingsViewPackages(_disabledPackageIds.Contains);
+        => _viewRegistry.ListSettingsViewPackages(IsPackageDisabled);
 
     public Control? GetOrCreateSettingsView(string packageId)
         => _viewRegistry.GetOrCreateSettingsView(
             packageId,
-            _disabledPackageIds.Contains,
+            IsPackageDisabled,
             (failedPackageId, message, exception) => DisablePackage(failedPackageId, message, PackageFailureOrigin.AppHostedView, exception));
 
     public async ValueTask DisposeAsync()
@@ -240,7 +268,13 @@ public sealed class PackageViewHostService : IAsyncDisposable
         }
 
         _disposed = true;
-        foreach (var packageId in _loadedPackages.Keys.ToArray())
+        string[] packageIds;
+        lock (_stateLock)
+        {
+            packageIds = _loadedPackages.Keys.ToArray();
+        }
+
+        foreach (var packageId in packageIds)
         {
             await UnloadPackageAsync(packageId);
         }
@@ -267,11 +301,14 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     internal void RegisterPackageAssembly(string packageId, Assembly assembly)
     {
-        _assemblyPackageMap[assembly] = packageId;
-        var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
-        if (loadContext is not null)
+        lock (_stateLock)
         {
-            _loadContextPackageMap[loadContext] = packageId;
+            _assemblyPackageMap[assembly] = packageId;
+            var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
+            if (loadContext is not null)
+            {
+                _loadContextPackageMap[loadContext] = packageId;
+            }
         }
     }
 
@@ -294,7 +331,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             return;
         }
 
-        await _backgroundServices.StopAsync(packageId, cancellationToken);
+        await StopBackgroundServicesAsync(packageId, cancellationToken);
     }
 
     private async Task LoadPackageAsync(
@@ -303,7 +340,9 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var preparedSource = PreparePackageSource(_loadedPackages.Count, source);
+        var preparedSource = await Task.Run(
+            () => PreparePackageSource(_loadedPackages.Count, source),
+            cancellationToken);
         if (preparedSource is null)
         {
             await DisablePackageAsync(
@@ -325,6 +364,17 @@ public sealed class PackageViewHostService : IAsyncDisposable
             return;
         }
 
+        await Task.Run(
+            async () => await ActivatePreparedPackageAsync(package, source, preparedSource, cancellationToken),
+            cancellationToken);
+    }
+
+    private async Task ActivatePreparedPackageAsync(
+        ActivePackageDescriptor package,
+        PackageSourceDescriptor source,
+        AppPreparedPackageSource preparedSource,
+        CancellationToken cancellationToken)
+    {
         ServiceProvider? serviceProvider = null;
         AppPackageLoadContext? loadContext = null;
         var packageActivated = false;
@@ -340,7 +390,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
             _sharedAssemblyRegistry.AddProbeDirectories([packageInfo.LibraryFolder]);
 
             loadContext = new AppPackageLoadContext(package.PackageId, packageInfo.EntryAssemblyPath, _sharedAssemblyRegistry, RegisterPackageAssembly);
-            _loadContexts.Add(loadContext);
+            lock (_stateLock)
+            {
+                _loadContexts.Add(loadContext);
+            }
             var entryAssembly = loadContext.LoadPackageEntryAssembly();
             var moduleType = ResolvePackageModuleType(entryAssembly, out var moduleResolutionError);
             if (moduleType is null)
@@ -365,7 +418,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
                 : new AppPackageNotificationService(_notificationCenter, package.PackageId, package.DisplayName));
             module.ConfigureServices(services, packageContext);
             serviceProvider = services.BuildServiceProvider();
-            _ownedDisposables.Add(serviceProvider);
+            lock (_stateLock)
+            {
+                _ownedDisposables.Add(serviceProvider);
+            }
 
             _viewRegistry.SetSettingsViewPackage(new PackageSettingsViewDescriptor(
                 package.PackageId,
@@ -375,8 +431,11 @@ public sealed class PackageViewHostService : IAsyncDisposable
             module.RegisterContributions(registry, serviceProvider);
             await _backgroundServices.StartAsync(package.PackageId, cancellationToken);
 
-            _disabledPackageIds.Remove(package.PackageId);
-            _loadedPackages[package.PackageId] = new AppLoadedPackageHandle(package, source, preparedSource.Folder, serviceProvider, loadContext);
+            lock (_stateLock)
+            {
+                _disabledPackageIds.Remove(package.PackageId);
+                _loadedPackages[package.PackageId] = new AppLoadedPackageHandle(package, source, preparedSource.Folder, serviceProvider, loadContext);
+            }
             packageActivated = true;
         }
         catch (OperationCanceledException)
@@ -398,13 +457,19 @@ public sealed class PackageViewHostService : IAsyncDisposable
             {
                 if (serviceProvider is not null)
                 {
-                    _ownedDisposables.Remove(serviceProvider);
+                    lock (_stateLock)
+                    {
+                        _ownedDisposables.Remove(serviceProvider);
+                    }
                     await TryDisposeOwnedInstanceAsync(serviceProvider, $"Failed to dispose app-side services for package '{package.PackageId}'.");
                 }
 
                 if (loadContext is not null)
                 {
-                    _loadContexts.Remove(loadContext);
+                    lock (_stateLock)
+                    {
+                        _loadContexts.Remove(loadContext);
+                    }
                     TryUnloadLoadContext(loadContext, package.PackageId);
                 }
             }
@@ -413,23 +478,39 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     private async Task UnloadPackageAsync(string packageId, CancellationToken cancellationToken = default)
     {
-        if (!_loadedPackages.Remove(packageId, out var handle))
+        AppLoadedPackageHandle? handle;
+        lock (_stateLock)
+        {
+            if (!_loadedPackages.Remove(packageId, out handle))
+            {
+                return;
+            }
+
+            _disabledPackageIds.Remove(packageId);
+        }
+
+        if (handle is null)
         {
             return;
         }
 
-        _disabledPackageIds.Remove(packageId);
         _viewRegistry.UnregisterPackage(packageId);
         _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
-        await _backgroundServices.StopAsync(packageId, cancellationToken);
+        await StopBackgroundServicesAsync(packageId, cancellationToken);
 
-        _ownedDisposables.Remove(handle.ServiceProvider);
-        await TryDisposeOwnedInstanceAsync(handle.ServiceProvider, $"Failed to dispose app-side services for package '{packageId}'.");
-        _loadContexts.Remove(handle.LoadContext);
+        lock (_stateLock)
+        {
+            _ownedDisposables.Remove(handle.ServiceProvider);
+        }
+        await Task.Run(
+            async () => await TryDisposeOwnedInstanceAsync(handle.ServiceProvider, $"Failed to dispose app-side services for package '{packageId}'."),
+            cancellationToken);
+        lock (_stateLock)
+        {
+            _loadContexts.Remove(handle.LoadContext);
+        }
         RemovePackageAssemblyMappings(packageId);
         TryUnloadLoadContext(handle.LoadContext, packageId);
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
     }
 
     private bool TryMarkPackageDisabled(
@@ -438,9 +519,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
         PackageFailureOrigin origin,
         Exception? exception)
     {
-        if (!_disabledPackageIds.Add(packageId))
+        lock (_stateLock)
         {
-            return false;
+            if (!_disabledPackageIds.Add(packageId))
+            {
+                return false;
+            }
         }
 
         AppSessionLog.WriteError($"Disabled package '{packageId}' for the current app session. {message}", exception);
@@ -462,22 +546,38 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     private async Task DisposeLegacyOwnedInstancesAsync()
     {
-        foreach (var disposable in _ownedDisposables.ToArray())
+        object[] ownedDisposables;
+        AppPackageLoadContext[] loadContexts;
+        lock (_stateLock)
         {
-            await TryDisposeOwnedInstanceAsync(disposable, "Failed to dispose an app-side package service container.");
+            ownedDisposables = _ownedDisposables.ToArray();
+            loadContexts = _loadContexts.ToArray();
         }
 
-        foreach (var loadContext in _loadContexts.ToArray())
+        foreach (var disposable in ownedDisposables)
+        {
+            await Task.Run(
+                async () => await TryDisposeOwnedInstanceAsync(disposable, "Failed to dispose an app-side package service container."));
+        }
+
+        foreach (var loadContext in loadContexts)
         {
             TryUnloadLoadContext(loadContext, packageId: null);
         }
+    }
 
-        if (_loadContexts.Count > 0)
+    private bool IsPackageDisabled(string packageId)
+    {
+        lock (_stateLock)
         {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
+            return _disabledPackageIds.Contains(packageId);
         }
     }
+
+    private Task StopBackgroundServicesAsync(string packageId, CancellationToken cancellationToken)
+        => Task.Run(
+            async () => await _backgroundServices.StopAsync(packageId, cancellationToken),
+            cancellationToken);
 
     private static async Task TryDisposeOwnedInstanceAsync(object ownedInstance, string message)
     {
@@ -507,14 +607,17 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     private void RemovePackageAssemblyMappings(string packageId)
     {
-        foreach (var assembly in _assemblyPackageMap.Where(entry => string.Equals(entry.Value, packageId, StringComparison.OrdinalIgnoreCase)).Select(entry => entry.Key).ToArray())
+        lock (_stateLock)
         {
-            _assemblyPackageMap.Remove(assembly);
-        }
+            foreach (var assembly in _assemblyPackageMap.Where(entry => string.Equals(entry.Value, packageId, StringComparison.OrdinalIgnoreCase)).Select(entry => entry.Key).ToArray())
+            {
+                _assemblyPackageMap.Remove(assembly);
+            }
 
-        foreach (var loadContext in _loadContextPackageMap.Where(entry => string.Equals(entry.Value, packageId, StringComparison.OrdinalIgnoreCase)).Select(entry => entry.Key).ToArray())
-        {
-            _loadContextPackageMap.Remove(loadContext);
+            foreach (var loadContext in _loadContextPackageMap.Where(entry => string.Equals(entry.Value, packageId, StringComparison.OrdinalIgnoreCase)).Select(entry => entry.Key).ToArray())
+            {
+                _loadContextPackageMap.Remove(loadContext);
+            }
         }
     }
 
@@ -528,15 +631,18 @@ public sealed class PackageViewHostService : IAsyncDisposable
                 continue;
             }
 
-            if (_assemblyPackageMap.TryGetValue(assembly, out var packageId))
+            lock (_stateLock)
             {
-                return packageId;
-            }
+                if (_assemblyPackageMap.TryGetValue(assembly, out var packageId))
+                {
+                    return packageId;
+                }
 
-            var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
-            if (loadContext is not null && _loadContextPackageMap.TryGetValue(loadContext, out packageId))
-            {
-                return packageId;
+                var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
+                if (loadContext is not null && _loadContextPackageMap.TryGetValue(loadContext, out packageId))
+                {
+                    return packageId;
+                }
             }
         }
 

@@ -6,14 +6,26 @@ namespace Sunder.App.Services;
 
 public static class PackageIconImageLoader
 {
-    private static readonly HttpClient ImageHttpClient = new();
+    private const long MaxIconBytes = 1_048_576;
+    private static readonly HttpClient ImageHttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private static readonly SemaphoreSlim ImageLoadSemaphore = new(4, 4);
 
     public static async Task<PackageIconImageLoadResult> LoadAsync(Uri uri, CancellationToken cancellationToken = default)
     {
+        var semaphoreAcquired = false;
         try
         {
+            await ImageLoadSemaphore.WaitAsync(cancellationToken);
+            semaphoreAcquired = true;
             using var response = await ImageHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
+
+            if (response.Content.Headers.ContentLength > MaxIconBytes)
+            {
+                var error = $"Package icon '{uri}' exceeds the {MaxIconBytes} byte limit.";
+                AppSessionLog.WriteError(error);
+                return PackageIconImageLoadResult.Failed(error);
+            }
 
             var format = ResolveIconFormat(response.Content.Headers.ContentType?.MediaType);
             if (format == PackageIconImageFormat.Unsupported)
@@ -24,8 +36,7 @@ public static class PackageIconImageLoader
             }
 
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var memory = new MemoryStream();
-            await source.CopyToAsync(memory, cancellationToken);
+            using var memory = await ReadBoundedContentAsync(source, MaxIconBytes, cancellationToken);
             memory.Position = 0;
 
             if (format == PackageIconImageFormat.Svg)
@@ -43,6 +54,40 @@ public static class PackageIconImageLoader
             var error = $"Failed to load package icon '{uri}': {ex.Message}";
             AppSessionLog.WriteError(error, ex);
             return PackageIconImageLoadResult.Failed(error);
+        }
+        finally
+        {
+            if (semaphoreAcquired)
+            {
+                ImageLoadSemaphore.Release();
+            }
+        }
+    }
+
+    private static async Task<MemoryStream> ReadBoundedContentAsync(
+        Stream source,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        var memory = new MemoryStream();
+        var buffer = new byte[81920];
+        long totalBytes = 0;
+        while (true)
+        {
+            var bytesRead = await source.ReadAsync(buffer, cancellationToken);
+            if (bytesRead == 0)
+            {
+                return memory;
+            }
+
+            totalBytes += bytesRead;
+            if (totalBytes > maxBytes)
+            {
+                memory.Dispose();
+                throw new InvalidOperationException($"Image content exceeds the {maxBytes} byte limit.");
+            }
+
+            memory.Write(buffer, 0, bytesRead);
         }
     }
 

@@ -106,80 +106,88 @@ public sealed class CliInstallationService
     public Task<CliInstallationStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(CreateStatus());
+        return Task.Run(CreateStatus, cancellationToken);
     }
 
     public Task<CliInstallationResult> EnsureInstalledAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-
-        var warnings = new List<string>();
-        var paths = CreateBasePaths();
-        var bundledCli = ResolveBundledCli(paths.BundledCliDirectory);
-
-        if (bundledCli is null)
+        return Task.Run(() =>
         {
-            var status = CreateStatus();
-            if (!string.IsNullOrWhiteSpace(status.Warning))
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var warnings = new List<string>();
+            var paths = CreateBasePaths();
+            var bundledCli = ResolveBundledCli(paths.BundledCliDirectory);
+
+            if (bundledCli is null)
             {
-                warnings.Add(status.Warning);
+                var status = CreateStatus();
+                if (!string.IsNullOrWhiteSpace(status.Warning))
+                {
+                    warnings.Add(status.Warning);
+                }
+
+                return new CliInstallationResult(
+                    status,
+                    InstalledOrUpdatedCli: false,
+                    CreatedOrUpdatedShim: false,
+                    UpdatedUserPath: false,
+                    warnings);
             }
 
-            return Task.FromResult(new CliInstallationResult(
-                status,
-                InstalledOrUpdatedCli: false,
-                CreatedOrUpdatedShim: false,
-                UpdatedUserPath: false,
-                warnings));
-        }
+            Directory.CreateDirectory(paths.InstalledCliDirectory);
+            Directory.CreateDirectory(paths.ShimDirectory);
 
-        Directory.CreateDirectory(paths.InstalledCliDirectory);
-        Directory.CreateDirectory(paths.ShimDirectory);
+            var installedCliPath = Path.Combine(paths.InstalledCliDirectory, Path.GetFileName(bundledCli.FilePath));
+            var installedOrUpdatedCli = SyncCliDirectoryIfNeeded(paths.BundledCliDirectory, paths.InstalledCliDirectory);
 
-        var installedCliPath = Path.Combine(paths.InstalledCliDirectory, Path.GetFileName(bundledCli.FilePath));
-        var installedOrUpdatedCli = SyncCliDirectoryIfNeeded(paths.BundledCliDirectory, paths.InstalledCliDirectory);
+            if (!bundledCli.RequiresDotnet)
+            {
+                TryMakeExecutable(installedCliPath);
+            }
 
-        if (!bundledCli.RequiresDotnet)
-        {
-            TryMakeExecutable(installedCliPath);
-        }
+            var installedCli = new CliFileDescriptor(installedCliPath, bundledCli.RequiresDotnet);
+            var shimContent = CreateShimContent(installedCli);
+            var createdOrUpdatedShim = WriteTextIfChanged(paths.ShimPath, shimContent);
+            TryMakeExecutable(paths.ShimPath);
 
-        var installedCli = new CliFileDescriptor(installedCliPath, bundledCli.RequiresDotnet);
-        var shimContent = CreateShimContent(installedCli);
-        var createdOrUpdatedShim = WriteTextIfChanged(paths.ShimPath, shimContent);
-        TryMakeExecutable(paths.ShimPath);
+            var updatedUserPath = EnsureShimDirectoryIsOnPath(paths.ShimDirectory);
+            var statusAfterInstall = CreateStatus();
 
-        var updatedUserPath = EnsureShimDirectoryIsOnPath(paths.ShimDirectory);
-        var statusAfterInstall = CreateStatus();
+            if (!statusAfterInstall.IsFullyInstalled && !string.IsNullOrWhiteSpace(statusAfterInstall.Warning))
+            {
+                warnings.Add(statusAfterInstall.Warning);
+            }
 
-        if (!statusAfterInstall.IsFullyInstalled && !string.IsNullOrWhiteSpace(statusAfterInstall.Warning))
-        {
-            warnings.Add(statusAfterInstall.Warning);
-        }
-
-        return Task.FromResult(new CliInstallationResult(
-            statusAfterInstall,
-            installedOrUpdatedCli,
-            createdOrUpdatedShim,
-            updatedUserPath,
-            warnings));
+            return new CliInstallationResult(
+                statusAfterInstall,
+                installedOrUpdatedCli,
+                createdOrUpdatedShim,
+                updatedUserPath,
+                warnings);
+        }, cancellationToken);
     }
 
     public Task<CliInstallationStatus> UninstallAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-
-        var paths = CreateBasePaths();
-        foreach (var candidate in GetKnownInstalledCliCandidates(paths.InstalledCliDirectory))
+        return Task.Run(() =>
         {
-            DeleteFileIfExists(candidate);
-        }
+            cancellationToken.ThrowIfCancellationRequested();
 
-        DeleteFileIfExists(paths.ShimPath);
-        DeleteDirectoryIfEmpty(paths.InstalledCliDirectory);
-        DeleteDirectoryIfEmpty(paths.ShimDirectory);
+            var paths = CreateBasePaths();
+            foreach (var candidate in GetKnownInstalledCliCandidates(paths.InstalledCliDirectory))
+            {
+                DeleteFileIfExists(candidate);
+            }
 
-        return Task.FromResult(CreateStatus());
+            DeleteFileIfExists(paths.ShimPath);
+            DeleteDirectoryIfEmpty(paths.InstalledCliDirectory);
+            DeleteDirectoryIfEmpty(paths.ShimDirectory);
+
+            return CreateStatus();
+        }, cancellationToken);
     }
 
     private CliInstallationStatus CreateStatus()

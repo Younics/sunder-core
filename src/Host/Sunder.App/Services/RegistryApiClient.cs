@@ -13,7 +13,11 @@ public sealed class RegistryApiClient : IRegistryApiClient
     public RegistryApiClient(Uri registryUrl)
     {
         RegistryUrl = RegistryUrlHelper.Normalize(registryUrl);
-        _httpClient = new HttpClient { BaseAddress = RegistryUrl };
+        _httpClient = new HttpClient
+        {
+            BaseAddress = RegistryUrl,
+            Timeout = TimeSpan.FromSeconds(30),
+        };
     }
 
     public Uri RegistryUrl { get; }

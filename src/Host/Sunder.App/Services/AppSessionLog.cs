@@ -24,21 +24,24 @@ internal static class AppSessionLog
     private static void Write(PackageLogLevel level, string message, Exception? exception)
     {
         Trace.WriteLine(exception is null ? message : $"{message}{Environment.NewLine}{exception}");
-        try
+        _ = Task.Run(async () =>
         {
-            Logging.Value.Events.WriteAsync(
-                level,
-                "app.session.log",
-                message,
-                new Dictionary<string, object?>(StringComparer.Ordinal)
-                {
-                    ["log.scope"] = "app",
-                },
-                exception).GetAwaiter().GetResult();
-        }
-        catch
-        {
-            // Logging must never interrupt app startup or shutdown.
-        }
+            try
+            {
+                await Logging.Value.Events.WriteAsync(
+                    level,
+                    "app.session.log",
+                    message,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["log.scope"] = "app",
+                    },
+                    exception);
+            }
+            catch
+            {
+                // Logging must never interrupt app startup or shutdown.
+            }
+        });
     }
 }

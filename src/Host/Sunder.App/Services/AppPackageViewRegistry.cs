@@ -6,6 +6,7 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageViewRegistry
 {
+    private readonly object _syncRoot = new();
     private readonly Dictionary<string, AppRegisteredPackageView> _registeredViews = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AppRegisteredSettingsView> _registeredSettingsViews = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Control> _viewCache = new(StringComparer.OrdinalIgnoreCase);
@@ -26,27 +27,39 @@ internal sealed class AppPackageViewRegistry
     public void RegisterPackageView<TView>(string packageId, string viewId, IServiceProvider serviceProvider)
         where TView : Control
     {
-        _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, typeof(TView), AppRegistrationKind.View, packageId);
-        TrackPackageViewId(packageId, viewId);
+        lock (_syncRoot)
+        {
+            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, typeof(TView), AppRegistrationKind.View, packageId);
+            TrackPackageViewId(packageId, viewId);
+        }
     }
 
     public void RegisterPackageViewFactory<TFactory>(string packageId, string viewId, IServiceProvider serviceProvider)
         where TFactory : class, IPackageWorkspaceFactory
     {
-        _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, typeof(TFactory), AppRegistrationKind.Factory, packageId);
-        TrackPackageViewId(packageId, viewId);
+        lock (_syncRoot)
+        {
+            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, typeof(TFactory), AppRegistrationKind.Factory, packageId);
+            TrackPackageViewId(packageId, viewId);
+        }
     }
 
     public void RegisterSettingsView<TView>(string packageId, IServiceProvider serviceProvider)
         where TView : Control
     {
-        _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TView), AppRegistrationKind.View, packageId);
+        lock (_syncRoot)
+        {
+            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TView), AppRegistrationKind.View, packageId);
+        }
     }
 
     public void RegisterSettingsViewFactory<TFactory>(string packageId, IServiceProvider serviceProvider)
         where TFactory : class, IPackageWorkspaceFactory
     {
-        _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TFactory), AppRegistrationKind.Factory, packageId);
+        lock (_syncRoot)
+        {
+            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TFactory), AppRegistrationKind.Factory, packageId);
+        }
     }
 
     public Control? GetOrCreateView(
@@ -54,9 +67,14 @@ internal sealed class AppPackageViewRegistry
         Func<string, bool> isPackageDisabled,
         Action<string, string, Exception> reportFailure)
     {
-        if (!_registeredViews.TryGetValue(viewId, out var registration))
+        AppRegisteredPackageView registration;
+        lock (_syncRoot)
         {
-            return null;
+            if (!_registeredViews.TryGetValue(viewId, out var foundRegistration))
+            {
+                return null;
+            }
+            registration = foundRegistration;
         }
 
         if (isPackageDisabled(registration.PackageId))
@@ -64,52 +82,85 @@ internal sealed class AppPackageViewRegistry
             return null;
         }
 
-        if (_viewCache.TryGetValue(viewId, out var cachedView))
-        {
-            return cachedView;
-        }
-
+        Control control;
         try
         {
-            var control = CreateControl(registration.ServiceProvider, registration.ImplementationType, registration.RegistrationKind);
-            _viewCache[viewId] = control;
-            return control;
+            control = CreateControl(registration.ServiceProvider, registration.ImplementationType, registration.RegistrationKind);
         }
         catch (Exception ex)
         {
             reportFailure(registration.PackageId, $"Failed to create package view '{viewId}': {ex.Message}", ex);
             return null;
         }
+
+        lock (_syncRoot)
+        {
+            if (_viewCache.TryGetValue(viewId, out var cachedView))
+            {
+                DisposeCachedControl(control);
+                return cachedView;
+            }
+
+            _viewCache[viewId] = control;
+            return control;
+        }
     }
 
     public bool HasSettingsView(string packageId)
-        => _registeredSettingsViews.ContainsKey(packageId);
+    {
+        lock (_syncRoot)
+        {
+            return _registeredSettingsViews.ContainsKey(packageId);
+        }
+    }
 
     public void SetSettingsViewPackage(PackageSettingsViewDescriptor descriptor)
     {
-        _settingsViewPackagesById[descriptor.PackageId] = descriptor;
+        lock (_syncRoot)
+        {
+            _settingsViewPackagesById[descriptor.PackageId] = descriptor;
+        }
     }
 
     public IReadOnlyList<string> ListPackageViewIds(string packageId)
-        => _viewIdsByPackageId.TryGetValue(packageId, out var viewIds) ? viewIds.ToArray() : [];
+    {
+        lock (_syncRoot)
+        {
+            return _viewIdsByPackageId.TryGetValue(packageId, out var viewIds) ? viewIds.ToArray() : [];
+        }
+    }
 
     public IReadOnlyList<PackageSettingsViewDescriptor> ListSettingsViewPackages(Func<string, bool> isPackageDisabled)
-        => _registeredSettingsViews.Keys
-            .Where(packageId => !isPackageDisabled(packageId))
-            .Select(packageId => _settingsViewPackagesById.TryGetValue(packageId, out var descriptor)
-                ? descriptor
-                : new PackageSettingsViewDescriptor(packageId, packageId, $"Configure {packageId}."))
-            .OrderBy(package => package.DisplayName, StringComparer.OrdinalIgnoreCase)
+    {
+        PackageSettingsViewDescriptor[] descriptors;
+        lock (_syncRoot)
+        {
+            descriptors = _registeredSettingsViews.Keys
+                .Select(packageId => _settingsViewPackagesById.TryGetValue(packageId, out var descriptor)
+                    ? descriptor
+                    : new PackageSettingsViewDescriptor(packageId, packageId, $"Configure {packageId}."))
+                .OrderBy(package => package.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        return descriptors
+            .Where(package => !isPackageDisabled(package.PackageId))
             .ToArray();
+    }
 
     public Control? GetOrCreateSettingsView(
         string packageId,
         Func<string, bool> isPackageDisabled,
         Action<string, string, Exception> reportFailure)
     {
-        if (!_registeredSettingsViews.TryGetValue(packageId, out var registration))
+        AppRegisteredSettingsView registration;
+        lock (_syncRoot)
         {
-            return null;
+            if (!_registeredSettingsViews.TryGetValue(packageId, out var foundRegistration))
+            {
+                return null;
+            }
+            registration = foundRegistration;
         }
 
         if (isPackageDisabled(registration.PackageId))
@@ -117,74 +168,89 @@ internal sealed class AppPackageViewRegistry
             return null;
         }
 
-        if (_settingsViewCache.TryGetValue(packageId, out var cachedView))
-        {
-            return cachedView;
-        }
-
+        Control control;
         try
         {
-            var control = CreateControl(registration.ServiceProvider, registration.ImplementationType, registration.RegistrationKind);
-            _settingsViewCache[packageId] = control;
-            return control;
+            control = CreateControl(registration.ServiceProvider, registration.ImplementationType, registration.RegistrationKind);
         }
         catch (Exception ex)
         {
             reportFailure(registration.PackageId, $"Failed to create package settings view for '{packageId}': {ex.Message}", ex);
             return null;
         }
+
+        lock (_syncRoot)
+        {
+            if (_settingsViewCache.TryGetValue(packageId, out var cachedView))
+            {
+                DisposeCachedControl(control);
+                return cachedView;
+            }
+
+            _settingsViewCache[packageId] = control;
+            return control;
+        }
     }
 
     public void RemoveCachedViews(string packageId)
     {
-        if (_viewIdsByPackageId.TryGetValue(packageId, out var viewIds))
+        lock (_syncRoot)
         {
-            foreach (var viewId in viewIds)
+            if (_viewIdsByPackageId.TryGetValue(packageId, out var viewIds))
             {
-                if (_viewCache.Remove(viewId, out var cachedView))
+                foreach (var viewId in viewIds)
                 {
-                    DisposeCachedControl(cachedView);
+                    if (_viewCache.Remove(viewId, out var cachedView))
+                    {
+                        DisposeCachedControl(cachedView);
+                    }
                 }
             }
-        }
 
-        if (_settingsViewCache.Remove(packageId, out var cachedSettingsView))
-        {
-            DisposeCachedControl(cachedSettingsView);
+            if (_settingsViewCache.Remove(packageId, out var cachedSettingsView))
+            {
+                DisposeCachedControl(cachedSettingsView);
+            }
         }
     }
 
     public bool RemoveCachedView(string viewId)
     {
-        if (!_viewCache.Remove(viewId, out var cachedView))
+        lock (_syncRoot)
         {
-            return false;
-        }
+            if (!_viewCache.Remove(viewId, out var cachedView))
+            {
+                return false;
+            }
 
-        DisposeCachedControl(cachedView);
-        return true;
+            DisposeCachedControl(cachedView);
+            return true;
+        }
     }
 
     public IReadOnlyList<string> UnregisterPackage(string packageId)
     {
-        var removedViewIds = ListPackageViewIds(packageId);
-        foreach (var viewId in removedViewIds)
+        lock (_syncRoot)
         {
-            _registeredViews.Remove(viewId);
-            if (_viewCache.Remove(viewId, out var cachedView))
+            var removedViewIds = _viewIdsByPackageId.TryGetValue(packageId, out var viewIds) ? viewIds.ToArray() : [];
+            foreach (var viewId in removedViewIds)
             {
-                DisposeCachedControl(cachedView);
+                _registeredViews.Remove(viewId);
+                if (_viewCache.Remove(viewId, out var cachedView))
+                {
+                    DisposeCachedControl(cachedView);
+                }
             }
-        }
 
-        _registeredSettingsViews.Remove(packageId);
-        if (_settingsViewCache.Remove(packageId, out var cachedSettingsView))
-        {
-            DisposeCachedControl(cachedSettingsView);
+            _registeredSettingsViews.Remove(packageId);
+            if (_settingsViewCache.Remove(packageId, out var cachedSettingsView))
+            {
+                DisposeCachedControl(cachedSettingsView);
+            }
+            _settingsViewPackagesById.Remove(packageId);
+            _viewIdsByPackageId.Remove(packageId);
+            return removedViewIds;
         }
-        _settingsViewPackagesById.Remove(packageId);
-        _viewIdsByPackageId.Remove(packageId);
-        return removedViewIds;
     }
 
     private void TrackPackageViewId(string packageId, string viewId)
@@ -214,7 +280,17 @@ internal sealed class AppPackageViewRegistry
 
     private static void DisposeCachedControl(Control control)
     {
-        if (control.DataContext is IDisposable dataContextDisposable && !ReferenceEquals(dataContextDisposable, control))
+        object? dataContext = null;
+        try
+        {
+            dataContext = control.DataContext;
+        }
+        catch (InvalidOperationException)
+        {
+            // Avalonia controls are thread-affined; cleanup can run after callers leave the owning UI thread.
+        }
+
+        if (dataContext is IDisposable dataContextDisposable && !ReferenceEquals(dataContextDisposable, control))
         {
             dataContextDisposable.Dispose();
         }

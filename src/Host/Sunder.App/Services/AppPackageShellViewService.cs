@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Avalonia.Threading;
 using Sunder.App.ViewModels;
 using Sunder.Sdk.Abstractions;
@@ -6,6 +7,7 @@ namespace Sunder.App.Services;
 
 public sealed class AppPackageShellViewService : IPackageShellViewService
 {
+    private static readonly TimeSpan SynchronousUiInvokeTimeout = TimeSpan.FromSeconds(5);
     private MainWindowViewModel? _viewModel;
 
     public void Attach(MainWindowViewModel viewModel)
@@ -20,10 +22,10 @@ public sealed class AppPackageShellViewService : IPackageShellViewService
     }
 
     public IReadOnlyList<PackageHotbarView> ListHotbarViews()
-        => Invoke(() => _viewModel?.ListHotbarViews() ?? []);
+        => Invoke(() => _viewModel?.ListHotbarViews() ?? [], Array.Empty<PackageHotbarView>());
 
     public bool IsViewInHotbar(string viewId)
-        => Invoke(() => _viewModel?.IsViewInHotbar(viewId) == true);
+        => Invoke(() => _viewModel?.IsViewInHotbar(viewId) == true, fallback: false);
 
     public ValueTask<bool> AddViewToDefaultHotbarAsync(
         string viewId,
@@ -57,14 +59,43 @@ public sealed class AppPackageShellViewService : IPackageShellViewService
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => ValueTask.FromResult(viewModel.ClosePackageViewPanel(viewId)), cancellationToken);
 
-    private static T Invoke<T>(Func<T> action)
+    private static T Invoke<T>(Func<T> action, T fallback)
     {
         if (Dispatcher.UIThread.CheckAccess())
         {
             return action();
         }
 
-        return Dispatcher.UIThread.InvokeAsync(action).GetAwaiter().GetResult();
+        using var completion = new ManualResetEventSlim();
+        var result = fallback;
+        Exception? exception = null;
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                result = action();
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+            finally
+            {
+                completion.Set();
+            }
+        });
+
+        if (!completion.Wait(SynchronousUiInvokeTimeout))
+        {
+            return fallback;
+        }
+
+        if (exception is not null)
+        {
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
+
+        return result;
     }
 
     private async ValueTask<bool> InvokeAsync(
