@@ -42,6 +42,23 @@ public sealed class WindowLauncher(
         ShowWindow(_settingsWindow);
     }
 
+    public async Task<bool> ShowPackageSettingsAsync(
+        string packageId,
+        IReadOnlyDictionary<string, string?>? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(packageId))
+        {
+            return false;
+        }
+
+        _settingsWindow ??= CreateSettingsWindow();
+        ShowWindow(_settingsWindow);
+        return _settingsWindow.DataContext is SettingsWindowViewModel viewModel
+               && await viewModel.SelectPackageSettingsAsync(packageId, parameters, cancellationToken);
+    }
+
     public void ShowPackages()
     {
         _packagesWindow ??= CreatePackagesWindow();

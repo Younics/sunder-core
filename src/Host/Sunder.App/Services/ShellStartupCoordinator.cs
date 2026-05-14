@@ -88,6 +88,7 @@ public sealed class ShellStartupCoordinator(Application application)
 
         PackageViewHostService packageViewHostService;
         var shellViewService = new AppPackageShellViewService();
+        var settingsNavigationService = new AppPackageSettingsNavigationService();
         try
         {
             var packageFaultReporter = new PackageRuntimeFaultReporter(runtimeApiClientFactory);
@@ -96,6 +97,7 @@ public sealed class ShellStartupCoordinator(Application application)
                 packageSources,
                 packageFaultReporter,
                 shellViewService,
+                settingsNavigationService,
                 notificationCenter);
             activePackages = packageViewHostService.FilterEnabledPackages(activePackages);
         }
@@ -117,6 +119,7 @@ public sealed class ShellStartupCoordinator(Application application)
         themeManager.ApplyTheme(shellSnapshot.State.ThemeId);
 
         var windowLauncher = new WindowLauncher(packageViewHostService, runtimeApiClientFactory, cliInstallationService, notificationCenter, shellStateService, shellState, updateService);
+        settingsNavigationService.Attach(windowLauncher);
         var mainWindowViewModel = new MainWindowViewModel(
             windowLauncher,
             shellStateService,

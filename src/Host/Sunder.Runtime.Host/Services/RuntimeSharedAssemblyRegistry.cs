@@ -81,6 +81,12 @@ internal sealed class RuntimeSharedAssemblyRegistry
             return null;
         }
 
+        if (TryGetLoadedDefaultAssembly(assemblyName, out var loadedDefaultAssembly))
+        {
+            _sharedAssemblies[assemblyName.Name] = loadedDefaultAssembly;
+            return loadedDefaultAssembly;
+        }
+
         var loadedAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(sharedAssemblyPath);
         ValidateSharedContractCompatibility(assemblyName, loadedAssembly);
         _sharedAssemblies[assemblyName.Name] = loadedAssembly;
@@ -171,8 +177,15 @@ internal sealed class RuntimeSharedAssemblyRegistry
             return sharedAssembly;
         }
 
+        var requestedAssemblyName = _sharedAssemblyNames[assemblyName];
+        if (TryGetLoadedDefaultAssembly(requestedAssemblyName, out var loadedDefaultAssembly))
+        {
+            _sharedAssemblies[assemblyName] = loadedDefaultAssembly;
+            return loadedDefaultAssembly;
+        }
+
         var loadedAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(_sharedAssemblyPaths[assemblyName]);
-        ValidateSharedContractCompatibility(_sharedAssemblyNames[assemblyName], loadedAssembly);
+        ValidateSharedContractCompatibility(requestedAssemblyName, loadedAssembly);
         _sharedAssemblies[assemblyName] = loadedAssembly;
         return loadedAssembly;
     }
@@ -233,6 +246,29 @@ internal sealed class RuntimeSharedAssemblyRegistry
             throw new InvalidOperationException(
                 $"Shared contract assembly '{requestedAssemblyName.Name}' requested identity '{requestedAssemblyName.FullName}', but '{loadedAssemblyName.FullName}' is already loaded for this session.");
         }
+    }
+
+    private static bool TryGetLoadedDefaultAssembly(AssemblyName requestedAssemblyName, out Assembly assembly)
+    {
+        assembly = null!;
+        if (requestedAssemblyName.Name is null)
+        {
+            return false;
+        }
+
+        foreach (var loadedAssembly in AssemblyLoadContext.Default.Assemblies)
+        {
+            if (!string.Equals(loadedAssembly.GetName().Name, requestedAssemblyName.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            ValidateSharedContractCompatibility(requestedAssemblyName, loadedAssembly);
+            assembly = loadedAssembly;
+            return true;
+        }
+
+        return false;
     }
 
     private readonly record struct AssemblyCandidate(string Path, AssemblyName Name);

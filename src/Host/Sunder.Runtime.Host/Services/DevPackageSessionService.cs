@@ -226,7 +226,12 @@ internal sealed class DevPackageSessionService
         var result = await _installedPackageStore.UninstallAsync(packageId, cancellationToken);
         if (result.Success && !_isDevPackageOverrideActive)
         {
-            _sessionState.RemovePackage(packageId);
+            IReadOnlyList<string> removedPackageIds = result.ImpactedPackageIds.Count > 0 ? result.ImpactedPackageIds : [packageId];
+            foreach (var removedPackageId in removedPackageIds)
+            {
+                _sessionState.RemovePackage(removedPackageId);
+            }
+
             return result with { RequiresAppRestart = false };
         }
 

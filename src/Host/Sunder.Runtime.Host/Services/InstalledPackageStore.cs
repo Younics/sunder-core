@@ -194,31 +194,33 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                 return PackageOperationResults.Failure($"Package '{packageId}' is not installed.");
             }
 
-            var dependent = packages.FirstOrDefault(candidate => candidate.DependsOn.Any(dependency =>
-                string.Equals(dependency.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase)));
-            if (dependent is not null)
-            {
-                return PackageOperationResults.Failure($"Package '{package.PackageId}' cannot be uninstalled because package '{dependent.PackageId}' depends on it.");
-            }
+            var packagesToUninstall = BuildUninstallSet(package, packages);
 
-            try
+            foreach (var packageToUninstall in packagesToUninstall)
             {
-                if (Directory.Exists(package.InstallPath))
+                try
                 {
-                    Directory.Delete(package.InstallPath, recursive: true);
+                    if (Directory.Exists(packageToUninstall.InstallPath))
+                    {
+                        Directory.Delete(packageToUninstall.InstallPath, recursive: true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return PackageOperationResults.Failure($"Failed to delete installed package files for '{packageToUninstall.PackageId}': {ex.Message}");
                 }
             }
-            catch (Exception ex)
-            {
-                return PackageOperationResults.Failure($"Failed to delete installed package files for '{package.PackageId}': {ex.Message}");
-            }
 
-            var impactedPackageIds = BuildDependencyImpactSet(package, packages);
-            packages.Remove(package);
+            var removedPackageIds = packagesToUninstall.Select(candidate => candidate.PackageId).ToArray();
+            var removedPackageIdSet = removedPackageIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            packages.RemoveAll(candidate => removedPackageIdSet.Contains(candidate.PackageId));
             await WriteStateAsync(packages, cancellationToken);
+            var message = packagesToUninstall.Count == 1
+                ? $"Uninstalled package '{package.Name}'."
+                : $"Uninstalled package '{package.Name}' and {packagesToUninstall.Count - 1} dependent package(s).";
             return PackageOperationResults.Success(
-                $"Uninstalled package '{package.Name}'.",
-                impactedPackageIds: impactedPackageIds);
+                message,
+                impactedPackageIds: removedPackageIds);
         }
         finally
         {
@@ -388,6 +390,42 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 
         AddPackageAndRelated(package);
         return impactedPackageIds;
+    }
+
+    private static IReadOnlyList<InstalledPackageRecord> BuildUninstallSet(
+        InstalledPackageRecord package,
+        IReadOnlyList<InstalledPackageRecord> packages)
+    {
+        var dependentsByDependencyId = packages
+            .SelectMany(candidate => candidate.DependsOn.Select(dependency => new { DependencyId = dependency.PackageId, Package = candidate }))
+            .GroupBy(entry => entry.DependencyId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(entry => entry.Package).OrderBy(candidate => candidate.PackageId, StringComparer.OrdinalIgnoreCase).ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var packagesToUninstall = new List<InstalledPackageRecord>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddDependentsThenPackage(InstalledPackageRecord currentPackage)
+        {
+            if (!visited.Add(currentPackage.PackageId))
+            {
+                return;
+            }
+
+            if (dependentsByDependencyId.TryGetValue(currentPackage.PackageId, out var dependents))
+            {
+                foreach (var dependent in dependents)
+                {
+                    AddDependentsThenPackage(dependent);
+                }
+            }
+
+            packagesToUninstall.Add(currentPackage);
+        }
+
+        AddDependentsThenPackage(package);
+        return packagesToUninstall;
     }
 
     private async Task<IReadOnlyList<InstalledPackageRecord>> ReadStateAsync(CancellationToken cancellationToken)

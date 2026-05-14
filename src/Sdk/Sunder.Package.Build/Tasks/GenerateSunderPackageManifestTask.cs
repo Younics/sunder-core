@@ -362,6 +362,10 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             case ("Sunder.Sdk.Abstractions", "PackageHotbarPlacement"):
                 capabilities.Add(SunderSdkCapabilities.ShellViewV1);
                 break;
+            case ("Sunder.Sdk.Abstractions", "IPackageSettingsNavigationService"):
+            case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
+                capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
+                break;
             case ("Sunder.Sdk.Abstractions", "IPackageCallbackHandler"):
             case ("Sunder.Sdk.Callbacks", _):
                 capabilities.Add(SunderSdkCapabilities.CallbacksV1);

@@ -360,6 +360,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
             services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
             services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(EmptyPackageShellViewService.Instance);
+            services.AddSingleton<IPackageSettingsNavigationService>(NullPackageSettingsNavigationService.Instance);
             services.AddSingleton<IPackageNotificationService>(NullPackageNotificationService.Instance);
 
             module.ConfigureServices(services, packageContext);

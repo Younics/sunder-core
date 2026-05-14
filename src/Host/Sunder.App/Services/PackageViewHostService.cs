@@ -48,6 +48,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
     private readonly AppPackageExtensionCatalog _extensionCatalog;
     private readonly IPackageShellViewService? _shellViewService;
+    private readonly IPackageSettingsNavigationService? _settingsNavigationService;
     private readonly NotificationCenterService? _notificationCenter;
     private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleSemaphore = new(1, 1);
@@ -65,6 +66,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppSharedAssemblyRegistry? sharedAssemblyRegistry = null,
         AppPackageExtensionCatalog? extensionCatalog = null,
         IPackageShellViewService? shellViewService = null,
+        IPackageSettingsNavigationService? settingsNavigationService = null,
         NotificationCenterService? notificationCenter = null)
     {
         _viewRegistry = viewRegistry;
@@ -77,6 +79,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         _extensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
         _shellViewService = shellViewService;
+        _settingsNavigationService = settingsNavigationService;
         _notificationCenter = notificationCenter;
     }
 
@@ -87,6 +90,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         IReadOnlyList<PackageSourceDescriptor> packageSources,
         PackageRuntimeFaultReporter? faultReporter = null,
         IPackageShellViewService? shellViewService = null,
+        IPackageSettingsNavigationService? settingsNavigationService = null,
         NotificationCenterService? notificationCenter = null,
         CancellationToken cancellationToken = default)
     {
@@ -103,11 +107,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
             new AppSharedAssemblyRegistry([]),
             new AppPackageExtensionCatalog(),
             shellViewService,
+            settingsNavigationService,
             notificationCenter);
 
-        await Task.Run(
-            () => hostService.ApplyPackageDeltaAsync(activePackages, packageSources, cancellationToken: cancellationToken),
-            cancellationToken);
+        await hostService.ApplyPackageDeltaAsync(activePackages, packageSources, cancellationToken: cancellationToken);
         return hostService;
     }
 
@@ -340,8 +343,14 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        int loadedPackageCount;
+        lock (_stateLock)
+        {
+            loadedPackageCount = _loadedPackages.Count;
+        }
+
         var preparedSource = await Task.Run(
-            () => PreparePackageSource(_loadedPackages.Count, source),
+            () => PreparePackageSource(loadedPackageCount, source),
             cancellationToken);
         if (preparedSource is null)
         {
@@ -364,9 +373,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             return;
         }
 
-        await Task.Run(
-            async () => await ActivatePreparedPackageAsync(package, source, preparedSource, cancellationToken),
-            cancellationToken);
+        await ActivatePreparedPackageAsync(package, source, preparedSource, cancellationToken);
     }
 
     private async Task ActivatePreparedPackageAsync(
@@ -413,6 +420,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
             services.AddSingleton<IPackageExtensionCatalog>(_extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(_shellViewService ?? DisabledPackageShellViewService.Instance);
+            services.AddSingleton<IPackageSettingsNavigationService>(_settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
             services.AddSingleton<IPackageNotificationService>(_notificationCenter is null
                 ? NullPackageNotificationService.Instance
                 : new AppPackageNotificationService(_notificationCenter, package.PackageId, package.DisplayName));

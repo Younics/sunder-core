@@ -60,7 +60,7 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
-    public async Task UninstallAsync_WhenDependentExists_BlocksUninstall()
+    public async Task UninstallAsync_WhenDependentExists_UninstallsDependents()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
@@ -75,12 +75,48 @@ public sealed class InstalledPackageStoreTests
 
         var uninstallResult = await store.UninstallAsync("test.dependency");
 
-        Assert.False(uninstallResult.Success);
-        Assert.Contains("cannot be uninstalled", uninstallResult.Errors[0], StringComparison.OrdinalIgnoreCase);
+        Assert.True(uninstallResult.Success, string.Join(Environment.NewLine, uninstallResult.Errors));
+        Assert.Equal(["test.dependency", "test.dependent"], uninstallResult.ImpactedPackageIds.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase));
+        Assert.False(Directory.Exists(dependency.InstallPath));
+        Assert.False(Directory.Exists(dependent.InstallPath));
+        Assert.Empty(await store.ListAsync());
     }
 
     [Fact]
-    public async Task UninstallAsync_WhenPackageHasDependency_ReturnsTargetAndDependencyAsImpacted()
+    public async Task UninstallAsync_WhenTransitiveDependentsExist_UninstallsAllDependents()
+    {
+        var paths = CreateRuntimePackagePaths();
+        var store = new InstalledPackageStore(paths);
+        var dependency = CreatePackage(paths, "test.dependency");
+        var dependent = CreatePackage(
+            paths,
+            "test.dependent",
+            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
+        var transitiveDependent = CreatePackage(
+            paths,
+            "test.transitive",
+            dependencies: [new InstalledPackageDependencyRecord("test.dependent", ">=1.0.0")]);
+        var unrelated = CreatePackage(paths, "test.unrelated");
+
+        Assert.True((await store.InstallAsync(dependency)).Success);
+        Assert.True((await store.InstallAsync(dependent)).Success);
+        Assert.True((await store.InstallAsync(transitiveDependent)).Success);
+        Assert.True((await store.InstallAsync(unrelated)).Success);
+
+        var result = await store.UninstallAsync("test.dependency");
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        Assert.Equal(["test.dependency", "test.dependent", "test.transitive"], result.ImpactedPackageIds.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase));
+        Assert.False(Directory.Exists(dependency.InstallPath));
+        Assert.False(Directory.Exists(dependent.InstallPath));
+        Assert.False(Directory.Exists(transitiveDependent.InstallPath));
+        Assert.True(Directory.Exists(unrelated.InstallPath));
+        var installedPackage = Assert.Single(await store.ListAsync());
+        Assert.Equal("test.unrelated", installedPackage.PackageId);
+    }
+
+    [Fact]
+    public async Task UninstallAsync_WhenPackageHasDependency_ReturnsOnlyTargetAsImpacted()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
@@ -96,7 +132,11 @@ public sealed class InstalledPackageStoreTests
         var result = await store.UninstallAsync("test.dependent");
 
         Assert.True(result.Success);
-        Assert.Equal(["test.dependent", "test.dependency"], result.ImpactedPackageIds);
+        Assert.Equal(["test.dependent"], result.ImpactedPackageIds);
+        Assert.False(Directory.Exists(dependent.InstallPath));
+        Assert.True(Directory.Exists(dependency.InstallPath));
+        var installedPackage = Assert.Single(await store.ListAsync());
+        Assert.Equal("test.dependency", installedPackage.PackageId);
     }
 
     [Fact]

@@ -14,6 +14,7 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ContributionsV1,
         SunderSdkCapabilities.ViewsV1,
         SunderSdkCapabilities.SettingsViewsV1,
+        SunderSdkCapabilities.SettingsNavigationV1,
         SunderSdkCapabilities.WorkspacesV1,
         SunderSdkCapabilities.BackgroundServicesV1,
         SunderSdkCapabilities.ExtensionsV1,

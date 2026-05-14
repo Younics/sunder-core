@@ -382,6 +382,12 @@ public sealed class MainWindowViewModelShellViewTests
         {
         }
 
+        public Task<bool> ShowPackageSettingsAsync(
+            string packageId,
+            IReadOnlyDictionary<string, string?>? parameters = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(false);
+
         public void ShowPackages()
         {
         }

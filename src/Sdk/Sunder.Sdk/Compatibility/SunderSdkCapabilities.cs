@@ -7,6 +7,7 @@ public static class SunderSdkCapabilities
     public const string ContributionsV1 = "contributions.v1";
     public const string ViewsV1 = "views.v1";
     public const string SettingsViewsV1 = "settings-views.v1";
+    public const string SettingsNavigationV1 = "settings-navigation.v1";
     public const string WorkspacesV1 = "workspaces.v1";
     public const string BackgroundServicesV1 = "background-services.v1";
     public const string ExtensionsV1 = "extensions.v1";

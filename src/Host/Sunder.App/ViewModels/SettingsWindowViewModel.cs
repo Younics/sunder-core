@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Sunder.App.Services;
 using Sunder.Protocol;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.ViewModels;
 
@@ -12,6 +13,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private readonly SunderUpdateService _updateService;
     private readonly Dictionary<string, PackageConfigurationSchemaDescriptor> _schemasByPackageId = new(StringComparer.OrdinalIgnoreCase);
     private SettingsSectionItemViewModel? _selectedSection;
+    private Task _packageSectionsLoadTask;
 
     public SettingsWindowViewModel(
         IRuntimeApiClient runtimeApiClient,
@@ -42,7 +44,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _selectedSection = CoreSections[0];
         _selectedSection.IsSelected = true;
         ApplyCoreSelection(_selectedSection);
-        _ = LoadPackageSectionsAsync();
+        _packageSectionsLoadTask = LoadPackageSectionsAsync();
     }
 
     public ObservableCollection<SettingsSectionItemViewModel> CoreSections { get; }
@@ -263,6 +265,37 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         await ApplyAsync();
     }
 
+    public async Task<bool> SelectPackageSettingsAsync(
+        string packageId,
+        IReadOnlyDictionary<string, string?>? parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(packageId))
+        {
+            return false;
+        }
+
+        await _packageSectionsLoadTask;
+        var item = FindPackageSection(packageId);
+        if (item is null)
+        {
+            _packageSectionsLoadTask = LoadPackageSectionsAsync();
+            await _packageSectionsLoadTask;
+            item = FindPackageSection(packageId);
+        }
+
+        if (item is null)
+        {
+            StatusText = $"Package settings were not found for '{packageId}'.";
+            return false;
+        }
+
+        await SelectSectionAsync(item);
+        await NotifyHostedSettingsNavigatedAsync(packageId, parameters ?? new Dictionary<string, string?>(), cancellationToken);
+        return true;
+    }
+
     public async Task RefreshCliStatusAsync(bool showSuccessStatus = true)
     {
         IsBusy = true;
@@ -411,6 +444,31 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    private SettingsSectionItemViewModel? FindPackageSection(string packageId)
+        => PackageSections.FirstOrDefault(section => string.Equals(section.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+
+    private async Task NotifyHostedSettingsNavigatedAsync(
+        string packageId,
+        IReadOnlyDictionary<string, string?> parameters,
+        CancellationToken cancellationToken)
+    {
+        if (HostedSettingsView is null)
+        {
+            return;
+        }
+
+        var context = new PackageViewNavigationContext(packageId, parameters);
+        if (HostedSettingsView is IPackageViewNavigationTarget viewTarget)
+        {
+            await viewTarget.OnNavigatedToAsync(context, cancellationToken);
+        }
+
+        if (HostedSettingsView is Avalonia.Controls.Control { DataContext: IPackageViewNavigationTarget dataContextTarget })
+        {
+            await dataContextTarget.OnNavigatedToAsync(context, cancellationToken);
         }
     }
 
