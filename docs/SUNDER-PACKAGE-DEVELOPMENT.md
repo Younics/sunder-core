@@ -87,7 +87,7 @@ Current generated package project shape:
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.2" />
+    <PackageReference Include="Avalonia" Version="12.0.3" />
     <PackageReference Include="Sunder.Sdk" Version="*" />
     <PackageReference Include="Sunder.Package.Build" Version="*" PrivateAssets="all" />
   </ItemGroup>
