@@ -84,7 +84,7 @@
                   Height="32"
                   CornerRadius="8"
                   Padding="3">
-            <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
                    RenderOptions.BitmapInterpolationMode="HighQuality"
                    Stretch="Uniform" />
           </Border>

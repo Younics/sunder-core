@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Avalonia;
+using Avalonia.Threading;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
@@ -9,6 +11,7 @@ namespace Sunder.App.Services;
 
 public sealed record ShellStartupResult(
     MainWindow MainWindow,
+    MainWindowViewModel MainWindowViewModel,
     PackageViewHostService PackageViewHostService,
     WindowLauncher WindowLauncher);
 
@@ -34,47 +37,53 @@ public sealed class ShellStartupCoordinator(Application application)
         var notificationCenter = new NotificationCenterService();
         var cliInstallationService = new CliInstallationService();
         var updateService = new SunderUpdateService(SunderAppSettings.Load(), new AppUpdateSettingsService());
+        var startupStopwatch = Stopwatch.StartNew();
+        var phaseStopwatch = Stopwatch.StartNew();
 
-        loadingViewModel.StatusMessage = "Loading theme...";
-        loadingViewModel.ProgressWidth = 96;
+        await SetProgressAsync(loadingViewModel, "Loading theme...", 96);
 
-        var themeManager = new ThemeManager(_application);
-        themeManager.Initialize();
-        themeManager.ApplyTheme(shellState.ThemeId);
+        var themeManager = await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var manager = new ThemeManager(_application);
+            manager.Initialize();
+            manager.ApplyTheme(shellState.ThemeId);
+            return manager;
+        });
+        LogStartupPhase("theme", phaseStopwatch);
 
-        loadingViewModel.StatusMessage = "Checking CLI...";
-        loadingViewModel.ProgressWidth = 136;
-        await EnsureCliInstalledForStartupAsync(cliInstallationService, notificationCenter, warnings);
+        await SetProgressAsync(loadingViewModel, "Checking CLI...", 136);
+        await EnsureCliInstalledForStartupAsync(cliInstallationService, notificationCenter, warnings).ConfigureAwait(false);
+        LogStartupPhase("cli", phaseStopwatch);
 
         try
         {
             if (errors.Count == 0)
             {
-                loadingViewModel.StatusMessage = "Starting runtime...";
-                loadingViewModel.ProgressWidth = 176;
+                await SetProgressAsync(loadingViewModel, "Starting runtime...", 176).ConfigureAwait(false);
 
-                await runtimeHostProcessManager.EnsureStartedAsync(runtimeConnectionState.RuntimeUrl);
+                await runtimeHostProcessManager.EnsureStartedAsync(runtimeConnectionState.RuntimeUrl).ConfigureAwait(false);
 
                 using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
-                systemStatus = await runtimeApiClient.GetSystemStatusAsync();
+                systemStatus = await runtimeApiClient.GetSystemStatusAsync().ConfigureAwait(false);
+                LogStartupPhase("runtime", phaseStopwatch);
 
                 if (startupOptions.DevPackageFolders.Count > 0)
                 {
-                    loadingViewModel.StatusMessage = "Loading dev packages...";
-                    loadingViewModel.ProgressWidth = 248;
+                    await SetProgressAsync(loadingViewModel, "Loading dev packages...", 248).ConfigureAwait(false);
 
-                    var loadResult = await runtimeApiClient.LoadDevPackagesAsync(startupOptions.DevPackageFolders);
+                    var loadResult = await runtimeApiClient.LoadDevPackagesAsync(startupOptions.DevPackageFolders).ConfigureAwait(false);
                     activePackages = loadResult.LoadedPackages;
-                    packageSources = await runtimeApiClient.GetActivePackageSourcesAsync();
+                    packageSources = await runtimeApiClient.GetActivePackageSourcesAsync().ConfigureAwait(false);
                     warnings.AddRange(loadResult.Warnings);
                     errors.AddRange(loadResult.Errors);
+                    LogStartupPhase("runtime dev packages", phaseStopwatch);
                 }
                 else
                 {
-                    loadingViewModel.StatusMessage = "Loading active packages...";
-                    loadingViewModel.ProgressWidth = 248;
-                    activePackages = await runtimeApiClient.GetActivePackagesAsync();
-                    packageSources = await runtimeApiClient.GetActivePackageSourcesAsync();
+                    await SetProgressAsync(loadingViewModel, "Loading active packages...", 248).ConfigureAwait(false);
+                    activePackages = await runtimeApiClient.GetActivePackagesAsync().ConfigureAwait(false);
+                    packageSources = await runtimeApiClient.GetActivePackageSourcesAsync().ConfigureAwait(false);
+                    LogStartupPhase("runtime active packages", phaseStopwatch);
                 }
             }
         }
@@ -83,8 +92,7 @@ public sealed class ShellStartupCoordinator(Application application)
             errors.Add(ex.Message);
         }
 
-        loadingViewModel.StatusMessage = "Composing shell...";
-        loadingViewModel.ProgressWidth = 318;
+        await SetProgressAsync(loadingViewModel, "Composing shell...", 318).ConfigureAwait(false);
 
         PackageViewHostService packageViewHostService;
         var shellViewService = new AppPackageShellViewService();
@@ -98,8 +106,9 @@ public sealed class ShellStartupCoordinator(Application application)
                 packageFaultReporter,
                 shellViewService,
                 settingsNavigationService,
-                notificationCenter);
+                notificationCenter).ConfigureAwait(false);
             activePackages = packageViewHostService.FilterEnabledPackages(activePackages);
+            LogStartupPhase("app package activation", phaseStopwatch);
         }
         catch (Exception ex)
         {
@@ -116,29 +125,69 @@ public sealed class ShellStartupCoordinator(Application application)
             systemStatus,
             warnings,
             errors);
-        themeManager.ApplyTheme(shellSnapshot.State.ThemeId);
+        LogStartupPhase("shell composition", phaseStopwatch);
 
-        var windowLauncher = new WindowLauncher(packageViewHostService, runtimeApiClientFactory, cliInstallationService, notificationCenter, shellStateService, shellState, updateService);
-        settingsNavigationService.Attach(windowLauncher);
-        var mainWindowViewModel = new MainWindowViewModel(
-            windowLauncher,
-            shellStateService,
-            shellSnapshot,
-            packageViewHostService,
-            runtimeConnectionState,
-            runtimeApiClientFactory,
-            runtimeHostProcessManager,
-            systemStatus,
-            notificationCenter,
-            shellViewService,
-            updateService);
-        var mainWindow = new MainWindow
+        var result = await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            DataContext = mainWindowViewModel,
-        };
-        _ = mainWindowViewModel.CheckForAppUpdatesOnStartupAsync();
+            themeManager.ApplyTheme(shellSnapshot.State.ThemeId);
 
-        return new ShellStartupResult(mainWindow, packageViewHostService, windowLauncher);
+            var windowLauncher = new WindowLauncher(packageViewHostService, runtimeApiClientFactory, cliInstallationService, notificationCenter, shellStateService, shellState, updateService);
+            settingsNavigationService.Attach(windowLauncher);
+            var mainWindowViewModel = new MainWindowViewModel(
+                windowLauncher,
+                shellStateService,
+                shellSnapshot,
+                packageViewHostService,
+                runtimeConnectionState,
+                runtimeApiClientFactory,
+                runtimeHostProcessManager,
+                systemStatus,
+                notificationCenter,
+                shellViewService,
+                updateService,
+                deferInitialHostedViews: true);
+            var mainWindow = new MainWindow
+            {
+                DataContext = mainWindowViewModel,
+            };
+
+            return new ShellStartupResult(mainWindow, mainWindowViewModel, packageViewHostService, windowLauncher);
+        });
+        LogStartupPhase("main window creation", phaseStopwatch);
+        AppSessionLog.WriteInfo($"Sunder startup composition completed in {startupStopwatch.ElapsedMilliseconds} ms.");
+        _ = result.MainWindowViewModel.CheckForAppUpdatesOnStartupAsync();
+
+        return result;
+    }
+
+    private static async Task SetProgressAsync(
+        LoadingWindowViewModel loadingViewModel,
+        string statusMessage,
+        double progressWidth)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            ApplyProgress(loadingViewModel, statusMessage, progressWidth);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => ApplyProgress(loadingViewModel, statusMessage, progressWidth));
+    }
+
+    private static void ApplyProgress(
+        LoadingWindowViewModel loadingViewModel,
+        string statusMessage,
+        double progressWidth)
+    {
+        loadingViewModel.StatusMessage = statusMessage;
+        loadingViewModel.ProgressWidth = progressWidth;
+    }
+
+    private static void LogStartupPhase(string phaseName, Stopwatch phaseStopwatch)
+    {
+        AppSessionLog.WriteInfo(
+            $"Sunder startup phase '{phaseName}' completed in {phaseStopwatch.ElapsedMilliseconds} ms. UI thread: {Dispatcher.UIThread.CheckAccess()}.");
+        phaseStopwatch.Restart();
     }
 
     private static async Task EnsureCliInstalledForStartupAsync(
@@ -148,7 +197,7 @@ public sealed class ShellStartupCoordinator(Application application)
     {
         try
         {
-            var result = await cliInstallationService.EnsureInstalledAsync();
+            var result = await cliInstallationService.EnsureInstalledAsync().ConfigureAwait(false);
             if (!CliStartupNotificationPolicy.TryCreateWarning(result, out var warning))
             {
                 return;
@@ -162,7 +211,7 @@ public sealed class ShellStartupCoordinator(Application application)
                     "Sunder CLI needs attention",
                     warning,
                     PackageNotificationDisplayMode.TrayOnly,
-                    PackageNotificationSeverity.Warning));
+                    PackageNotificationSeverity.Warning)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -175,7 +224,7 @@ public sealed class ShellStartupCoordinator(Application application)
                     "Sunder CLI install failed",
                     ex.Message,
                     PackageNotificationDisplayMode.TrayOnly,
-                    PackageNotificationSeverity.Warning));
+                    PackageNotificationSeverity.Warning)).ConfigureAwait(false);
         }
     }
 

@@ -15,9 +15,9 @@ public static class PackageIconImageLoader
         var semaphoreAcquired = false;
         try
         {
-            await ImageLoadSemaphore.WaitAsync(cancellationToken);
+            await ImageLoadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             semaphoreAcquired = true;
-            using var response = await ImageHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using var response = await ImageHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
             if (response.Content.Headers.ContentLength > MaxIconBytes)
@@ -35,8 +35,8 @@ public static class PackageIconImageLoader
                 return PackageIconImageLoadResult.Failed(error);
             }
 
-            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var memory = await ReadBoundedContentAsync(source, MaxIconBytes, cancellationToken);
+            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var memory = await ReadBoundedContentAsync(source, MaxIconBytes, cancellationToken).ConfigureAwait(false);
             memory.Position = 0;
 
             if (format == PackageIconImageFormat.Svg)
@@ -74,7 +74,7 @@ public static class PackageIconImageLoader
         long totalBytes = 0;
         while (true)
         {
-            var bytesRead = await source.ReadAsync(buffer, cancellationToken);
+            var bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (bytesRead == 0)
             {
                 return memory;

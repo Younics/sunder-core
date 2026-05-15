@@ -43,7 +43,7 @@
                   CornerRadius="9"
                   VerticalAlignment="Center"
                   Padding="3">
-            <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
                    RenderOptions.BitmapInterpolationMode="HighQuality"
                    Stretch="Uniform" />
           </Border>
@@ -386,7 +386,7 @@
                 <Grid RowDefinitions="Auto,Auto,Auto,Auto"
                       RowSpacing="18">
                   <Border Classes="welcome-logo-frame">
-                    <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+                    <Image Source="avares://Sunder.App/Assets/Images/icon.png"
                            RenderOptions.BitmapInterpolationMode="HighQuality"
                            Stretch="Uniform" />
                   </Border>

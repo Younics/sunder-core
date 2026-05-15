@@ -62,20 +62,26 @@
           <StackPanel Orientation="Horizontal"
                       Spacing="10"
                       Margin="0,18,0,0">
-            <Border Width="26"
-                    Height="26"
-                    Classes="loading-logo-badge"
-                    Padding="2">
-              <Image Source="avares://Sunder.App/Assets/Images/logo.png"
-                     RenderOptions.BitmapInterpolationMode="HighQuality"
-                     Stretch="Uniform" />
-            </Border>
+            <Image Width="26"
+                   Height="26"
+                   Source="avares://Sunder.App/Assets/Images/icon.png"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Stretch="Uniform" />
 
             <TextBlock Classes="loading-footer"
                        VerticalAlignment="Center"
                        Text="{Binding FooterText}" />
           </StackPanel>
         </StackPanel>
+
+        <Image Grid.Column="1"
+               Width="132"
+               Source="avares://Sunder.App/Assets/Images/younics.png"
+               HorizontalAlignment="Right"
+               VerticalAlignment="Bottom"
+               Margin="0,0,0,4"
+               RenderOptions.BitmapInterpolationMode="HighQuality"
+               Stretch="Uniform" />
       </Grid>
 
       <Border Grid.Row="1"

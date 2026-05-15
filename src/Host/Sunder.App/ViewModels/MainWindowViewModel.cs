@@ -58,7 +58,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         SystemStatusResponse? initialSystemStatus,
         NotificationCenterService notificationCenter,
         AppPackageShellViewService? shellViewService = null,
-        SunderUpdateService? updateService = null)
+        SunderUpdateService? updateService = null,
+        bool deferInitialHostedViews = false)
     {
         _windowLauncher = windowLauncher;
         _shellStateService = shellStateService;
@@ -104,7 +105,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         ReloadNotifications();
         _shellViewService?.Attach(this);
 
-        RebuildRailCollections();
+        RebuildRailCollections(createHostedViews: !deferInitialHostedViews);
         PersistShellState();
     }
 
@@ -756,6 +757,52 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         ApplyActivePackagesToShell(enabledPackages);
     }
 
+    public async Task ActivateDeferredInitialHostedViewsAsync(CancellationToken cancellationToken = default)
+    {
+        var selections = new[]
+        {
+            (RailPlacement.Middle, _shellState.SelectedMiddleViewId),
+            (RailPlacement.LeftTop, _shellState.SelectedLeftTopViewId),
+            (RailPlacement.RightTop, _shellState.SelectedRightTopViewId),
+            (RailPlacement.LeftBottom, _shellState.SelectedLeftBottomViewId),
+            (RailPlacement.RightBottom, _shellState.SelectedRightBottomViewId),
+        };
+
+        foreach (var (placement, viewId) in selections)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(viewId))
+            {
+                continue;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(
+                () => ActivateDeferredHostedView(placement, viewId),
+                DispatcherPriority.Background);
+            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ActivateDeferredHostedView(RailPlacement placement, string viewId)
+    {
+        if (_disposed || !string.Equals(GetSelectedViewId(placement), viewId, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var panel = GetPanel(placement);
+        if (panel.HostedView is not null)
+        {
+            return;
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        ApplyPanelContent(placement, viewId, createHostedView: true);
+        AppSessionLog.WriteInfo(
+            $"Deferred package view '{viewId}' activated in {stopwatch.ElapsedMilliseconds} ms.");
+        NotifyLayoutStateChanged();
+    }
+
     public void ActivatePackageView(string viewId)
         => _ = OpenPackageViewPanelAsync(viewId);
 
@@ -1016,7 +1063,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         PersistShellState();
     }
 
-    private void RebuildRailCollections()
+    private void RebuildRailCollections(bool createHostedViews = true)
     {
         _selectedLeftTopItem = null;
         _selectedMiddleItem = null;
@@ -1048,11 +1095,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         RestoreSelection(RailPlacement.LeftBottom, _shellState.SelectedLeftBottomViewId, ref _selectedLeftBottomItem);
         RestoreSelection(RailPlacement.RightBottom, _shellState.SelectedRightBottomViewId, ref _selectedRightBottomItem);
 
-        ApplyPanelContent(RailPlacement.LeftTop, _shellState.SelectedLeftTopViewId);
-        ApplyPanelContent(RailPlacement.Middle, _shellState.SelectedMiddleViewId);
-        ApplyPanelContent(RailPlacement.RightTop, _shellState.SelectedRightTopViewId);
-        ApplyPanelContent(RailPlacement.LeftBottom, _shellState.SelectedLeftBottomViewId);
-        ApplyPanelContent(RailPlacement.RightBottom, _shellState.SelectedRightBottomViewId);
+        ApplyPanelContent(RailPlacement.LeftTop, _shellState.SelectedLeftTopViewId, createHostedViews);
+        ApplyPanelContent(RailPlacement.Middle, _shellState.SelectedMiddleViewId, createHostedViews);
+        ApplyPanelContent(RailPlacement.RightTop, _shellState.SelectedRightTopViewId, createHostedViews);
+        ApplyPanelContent(RailPlacement.LeftBottom, _shellState.SelectedLeftBottomViewId, createHostedViews);
+        ApplyPanelContent(RailPlacement.RightBottom, _shellState.SelectedRightBottomViewId, createHostedViews);
 
         NotifyLayoutStateChanged();
     }
@@ -1140,7 +1187,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         PersistShellState();
     }
 
-    private void ApplyPanelContent(RailPlacement placement, string? viewId)
+    private void ApplyPanelContent(RailPlacement placement, string? viewId, bool createHostedView = true)
     {
         var panel = GetPanel(placement);
         panel.Lines.Clear();
@@ -1157,6 +1204,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             ? $"{ToPlacementDisplay(placement).ToUpperInvariant()} PACKAGE ACTIVE"
             : $"PACKAGE {packageView.Readiness.ToString().ToUpperInvariant()}";
         AddCommonViewLines(panel.Lines, packageView);
+        if (!createHostedView)
+        {
+            panel.HostedView = null;
+            panel.Lines.Add("Package view will open after the shell finishes rendering.");
+            return;
+        }
+
         panel.HostedView = _packageViewHostService.GetOrCreateView(viewId);
 
         if (placement != RailPlacement.Middle)

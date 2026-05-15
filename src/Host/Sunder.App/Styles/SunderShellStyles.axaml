@@ -725,11 +725,6 @@
     <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
   </Style>
 
-  <Style Selector="Border.loading-logo-badge">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
-  </Style>
-
   <Style Selector="TextBlock.loading-title">
     <Setter Property="FontSize" Value="56" />
     <Setter Property="FontWeight" Value="SemiBold" />

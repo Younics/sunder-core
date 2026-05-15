@@ -65,11 +65,12 @@ public partial class App : Application
         _packageViewHostService = startup.PackageViewHostService;
         _windowLauncher = startup.WindowLauncher;
         var mainWindow = startup.MainWindow;
+        var mainWindowViewModel = startup.MainWindowViewModel;
 
         desktop.MainWindow = mainWindow;
         try
         {
-            mainWindow.Show();
+            await ShowMainWindowWhenReadyAsync(mainWindow);
         }
         finally
         {
@@ -77,6 +78,38 @@ public partial class App : Application
             {
                 loadingWindow.Close();
             }
+        }
+
+        _ = ActivateDeferredInitialHostedViewsAsync(mainWindowViewModel);
+    }
+
+    private static async Task ShowMainWindowWhenReadyAsync(MainWindow mainWindow)
+    {
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            mainWindow.Opacity = 0;
+            mainWindow.Show();
+        });
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render);
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            mainWindow.Opacity = 1;
+            mainWindow.Activate();
+        });
+    }
+
+    private static async Task ActivateDeferredInitialHostedViewsAsync(MainWindowViewModel mainWindowViewModel)
+    {
+        try
+        {
+            await mainWindowViewModel.ActivateDeferredInitialHostedViewsAsync();
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to activate deferred package views after startup.", ex);
         }
     }
 
