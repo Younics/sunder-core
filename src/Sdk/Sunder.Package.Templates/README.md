@@ -47,7 +47,7 @@ dotnet new sunder-package --name MyExtension --packageId my.company.extension --
 Create an extension package that also references a host contracts NuGet package:
 
 ```powershell
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.host --withHostContracts --hostContractsPackageId Sunder.Host.Package.Contracts --hostContractsVersion 1.0.0
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.host --withHostContracts --hostContractsPackageId Sunder.Host.Package.Contracts --hostContractsVersion <host-contracts-version>
 ```
 
 ## Template Options
@@ -78,8 +78,6 @@ MyPackage/
   PackageViews/
     DefaultPackageView.cs
     DefaultPackageViewModel.cs
-run-sunder-dev.ps1
-debug-sunder-runtime.ps1
 ```
 
 Generated package projects reference:
@@ -106,13 +104,6 @@ Load the dev package into an installed Sunder App:
 
 ```powershell
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev"
-```
-
-Or use the generated helper script:
-
-```powershell
-$env:SUNDER_APP_PATH = "C:\Path\To\Sunder.App.exe"
-.\run-sunder-dev.ps1
 ```
 
 ## Publish

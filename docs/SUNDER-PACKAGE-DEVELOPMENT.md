@@ -53,7 +53,7 @@ dotnet new sunder-package --name MyExtension --packageId my.company.extension --
 Create an extension package that also references a host contracts NuGet package:
 
 ```powershell
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion 1.0.0
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
 ```
 
 Template options:

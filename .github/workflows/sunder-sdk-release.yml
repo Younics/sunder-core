@@ -138,6 +138,12 @@ jobs:
 
           package_dir="$PWD/artifacts/release/sdk"
           nuget_config="$RUNNER_TEMP/sunder-template-sample.nuget.config"
+          host_contracts_version="$(sed -n 's/.*PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="\([^"]*\)".*/\1/p' Directory.Packages.props)"
+
+          if [[ -z "$host_contracts_version" ]]; then
+            echo "Could not resolve Microsoft.Extensions.Logging.Abstractions version from Directory.Packages.props." >&2
+            exit 1
+          fi
 
           dotnet new install "$package_dir/Sunder.Package.Templates.$VERSION.nupkg"
 
@@ -167,7 +173,7 @@ jobs:
 
           expect_template_failure "missing-identity" --name MissingIdentity
           expect_template_failure "missing-host-package" --name MissingHostPackage --packageId sample.missinghost --packageName "Missing Host" --withHostDependency
-          expect_template_failure "host-contracts-without-host" --name HostContractsWithoutHost --packageId sample.badcontracts --packageName "Bad Contracts" --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion 10.0.7
+          expect_template_failure "host-contracts-without-host" --name HostContractsWithoutHost --packageId sample.badcontracts --packageName "Bad Contracts" --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion "$host_contracts_version"
           expect_template_failure "missing-host-contracts-package" --name MissingHostContractsPackage --packageId sample.missingcontracts --packageName "Missing Contracts" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts
 
           validate_template() {
@@ -201,7 +207,7 @@ jobs:
           validate_template "Sample.Headless" "sample.headless" "Sample Headless" --noDefaultView
           validate_template "Sample.Contracts" "sample.contracts" "Sample Contracts" --withContracts
           validate_template "Sample.Extension" "sample.extension" "Sample Extension" --withHostDependency --hostPackageId sunder.package.agent
-          validate_template "Sample.TypedExtension" "sample.typedextension" "Sample Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion 10.0.7
+          validate_template "Sample.TypedExtension" "sample.typedextension" "Sample Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion "$host_contracts_version"
 
       - name: Upload NuGet package artifacts
         uses: actions/upload-artifact@v4

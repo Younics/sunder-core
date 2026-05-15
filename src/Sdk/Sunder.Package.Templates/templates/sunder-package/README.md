@@ -9,7 +9,7 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --noDefaultView
 dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion 1.0.0
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
 ```
 
 Generated package projects reference:
