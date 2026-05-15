@@ -186,6 +186,28 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public void MovePackageView_WhenSelectedMiddleViewMovesOut_SelectsFirstRemainingMiddleView()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService();
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+
+        harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.Middle, 1);
+        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
+
+        harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.RightTop, 0);
+
+        var hotbarViews = harness.ViewModel.ListHotbarViews();
+        Assert.True(harness.ViewModel.HasMiddleSelection);
+        Assert.Contains(hotbarViews, view => view.ViewId == "agent.chat" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
+        Assert.Contains(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.RightTop && view.IsOpen);
+        Assert.DoesNotContain(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle);
+        Assert.True(harness.ViewModel.MiddlePanel.HasHostedView);
+        Assert.False(harness.ViewModel.MiddlePanel.ShowFallbackLines);
+        Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+    }
+
+    [Fact]
     public void CalculateTopColumnWidths_PreservesRequestedSideWidthsWhenSpaceAllows()
     {
         var widths = MainWindow.CalculateTopColumnWidths(

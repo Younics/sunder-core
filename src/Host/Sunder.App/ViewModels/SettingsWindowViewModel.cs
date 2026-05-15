@@ -44,7 +44,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _selectedSection = CoreSections[0];
         _selectedSection.IsSelected = true;
         ApplyCoreSelection(_selectedSection);
-        _packageSectionsLoadTask = LoadPackageSectionsAsync();
+        _packageSectionsLoadTask = LoadPackageSectionsAsync(preserveSelection: false);
     }
 
     public ObservableCollection<SettingsSectionItemViewModel> CoreSections { get; }
@@ -280,7 +280,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         var item = FindPackageSection(packageId);
         if (item is null)
         {
-            _packageSectionsLoadTask = LoadPackageSectionsAsync();
+            _packageSectionsLoadTask = LoadPackageSectionsAsync(preserveSelection: true, cancellationToken);
             await _packageSectionsLoadTask;
             item = FindPackageSection(packageId);
         }
@@ -294,6 +294,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         await SelectSectionAsync(item);
         await NotifyHostedSettingsNavigatedAsync(packageId, parameters ?? new Dictionary<string, string?>(), cancellationToken);
         return true;
+    }
+
+    public async Task RefreshPackageSectionsAsync(CancellationToken cancellationToken = default)
+    {
+        _packageSectionsLoadTask = LoadPackageSectionsAsync(preserveSelection: true, cancellationToken);
+        await _packageSectionsLoadTask;
     }
 
     public async Task RefreshCliStatusAsync(bool showSuccessStatus = true)
@@ -390,12 +396,14 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _runtimeApiClient.Dispose();
     }
 
-    private async Task LoadPackageSectionsAsync()
+    private async Task LoadPackageSectionsAsync(bool preserveSelection, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         IsBusy = true;
+        var selectedPackageId = preserveSelection ? _selectedSection?.PackageId : null;
         try
         {
-            var schemas = await _runtimeApiClient.GetConfigurationSchemasAsync();
+            var schemas = await _runtimeApiClient.GetConfigurationSchemasAsync(cancellationToken);
             PackageSections.Clear();
             _schemasByPackageId.Clear();
 
@@ -436,6 +444,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             }
 
             OnPropertyChanged(nameof(HasPackageSections));
+            PreservePackageSelectionAfterRefresh(selectedPackageId);
         }
         catch (Exception ex)
         {
@@ -470,6 +479,45 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         {
             await dataContextTarget.OnNavigatedToAsync(context, cancellationToken);
         }
+    }
+
+    private void PreservePackageSelectionAfterRefresh(string? selectedPackageId)
+    {
+        if (string.IsNullOrWhiteSpace(selectedPackageId))
+        {
+            return;
+        }
+
+        var refreshedSelection = FindPackageSection(selectedPackageId);
+        if (refreshedSelection is null)
+        {
+            if (_selectedSection is not null)
+            {
+                _selectedSection.IsSelected = false;
+            }
+
+            _selectedSection = CoreSections[0];
+            _selectedSection.IsSelected = true;
+            ApplyCoreSelection(_selectedSection);
+            return;
+        }
+
+        if (_selectedSection is not null)
+        {
+            _selectedSection.IsSelected = false;
+        }
+
+        _selectedSection = refreshedSelection;
+        _selectedSection.IsSelected = true;
+
+        _schemasByPackageId.TryGetValue(selectedPackageId, out var schema);
+        SelectedTitle = schema?.PackageDisplayName ?? refreshedSelection.Title;
+        SelectedDescription = schema?.Summary ?? refreshedSelection.Description;
+        DetailsTitle = schema?.PackageDisplayName ?? refreshedSelection.Title;
+        DetailsText = $"Package id: {selectedPackageId}";
+        IsCliSelection = false;
+        IsUpdatesSelection = false;
+        IsPackageSelection = true;
     }
 
     private void ApplyCoreSelection(SettingsSectionItemViewModel item)

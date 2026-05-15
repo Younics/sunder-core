@@ -941,9 +941,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         var items = GetBar(packageView.Placement).Items;
         ref var selectedItem = ref GetSelectedItemReference(packageView.Placement);
-        ClearSelection(items, ref selectedItem);
-        SetSelectedViewId(packageView.Placement, null);
-        ApplyPanelContent(packageView.Placement, null);
+        if (packageView.Placement == RailPlacement.Middle && items.Count > 0)
+        {
+            var fallback = items[0];
+            SetSelection(items, fallback, ref selectedItem);
+            SetSelectedViewId(packageView.Placement, fallback.Id);
+            ApplyPanelContent(packageView.Placement, fallback.Id);
+        }
+        else
+        {
+            ClearSelection(items, ref selectedItem);
+            SetSelectedViewId(packageView.Placement, null);
+            ApplyPanelContent(packageView.Placement, null);
+        }
+
         NotifyLayoutStateChanged();
         PersistShellState();
         return true;
@@ -1076,7 +1087,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             ? null
             : items.FirstOrDefault(item => string.Equals(item.Id, selectedId, StringComparison.OrdinalIgnoreCase));
 
-        if (selected is null && placement == RailPlacement.Middle && items.Count > 0 && !_shellState.HasInitializedLayout)
+        if (selected is null && placement == RailPlacement.Middle && items.Count > 0)
         {
             selected = items[0];
             SetSelectedViewId(placement, selected.Id);

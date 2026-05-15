@@ -42,6 +42,26 @@
     <Setter Property="FontSize" Value="13" />
   </Style>
 
+  <Style Selector="Button.search-clear-button">
+    <Setter Property="Width" Value="24" />
+    <Setter Property="Height" Value="24" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.search-clear-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
   <Style Selector="Border.rail-surface, Border.side-rail-surface">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Background.App}" />
   </Style>

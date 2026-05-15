@@ -126,10 +126,22 @@
               </Button>
             </StackPanel>
 
-            <TextBox Grid.Row="1"
-                     Classes="search-box"
-                     Text="{Binding SearchText}"
-                     PlaceholderText="{Binding SearchPlaceholder}" />
+            <Border Grid.Row="1"
+                    Classes="search-host">
+              <Grid ColumnDefinitions="*,Auto"
+                    ColumnSpacing="8"
+                    VerticalAlignment="Center">
+                <TextBox Classes="search-box"
+                         Text="{Binding SearchText}"
+                         PlaceholderText="{Binding SearchPlaceholder}" />
+                <Button Grid.Column="1"
+                        Classes="search-clear-button"
+                        Command="{Binding ClearSearchCommand}"
+                        Content="X"
+                        IsVisible="{Binding HasSearchText}"
+                        ToolTip.Tip="Clear search" />
+              </Grid>
+            </Border>
 
             <ScrollViewer Grid.Row="2">
               <StackPanel Spacing="8">

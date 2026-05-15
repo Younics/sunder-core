@@ -21,14 +21,21 @@ public enum PackageWindowMode
 
 public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 {
+    private const int MarketplaceSearchThrottleDelayMilliseconds = 300;
+
     private readonly IRuntimeApiClient _runtimeApiClient;
     private readonly IPackageArchivePicker _packageArchivePicker;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly NotificationCenterService? _notificationCenter;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _applyPackageLifecycleChangesAsync;
+    private readonly Func<Uri, IRegistryApiClient> _createRegistryClient;
+    private readonly TimeSpan _marketplaceSearchThrottleDelay;
     private readonly List<SessionPackageDescriptor> _sessionPackages = [];
     private readonly List<InstalledPackageDescriptor> _installedPackages = [];
     private readonly List<RegistryPackageUpdate> _availableUpdates = [];
+    private CancellationTokenSource? _pendingMarketplaceSearchCts;
+    private int _marketplaceSearchVersion;
+    private bool _disposed;
     private PackageCatalogItemViewModel? _selectedInstalledPackage;
     private PackageCatalogItemViewModel? _observedSelectedInstalledPackage;
     private RegistryPackageSearchItemViewModel? _selectedMarketplacePackage;
@@ -42,13 +49,17 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         IPackageArchivePicker packageArchivePicker,
         Func<IReadOnlyList<string>, CancellationToken, Task>? applyPackageLifecycleChangesAsync = null,
         RegistryPackageInstallService? registryInstallService = null,
-        NotificationCenterService? notificationCenter = null)
+        NotificationCenterService? notificationCenter = null,
+        Func<Uri, IRegistryApiClient>? registryClientFactory = null,
+        TimeSpan? marketplaceSearchThrottleDelay = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageArchivePicker = packageArchivePicker;
         _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync ?? ((_, _) => Task.CompletedTask);
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         _notificationCenter = notificationCenter;
+        _createRegistryClient = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
+        _marketplaceSearchThrottleDelay = marketplaceSearchThrottleDelay ?? TimeSpan.FromMilliseconds(MarketplaceSearchThrottleDelayMilliseconds);
         InstalledPackages = [];
         MarketplacePackages = [];
         MarketplaceVersions = [];
@@ -158,6 +169,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public string SearchPlaceholder => IsMarketplaceMode ? "Search marketplace packages" : "Search installed and session packages";
 
+    public bool HasSearchText => !string.IsNullOrEmpty(SearchText);
+
     public int InstalledPackageCount => _installedPackages.Count;
 
     public int ActivePackageCount => _sessionPackages.Count(package => package.IsEnabled);
@@ -236,9 +249,16 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnSearchTextChanged(string value)
     {
+        OnPropertyChanged(nameof(HasSearchText));
         if (IsInstalledMode)
         {
             RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
+            return;
+        }
+
+        if (IsMarketplaceMode)
+        {
+            QueueMarketplaceSearch();
         }
     }
 
@@ -318,6 +338,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private async Task SearchMarketplaceAsync()
     {
         Mode = PackageWindowMode.Marketplace;
+        CancelQueuedMarketplaceSearch();
         await RefreshMarketplaceAsync();
     }
 
@@ -328,6 +349,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         if (IsInstalledMode)
         {
             RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
+            return;
+        }
+
+        if (IsMarketplaceMode)
+        {
+            QueueMarketplaceSearch(TimeSpan.Zero);
         }
     }
 
@@ -336,6 +363,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     {
         if (IsMarketplaceMode)
         {
+            CancelQueuedMarketplaceSearch();
             await RefreshMarketplaceAsync();
             return;
         }
@@ -643,26 +671,35 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async Task RefreshMarketplaceAsync()
+    private async Task RefreshMarketplaceAsync(CancellationToken cancellationToken = default)
     {
         if (!TryCreateRegistryClient(out var registryClient))
         {
             return;
         }
 
+        var searchVersion = ++_marketplaceSearchVersion;
         using (registryClient)
         {
             IsBusy = true;
             try
             {
                 StatusText = "Searching marketplace...";
-                await RefreshInstalledPackageStateOnlyAsync();
-                var packages = await registryClient.SearchAsync(SearchText, skip: 0, take: 50);
+                await RefreshInstalledPackageStateOnlyAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var query = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText.Trim();
+                var packages = await registryClient.SearchAsync(query, skip: 0, take: 50, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (searchVersion != _marketplaceSearchVersion)
+                {
+                    return;
+                }
+
                 var packageItems = packages.Select(package => new RegistryPackageSearchItemViewModel(
                         package,
                         GetInstalledPackage(package.PackageId)?.Version,
                         GetPackageUpdate(package.PackageId),
-                        SelectMarketplacePackageAsync)).ToArray();
+                        item => SelectMarketplacePackageAsync(item))).ToArray();
                 ObserveSelectedMarketplacePackage(null);
                 DisposeMarketplacePackageItems();
                 ReplaceItems(MarketplacePackages, packageItems);
@@ -679,28 +716,37 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                     return;
                 }
 
-                await SelectMarketplacePackageAsync(selected);
+                await SelectMarketplacePackageAsync(selected, cancellationToken);
                 StatusText = $"Found {MarketplacePackages.Count} marketplace package(s).";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {
-                StatusText = ex.Message;
+                if (searchVersion == _marketplaceSearchVersion)
+                {
+                    StatusText = ex.Message;
+                }
             }
             finally
             {
-                IsBusy = false;
+                if (searchVersion == _marketplaceSearchVersion)
+                {
+                    IsBusy = false;
+                }
             }
         }
     }
 
-    private async Task RefreshInstalledPackageStateOnlyAsync()
+    private async Task RefreshInstalledPackageStateOnlyAsync(CancellationToken cancellationToken = default)
     {
         _installedPackages.Clear();
-        _installedPackages.AddRange(await _runtimeApiClient.GetInstalledPackagesAsync());
-        await ResolveAvailableUpdatesAsync();
+        _installedPackages.AddRange(await _runtimeApiClient.GetInstalledPackagesAsync(cancellationToken));
+        await ResolveAvailableUpdatesAsync(cancellationToken);
     }
 
-    private async Task ResolveAvailableUpdatesAsync()
+    private async Task ResolveAvailableUpdatesAsync(CancellationToken cancellationToken = default)
     {
         _availableUpdates.Clear();
         if (_installedPackages.Count == 0 || !RegistryUrlHelper.TryParse(RegistryUrlText, out var registryUrl) || registryUrl is null)
@@ -711,11 +757,16 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
         try
         {
-            using var registryClient = new RegistryApiClient(registryUrl);
+            using var registryClient = _createRegistryClient(registryUrl);
             var response = await registryClient.ResolveUpdatesAsync(
                 new RegistryResolveUpdatesRequest(
-                    _installedPackages.Select(package => new RegistryInstalledPackage(package.PackageId, package.Version)).ToArray()));
+                    _installedPackages.Select(package => new RegistryInstalledPackage(package.PackageId, package.Version)).ToArray()),
+                cancellationToken);
             _availableUpdates.AddRange(response.Updates);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -818,8 +869,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         NotifyCommandStateChanged();
     }
 
-    private async Task SelectMarketplacePackageAsync(RegistryPackageSearchItemViewModel item)
+    private async Task SelectMarketplacePackageAsync(RegistryPackageSearchItemViewModel item, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var package in MarketplacePackages)
         {
             package.IsSelected = ReferenceEquals(package, item);
@@ -849,7 +901,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             try
             {
                 StatusText = $"Loading {item.PackageId}...";
-                var package = await registryClient.GetPackageAsync(item.PackageId);
+                var package = await registryClient.GetPackageAsync(item.PackageId, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 ApplyMarketplaceProfile(package?.Profile);
                 var versions = package?.Versions
                     .OrderByDescending(version => TryParseVersion(version.Version), VersionComparer.Instance)
@@ -864,6 +917,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                 StatusText = package is null
                     ? $"Package '{item.PackageId}' was not found."
                     : $"Loaded {versions.Length} version(s) for {item.PackageId}.";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -1031,8 +1088,62 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             return false;
         }
 
-        registryClient = new RegistryApiClient(registryUrl);
+        registryClient = _createRegistryClient(registryUrl);
         return true;
+    }
+
+    private void QueueMarketplaceSearch(TimeSpan? delay = null)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        CancelQueuedMarketplaceSearch();
+        var cancellationTokenSource = new CancellationTokenSource();
+        _pendingMarketplaceSearchCts = cancellationTokenSource;
+        _ = RunQueuedMarketplaceSearchAsync(
+            cancellationTokenSource,
+            delay ?? _marketplaceSearchThrottleDelay);
+    }
+
+    private async Task RunQueuedMarketplaceSearchAsync(
+        CancellationTokenSource cancellationTokenSource,
+        TimeSpan delay)
+    {
+        try
+        {
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, cancellationTokenSource.Token);
+            }
+
+            await RefreshMarketplaceAsync(cancellationTokenSource.Token);
+        }
+        catch (OperationCanceledException) when (cancellationTokenSource.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_pendingMarketplaceSearchCts, cancellationTokenSource))
+            {
+                _pendingMarketplaceSearchCts = null;
+            }
+
+            cancellationTokenSource.Dispose();
+        }
+    }
+
+    private void CancelQueuedMarketplaceSearch()
+    {
+        var cancellationTokenSource = _pendingMarketplaceSearchCts;
+        if (cancellationTokenSource is null)
+        {
+            return;
+        }
+
+        _pendingMarketplaceSearchCts = null;
+        cancellationTokenSource.Cancel();
     }
 
     private void RefreshMarketplaceInstalledBadges()
@@ -1226,6 +1337,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        CancelQueuedMarketplaceSearch();
         ObserveSelectedInstalledPackage(null);
         ObserveSelectedMarketplacePackage(null);
         DisposeInstalledPackageItems();

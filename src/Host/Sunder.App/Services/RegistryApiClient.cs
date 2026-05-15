@@ -31,7 +31,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
         var path = $"api/packages?skip={skip}&take={take}";
         if (!string.IsNullOrWhiteSpace(query))
         {
-            path += $"&query={Uri.EscapeDataString(query)}";
+            path += $"&query={Uri.EscapeDataString(query.Trim())}";
         }
 
         return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryPackageSummary>>(path, cancellationToken) ?? [];

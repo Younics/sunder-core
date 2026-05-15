@@ -38,8 +38,13 @@ public sealed class WindowLauncher(
 
     public void ShowSettings()
     {
+        var createdWindow = _settingsWindow is null;
         _settingsWindow ??= CreateSettingsWindow();
         ShowWindow(_settingsWindow);
+        if (!createdWindow)
+        {
+            _ = RefreshSettingsWindowPackageSectionsAsync();
+        }
     }
 
     public async Task<bool> ShowPackageSettingsAsync(
@@ -109,7 +114,7 @@ public sealed class WindowLauncher(
         window.DataContext = new PackagesWindowViewModel(
             _runtimeApiClientFactory.CreateClient(),
             new PackageArchivePicker(window),
-            (impactedPackageIds, cancellationToken) => _mainWindowViewModel?.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken) ?? Task.CompletedTask,
+            ApplyPackageLifecycleChangesAsync,
             notificationCenter: _notificationCenter);
 
         window.Closed += (_, _) =>
@@ -133,5 +138,25 @@ public sealed class WindowLauncher(
 
         window.Show();
         window.Activate();
+    }
+
+    private async Task ApplyPackageLifecycleChangesAsync(
+        IReadOnlyList<string> impactedPackageIds,
+        CancellationToken cancellationToken)
+    {
+        if (_mainWindowViewModel is not null)
+        {
+            await _mainWindowViewModel.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken);
+        }
+
+        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken);
+    }
+
+    private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_settingsWindow?.DataContext is SettingsWindowViewModel viewModel)
+        {
+            await viewModel.RefreshPackageSectionsAsync(cancellationToken);
+        }
     }
 }

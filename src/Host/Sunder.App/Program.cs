@@ -1,4 +1,3 @@
-using System;
 using Avalonia;
 using Sunder.App.Models;
 using Sunder.App.Services;
