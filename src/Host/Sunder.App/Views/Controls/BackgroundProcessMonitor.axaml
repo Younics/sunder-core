@@ -1,0 +1,188 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.BackgroundProcessMonitor"
+             x:DataType="vm:BackgroundProcessMonitorViewModel"
+             ClipToBounds="False"
+             mc:Ignorable="d">
+  <Grid ClipToBounds="False">
+    <Button x:Name="MonitorButton"
+            Classes="process-monitor-button"
+            IsVisible="{Binding ShowFooter}"
+            ToolTip.Tip="Show background processes"
+            Click="MonitorButton_OnClick">
+      <Button.Content>
+        <Grid Width="300"
+              ColumnDefinitions="*,96,Auto"
+              ColumnSpacing="10"
+              ClipToBounds="True"
+              VerticalAlignment="Center">
+          <TextBlock Classes="status-text process-monitor-footer-text"
+                     Text="{Binding FooterStatusText}"
+                     MaxLines="1"
+                     ClipToBounds="True"
+                     HorizontalAlignment="Stretch"
+                     TextAlignment="Right"
+                     TextTrimming="CharacterEllipsis" />
+          <ProgressBar Grid.Column="1"
+                       Classes="process-monitor-progress compact"
+                       Width="96"
+                       MinWidth="96"
+                       MaxWidth="96"
+                       HorizontalAlignment="Right"
+                       Minimum="0"
+                       Maximum="100"
+                       Value="{Binding FooterProgressPercent}"
+                       IsIndeterminate="{Binding FooterIsIndeterminate}"
+                       IsVisible="{Binding ShowFooterProgress}" />
+          <Border Grid.Column="2"
+                  Classes="process-monitor-count-pill"
+                  IsVisible="{Binding ShowAdditionalActiveProcessCount}">
+            <TextBlock Text="{Binding AdditionalActiveProcessCountText}" />
+          </Border>
+        </Grid>
+      </Button.Content>
+    </Button>
+
+    <Popup x:Name="ProcessesPopup"
+           Placement="TopEdgeAlignedRight"
+           IsLightDismissEnabled="True">
+      <Border Classes="process-monitor-popup-surface"
+              Width="{Binding PopoverWidth}"
+              Height="{Binding PopoverHeight}"
+              ClipToBounds="True">
+        <Grid ClipToBounds="True">
+          <Grid RowDefinitions="Auto,Auto,*,Auto"
+                RowSpacing="12"
+                Margin="14"
+                ClipToBounds="True">
+            <Grid ColumnDefinitions="*,Auto"
+                  ColumnSpacing="12"
+                  VerticalAlignment="Center">
+              <TextBlock Classes="section-title"
+                         Text="Processes"
+                         HorizontalAlignment="Center" />
+              <Button Grid.Column="1"
+                      Classes="window-action-button process-monitor-close-button"
+                      Content="−"
+                      Click="ClosePopupButton_OnClick" />
+            </Grid>
+
+            <Border Grid.Row="1"
+                    Height="1"
+                    Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+            <Border Grid.Row="2"
+                    Classes="notification-empty-state"
+                    IsVisible="{Binding HasNoProcesses}">
+              <TextBlock Classes="caption"
+                         Text="No active processes."
+                         TextWrapping="Wrap" />
+            </Border>
+
+            <ScrollViewer Grid.Row="2"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto"
+                          ClipToBounds="True"
+                          IsVisible="{Binding HasProcesses}">
+              <ItemsControl ItemsSource="{Binding Processes}"
+                            HorizontalAlignment="Stretch"
+                            ClipToBounds="True">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:BackgroundProcessItemViewModel">
+                    <Border Classes="process-monitor-row"
+                            HorizontalAlignment="Stretch"
+                            ClipToBounds="True">
+                      <Grid ColumnDefinitions="*,Auto"
+                            RowDefinitions="Auto,Auto,Auto"
+                            ColumnSpacing="12"
+                            RowSpacing="6"
+                            ClipToBounds="True">
+                        <TextBlock Classes="process-monitor-title"
+                                   Text="{Binding Title}"
+                                   MaxLines="1"
+                                   ClipToBounds="True"
+                                   TextTrimming="CharacterEllipsis" />
+                        <Button Grid.Column="1"
+                                Classes="process-monitor-cancel-button"
+                                Content="Cancel"
+                                Command="{Binding CancelCommand}"
+                                IsVisible="{Binding ShowCancel}" />
+                        <ProgressBar Grid.Row="1"
+                                     Grid.ColumnSpan="2"
+                                     Classes="process-monitor-progress"
+                                     Minimum="0"
+                                     Maximum="100"
+                                     Value="{Binding ProgressPercent}"
+                                     IsIndeterminate="{Binding IsIndeterminate}" />
+                        <StackPanel Grid.Row="2"
+                                    Grid.ColumnSpan="2"
+                                    Spacing="2"
+                                    ClipToBounds="True">
+                          <TextBlock Classes="caption"
+                                     Text="{Binding StatusText}"
+                                     MaxLines="1"
+                                     ClipToBounds="True"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Classes="caption"
+                                     Text="{Binding DetailText}"
+                                     IsVisible="{Binding ShowDetailText}"
+                                     MaxLines="1"
+                                     ClipToBounds="True"
+                                     TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-left"
+                 HorizontalAlignment="Left"
+                 VerticalAlignment="Stretch"
+                 DragDelta="ResizeLeftThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-right"
+                 HorizontalAlignment="Right"
+                 VerticalAlignment="Stretch"
+                 DragDelta="ResizeRightThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-top"
+                 HorizontalAlignment="Stretch"
+                 VerticalAlignment="Top"
+                 DragDelta="ResizeTopThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-bottom"
+                 HorizontalAlignment="Stretch"
+                 VerticalAlignment="Bottom"
+                 DragDelta="ResizeBottomThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-top-left"
+                 HorizontalAlignment="Left"
+                 VerticalAlignment="Top"
+                 DragDelta="ResizeTopLeftThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-top-right"
+                 HorizontalAlignment="Right"
+                 VerticalAlignment="Top"
+                 DragDelta="ResizeTopRightThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-bottom-left"
+                 HorizontalAlignment="Left"
+                 VerticalAlignment="Bottom"
+                 DragDelta="ResizeBottomLeftThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+          <Thumb Classes="process-monitor-resize-thumb process-monitor-resize-bottom-right"
+                 HorizontalAlignment="Right"
+                 VerticalAlignment="Bottom"
+                 DragDelta="ResizeBottomRightThumb_OnDragDelta"
+                 DragCompleted="ResizeThumb_OnDragCompleted" />
+        </Grid>
+      </Border>
+    </Popup>
+  </Grid>
+</UserControl>

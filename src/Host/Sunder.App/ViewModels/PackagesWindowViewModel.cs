@@ -6,6 +6,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LiveMarkdown.Avalonia;
+using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
@@ -26,6 +27,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private readonly IRuntimeApiClient _runtimeApiClient;
     private readonly IPackageArchivePicker _packageArchivePicker;
     private readonly RegistryPackageInstallService _registryInstallService;
+    private readonly PackageOperationService? _packageOperationService;
     private readonly NotificationCenterService? _notificationCenter;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _applyPackageLifecycleChangesAsync;
     private readonly Func<Uri, IRegistryApiClient> _createRegistryClient;
@@ -36,6 +38,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private CancellationTokenSource? _pendingMarketplaceSearchCts;
     private int _marketplaceSearchVersion;
     private bool _disposed;
+    private bool _installedCatalogDirty;
+    private bool _isApplyingModeSearchText;
+    private string _marketplaceSearchText = string.Empty;
+    private string _installedSearchText = string.Empty;
     private PackageCatalogItemViewModel? _selectedInstalledPackage;
     private PackageCatalogItemViewModel? _observedSelectedInstalledPackage;
     private RegistryPackageSearchItemViewModel? _selectedMarketplacePackage;
@@ -48,14 +54,20 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         IRuntimeApiClient runtimeApiClient,
         IPackageArchivePicker packageArchivePicker,
         Func<IReadOnlyList<string>, CancellationToken, Task>? applyPackageLifecycleChangesAsync = null,
+        PackageOperationService? packageOperationService = null,
+        BackgroundProcessQueueService? backgroundProcessQueue = null,
         RegistryPackageInstallService? registryInstallService = null,
         NotificationCenterService? notificationCenter = null,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
-        TimeSpan? marketplaceSearchThrottleDelay = null)
+        TimeSpan? marketplaceSearchThrottleDelay = null,
+        double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
+        double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
+        Action<double, double>? persistBackgroundProcessPopoverSize = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageArchivePicker = packageArchivePicker;
         _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync ?? ((_, _) => Task.CompletedTask);
+        _packageOperationService = packageOperationService;
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         _notificationCenter = notificationCenter;
         _createRegistryClient = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
@@ -68,7 +80,20 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         MarketplaceProfileTags = [];
         MarketplaceProfileMedia = [];
         WarningLines = [];
+        PackageProcesses = backgroundProcessQueue is null
+            ? BackgroundProcessMonitorViewModel.Empty
+            : new BackgroundProcessMonitorViewModel(
+                backgroundProcessQueue,
+                snapshot => string.Equals(snapshot.GroupKey, PackageOperationService.PackageStoreGroupKey, StringComparison.OrdinalIgnoreCase),
+                "No package processes.",
+                backgroundProcessPopoverWidth,
+                backgroundProcessPopoverHeight,
+                persistBackgroundProcessPopoverSize);
         RegistryUrlText = RegistryUrlHelper.DefaultRegistryUrl.ToString();
+        if (_packageOperationService is not null)
+        {
+            _packageOperationService.OperationChanged += PackageOperationService_OnOperationChanged;
+        }
     }
 
     public ObservableCollection<PackageCatalogItemViewModel> InstalledPackages { get; }
@@ -88,6 +113,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public ObservableStringBuilder MarketplaceReadmeMarkdownBuilder { get; } = new();
 
     public ObservableCollection<string> WarningLines { get; }
+
+    public BackgroundProcessMonitorViewModel PackageProcesses { get; }
 
     public bool IsMarketplaceMode => Mode == PackageWindowMode.Marketplace;
 
@@ -133,21 +160,27 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool SelectedPackageHasIconLoadError => !string.IsNullOrWhiteSpace(SelectedPackageIconLoadError);
 
+    public bool ShowSelectedPackageOperationStatus => SelectedPackageHasActiveOperation;
+
+    public bool ShowCancelSelectedPackageOperation => SelectedPackageHasActiveOperation && SelectedPackageOperationCanCancel;
+
+    private bool HasActivePackageStoreOperation => _packageOperationService?.GetActivePackageStoreOperation()?.IsActive == true;
+
     public bool CanRefresh => !IsBusy;
 
     public bool CanInstallPackage => !IsBusy;
 
-    public bool CanEnableSelectedPackage => !IsBusy && IsInstalledMode && _selectedInstalledPackage?.CanEnable == true;
+    public bool CanEnableSelectedPackage => !IsBusy && !HasActivePackageStoreOperation && IsInstalledMode && _selectedInstalledPackage?.CanEnable == true;
 
-    public bool CanDisableSelectedPackage => !IsBusy && IsInstalledMode && _selectedInstalledPackage?.CanDisable == true;
+    public bool CanDisableSelectedPackage => !IsBusy && !HasActivePackageStoreOperation && IsInstalledMode && _selectedInstalledPackage?.CanDisable == true;
 
     public bool ShowEnableSelectedPackage => IsInstalledMode && _selectedInstalledPackage?.CanEnable == true;
 
     public bool ShowDisableSelectedPackage => IsInstalledMode && _selectedInstalledPackage?.CanDisable == true;
 
-    public bool CanUninstallSelectedPackage => !IsBusy && IsInstalledMode && _selectedInstalledPackage?.CanUninstall == true;
+    public bool CanUninstallSelectedPackage => !IsBusy && IsInstalledMode && _selectedInstalledPackage?.CanUninstall == true && !SelectedPackageHasActiveOperation;
 
-    public bool CanUpdateSelectedInstalledPackage => !IsBusy && IsInstalledMode && GetSelectedInstalledPackageUpdate() is not null;
+    public bool CanUpdateSelectedInstalledPackage => !IsBusy && IsInstalledMode && GetSelectedInstalledPackageUpdate() is not null && !SelectedPackageHasActiveOperation;
 
     public bool ShowUpdateSelectedInstalledPackage => IsInstalledMode && GetSelectedInstalledPackageUpdate() is not null;
 
@@ -157,11 +190,17 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowMarketplaceInstalledActions => IsMarketplaceMode && IsSelectedMarketplacePackageInstalled;
 
-    public bool CanInstallSelectedMarketplacePackage => !IsBusy && ShowMarketplaceInstallAction && _selectedMarketplacePackage is { IsYanked: false };
+    public bool ShowMarketplaceInstallButton => ShowMarketplaceInstallAction && !SelectedPackageHasActiveOperation;
 
-    public bool CanUninstallSelectedMarketplacePackage => !IsBusy && ShowMarketplaceInstalledActions;
+    public bool ShowMarketplaceUninstallButton => ShowMarketplaceInstalledActions && !SelectedPackageHasActiveOperation;
 
-    public bool CanUpdateSelectedMarketplacePackage => !IsBusy && IsMarketplaceMode && _selectedMarketplacePackage?.HasUpdate == true;
+    public bool ShowMarketplaceUpdateButton => ShowMarketplaceInstalledActions && !SelectedPackageHasActiveOperation;
+
+    public bool CanInstallSelectedMarketplacePackage => ShowMarketplaceInstallAction && _selectedMarketplacePackage is { IsYanked: false } && !SelectedPackageHasActiveOperation;
+
+    public bool CanUninstallSelectedMarketplacePackage => ShowMarketplaceInstalledActions && !SelectedPackageHasActiveOperation;
+
+    public bool CanUpdateSelectedMarketplacePackage => IsMarketplaceMode && _selectedMarketplacePackage?.HasUpdate == true && !SelectedPackageHasActiveOperation;
 
     public bool CanUpdateAllPackages => !IsBusy && AvailableUpdateCount > 0;
 
@@ -224,6 +263,21 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private string _selectedPackageOperationHint = string.Empty;
 
     [ObservableProperty]
+    private bool _selectedPackageHasActiveOperation;
+
+    [ObservableProperty]
+    private bool _selectedPackageOperationCanCancel;
+
+    [ObservableProperty]
+    private bool _selectedPackageOperationIsIndeterminate = true;
+
+    [ObservableProperty]
+    private double _selectedPackageOperationProgressPercent;
+
+    [ObservableProperty]
+    private string _selectedPackageOperationStatusText = string.Empty;
+
+    [ObservableProperty]
     private bool _selectedPackageHasError;
 
     [ObservableProperty]
@@ -240,6 +294,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(IsMarketplaceMode));
         OnPropertyChanged(nameof(IsInstalledMode));
         OnPropertyChanged(nameof(SearchPlaceholder));
+        ApplySearchTextForCurrentMode();
         NotifyListVisibilityChanged();
         NotifyDetailsChanged();
         NotifyCommandStateChanged();
@@ -250,14 +305,21 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     partial void OnSearchTextChanged(string value)
     {
         OnPropertyChanged(nameof(HasSearchText));
+        if (_isApplyingModeSearchText)
+        {
+            return;
+        }
+
         if (IsInstalledMode)
         {
+            _installedSearchText = value;
             RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
             return;
         }
 
         if (IsMarketplaceMode)
         {
+            _marketplaceSearchText = value;
             QueueMarketplaceSearch();
         }
     }
@@ -272,6 +334,19 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnSelectedPackageIconLoadErrorChanged(string value)
         => OnPropertyChanged(nameof(SelectedPackageHasIconLoadError));
+
+    partial void OnSelectedPackageHasActiveOperationChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowSelectedPackageOperationStatus));
+        OnPropertyChanged(nameof(ShowCancelSelectedPackageOperation));
+        NotifyCommandStateChanged();
+    }
+
+    partial void OnSelectedPackageOperationCanCancelChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowCancelSelectedPackageOperation));
+        NotifyCommandStateChanged();
+    }
 
     public bool ShowNoInstalledPackageError => !SelectedPackageHasError;
 
@@ -297,6 +372,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
 
         Mode = PackageWindowMode.Marketplace;
+        ApplySearchTextForCurrentMode();
         ClearWarnings();
         if (MarketplacePackages.Count == 0)
         {
@@ -322,22 +398,44 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
 
         Mode = PackageWindowMode.Installed;
+        ApplySearchTextForCurrentMode();
         ClearWarnings();
-        if (InstalledPackages.Count == 0)
+        if (_installedCatalogDirty || InstalledPackages.Count == 0)
         {
-            await RefreshInstalledAsync();
+            await RefreshInstalledAsync(_selectedInstalledPackage?.PackageId);
             return;
         }
 
-        SelectInstalledPackage(InstalledPackages.FirstOrDefault(package =>
-                string.Equals(package.PackageId, _selectedInstalledPackage?.PackageId, StringComparison.OrdinalIgnoreCase))
-            ?? InstalledPackages.First());
+        RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
+    }
+
+    private void ApplySearchTextForCurrentMode()
+    {
+        var value = IsMarketplaceMode ? _marketplaceSearchText : _installedSearchText;
+        if (string.Equals(SearchText, value, StringComparison.Ordinal))
+        {
+            OnPropertyChanged(nameof(HasSearchText));
+            return;
+        }
+
+        _isApplyingModeSearchText = true;
+        try
+        {
+            SearchText = value;
+        }
+        finally
+        {
+            _isApplyingModeSearchText = false;
+        }
+
+        OnPropertyChanged(nameof(HasSearchText));
     }
 
     [RelayCommand]
     private async Task SearchMarketplaceAsync()
     {
         Mode = PackageWindowMode.Marketplace;
+        ApplySearchTextForCurrentMode();
         CancelQueuedMarketplaceSearch();
         await RefreshMarketplaceAsync();
     }
@@ -345,7 +443,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void ClearSearch()
     {
-        SearchText = string.Empty;
+        if (!string.IsNullOrEmpty(SearchText))
+        {
+            SearchText = string.Empty;
+            return;
+        }
+
         if (IsInstalledMode)
         {
             RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
@@ -382,6 +485,16 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         var packagePath = await _packageArchivePicker.PickPackagePathAsync();
         if (string.IsNullOrWhiteSpace(packagePath))
         {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            _packageOperationService.EnqueueLocalInstall(packagePath);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = $"Queued install for {Path.GetFileName(packagePath)}.";
+            Mode = PackageWindowMode.Installed;
             return;
         }
 
@@ -429,7 +542,21 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private async Task UninstallSelectedPackageAsync()
     {
         var packageId = _selectedInstalledPackage?.PackageId;
-        if (string.IsNullOrWhiteSpace(packageId) || IsBusy)
+        if (string.IsNullOrWhiteSpace(packageId))
+        {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            _packageOperationService.EnqueueUninstall(packageId, _selectedInstalledPackage?.DisplayName ?? packageId);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = $"Queued uninstall for {packageId}.";
+            return;
+        }
+
+        if (IsBusy)
         {
             return;
         }
@@ -445,7 +572,26 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private async Task InstallSelectedMarketplacePackageAsync()
     {
         var packageId = _selectedMarketplacePackage?.PackageId;
-        if (string.IsNullOrWhiteSpace(packageId) || IsBusy)
+        if (string.IsNullOrWhiteSpace(packageId))
+        {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
+            {
+                return;
+            }
+
+            _packageOperationService.EnqueueMarketplaceInstall(packageId, _selectedMarketplacePackage?.Name ?? packageId, registryUrl);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = $"Queued install for {packageId}.";
+            return;
+        }
+
+        if (IsBusy)
         {
             return;
         }
@@ -466,7 +612,30 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private async Task UpdateSelectedInstalledPackageAsync()
     {
         var update = GetSelectedInstalledPackageUpdate();
-        if (update is null || IsBusy)
+        if (update is null)
+        {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
+            {
+                return;
+            }
+
+            _packageOperationService.EnqueueMarketplaceUpdate(
+                update.PackageId,
+                _selectedInstalledPackage?.DisplayName ?? update.PackageId,
+                update.AvailableVersion,
+                registryUrl);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = $"Queued update for {update.PackageId}.";
+            return;
+        }
+
+        if (IsBusy)
         {
             return;
         }
@@ -488,7 +657,30 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     {
         var packageId = _selectedMarketplacePackage?.PackageId;
         var update = string.IsNullOrWhiteSpace(packageId) ? null : GetPackageUpdate(packageId);
-        if (update is null || IsBusy)
+        if (update is null)
+        {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
+            {
+                return;
+            }
+
+            _packageOperationService.EnqueueMarketplaceUpdate(
+                update.PackageId,
+                _selectedMarketplacePackage?.Name ?? update.PackageId,
+                update.AvailableVersion,
+                registryUrl);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = $"Queued update for {update.PackageId}.";
+            return;
+        }
+
+        if (IsBusy)
         {
             return;
         }
@@ -509,7 +701,21 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private async Task UninstallSelectedMarketplacePackageAsync()
     {
         var packageId = _selectedMarketplacePackage?.PackageId;
-        if (string.IsNullOrWhiteSpace(packageId) || IsBusy)
+        if (string.IsNullOrWhiteSpace(packageId))
+        {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            _packageOperationService.EnqueueUninstall(packageId, _selectedMarketplacePackage?.Name ?? packageId);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = $"Queued uninstall for {packageId}.";
+            return;
+        }
+
+        if (IsBusy)
         {
             return;
         }
@@ -524,7 +730,26 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task UpdateAllPackagesAsync()
     {
-        if (IsBusy || AvailableUpdateCount == 0)
+        if (AvailableUpdateCount == 0)
+        {
+            return;
+        }
+
+        if (_packageOperationService is not null)
+        {
+            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
+            {
+                return;
+            }
+
+            _packageOperationService.EnqueueUpdateAll(registryUrl);
+            _installedCatalogDirty = true;
+            RefreshPackageOperationState();
+            StatusText = "Queued updates for installed packages.";
+            return;
+        }
+
+        if (IsBusy)
         {
             return;
         }
@@ -533,6 +758,22 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             registryClient => _registryInstallService.UpdateAllAsync(registryClient, _runtimeApiClient),
             "Packages updated",
             "Installed packages were updated.");
+    }
+
+    [RelayCommand]
+    private void CancelSelectedPackageOperation()
+    {
+        var packageId = IsMarketplaceMode ? _selectedMarketplacePackage?.PackageId : _selectedInstalledPackage?.PackageId;
+        if (string.IsNullOrWhiteSpace(packageId) || _packageOperationService is null)
+        {
+            return;
+        }
+
+        if (_packageOperationService.CancelActiveOperationForPackage(packageId))
+        {
+            RefreshPackageOperationState();
+            StatusText = $"Cancelling package operation for {packageId}...";
+        }
     }
 
     private async Task ExecuteLocalPackageOperationAsync(
@@ -642,7 +883,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async Task RefreshInstalledAsync(string? preferredPackageId = null, PackageOperationResult? operationResult = null)
+    private async Task RefreshInstalledAsync(
+        string? preferredPackageId = null,
+        PackageOperationResult? operationResult = null,
+        bool updateSelection = true)
     {
         IsBusy = true;
         try
@@ -658,8 +902,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
             await ResolveAvailableUpdatesAsync();
             StatusText = BuildInstalledStatusText(operationResult);
-            RebuildInstalledPackageList(preferredPackageId);
+            RebuildInstalledPackageList(preferredPackageId, updateSelection);
             RefreshMarketplaceInstalledBadges();
+            _installedCatalogDirty = false;
         }
         catch (Exception ex)
         {
@@ -687,7 +932,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                 StatusText = "Searching marketplace...";
                 await RefreshInstalledPackageStateOnlyAsync(cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                var query = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText.Trim();
+                var query = string.IsNullOrWhiteSpace(_marketplaceSearchText) ? null : _marketplaceSearchText.Trim();
                 var packages = await registryClient.SearchAsync(query, skip: 0, take: 50, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (searchVersion != _marketplaceSearchVersion)
@@ -703,6 +948,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                 ObserveSelectedMarketplacePackage(null);
                 DisposeMarketplacePackageItems();
                 ReplaceItems(MarketplacePackages, packageItems);
+                RefreshPackageOperationState();
                 OnPropertyChanged(nameof(HasMarketplacePackages));
                 OnPropertyChanged(nameof(ShowNoMarketplacePackages));
 
@@ -776,7 +1022,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         NotifyUpdateStateChanged();
     }
 
-    private void RebuildInstalledPackageList(string? preferredPackageId = null)
+    private void RebuildInstalledPackageList(string? preferredPackageId = null, bool updateSelection = true)
     {
         var sessionById = _sessionPackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
         var installedById = _installedPackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
@@ -797,6 +1043,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
         DisposeInstalledPackageItems();
         ReplaceItems(InstalledPackages, filteredPackages);
+        RefreshPackageOperationState();
         NotifyListVisibilityChanged();
         NotifyPackageCountsChanged();
 
@@ -804,6 +1051,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             .FirstOrDefault(item => string.Equals(item.PackageId, preferredPackageId, StringComparison.OrdinalIgnoreCase))
             ?? InstalledPackages.FirstOrDefault(item => string.Equals(item.PackageId, _selectedInstalledPackage?.PackageId, StringComparison.OrdinalIgnoreCase))
             ?? InstalledPackages.FirstOrDefault();
+
+        if (!updateSelection)
+        {
+            _selectedInstalledPackage = selectedItem;
+            return;
+        }
 
         if (selectedItem is null)
         {
@@ -816,15 +1069,15 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     private bool MatchesInstalledSearch(PackageCatalogItemViewModel package)
     {
-        if (string.IsNullOrWhiteSpace(SearchText))
+        if (string.IsNullOrWhiteSpace(_installedSearchText))
         {
             return true;
         }
 
-        return package.DisplayName.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-               || package.PackageId.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-               || package.Version.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-               || package.SourceLabel.Contains(SearchText, StringComparison.OrdinalIgnoreCase);
+        return package.DisplayName.Contains(_installedSearchText, StringComparison.OrdinalIgnoreCase)
+               || package.PackageId.Contains(_installedSearchText, StringComparison.OrdinalIgnoreCase)
+               || package.Version.Contains(_installedSearchText, StringComparison.OrdinalIgnoreCase)
+               || package.SourceLabel.Contains(_installedSearchText, StringComparison.OrdinalIgnoreCase);
     }
 
     private void SelectInstalledPackage(PackageCatalogItemViewModel item)
@@ -846,6 +1099,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         SelectedPackageHasError = !string.IsNullOrWhiteSpace(item.LastError);
         SelectedPackageError = item.LastError ?? string.Empty;
         SelectedPackageOperationHint = item.OperationHint;
+        RefreshSelectedPackageOperationState();
         NotifyDetailsChanged();
         NotifyCommandStateChanged();
     }
@@ -865,6 +1119,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         SelectedPackageHasError = false;
         SelectedPackageError = string.Empty;
         SelectedPackageOperationHint = "Install a .sunderpkg from disk or use the marketplace tab.";
+        RefreshSelectedPackageOperationState();
         NotifyDetailsChanged();
         NotifyCommandStateChanged();
     }
@@ -888,6 +1143,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         MarketplaceInstalledVersion = item.InstalledVersion ?? "Not installed";
         MarketplaceSelectedVersion = "Latest";
         ClearWarnings();
+        RefreshSelectedPackageOperationState();
         NotifyDetailsChanged();
         NotifyCommandStateChanged();
 
@@ -971,6 +1227,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         MarketplaceInstalledVersion = "Not installed";
         MarketplaceSelectedVersion = "Latest";
         ClearWarnings();
+        RefreshSelectedPackageOperationState();
         OnPropertyChanged(nameof(HasMarketplaceVersions));
         OnPropertyChanged(nameof(ShowNoMarketplaceVersions));
         NotifyDetailsChanged();
@@ -1082,13 +1339,23 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private bool TryCreateRegistryClient(out IRegistryApiClient registryClient)
     {
         registryClient = null!;
-        if (!RegistryUrlHelper.TryParse(RegistryUrlText, out var registryUrl) || registryUrl is null)
+        if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
+        {
+            return false;
+        }
+
+        registryClient = _createRegistryClient(registryUrl);
+        return true;
+    }
+
+    private bool TryResolveRegistryUrl(out Uri? registryUrl)
+    {
+        if (!RegistryUrlHelper.TryParse(RegistryUrlText, out registryUrl) || registryUrl is null)
         {
             StatusText = "Enter a valid HTTP or HTTPS registry URL.";
             return false;
         }
 
-        registryClient = _createRegistryClient(registryUrl);
         return true;
     }
 
@@ -1134,6 +1401,82 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private void PackageOperationService_OnOperationChanged(object? sender, PackageOperationChangedEventArgs e)
+        => _ = RunOnUiThreadAsync(async () =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            RefreshPackageOperationState();
+            if (!e.Snapshot.IsTerminal)
+            {
+                return;
+            }
+
+            await RefreshAfterPackageOperationAsync(e.Snapshot);
+        });
+
+    private async Task RefreshAfterPackageOperationAsync(BackgroundProcessSnapshot snapshot)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            var preferredPackageId = GetPreferredPackageIdForCompletedOperation(snapshot);
+            await RefreshInstalledAsync(preferredPackageId, updateSelection: IsInstalledMode);
+
+            StatusText = snapshot.State switch
+            {
+                BackgroundProcessState.Completed => snapshot.StatusText,
+                BackgroundProcessState.Cancelled => $"Cancelled {snapshot.Title}.",
+                BackgroundProcessState.Failed => snapshot.ErrorMessage ?? snapshot.StatusText,
+                _ => StatusText,
+            };
+        }
+        catch (Exception ex)
+        {
+            StatusText = ex.Message;
+        }
+    }
+
+    private string? GetPreferredPackageIdForCompletedOperation(BackgroundProcessSnapshot snapshot)
+    {
+        if (snapshot.Metadata is PackageOperationMetadata { PackageId: { Length: > 0 } packageId })
+        {
+            return packageId;
+        }
+
+        return IsInstalledMode ? _selectedInstalledPackage?.PackageId : _selectedMarketplacePackage?.PackageId;
+    }
+
+    private static Task RunOnUiThreadAsync(Func<Task> action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            return action();
+        }
+
+        var completion = new TaskCompletionSource();
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                await action();
+                completion.SetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+        return completion.Task;
+    }
+
     private void CancelQueuedMarketplaceSearch()
     {
         var cancellationTokenSource = _pendingMarketplaceSearchCts;
@@ -1159,7 +1502,67 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             MarketplaceInstalledVersion = GetInstalledPackage(_selectedMarketplacePackage.PackageId)?.Version ?? "Not installed";
         }
 
+        RefreshPackageOperationState();
         NotifyCommandStateChanged();
+    }
+
+    private void RefreshPackageOperationState()
+    {
+        foreach (var package in MarketplacePackages)
+        {
+            ApplyPackageOperationState(package, _packageOperationService?.GetActiveOperationForPackage(package.PackageId));
+        }
+
+        foreach (var package in InstalledPackages)
+        {
+            ApplyPackageOperationState(package, _packageOperationService?.GetActiveOperationForPackage(package.PackageId));
+        }
+
+        RefreshSelectedPackageOperationState();
+        NotifyCommandStateChanged();
+    }
+
+    private void RefreshSelectedPackageOperationState()
+    {
+        var packageId = IsMarketplaceMode ? _selectedMarketplacePackage?.PackageId : _selectedInstalledPackage?.PackageId;
+        var operation = string.IsNullOrWhiteSpace(packageId)
+            ? null
+            : _packageOperationService?.GetActiveOperationForPackage(packageId);
+
+        SelectedPackageHasActiveOperation = operation?.IsActive == true;
+        SelectedPackageOperationCanCancel = operation is { CanCancel: true, State: not BackgroundProcessState.Cancelling };
+        SelectedPackageOperationIsIndeterminate = operation?.ProgressPercent is null;
+        SelectedPackageOperationProgressPercent = operation?.ProgressPercent ?? 0;
+        SelectedPackageOperationStatusText = operation is null ? string.Empty : FormatBackgroundProcessStatus(operation);
+    }
+
+    private static void ApplyPackageOperationState(PackageCatalogItemViewModel package, BackgroundProcessSnapshot? operation)
+    {
+        package.HasActiveOperation = operation?.IsActive == true;
+        package.OperationCanCancel = operation is { CanCancel: true, State: not BackgroundProcessState.Cancelling };
+        package.OperationIsIndeterminate = operation?.ProgressPercent is null;
+        package.OperationProgressPercent = operation?.ProgressPercent ?? 0;
+        package.OperationStatusText = operation is null ? string.Empty : FormatBackgroundProcessStatus(operation);
+    }
+
+    private static void ApplyPackageOperationState(RegistryPackageSearchItemViewModel package, BackgroundProcessSnapshot? operation)
+    {
+        package.HasActiveOperation = operation?.IsActive == true;
+        package.OperationCanCancel = operation is { CanCancel: true, State: not BackgroundProcessState.Cancelling };
+        package.OperationIsIndeterminate = operation?.ProgressPercent is null;
+        package.OperationProgressPercent = operation?.ProgressPercent ?? 0;
+        package.OperationStatusText = operation is null ? string.Empty : FormatBackgroundProcessStatus(operation);
+    }
+
+    private static string FormatBackgroundProcessStatus(BackgroundProcessSnapshot snapshot)
+    {
+        return snapshot.State switch
+        {
+            BackgroundProcessState.Queued => $"Queued: {snapshot.Title}",
+            BackgroundProcessState.Running => snapshot.StatusText,
+            BackgroundProcessState.Cancelling => "Cancelling...",
+            _ => snapshot.StatusText,
+        };
     }
 
     private InstalledPackageDescriptor? GetInstalledPackage(string packageId)
@@ -1243,6 +1646,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(IsSelectedMarketplacePackageInstalled));
         OnPropertyChanged(nameof(ShowMarketplaceInstallAction));
         OnPropertyChanged(nameof(ShowMarketplaceInstalledActions));
+        OnPropertyChanged(nameof(ShowMarketplaceInstallButton));
+        OnPropertyChanged(nameof(ShowMarketplaceUninstallButton));
+        OnPropertyChanged(nameof(ShowMarketplaceUpdateButton));
         OnPropertyChanged(nameof(CanInstallSelectedMarketplacePackage));
         OnPropertyChanged(nameof(CanUninstallSelectedMarketplacePackage));
         OnPropertyChanged(nameof(CanUpdateSelectedMarketplacePackage));
@@ -1338,12 +1744,21 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        if (_packageOperationService is not null)
+        {
+            _packageOperationService.OperationChanged -= PackageOperationService_OnOperationChanged;
+        }
+
         CancelQueuedMarketplaceSearch();
         ObserveSelectedInstalledPackage(null);
         ObserveSelectedMarketplacePackage(null);
         DisposeInstalledPackageItems();
         DisposeMarketplacePackageItems();
         DisposeMarketplaceProfileMedia();
+        if (!ReferenceEquals(PackageProcesses, BackgroundProcessMonitorViewModel.Empty))
+        {
+            PackageProcesses.Dispose();
+        }
         _runtimeApiClient.Dispose();
     }
 
@@ -1526,6 +1941,8 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
 
     public bool HasIconLoadError => !string.IsNullOrWhiteSpace(IconLoadError);
 
+    public bool ShowOperationStatus => HasActiveOperation;
+
     public string StatusText { get; }
 
     public bool IsEnabled { get; }
@@ -1567,6 +1984,21 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
     [ObservableProperty]
     private string _iconLoadError = string.Empty;
 
+    [ObservableProperty]
+    private bool _hasActiveOperation;
+
+    [ObservableProperty]
+    private bool _operationCanCancel;
+
+    [ObservableProperty]
+    private bool _operationIsIndeterminate = true;
+
+    [ObservableProperty]
+    private double _operationProgressPercent;
+
+    [ObservableProperty]
+    private string _operationStatusText = string.Empty;
+
     partial void OnIconImageChanged(IImage? value)
     {
         OnPropertyChanged(nameof(HasIconImage));
@@ -1575,6 +2007,9 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
 
     partial void OnIconLoadErrorChanged(string value)
         => OnPropertyChanged(nameof(HasIconLoadError));
+
+    partial void OnHasActiveOperationChanged(bool value)
+        => OnPropertyChanged(nameof(ShowOperationStatus));
 
     [RelayCommand]
     private void Select() => _onSelect(this);
@@ -1750,6 +2185,8 @@ public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase, 
 
     public bool HasIconLoadError => !string.IsNullOrWhiteSpace(IconLoadError);
 
+    public bool ShowOperationStatus => HasActiveOperation;
+
     public string? Summary { get; }
 
     public string? LatestVersion { get; }
@@ -1779,6 +2216,21 @@ public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase, 
     [ObservableProperty]
     private string _iconLoadError = string.Empty;
 
+    [ObservableProperty]
+    private bool _hasActiveOperation;
+
+    [ObservableProperty]
+    private bool _operationCanCancel;
+
+    [ObservableProperty]
+    private bool _operationIsIndeterminate = true;
+
+    [ObservableProperty]
+    private double _operationProgressPercent;
+
+    [ObservableProperty]
+    private string _operationStatusText = string.Empty;
+
     partial void OnInstalledVersionChanged(string? value)
     {
         OnPropertyChanged(nameof(InstalledVersionText));
@@ -1799,6 +2251,9 @@ public sealed partial class RegistryPackageSearchItemViewModel : ViewModelBase, 
 
     partial void OnIconLoadErrorChanged(string value)
         => OnPropertyChanged(nameof(HasIconLoadError));
+
+    partial void OnHasActiveOperationChanged(bool value)
+        => OnPropertyChanged(nameof(ShowOperationStatus));
 
     [RelayCommand]
     private async Task SelectAsync() => await _onSelectAsync(this);

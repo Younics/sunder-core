@@ -186,6 +186,41 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task ApplyPackageLifecycleChangesAsync_WhenPackageRepeatedlyReinstalled_DoesNotDuplicateHotbarViews()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var packageSource = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var runtimeApiClientFactory = new MutableRuntimeApiClientFactory
+        {
+            ActivePackages = [CreateActiveAgentPackage()],
+            PackageSources = [packageSource],
+        };
+        var packageViewHostService = CreatePackageViewHostService();
+        using var harness = CreateHarness(rootPath, runtimeApiClientFactory, packageViewHostService, packageViewHostService);
+
+        for (var index = 0; index < 3; index++)
+        {
+            runtimeApiClientFactory.ActivePackages = [];
+            runtimeApiClientFactory.PackageSources = [];
+            await harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+
+            runtimeApiClientFactory.ActivePackages = [CreateActiveAgentPackage()];
+            runtimeApiClientFactory.PackageSources = [packageSource];
+            await harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+        }
+
+        var hotbarViewIds = harness.ViewModel.ListHotbarViews()
+            .Select(view => view.ViewId)
+            .ToArray();
+
+        Assert.Equal(hotbarViewIds.Distinct(StringComparer.OrdinalIgnoreCase).Count(), hotbarViewIds.Length);
+        Assert.Single(hotbarViewIds, viewId => string.Equals(viewId, "agent.chat", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(hotbarViewIds, viewId => string.Equals(viewId, "agent.workspaces", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(hotbarViewIds, viewId => string.Equals(viewId, "agent.subsessions", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void MovePackageView_WhenSelectedMiddleViewMovesOut_SelectsFirstRemainingMiddleView()
     {
         var rootPath = CreateTempDirectory();
@@ -428,6 +463,15 @@ public sealed class MainWindowViewModelShellViewTests
     private sealed class EmptyRuntimeApiClientFactory : IRuntimeApiClientFactory
     {
         public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient([], []);
+    }
+
+    private sealed class MutableRuntimeApiClientFactory : IRuntimeApiClientFactory
+    {
+        public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; set; } = [];
+
+        public IReadOnlyList<PackageSourceDescriptor> PackageSources { get; set; } = [];
+
+        public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(ActivePackages, PackageSources);
     }
 
     private sealed class StaticRuntimeApiClientFactory(

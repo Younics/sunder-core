@@ -59,7 +59,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         NotificationCenterService notificationCenter,
         AppPackageShellViewService? shellViewService = null,
         SunderUpdateService? updateService = null,
-        bool deferInitialHostedViews = false)
+        bool deferInitialHostedViews = false,
+        BackgroundProcessQueueService? backgroundProcessQueue = null)
     {
         _windowLauncher = windowLauncher;
         _shellStateService = shellStateService;
@@ -77,6 +78,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _packageViewHostService.PackageFaulted += OnPackageFaulted;
         _notificationCenter.NotificationsChanged += OnNotificationsChanged;
         _notificationCenter.ToastQueued += OnToastQueued;
+        BackgroundProcesses = backgroundProcessQueue is null
+            ? BackgroundProcessMonitorViewModel.Empty
+            : new BackgroundProcessMonitorViewModel(
+                backgroundProcessQueue,
+                snapshot => !snapshot.IsHidden,
+                "No visible processes.",
+                _shellState.BackgroundProcessPopoverWidth,
+                _shellState.BackgroundProcessPopoverHeight,
+                PersistBackgroundProcessPopoverSize);
         if (_windowLauncher is WindowLauncher concreteWindowLauncher)
         {
             concreteWindowLauncher.AttachShell(this);
@@ -122,6 +132,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<NotificationItemViewModel> Notifications { get; } = [];
 
     public ObservableCollection<ToastNotificationViewModel> Toasts { get; } = [];
+
+    public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
 
     public bool CanInstallAppUpdate => ShowUpdatePrompt && !IsUpdateActionBusy;
 
@@ -680,6 +692,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _packageViewHostService.PackageFaulted -= OnPackageFaulted;
         _notificationCenter.NotificationsChanged -= OnNotificationsChanged;
         _notificationCenter.ToastQueued -= OnToastQueued;
+        if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
+        {
+            BackgroundProcesses.Dispose();
+        }
         if (_windowLauncher is WindowLauncher concreteWindowLauncher)
         {
             concreteWindowLauncher.DetachShell(this);
@@ -722,7 +738,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public async Task ApplyPackageLifecycleChangesAsync(
         IReadOnlyCollection<string>? impactedPackageIds = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool deferHostedViewCreation = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
@@ -748,13 +765,17 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         if (removedPackageIds.Length > 0)
         {
-            RebuildRailCollections();
+            RebuildRailCollections(createHostedViews: !deferHostedViewCreation);
         }
 
         await _packageViewHostService.ApplyPackageDeltaAsync(activePackages, packageSources, impactedPackages, cancellationToken);
 
         var enabledPackages = _packageViewHostService.FilterEnabledPackages(activePackages);
-        ApplyActivePackagesToShell(enabledPackages);
+        ApplyActivePackagesToShell(enabledPackages, deferHostedViewCreation);
+        if (deferHostedViewCreation)
+        {
+            _ = ActivateDeferredHostedViewsAfterLifecycleAsync(cancellationToken);
+        }
     }
 
     public async Task ActivateDeferredInitialHostedViewsAsync(CancellationToken cancellationToken = default)
@@ -801,6 +822,21 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         AppSessionLog.WriteInfo(
             $"Deferred package view '{viewId}' activated in {stopwatch.ElapsedMilliseconds} ms.");
         NotifyLayoutStateChanged();
+    }
+
+    private async Task ActivateDeferredHostedViewsAfterLifecycleAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ActivateDeferredInitialHostedViewsAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to activate deferred package views after package lifecycle changes.", ex);
+        }
     }
 
     public void ActivatePackageView(string viewId)
@@ -1316,7 +1352,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         PersistShellState();
     }
 
-    private void ApplyActivePackagesToShell(IReadOnlyList<ActivePackageDescriptor> activePackages)
+    private void ApplyActivePackagesToShell(IReadOnlyList<ActivePackageDescriptor> activePackages, bool deferHostedViewCreation = false)
     {
         var shellSnapshot = new ShellCompositionService().Compose(
             activePackages,
@@ -1332,7 +1368,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         SyncStatusText = shellSnapshot.SyncStatusText;
-        RebuildRailCollections();
+        RebuildRailCollections(createHostedViews: !deferHostedViewCreation);
         PersistShellState();
     }
 
@@ -1395,6 +1431,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         QueueShellStateSave();
     }
 
+    private void PersistBackgroundProcessPopoverSize(double width, double height)
+    {
+        _shellState.BackgroundProcessPopoverWidth = width;
+        _shellState.BackgroundProcessPopoverHeight = height;
+        QueueShellStateSave();
+    }
+
     private void QueueShellStateSave()
     {
         if (_disposed)
@@ -1446,6 +1489,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             RightPanelWidth = RightPanelWidth,
             TopRowHeightRatio = TopRowHeightRatio,
             BottomSplitRatio = BottomSplitRatio,
+            SettingsSidebarWidth = _shellState.SettingsSidebarWidth,
+            PackagesSidebarWidth = _shellState.PackagesSidebarWidth,
+            BackgroundProcessPopoverWidth = _shellState.BackgroundProcessPopoverWidth,
+            BackgroundProcessPopoverHeight = _shellState.BackgroundProcessPopoverHeight,
+            SettingsWindowPlacement = _shellState.SettingsWindowPlacement,
+            PackagesWindowPlacement = _shellState.PackagesWindowPlacement,
             ThemeId = _shellState.ThemeId,
             PreferredRuntimeUrl = _shellState.PreferredRuntimeUrl,
         };

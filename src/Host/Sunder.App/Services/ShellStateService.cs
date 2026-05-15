@@ -48,6 +48,8 @@ public sealed class ShellStateService
                 state.BottomSplitRatio = ClampRatio(state.BottomSplitRatio, ShellState.DefaultBottomSplitRatio);
                 state.SettingsSidebarWidth = ClampSecondarySidebarWidth(state.SettingsSidebarWidth, ShellState.DefaultSettingsSidebarWidth);
                 state.PackagesSidebarWidth = ClampSecondarySidebarWidth(state.PackagesSidebarWidth, ShellState.DefaultPackagesSidebarWidth);
+                state.BackgroundProcessPopoverWidth = ClampBackgroundProcessPopoverWidth(state.BackgroundProcessPopoverWidth);
+                state.BackgroundProcessPopoverHeight = ClampBackgroundProcessPopoverHeight(state.BackgroundProcessPopoverHeight);
                 return state;
             }
             catch
@@ -92,6 +94,8 @@ public sealed class ShellStateService
             BottomSplitRatio = state.BottomSplitRatio,
             SettingsSidebarWidth = state.SettingsSidebarWidth,
             PackagesSidebarWidth = state.PackagesSidebarWidth,
+            BackgroundProcessPopoverWidth = state.BackgroundProcessPopoverWidth,
+            BackgroundProcessPopoverHeight = state.BackgroundProcessPopoverHeight,
             SettingsWindowPlacement = ClonePlacement(state.SettingsWindowPlacement),
             PackagesWindowPlacement = ClonePlacement(state.PackagesWindowPlacement),
             ThemeId = state.ThemeId,
@@ -138,5 +142,25 @@ public sealed class ShellStateService
         }
 
         return Math.Clamp(value, 180, 900);
+    }
+
+    private static double ClampBackgroundProcessPopoverWidth(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
+        {
+            return ShellState.DefaultBackgroundProcessPopoverWidth;
+        }
+
+        return Math.Clamp(value, ShellState.MinimumBackgroundProcessPopoverWidth, ShellState.MaximumBackgroundProcessPopoverWidth);
+    }
+
+    private static double ClampBackgroundProcessPopoverHeight(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
+        {
+            return ShellState.DefaultBackgroundProcessPopoverHeight;
+        }
+
+        return Math.Clamp(value, ShellState.MinimumBackgroundProcessPopoverHeight, ShellState.MaximumBackgroundProcessPopoverHeight);
     }
 }

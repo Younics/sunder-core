@@ -1,32 +1,54 @@
 using Avalonia.Controls;
+using Avalonia.Threading;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
 
 namespace Sunder.App.Services;
 
-public sealed class WindowLauncher(
-    PackageViewHostService packageViewHostService,
-    IRuntimeApiClientFactory runtimeApiClientFactory,
-    CliInstallationService cliInstallationService,
-    NotificationCenterService notificationCenter,
-    ShellStateService shellStateService,
-    ShellState shellState,
-    SunderUpdateService? updateService = null) : IWindowLauncher
+public sealed class WindowLauncher : IWindowLauncher
 {
-    private readonly PackageViewHostService _packageViewHostService = packageViewHostService;
-    private readonly IRuntimeApiClientFactory _runtimeApiClientFactory = runtimeApiClientFactory;
-    private readonly CliInstallationService _cliInstallationService = cliInstallationService;
-    private readonly NotificationCenterService _notificationCenter = notificationCenter;
-    private readonly ShellStateService _shellStateService = shellStateService;
-    private readonly ShellState _shellState = shellState;
-    private readonly SunderUpdateService _updateService = updateService ?? new SunderUpdateService();
+    private readonly PackageViewHostService _packageViewHostService;
+    private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
+    private readonly CliInstallationService _cliInstallationService;
+    private readonly NotificationCenterService _notificationCenter;
+    private readonly ShellStateService _shellStateService;
+    private readonly ShellState _shellState;
+    private readonly SunderUpdateService _updateService;
+    private readonly BackgroundProcessQueueService _backgroundProcessQueue;
+    private readonly PackageOperationService _packageOperationService;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
     private MainWindowViewModel? _mainWindowViewModel;
 
+    public WindowLauncher(
+        PackageViewHostService packageViewHostService,
+        IRuntimeApiClientFactory runtimeApiClientFactory,
+        CliInstallationService cliInstallationService,
+        NotificationCenterService notificationCenter,
+        ShellStateService shellStateService,
+        ShellState shellState,
+        SunderUpdateService? updateService = null)
+    {
+        _packageViewHostService = packageViewHostService;
+        _runtimeApiClientFactory = runtimeApiClientFactory;
+        _cliInstallationService = cliInstallationService;
+        _notificationCenter = notificationCenter;
+        _shellStateService = shellStateService;
+        _shellState = shellState;
+        _updateService = updateService ?? new SunderUpdateService();
+        _backgroundProcessQueue = new BackgroundProcessQueueService();
+        _packageOperationService = new PackageOperationService(
+            _backgroundProcessQueue,
+            _runtimeApiClientFactory,
+            ApplyPackageLifecycleChangesAsync,
+            _notificationCenter);
+    }
+
     public void AttachShell(MainWindowViewModel viewModel)
         => _mainWindowViewModel = viewModel;
+
+    public BackgroundProcessQueueService BackgroundProcesses => _backgroundProcessQueue;
 
     public void DetachShell(MainWindowViewModel viewModel)
     {
@@ -72,6 +94,8 @@ public sealed class WindowLauncher(
 
     public void CloseForShutdown()
     {
+        _ = _packageOperationService.CancelAllAsync();
+
         if (_settingsWindow is not null)
         {
             _settingsWindow.CloseForShutdown();
@@ -85,6 +109,9 @@ public sealed class WindowLauncher(
         }
 
     }
+
+    public async Task CancelBackgroundProcessesAsync(CancellationToken cancellationToken = default)
+        => await _packageOperationService.CancelAllAsync(cancellationToken);
 
     private SettingsWindow CreateSettingsWindow()
     {
@@ -115,7 +142,12 @@ public sealed class WindowLauncher(
             _runtimeApiClientFactory.CreateClient(),
             new PackageArchivePicker(window),
             ApplyPackageLifecycleChangesAsync,
-            notificationCenter: _notificationCenter);
+            _packageOperationService,
+            _backgroundProcessQueue,
+            notificationCenter: _notificationCenter,
+            backgroundProcessPopoverWidth: _shellState.BackgroundProcessPopoverWidth,
+            backgroundProcessPopoverHeight: _shellState.BackgroundProcessPopoverHeight,
+            persistBackgroundProcessPopoverSize: PersistBackgroundProcessPopoverSize);
 
         window.Closed += (_, _) =>
         {
@@ -140,13 +172,35 @@ public sealed class WindowLauncher(
         window.Activate();
     }
 
+    private void PersistBackgroundProcessPopoverSize(double width, double height)
+    {
+        _shellState.BackgroundProcessPopoverWidth = width;
+        _shellState.BackgroundProcessPopoverHeight = height;
+        _shellStateService.Save(_shellState);
+    }
+
     private async Task ApplyPackageLifecycleChangesAsync(
+        IReadOnlyList<string> impactedPackageIds,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            await Dispatcher.UIThread.InvokeAsync(async () =>
+                await ApplyPackageLifecycleChangesOnUiThreadAsync(impactedPackageIds, cancellationToken));
+            return;
+        }
+
+        await ApplyPackageLifecycleChangesOnUiThreadAsync(impactedPackageIds, cancellationToken);
+    }
+
+    private async Task ApplyPackageLifecycleChangesOnUiThreadAsync(
         IReadOnlyList<string> impactedPackageIds,
         CancellationToken cancellationToken)
     {
         if (_mainWindowViewModel is not null)
         {
-            await _mainWindowViewModel.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken);
+            await _mainWindowViewModel.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation: true);
         }
 
         await RefreshSettingsWindowPackageSectionsAsync(cancellationToken);

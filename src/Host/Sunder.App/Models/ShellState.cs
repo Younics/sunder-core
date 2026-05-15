@@ -11,6 +11,12 @@ public sealed class ShellState
     public const double DefaultBottomSplitRatio = 0.5;
     public const double DefaultSettingsSidebarWidth = 250;
     public const double DefaultPackagesSidebarWidth = 430;
+    public const double DefaultBackgroundProcessPopoverWidth = 500;
+    public const double DefaultBackgroundProcessPopoverHeight = 360;
+    public const double MinimumBackgroundProcessPopoverWidth = 360;
+    public const double MaximumBackgroundProcessPopoverWidth = 760;
+    public const double MinimumBackgroundProcessPopoverHeight = 220;
+    public const double MaximumBackgroundProcessPopoverHeight = 640;
 
     public int LayoutVersion { get; set; } = CurrentLayoutVersion;
 
@@ -43,6 +49,10 @@ public sealed class ShellState
     public double SettingsSidebarWidth { get; set; } = DefaultSettingsSidebarWidth;
 
     public double PackagesSidebarWidth { get; set; } = DefaultPackagesSidebarWidth;
+
+    public double BackgroundProcessPopoverWidth { get; set; } = DefaultBackgroundProcessPopoverWidth;
+
+    public double BackgroundProcessPopoverHeight { get; set; } = DefaultBackgroundProcessPopoverHeight;
 
     public ShellWindowPlacement? SettingsWindowPlacement { get; set; }
 

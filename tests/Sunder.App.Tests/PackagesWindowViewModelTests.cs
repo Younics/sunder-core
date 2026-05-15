@@ -241,6 +241,97 @@ public sealed class PackagesWindowViewModelTests
         );
     }
 
+    [Fact]
+    public async Task SearchText_WhenSwitchingModes_RestoresModeSpecificSearch()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.tools")],
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient(
+            [
+                CreateInstalledPackage("sunder.package.agent", isEnabled: true),
+                CreateInstalledPackage("sunder.package.tools", isEnabled: true),
+            ]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40)
+        );
+        viewModel.RegistryUrlText = "https://registry.example/";
+        await viewModel.InitializeAsync();
+        viewModel.SearchText = "agent";
+        Assert.Collection(viewModel.InstalledPackages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+
+        await viewModel.ShowMarketplaceCommand.ExecuteAsync(null);
+
+        Assert.Equal(string.Empty, viewModel.SearchText);
+        viewModel.SearchText = "tools";
+        await WaitForConditionAsync(() => registryClient.SearchQueries.Count > 0);
+
+        await viewModel.ShowInstalledCommand.ExecuteAsync(null);
+
+        Assert.Equal("agent", viewModel.SearchText);
+        Assert.Collection(viewModel.InstalledPackages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+    }
+
+    [Fact]
+    public async Task PackageOperationCompletion_RebuildsInstalledPackagesWhileMarketplaceTabIsActive()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+        };
+        var runtimeClient = new FakeRuntimeApiClient([CreateInstalledPackage("sunder.package.tools", isEnabled: true)]);
+        using var viewModel = new PackagesWindowViewModel(
+            runtimeClient,
+            new FakePackageArchivePicker(),
+            notificationCenter: CreateNotificationCenter(),
+            registryClientFactory: _ => registryClient,
+            marketplaceSearchThrottleDelay: TimeSpan.FromMilliseconds(40))
+        {
+            RegistryUrlText = "https://registry.example/",
+        };
+
+        await viewModel.InitializeAsync();
+        Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
+        Assert.DoesNotContain(viewModel.InstalledPackages, package => package.PackageId == "sunder.package.agent");
+        runtimeClient.AddInstalledPackage(CreateInstalledPackage("sunder.package.agent", isEnabled: true));
+
+        await InvokeRefreshAfterPackageOperationAsync(
+            viewModel,
+            new PackageOperationMetadata("sunder.package.agent", PackageOperationKind.InstallMarketplace, "Sunder Agent"));
+
+        Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
+        Assert.Contains(viewModel.InstalledPackages, package => package.PackageId == "sunder.package.agent");
+    }
+
+    private static async Task InvokeRefreshAfterPackageOperationAsync(
+        PackagesWindowViewModel viewModel,
+        PackageOperationMetadata metadata)
+    {
+        var method = typeof(PackagesWindowViewModel).GetMethod(
+            "RefreshAfterPackageOperationAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var snapshot = new BackgroundProcessSnapshot(
+            Guid.NewGuid(),
+            "Install Sunder Agent",
+            PackageOperationService.PackageStoreGroupKey,
+            IsHidden: true,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundProcessState.Completed,
+            "Completed",
+            100,
+            CanCancel: true,
+            metadata,
+            ErrorMessage: null,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        await (Task)method.Invoke(viewModel, [snapshot])!;
+    }
+
     private static PackagesWindowViewModel CreateViewModel(
         FakeRuntimeApiClient runtimeClient,
         NotificationCenterService notificationCenter,
@@ -295,6 +386,16 @@ public sealed class PackagesWindowViewModelTests
             DateTimeOffset.UtcNow
         );
 
+    private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
+        => new(
+            packageId,
+            CurrentVersion: null,
+            version,
+            IsUpdate: false,
+            DeprecatedMessage: null,
+            DependsOn: [],
+            new RegistryPackageArtifact("", 0, $"download/{packageId}/{version}"));
+
     private static string ToDisplayName(string packageId) =>
         string.Concat(packageId[..1].ToUpperInvariant(), packageId[1..]);
 
@@ -330,6 +431,11 @@ public sealed class PackagesWindowViewModelTests
             Task.FromResult<string?>(null);
     }
 
+    private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
+    {
+        public IRuntimeApiClient CreateClient() => runtimeApiClient;
+    }
+
     private sealed class FakeRegistryApiClient : IRegistryApiClient
     {
         private readonly object _gate = new();
@@ -349,6 +455,8 @@ public sealed class PackagesWindowViewModelTests
         }
 
         public Func<string?, IReadOnlyList<RegistryPackageSummary>> SearchResults { get; init; } = _ => [];
+
+        public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
 
         public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(
             string? query,
@@ -404,7 +512,7 @@ public sealed class PackagesWindowViewModelTests
         public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
             RegistryResolveInstallPlanRequest request,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        ) => Task.FromResult(InstallPlan);
 
         public Task DownloadArtifactAsync(
             RegistryPackageArtifact artifact,
@@ -412,7 +520,11 @@ public sealed class PackagesWindowViewModelTests
             string version,
             string destinationPath,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
 
         public void Dispose() { }
     }
@@ -427,6 +539,15 @@ public sealed class PackagesWindowViewModelTests
         public int GetInstalledPackagesCallCount { get; private set; }
 
         public PackageOperationResult? EnableResult { get; init; }
+
+        public string? RegistryInstallPackageId { get; init; }
+
+        public void AddInstalledPackage(InstalledPackageDescriptor package)
+        {
+            _installedPackages.RemoveAll(existing =>
+                string.Equals(existing.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase));
+            _installedPackages.Add(package);
+        }
 
         public Task<SystemStatusResponse?> GetSystemStatusAsync(
             CancellationToken cancellationToken = default
@@ -465,7 +586,26 @@ public sealed class PackagesWindowViewModelTests
         public Task<PackageOperationResult> InstallPackageFromPathAsync(
             string packagePath,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var packageId = RegistryInstallPackageId ?? Path.GetFileNameWithoutExtension(packagePath);
+            if (!_installedPackages.Any(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase)))
+            {
+                _installedPackages.Add(CreateInstalledPackage(packageId, isEnabled: true));
+            }
+
+            return Task.FromResult(
+                new PackageOperationResult(
+                    true,
+                    $"Installed package '{ToDisplayName(packageId)}'.",
+                    false,
+                    [],
+                    [])
+                {
+                    ImpactedPackageIds = [packageId],
+                });
+        }
 
         public Task<PackageOperationResult> UpgradePackageFromPathAsync(
             string packageId,

@@ -39,6 +39,8 @@ public sealed class ShellCompositionService : IShellCompositionService
         }
 
         var orderedViews = packageViews
+            .GroupBy(view => view.ViewId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .OrderBy(x => x.PackageDisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
             .ToArray();

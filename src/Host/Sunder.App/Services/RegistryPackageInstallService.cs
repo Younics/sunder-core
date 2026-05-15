@@ -22,6 +22,8 @@ public sealed record RegistryPackageInstallExecutionResult(
         => new(false, message, warnings ?? [], errors ?? [message], [], planItems ?? []);
 }
 
+public sealed record RegistryPackageInstallProgress(string StatusText, double? ProgressPercent);
+
 public sealed class RegistryPackageInstallService
 {
     public async Task<RegistryPackageInstallExecutionResult> InstallPackageAsync(
@@ -32,9 +34,12 @@ public sealed class RegistryPackageInstallService
         bool reinstall,
         IRegistryApiClient registryClient,
         IRuntimeApiClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        progress?.Invoke(new RegistryPackageInstallProgress("Reading installed package state...", 5));
         var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken);
+        progress?.Invoke(new RegistryPackageInstallProgress("Resolving registry install plan...", 15));
         var request = new RegistryResolveInstallPlanRequest(
             packageId,
             version,
@@ -44,15 +49,17 @@ public sealed class RegistryPackageInstallService
             Reinstall: reinstall);
         var plan = await registryClient.ResolveInstallPlanAsync(request, cancellationToken);
         return plan.Success
-            ? await ExecutePlanAsync(plan, allowDowngrade, reinstall, registryClient, runtimeApiClient, cancellationToken)
+            ? await ExecutePlanAsync(plan, allowDowngrade, reinstall, registryClient, runtimeApiClient, progress, cancellationToken)
             : ToPlanFailure(plan);
     }
 
     public async Task<RegistryPackageInstallExecutionResult> UpdateAllAsync(
         IRegistryApiClient registryClient,
         IRuntimeApiClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        progress?.Invoke(new RegistryPackageInstallProgress("Reading installed package state...", 5));
         var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken);
         if (installedPackages.Count == 0)
         {
@@ -84,9 +91,10 @@ public sealed class RegistryPackageInstallService
                 tag: null,
                 allowDowngrade: false,
                 reinstall: false,
-                registryClient,
-                runtimeApiClient,
-                cancellationToken);
+            registryClient,
+            runtimeApiClient,
+            progress,
+            cancellationToken);
 
             warnings.AddRange(result.Warnings);
             planItems.AddRange(result.PlanItems);
@@ -128,6 +136,7 @@ public sealed class RegistryPackageInstallService
         bool reinstall,
         IRegistryApiClient registryClient,
         IRuntimeApiClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress,
         CancellationToken cancellationToken)
     {
         if (plan.Items.Count == 0)
@@ -141,10 +150,13 @@ public sealed class RegistryPackageInstallService
 
         try
         {
-            foreach (var item in plan.Items)
+            for (var index = 0; index < plan.Items.Count; index++)
             {
+                var item = plan.Items[index];
                 cancellationToken.ThrowIfCancellationRequested();
+                var progressBase = 20 + 70d * index / plan.Items.Count;
                 var packagePath = Path.Combine(tempDirectory, $"{SanitizeFileName(item.PackageId)}.{SanitizeFileName(item.Version)}.sunderpkg");
+                progress?.Invoke(new RegistryPackageInstallProgress($"Downloading {item.PackageId} {item.Version}...", progressBase));
                 await registryClient.DownloadArtifactAsync(item.Artifact, item.PackageId, item.Version, packagePath, cancellationToken);
 
                 if (!string.IsNullOrWhiteSpace(item.DeprecatedMessage))
@@ -152,6 +164,7 @@ public sealed class RegistryPackageInstallService
                     warnings.Add($"{item.PackageId} {item.Version} is deprecated: {item.DeprecatedMessage}");
                 }
 
+                progress?.Invoke(new RegistryPackageInstallProgress($"Installing {item.PackageId} {item.Version}...", Math.Min(progressBase + 20, 90)));
                 var operationResult = item.CurrentVersion is null
                     ? await runtimeApiClient.InstallPackageFromPathAsync(packagePath, cancellationToken)
                     : await runtimeApiClient.UpgradePackageFromPathAsync(item.PackageId, packagePath, allowDowngrade, reinstall, cancellationToken);

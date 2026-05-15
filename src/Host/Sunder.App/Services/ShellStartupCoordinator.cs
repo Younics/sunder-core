@@ -145,7 +145,8 @@ public sealed class ShellStartupCoordinator(Application application)
                 notificationCenter,
                 shellViewService,
                 updateService,
-                deferInitialHostedViews: true);
+                deferInitialHostedViews: true,
+                backgroundProcessQueue: windowLauncher.BackgroundProcesses);
             var mainWindow = new MainWindow
             {
                 DataContext = mainWindowViewModel,

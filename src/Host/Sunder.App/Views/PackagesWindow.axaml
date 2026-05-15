@@ -155,7 +155,7 @@
                               HorizontalContentAlignment="Stretch"
                               Command="{Binding SelectCommand}">
                         <Grid ColumnDefinitions="Auto,*,Auto"
-                              RowDefinitions="Auto,Auto,Auto"
+                              RowDefinitions="Auto,Auto,Auto,Auto"
                               ColumnSpacing="12"
                               RowSpacing="3">
                           <Grid Width="30"
@@ -183,6 +183,13 @@
                             <TextBlock Classes="caption" Text="{Binding InstalledVersionText}" />
                             <TextBlock Grid.Column="1" Classes="caption" Text="{Binding ActionText}" />
                           </Grid>
+                          <TextBlock Grid.Row="3"
+                                     Grid.Column="1"
+                                     Grid.ColumnSpan="2"
+                                     Classes="caption"
+                                     Text="{Binding OperationStatusText}"
+                                     IsVisible="{Binding ShowOperationStatus}"
+                                     TextWrapping="Wrap" />
                         </Grid>
                       </Button>
                     </DataTemplate>
@@ -199,7 +206,7 @@
                               HorizontalContentAlignment="Stretch"
                               Command="{Binding SelectCommand}">
                         <Grid ColumnDefinitions="Auto,*,Auto"
-                              RowDefinitions="Auto,Auto,Auto"
+                              RowDefinitions="Auto,Auto,Auto,Auto"
                               ColumnSpacing="12"
                               RowSpacing="3">
                           <Grid Width="30"
@@ -227,6 +234,13 @@
                             <TextBlock Classes="caption" Text="{Binding SourceLabel}" />
                             <TextBlock Grid.Column="1" Classes="caption" Text="{Binding UpdateText}" IsVisible="{Binding HasUpdate}" />
                           </Grid>
+                          <TextBlock Grid.Row="3"
+                                     Grid.Column="1"
+                                     Grid.ColumnSpan="2"
+                                     Classes="caption"
+                                     Text="{Binding OperationStatusText}"
+                                     IsVisible="{Binding ShowOperationStatus}"
+                                     TextWrapping="Wrap" />
                         </Grid>
                       </Button>
                     </DataTemplate>
@@ -318,6 +332,7 @@
 
                 <Border Classes="card-surface">
                   <Grid ColumnDefinitions="*,Auto,Auto"
+                        RowDefinitions="Auto,Auto,Auto"
                         ColumnSpacing="10">
                     <StackPanel Spacing="3">
                       <TextBlock Classes="section-title" Text="Marketplace Actions" />
@@ -328,19 +343,38 @@
                             Command="{Binding InstallSelectedMarketplacePackageCommand}"
                             Content="Install"
                             IsEnabled="{Binding CanInstallSelectedMarketplacePackage}"
-                            IsVisible="{Binding ShowMarketplaceInstallAction}" />
+                            IsVisible="{Binding ShowMarketplaceInstallButton}" />
                     <Button Grid.Column="1"
                             Classes="secondary-action"
                             Command="{Binding UninstallSelectedMarketplacePackageCommand}"
                             Content="Uninstall"
                             IsEnabled="{Binding CanUninstallSelectedMarketplacePackage}"
-                            IsVisible="{Binding ShowMarketplaceInstalledActions}" />
+                            IsVisible="{Binding ShowMarketplaceUninstallButton}" />
                     <Button Grid.Column="2"
                             Classes="primary-action"
                             Command="{Binding UpdateSelectedMarketplacePackageCommand}"
                             Content="Update"
                             IsEnabled="{Binding CanUpdateSelectedMarketplacePackage}"
-                            IsVisible="{Binding ShowMarketplaceInstalledActions}" />
+                            IsVisible="{Binding ShowMarketplaceUpdateButton}" />
+                    <Button Grid.Column="1"
+                            Classes="secondary-action"
+                            Command="{Binding CancelSelectedPackageOperationCommand}"
+                            Content="Cancel"
+                            IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
+                    <TextBlock Grid.Row="1"
+                               Grid.ColumnSpan="3"
+                               Classes="caption"
+                               Text="{Binding SelectedPackageOperationStatusText}"
+                               IsVisible="{Binding ShowSelectedPackageOperationStatus}"
+                               TextWrapping="Wrap" />
+                    <ProgressBar Grid.Row="2"
+                                 Grid.ColumnSpan="3"
+                                 Margin="0,5,0,0"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding SelectedPackageOperationProgressPercent}"
+                                 IsIndeterminate="{Binding SelectedPackageOperationIsIndeterminate}"
+                                 IsVisible="{Binding ShowSelectedPackageOperationStatus}" />
                   </Grid>
                 </Border>
 
@@ -510,7 +544,22 @@
                           Command="{Binding UninstallSelectedPackageCommand}"
                           Content="Uninstall"
                           IsEnabled="{Binding CanUninstallSelectedPackage}" />
+                  <Button Classes="secondary-action"
+                          Command="{Binding CancelSelectedPackageOperationCommand}"
+                          Content="Cancel"
+                          IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
                 </StackPanel>
+
+                <TextBlock Classes="caption"
+                           Text="{Binding SelectedPackageOperationStatusText}"
+                           IsVisible="{Binding ShowSelectedPackageOperationStatus}"
+                           TextWrapping="Wrap" />
+                <ProgressBar Minimum="0"
+                             Maximum="100"
+                             Margin="0,5,0,0"
+                             Value="{Binding SelectedPackageOperationProgressPercent}"
+                             IsIndeterminate="{Binding SelectedPackageOperationIsIndeterminate}"
+                             IsVisible="{Binding ShowSelectedPackageOperationStatus}" />
 
                 <Separator />
                 <TextBlock Classes="section-title" Text="Last Error" IsVisible="{Binding SelectedPackageHasError}" />
@@ -553,7 +602,7 @@
     </Border>
 
     <Grid Grid.Row="2"
-          ColumnDefinitions="Auto,*,Auto"
+          ColumnDefinitions="Auto,*,Auto,Auto"
           Margin="20,16,20,16"
           ColumnSpacing="16">
       <Button Classes="secondary-action"
@@ -561,18 +610,15 @@
               Content="Install from disk"
               IsEnabled="{Binding CanInstallPackage}" />
 
-      <TextBlock Grid.Column="1"
-                 Classes="caption"
-                 VerticalAlignment="Center"
-                 Text="{Binding StatusText}"
-                 TextWrapping="Wrap" />
-
       <Button Grid.Column="2"
               Classes="primary-action"
               Command="{Binding UpdateAllPackagesCommand}"
               Content="Update All"
               IsEnabled="{Binding CanUpdateAllPackages}"
               IsVisible="{Binding ShowUpdateAllPackages}" />
+      <controls:BackgroundProcessMonitor Grid.Column="3"
+                                         HorizontalAlignment="Right"
+                                         DataContext="{Binding PackageProcesses}" />
     </Grid>
   </Grid>
 </Window>

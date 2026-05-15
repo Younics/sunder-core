@@ -136,8 +136,21 @@ public partial class App : Application
 
     private async void OnDesktopExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
     {
-        _windowLauncher?.CloseForShutdown();
+        var windowLauncher = _windowLauncher;
         _windowLauncher = null;
+        if (windowLauncher is not null)
+        {
+            try
+            {
+                await windowLauncher.CancelBackgroundProcessesAsync();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to cancel background processes during shutdown.", ex);
+            }
+
+            windowLauncher.CloseForShutdown();
+        }
 
         var hostService = _packageViewHostService;
         _packageViewHostService = PackageViewHostService.Empty;

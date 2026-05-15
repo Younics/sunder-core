@@ -118,6 +118,25 @@ public sealed class ShellCompositionServiceTests
         Assert.Contains(snapshot.PackageViews, view => view.ViewId == "agent.subsessions" && !view.ShowInHotbarByDefault);
     }
 
+    [Fact]
+    public void Compose_DeduplicatesPackageViewsByViewId()
+    {
+        var service = new ShellCompositionService();
+
+        var snapshot = service.Compose(
+            [CreatePackage("agent", "Agent", [CreateView("agent.chat", "Chat", "middle"), CreateView("agent.chat", "Duplicate Chat", "right-top")])],
+            new ShellState(),
+            systemStatus: null,
+            warnings: [],
+            errors: []);
+
+        var view = Assert.Single(snapshot.PackageViews);
+        Assert.Equal("agent.chat", view.ViewId);
+        Assert.Equal("Chat", view.Title);
+        Assert.Equal(RailPlacement.Middle, view.Placement);
+        Assert.Single(snapshot.State.ViewPlacements);
+    }
+
     private static ActivePackageDescriptor CreatePackage(
         string packageId,
         string displayName,
