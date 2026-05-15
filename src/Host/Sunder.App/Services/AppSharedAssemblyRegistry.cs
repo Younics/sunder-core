@@ -22,19 +22,21 @@ internal sealed class AppSharedAssemblyRegistry
 
     private readonly Dictionary<string, string> _sharedAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AssemblyName> _sharedAssemblyNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _optionalHostAssemblies = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _missingOptionalHostAssemblies = new(StringComparer.OrdinalIgnoreCase);
 
     public AppSharedAssemblyRegistry(IEnumerable<string> probeDirectories)
     {
-        RegisterOptionalHostAssembly("Avalonia");
-        RegisterOptionalHostAssembly("AvaloniaEdit");
-        RegisterOptionalHostAssembly("Avalonia.Markup");
-        RegisterOptionalHostAssembly("Avalonia.Dialogs");
-        RegisterOptionalHostAssembly("Avalonia.Remote.Protocol");
-        RegisterOptionalHostAssembly("Avalonia.Metal");
-        RegisterOptionalHostAssembly("Avalonia.OpenGL");
-        RegisterOptionalHostAssembly("Avalonia.Vulkan");
-        RegisterOptionalHostAssembly("Avalonia.MicroCom");
-        RegisterOptionalHostAssembly("MicroCom.Runtime");
+        RegisterOptionalHostAssemblyName("Avalonia");
+        RegisterOptionalHostAssemblyName("AvaloniaEdit");
+        RegisterOptionalHostAssemblyName("Avalonia.Markup");
+        RegisterOptionalHostAssemblyName("Avalonia.Dialogs");
+        RegisterOptionalHostAssemblyName("Avalonia.Remote.Protocol");
+        RegisterOptionalHostAssemblyName("Avalonia.Metal");
+        RegisterOptionalHostAssemblyName("Avalonia.OpenGL");
+        RegisterOptionalHostAssemblyName("Avalonia.Vulkan");
+        RegisterOptionalHostAssemblyName("Avalonia.MicroCom");
+        RegisterOptionalHostAssemblyName("MicroCom.Runtime");
 
         AddProbeDirectories(probeDirectories);
     }
@@ -54,22 +56,9 @@ internal sealed class AppSharedAssemblyRegistry
         }
     }
 
-    private void RegisterOptionalHostAssembly(string assemblyName)
+    private void RegisterOptionalHostAssemblyName(string assemblyName)
     {
-        if (_sharedAssemblies.ContainsKey(assemblyName))
-        {
-            return;
-        }
-
-        try
-        {
-            var assembly = Assembly.Load(new AssemblyName(assemblyName));
-            _sharedAssemblies[assemblyName] = assembly;
-        }
-        catch
-        {
-            // Optional host-owned assemblies may not be loaded in every app configuration.
-        }
+        _optionalHostAssemblies.Add(assemblyName);
     }
 
     public Assembly? ResolveSharedAssembly(AssemblyName assemblyName)
@@ -88,6 +77,12 @@ internal sealed class AppSharedAssemblyRegistry
                 return sharedAssembly;
             }
 
+            if (_optionalHostAssemblies.Contains(assemblyName.Name)
+                && TryLoadOptionalHostAssembly(assemblyName.Name, out var optionalHostAssembly))
+            {
+                return optionalHostAssembly;
+            }
+
             if (!_sharedAssemblyPaths.TryGetValue(assemblyName.Name, out var sharedAssemblyPath))
             {
                 return null;
@@ -103,6 +98,27 @@ internal sealed class AppSharedAssemblyRegistry
             ValidateSharedContractCompatibility(assemblyName, loadedAssembly);
             _sharedAssemblies[assemblyName.Name] = loadedAssembly;
             return loadedAssembly;
+        }
+    }
+
+    private bool TryLoadOptionalHostAssembly(string assemblyName, out Assembly assembly)
+    {
+        assembly = null!;
+        if (_missingOptionalHostAssemblies.Contains(assemblyName))
+        {
+            return false;
+        }
+
+        try
+        {
+            assembly = Assembly.Load(new AssemblyName(assemblyName));
+            _sharedAssemblies[assemblyName] = assembly;
+            return true;
+        }
+        catch
+        {
+            _missingOptionalHostAssemblies.Add(assemblyName);
+            return false;
         }
     }
 

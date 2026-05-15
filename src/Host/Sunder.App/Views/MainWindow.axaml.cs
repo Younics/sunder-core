@@ -61,6 +61,12 @@ public partial class MainWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (!Dispatcher.UIThread.CheckAccess() && Application.Current is not null)
+        {
+            Dispatcher.UIThread.Post(() => OnViewModelPropertyChanged(sender, e));
+            return;
+        }
+
         if (e.PropertyName is nameof(MainWindowViewModel.HasLeftTopPanelContent)
             or nameof(MainWindowViewModel.HasRightTopPanelContent)
             or nameof(MainWindowViewModel.HasLeftBottomPanelContent)

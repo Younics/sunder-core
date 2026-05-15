@@ -21,7 +21,7 @@ dotnet new install .\path\to\Sunder.Package.Templates.1.0.0.nupkg
 Install the template from a feed when published:
 
 ```powershell
-dotnet new install Sunder.Package.Templates::1.0.0
+dotnet new install Sunder.Package.Templates
 ```
 
 ## Create A Package

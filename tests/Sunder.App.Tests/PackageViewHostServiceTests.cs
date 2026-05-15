@@ -108,12 +108,102 @@ public sealed class PackageViewHostServiceTests
         }
     }
 
+    [Fact]
+    public async Task ApplyPackageDeltaAsync_WhenPackageReloads_UsesNewShadowFolder()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.ApplyPackageDeltaAsync([package], [source], ["agent"]);
+
+            var shadowFolders = Directory.EnumerateDirectories(sessionFolder)
+                .Select(Path.GetFileName)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            Assert.Equal(2, shadowFolders.Length);
+            Assert.StartsWith("0001-agent", shadowFolders[0]);
+            Assert.StartsWith("0002-agent", shadowFolders[1]);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
     private static void TryDeleteDirectory(string path)
     {
         if (Directory.Exists(path))
         {
             Directory.Delete(path, recursive: true);
         }
+    }
+
+    private static void TryDeleteDirectoryBestEffort(string path)
+    {
+        try
+        {
+            TryDeleteDirectory(path);
+        }
+        catch
+        {
+            // Loaded package shadows can remain locked until process exit.
+        }
+    }
+
+    private static ActivePackageDescriptor CreateActiveAgentPackage()
+        => new(
+            "agent",
+            "Agent",
+            "1.0.0",
+            null,
+            true,
+            PackageReadinessState.Ready,
+            [new PackageViewDescriptor("agent.chat", "agent", "Chat", null, "middle")]);
+
+    private static string CreateAppPackageSource(string rootPath, string packageId)
+    {
+        var packageSourceFolder = Path.Combine(rootPath, "package-source");
+        var libraryFolder = Path.Combine(packageSourceFolder, "lib");
+        Directory.CreateDirectory(libraryFolder);
+
+        var assemblyPath = typeof(ShellLifecycleTestPackageModule).Assembly.Location;
+        var entryAssemblyFileName = Path.GetFileName(assemblyPath);
+        File.WriteAllText(Path.Combine(packageSourceFolder, "sunder-package.json"), $$"""
+            {
+              "id": "{{packageId}}",
+              "entryAssembly": "{{entryAssemblyFileName}}"
+            }
+            """);
+
+        foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
+        {
+            File.Copy(file, Path.Combine(libraryFolder, Path.GetFileName(file)), overwrite: true);
+        }
+
+        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
+        if (File.Exists(depsPath))
+        {
+            File.Copy(depsPath, Path.Combine(libraryFolder, Path.GetFileName(depsPath)), overwrite: true);
+        }
+
+        return packageSourceFolder;
     }
 
     private sealed class BlockingBackgroundService : IPackageBackgroundService

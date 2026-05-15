@@ -745,37 +745,57 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
         var activePackagesTask = runtimeApiClient.GetActivePackagesAsync(cancellationToken);
         var packageSourcesTask = runtimeApiClient.GetActivePackageSourcesAsync(cancellationToken);
-        await Task.WhenAll(activePackagesTask, packageSourcesTask);
+        await Task.WhenAll(activePackagesTask, packageSourcesTask).ConfigureAwait(false);
 
-        var activePackages = await activePackagesTask;
-        var packageSources = await packageSourcesTask;
-        var activePackageIds = activePackages.Select(package => package.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var removedPackageIds = _viewsById.Values
-            .Select(view => view.PackageId)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(packageId => !activePackageIds.Contains(packageId))
-            .ToArray();
+        var activePackages = await activePackagesTask.ConfigureAwait(false);
+        var packageSources = await packageSourcesTask.ConfigureAwait(false);
         var impactedPackages = impactedPackageIds is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(impactedPackageIds, StringComparer.OrdinalIgnoreCase);
+
+        await _packageViewHostService.ApplyPackageDeltaAsync(activePackages, packageSources, impactedPackages, cancellationToken).ConfigureAwait(false);
+
+        var enabledPackages = _packageViewHostService.FilterEnabledPackages(activePackages);
+        await ApplyPackageLifecycleChangesToShellAsync(enabledPackages, deferHostedViewCreation).ConfigureAwait(false);
+        if (deferHostedViewCreation)
+        {
+            _ = ActivateDeferredHostedViewsAfterLifecycleAsync(cancellationToken);
+        }
+    }
+
+    private async Task ApplyPackageLifecycleChangesToShellAsync(
+        IReadOnlyList<ActivePackageDescriptor> enabledPackages,
+        bool deferHostedViewCreation)
+    {
+        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        {
+            ApplyPackageLifecycleChangesToShell(enabledPackages, deferHostedViewCreation);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(
+            () => ApplyPackageLifecycleChangesToShell(enabledPackages, deferHostedViewCreation),
+            DispatcherPriority.Normal);
+    }
+
+    private void ApplyPackageLifecycleChangesToShell(
+        IReadOnlyList<ActivePackageDescriptor> enabledPackages,
+        bool deferHostedViewCreation)
+    {
+        var enabledPackageIds = enabledPackages
+            .Select(package => package.PackageId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var removedPackageIds = _viewsById.Values
+            .Select(view => view.PackageId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(packageId => !enabledPackageIds.Contains(packageId))
+            .ToArray();
         foreach (var packageId in removedPackageIds)
         {
             RemovePackageViewsFromShell(packageId);
         }
 
-        if (removedPackageIds.Length > 0)
-        {
-            RebuildRailCollections(createHostedViews: !deferHostedViewCreation);
-        }
-
-        await _packageViewHostService.ApplyPackageDeltaAsync(activePackages, packageSources, impactedPackages, cancellationToken);
-
-        var enabledPackages = _packageViewHostService.FilterEnabledPackages(activePackages);
         ApplyActivePackagesToShell(enabledPackages, deferHostedViewCreation);
-        if (deferHostedViewCreation)
-        {
-            _ = ActivateDeferredHostedViewsAfterLifecycleAsync(cancellationToken);
-        }
     }
 
     public async Task ActivateDeferredInitialHostedViewsAsync(CancellationToken cancellationToken = default)
@@ -1343,6 +1363,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private void OnPackageFaulted(object? sender, PackageViewHostFaultEventArgs e)
     {
+        if (!Dispatcher.UIThread.CheckAccess() && Application.Current is not null)
+        {
+            Dispatcher.UIThread.Post(() => OnPackageFaulted(sender, e));
+            return;
+        }
+
         if (!RemovePackageViewsFromShell(e.PackageId))
         {
             return;

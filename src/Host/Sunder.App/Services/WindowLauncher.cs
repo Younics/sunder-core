@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Sunder.App.Models;
@@ -184,30 +185,36 @@ public sealed class WindowLauncher : IWindowLauncher
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!Dispatcher.UIThread.CheckAccess())
-        {
-            await Dispatcher.UIThread.InvokeAsync(async () =>
-                await ApplyPackageLifecycleChangesOnUiThreadAsync(impactedPackageIds, cancellationToken));
-            return;
-        }
-
-        await ApplyPackageLifecycleChangesOnUiThreadAsync(impactedPackageIds, cancellationToken);
-    }
-
-    private async Task ApplyPackageLifecycleChangesOnUiThreadAsync(
-        IReadOnlyList<string> impactedPackageIds,
-        CancellationToken cancellationToken)
-    {
         if (_mainWindowViewModel is not null)
         {
-            await _mainWindowViewModel.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation: true);
+            await _mainWindowViewModel.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation: true).ConfigureAwait(false);
         }
 
-        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken);
+        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
     {
+        if (!Dispatcher.UIThread.CheckAccess() && Application.Current is not null)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(async () =>
+            {
+                try
+                {
+                    await RefreshSettingsWindowPackageSectionsAsync(cancellationToken);
+                    completion.SetResult();
+                }
+                catch (Exception ex)
+                {
+                    completion.SetException(ex);
+                }
+            });
+
+            await completion.Task.ConfigureAwait(false);
+            return;
+        }
+
         if (_settingsWindow?.DataContext is SettingsWindowViewModel viewModel)
         {
             await viewModel.RefreshPackageSectionsAsync(cancellationToken);

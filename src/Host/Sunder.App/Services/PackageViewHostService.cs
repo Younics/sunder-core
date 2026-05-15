@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,6 +54,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleSemaphore = new(1, 1);
     private readonly object _stateLock = new();
+    private int _shadowFolderSequence;
     private bool _disposed;
 
     internal PackageViewHostService(
@@ -343,14 +345,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        int loadedPackageCount;
-        lock (_stateLock)
-        {
-            loadedPackageCount = _loadedPackages.Count;
-        }
-
         var preparedSource = await Task.Run(
-            () => PreparePackageSource(loadedPackageCount, source),
+            () => PreparePackageSource(source),
             cancellationToken);
         if (preparedSource is null)
         {
@@ -502,7 +498,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             return;
         }
 
-        _viewRegistry.UnregisterPackage(packageId);
+        await UnregisterPackageViewsAsync(packageId, cancellationToken);
         _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
         await StopBackgroundServicesAsync(packageId, cancellationToken);
 
@@ -539,7 +535,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _faultReporter?.ReportPackageFault(packageId, origin, message);
 
         _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
-        _viewRegistry.RemoveCachedViews(packageId);
+        RemoveCachedPackageViews(packageId);
 
         var args = new PackageViewHostFaultEventArgs(packageId, message, origin);
         if (Dispatcher.UIThread.CheckAccess())
@@ -550,6 +546,31 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
         Dispatcher.UIThread.Post(() => PackageFaulted?.Invoke(this, args));
         return true;
+    }
+
+    private async Task UnregisterPackageViewsAsync(string packageId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        {
+            _viewRegistry.UnregisterPackage(packageId);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(
+            () => _viewRegistry.UnregisterPackage(packageId),
+            DispatcherPriority.Normal);
+    }
+
+    private void RemoveCachedPackageViews(string packageId)
+    {
+        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        {
+            _viewRegistry.RemoveCachedViews(packageId);
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() => _viewRegistry.RemoveCachedViews(packageId));
     }
 
     private async Task DisposeLegacyOwnedInstancesAsync()
@@ -657,7 +678,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         return null;
     }
 
-    private AppPreparedPackageSource? PreparePackageSource(int index, PackageSourceDescriptor source)
+    private AppPreparedPackageSource? PreparePackageSource(PackageSourceDescriptor source)
     {
         if (string.IsNullOrWhiteSpace(source.Folder) || !Directory.Exists(source.Folder))
         {
@@ -666,7 +687,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
         var shadowRoot = _sessionFolder ?? AppPackageSessionDirectories.CreateSessionFolder();
         Directory.CreateDirectory(shadowRoot);
-        var shadowFolder = Path.Combine(shadowRoot, $"{index:D2}-{SanitizeFolderName(source.PackageId)}");
+        var sequence = Interlocked.Increment(ref _shadowFolderSequence);
+        var shadowFolder = Path.Combine(shadowRoot, $"{sequence:D4}-{SanitizeFolderName(source.PackageId)}");
         Directory.CreateDirectory(shadowFolder);
         switch (source.Kind)
         {

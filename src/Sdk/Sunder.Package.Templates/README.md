@@ -15,7 +15,7 @@ dotnet new install Sunder.Package.Templates
 Install a specific version:
 
 ```powershell
-dotnet new install Sunder.Package.Templates::1.0.0
+dotnet new install Sunder.Package.Templates
 ```
 
 ## Create A Package
