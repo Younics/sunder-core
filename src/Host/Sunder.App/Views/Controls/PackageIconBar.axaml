@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:Sunder.App.Views.Controls"
              xmlns:vm="using:Sunder.App.ViewModels"
              x:Class="Sunder.App.Views.Controls.PackageIconBar"
              x:DataType="vm:PackageIconBarViewModel"
@@ -35,16 +36,11 @@
                   <Border Classes="package-bar-button-surface"
                           Classes.drag-preview="{Binding IsDragPreview}"
                           Classes.selected="{Binding IsSelected}">
-                    <Grid>
-                      <Image Source="{Binding IconImage}"
-                             RenderOptions.BitmapInterpolationMode="HighQuality"
-                             Stretch="Uniform"
-                             Margin="5"
-                             IsVisible="{Binding HasIconImage}" />
-                      <TextBlock Classes="glyph-text"
-                                 Text="{Binding Glyph}"
-                                 IsVisible="{Binding ShowGlyphFallback}" />
-                    </Grid>
+                    <controls:PackageIconView IconImage="{Binding IconImage}"
+                                              HasIconImage="{Binding HasIconImage}"
+                                              Glyph="{Binding Glyph}"
+                                              ShowBareGlyphFallback="{Binding ShowGlyphFallback}"
+                                              ImageMargin="5" />
                   </Border>
                 </Grid>
               </Border>
@@ -83,16 +79,11 @@
                   <Border Classes="package-bar-button-surface top-bar-surface"
                           Classes.drag-preview="{Binding IsDragPreview}"
                           Classes.selected="{Binding IsSelected}">
-                    <Grid>
-                      <Image Source="{Binding IconImage}"
-                             RenderOptions.BitmapInterpolationMode="HighQuality"
-                             Stretch="Uniform"
-                             Margin="5"
-                             IsVisible="{Binding HasIconImage}" />
-                      <TextBlock Classes="glyph-text"
-                                 Text="{Binding Glyph}"
-                                 IsVisible="{Binding ShowGlyphFallback}" />
-                    </Grid>
+                    <controls:PackageIconView IconImage="{Binding IconImage}"
+                                              HasIconImage="{Binding HasIconImage}"
+                                              Glyph="{Binding Glyph}"
+                                              ShowBareGlyphFallback="{Binding ShowGlyphFallback}"
+                                              ImageMargin="5" />
                   </Border>
                 </Grid>
               </Border>

@@ -324,44 +324,7 @@ public partial class MainWindow : Window
     }
 
     private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.Handled)
-        {
-            return;
-        }
-
-        if (e.Source is Visual visual)
-        {
-            if (!ReferenceEquals(TopLevel.GetTopLevel(visual), this))
-            {
-                return;
-            }
-
-            var ancestors = visual.GetSelfAndVisualAncestors().OfType<StyledElement>().ToArray();
-            if (ancestors.Any(x => x is Button or TextBox or Menu or MenuItem))
-            {
-                return;
-            }
-        }
-
-        if (!e.GetCurrentPoint(ToolbarDragHost).Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        if (e.ClickCount == 2)
-        {
-            ToggleMaximizedState();
-            return;
-        }
-
-        BeginMoveDrag(e);
-    }
-
-    private void ToggleMaximizedState()
-    {
-        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-    }
+        => WindowDragHost.BeginWindowDragOrToggleMaximize(this, e);
 
     private void MoreActionsButton_OnClick(object? sender, RoutedEventArgs e)
     {
@@ -544,10 +507,10 @@ public partial class MainWindow : Window
 
     public void ShowPackageDragGhost(ShellItemViewModel item, bool compact, Point centerPosition)
     {
-        PackageDragGhostIcon.Source = item.IconImage;
-        PackageDragGhostIcon.IsVisible = item.HasIconImage;
-        PackageDragGhostGlyph.Text = item.Glyph;
-        PackageDragGhostGlyph.IsVisible = item.ShowGlyphFallback;
+        PackageDragGhostIcon.IconImage = item.IconImage;
+        PackageDragGhostIcon.HasIconImage = item.HasIconImage;
+        PackageDragGhostIcon.Glyph = item.Glyph;
+        PackageDragGhostIcon.ShowBareGlyphFallback = item.ShowGlyphFallback;
         PackageDragGhost.Classes.Set("top-bar-surface", compact);
         PackageDragGhost.IsVisible = true;
         MovePackageDragGhost(centerPosition);
@@ -569,7 +532,9 @@ public partial class MainWindow : Window
     public void HidePackageDragGhost()
     {
         PackageDragGhost.IsVisible = false;
-        PackageDragGhostIcon.Source = null;
-        PackageDragGhostGlyph.Text = string.Empty;
+        PackageDragGhostIcon.IconImage = null;
+        PackageDragGhostIcon.HasIconImage = false;
+        PackageDragGhostIcon.Glyph = string.Empty;
+        PackageDragGhostIcon.ShowBareGlyphFallback = false;
     }
 }

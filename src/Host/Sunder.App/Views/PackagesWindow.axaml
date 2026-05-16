@@ -158,24 +158,14 @@
                               RowDefinitions="Auto,Auto,Auto,Auto"
                               ColumnSpacing="12"
                               RowSpacing="3">
-                          <Grid Width="30"
-                                Height="30">
-                            <Image Source="{Binding IconImage}"
-                                   RenderOptions.BitmapInterpolationMode="HighQuality"
-                                   Stretch="Uniform"
-                                   IsVisible="{Binding HasIconImage}" />
-                            <Border CornerRadius="8"
-                                    Padding="3"
-                                    Background="{DynamicResource Sunder.Brush.Surface.Raised}"
-                                    IsVisible="{Binding ShowGlyphFallback}">
-                              <TextBlock Text="{Binding Glyph}"
-                                         HorizontalAlignment="Center"
-                                         VerticalAlignment="Center"
-                                         FontSize="13"
-                                         FontWeight="SemiBold"
-                                         Foreground="{DynamicResource Sunder.Brush.Accent}" />
-                            </Border>
-                          </Grid>
+                          <controls:PackageIconView Width="30"
+                                                    Height="30"
+                                                    IconImage="{Binding IconImage}"
+                                                    HasIconImage="{Binding HasIconImage}"
+                                                    Glyph="{Binding Glyph}"
+                                                    ShowFallbackContainer="{Binding ShowGlyphFallback}"
+                                                    GlyphFontSize="13"
+                                                    GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
                           <TextBlock Grid.Column="1" Classes="section-title" Text="{Binding Name}" TextWrapping="Wrap" />
                           <TextBlock Grid.Column="2" Classes="caption" Text="{Binding LatestVersionText}" />
                           <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="caption" Text="{Binding PackageId}" TextWrapping="Wrap" />
@@ -209,24 +199,14 @@
                               RowDefinitions="Auto,Auto,Auto,Auto"
                               ColumnSpacing="12"
                               RowSpacing="3">
-                          <Grid Width="30"
-                                Height="30">
-                            <Image Source="{Binding IconImage}"
-                                   RenderOptions.BitmapInterpolationMode="HighQuality"
-                                   Stretch="Uniform"
-                                   IsVisible="{Binding HasIconImage}" />
-                            <Border CornerRadius="8"
-                                    Padding="3"
-                                    Background="{DynamicResource Sunder.Brush.Surface.Raised}"
-                                    IsVisible="{Binding ShowGlyphFallback}">
-                              <TextBlock Text="{Binding Glyph}"
-                                         HorizontalAlignment="Center"
-                                         VerticalAlignment="Center"
-                                         FontSize="13"
-                                         FontWeight="SemiBold"
-                                         Foreground="{DynamicResource Sunder.Brush.Accent}" />
-                            </Border>
-                          </Grid>
+                          <controls:PackageIconView Width="30"
+                                                    Height="30"
+                                                    IconImage="{Binding IconImage}"
+                                                    HasIconImage="{Binding HasIconImage}"
+                                                    Glyph="{Binding Glyph}"
+                                                    ShowFallbackContainer="{Binding ShowGlyphFallback}"
+                                                    GlyphFontSize="13"
+                                                    GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
                           <TextBlock Grid.Column="1" Classes="section-title" Text="{Binding DisplayName}" TextWrapping="Wrap" />
                           <TextBlock Grid.Column="2" Classes="caption" Text="{Binding StatusText}" />
                           <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="caption" Text="{Binding PackageId}" TextWrapping="Wrap" />
@@ -277,26 +257,18 @@
                         Spacing="16">
               <Grid ColumnDefinitions="Auto,*"
                     ColumnSpacing="12">
-                <Grid Width="64"
-                      Height="64"
-                      VerticalAlignment="Top"
-                      IsVisible="{Binding ShowSelectedPackageIcon}">
-                  <Image Source="{Binding SelectedPackageIconImage}"
-                         RenderOptions.BitmapInterpolationMode="HighQuality"
-                         Stretch="Uniform"
-                         IsVisible="{Binding SelectedPackageHasIconImage}" />
-                  <Border CornerRadius="10"
-                          Padding="5"
-                          Background="{DynamicResource Sunder.Brush.Surface.Raised}"
-                          IsVisible="{Binding SelectedPackageShowGlyphFallback}">
-                    <TextBlock Text="{Binding SelectedPackageGlyph}"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               FontSize="16"
-                               FontWeight="SemiBold"
-                               Foreground="{DynamicResource Sunder.Brush.Accent}" />
-                  </Border>
-                </Grid>
+                <controls:PackageIconView Width="64"
+                                          Height="64"
+                                          VerticalAlignment="Top"
+                                          IsVisible="{Binding ShowSelectedPackageIcon}"
+                                          IconImage="{Binding SelectedPackageIconImage}"
+                                          HasIconImage="{Binding SelectedPackageHasIconImage}"
+                                          Glyph="{Binding SelectedPackageGlyph}"
+                                          ShowFallbackContainer="{Binding SelectedPackageShowGlyphFallback}"
+                                          FallbackCornerRadius="10"
+                                          FallbackPadding="5"
+                                          GlyphFontSize="16"
+                                          GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
 
                 <StackPanel Grid.Column="1"
                             Spacing="5">

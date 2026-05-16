@@ -52,8 +52,9 @@ public sealed class ShellStateService
                 state.BackgroundProcessPopoverHeight = ClampBackgroundProcessPopoverHeight(state.BackgroundProcessPopoverHeight);
                 return state;
             }
-            catch
+            catch (Exception ex)
             {
+                AppSessionLog.WriteError("Failed to load shell state. Defaults will be used.", ex);
                 return new ShellState();
             }
         }
@@ -61,10 +62,24 @@ public sealed class ShellStateService
 
     public void Save(ShellState state)
     {
+        var serializedState = JsonSerializer.Serialize(state, JsonOptions);
         lock (_syncRoot)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_stateFilePath)!);
-            File.WriteAllText(_stateFilePath, JsonSerializer.Serialize(state, JsonOptions));
+            var directory = Path.GetDirectoryName(_stateFilePath)!;
+            Directory.CreateDirectory(directory);
+
+            var tempFilePath = Path.Combine(directory, $"{Path.GetFileName(_stateFilePath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllText(tempFilePath, serializedState);
+                File.Move(tempFilePath, _stateFilePath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                TryDeleteTempFile(tempFilePath);
+                AppSessionLog.WriteError("Failed to save shell state.", ex);
+                throw;
+            }
         }
     }
 
@@ -113,6 +128,21 @@ public sealed class ShellStateService
                 Height = placement.Height,
                 IsMaximized = placement.IsMaximized,
             };
+
+    private static void TryDeleteTempFile(string tempFilePath)
+    {
+        try
+        {
+            if (File.Exists(tempFilePath))
+            {
+                File.Delete(tempFilePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to delete a temporary shell state file.", ex);
+        }
+    }
 
     private static double ClampRatio(double value, double fallback)
     {

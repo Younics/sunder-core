@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
-using Avalonia.VisualTree;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
@@ -133,39 +132,7 @@ public partial class SettingsWindow : Window
     }
 
     private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.Handled)
-        {
-            return;
-        }
-
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        if (e.Source is Visual visual)
-        {
-            var ancestors = visual.GetSelfAndVisualAncestors().OfType<StyledElement>().ToArray();
-            if (ancestors.Any(x => x is Button or TextBox or ComboBox or CheckBox))
-            {
-                return;
-            }
-        }
-
-        if (e.ClickCount == 2)
-        {
-            ToggleMaximizedState();
-            return;
-        }
-
-        BeginMoveDrag(e);
-    }
-
-    private void ToggleMaximizedState()
-    {
-        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-    }
+        => WindowDragHost.BeginWindowDragOrToggleMaximize(this, e);
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {

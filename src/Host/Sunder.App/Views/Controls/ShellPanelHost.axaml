@@ -1,0 +1,47 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.ShellPanelHost"
+             x:DataType="vm:ShellPanelViewModel"
+             mc:Ignorable="d">
+  <Border Classes="shell-panel-content-clip">
+    <Grid>
+      <Grid Margin="16"
+            IsVisible="{Binding ShowFallbackLines}"
+            RowDefinitions="Auto,Auto,*"
+            RowSpacing="14">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="panel-header-text" Text="{Binding Title}" />
+          <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
+          <TextBlock Classes="workspace-state-text" Text="{Binding Summary}" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Border Grid.Row="1"
+                Height="1"
+                Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+        <ScrollViewer Grid.Row="2">
+          <ItemsControl ItemsSource="{Binding Lines}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Classes="status-text"
+                           Margin="0,0,0,8"
+                           Text="{Binding}"
+                           TextWrapping="Wrap" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+
+      <ContentControl HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch"
+                      IsVisible="{Binding HasHostedView}"
+                      Content="{Binding HostedView}" />
+    </Grid>
+  </Border>
+</UserControl>

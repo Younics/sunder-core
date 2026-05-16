@@ -1490,6 +1490,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to persist shell state.", ex);
+        }
     }
 
     private void SaveShellStateImmediately()
@@ -1722,66 +1726,4 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         selectedItem = null;
     }
-}
-
-public sealed class NotificationItemViewModel(AppNotificationRecord notification, DateTimeOffset lastReadAtUtc)
-{
-    public string NotificationId { get; } = notification.NotificationId;
-
-    public string Title { get; } = notification.Title;
-
-    public string Message { get; } = notification.Message;
-
-    public string SourceText { get; } = $"{(string.IsNullOrWhiteSpace(notification.SourceDisplayName) ? notification.SourcePackageId : notification.SourceDisplayName)} · {notification.CreatedAtUtc.ToLocalTime():g}";
-
-    public bool IsUnread { get; } = notification.CreatedAtUtc > lastReadAtUtc;
-
-    public string SeverityGlyph { get; } = ToSeverityGlyph(notification.Severity);
-
-    public string SeverityText { get; } = ToSeverityText(notification.Severity);
-
-    private static string ToSeverityGlyph(PackageNotificationSeverity severity)
-        => severity switch
-        {
-            PackageNotificationSeverity.Success => "✓",
-            PackageNotificationSeverity.Warning => "!",
-            PackageNotificationSeverity.Error => "!",
-            _ => "i",
-        };
-
-    private static string ToSeverityText(PackageNotificationSeverity severity)
-        => severity switch
-        {
-            PackageNotificationSeverity.Success => "Success",
-            PackageNotificationSeverity.Warning => "Warning",
-            PackageNotificationSeverity.Error => "Error",
-            _ => "Info",
-        };
-}
-
-public sealed class ToastNotificationViewModel(AppToastNotification notification)
-{
-    public string NotificationId { get; } = notification.NotificationId;
-
-    public string Title { get; } = notification.Title;
-
-    public string Message { get; } = notification.Message;
-
-    public string SourceText { get; } = string.IsNullOrWhiteSpace(notification.SourceDisplayName)
-        ? notification.SourcePackageId
-        : notification.SourceDisplayName;
-
-    public string SeverityGlyph { get; } = NotificationItemViewModelSeverity.ToGlyph(notification.Severity);
-}
-
-internal static class NotificationItemViewModelSeverity
-{
-    public static string ToGlyph(PackageNotificationSeverity severity)
-        => severity switch
-        {
-            PackageNotificationSeverity.Success => "✓",
-            PackageNotificationSeverity.Warning => "!",
-            PackageNotificationSeverity.Error => "!",
-            _ => "i",
-        };
 }

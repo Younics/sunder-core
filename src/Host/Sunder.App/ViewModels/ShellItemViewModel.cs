@@ -1,5 +1,4 @@
 using Avalonia.Media;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
@@ -108,7 +107,7 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
     private async Task LoadIconAsync(Uri iconUri)
     {
         var result = await PackageIconImageLoader.LoadAsync(iconUri);
-        await RunOnUiThreadAsync(() =>
+        await UiThread.InvokeAsync(() =>
         {
             if (_isDisposed)
             {
@@ -123,29 +122,5 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
             IconLoadError = result.Error ?? string.Empty;
             IconImage = result.Image;
         });
-    }
-
-    private static Task RunOnUiThreadAsync(Action action)
-    {
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            action();
-            return Task.CompletedTask;
-        }
-
-        var completion = new TaskCompletionSource();
-        Dispatcher.UIThread.Post(() =>
-        {
-            try
-            {
-                action();
-                completion.SetResult();
-            }
-            catch (Exception ex)
-            {
-                completion.SetException(ex);
-            }
-        });
-        return completion.Task;
     }
 }

@@ -341,9 +341,23 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
 
     private void Publish(BackgroundProcessSnapshot? snapshot)
     {
-        if (snapshot is not null)
+        var handlers = ProcessChanged;
+        if (snapshot is null || handlers is null)
         {
-            ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(snapshot));
+            return;
+        }
+
+        var args = new BackgroundProcessChangedEventArgs(snapshot);
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                ((EventHandler<BackgroundProcessChangedEventArgs>)handler)(this, args);
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("A background process change subscriber failed.", ex);
+            }
         }
     }
 

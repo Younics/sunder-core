@@ -1,0 +1,31 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             x:Class="Sunder.App.Views.Controls.PackageIconView"
+             x:Name="Root"
+             mc:Ignorable="d">
+  <Grid>
+    <Image Source="{Binding IconImage, ElementName=Root}"
+           RenderOptions.BitmapInterpolationMode="HighQuality"
+           Stretch="Uniform"
+           Margin="{Binding ImageMargin, ElementName=Root}"
+           IsVisible="{Binding HasIconImage, ElementName=Root}" />
+
+    <Border CornerRadius="{Binding FallbackCornerRadius, ElementName=Root}"
+            Padding="{Binding FallbackPadding, ElementName=Root}"
+            Background="{DynamicResource Sunder.Brush.Surface.Raised}"
+            IsVisible="{Binding ShowFallbackContainer, ElementName=Root}">
+      <TextBlock Text="{Binding Glyph, ElementName=Root}"
+                 HorizontalAlignment="Center"
+                 VerticalAlignment="Center"
+                 FontSize="{Binding GlyphFontSize, ElementName=Root}"
+                 FontWeight="{Binding GlyphFontWeight, ElementName=Root}"
+                 Foreground="{Binding GlyphForeground, ElementName=Root}" />
+    </Border>
+
+    <TextBlock Classes="glyph-text"
+               Text="{Binding Glyph, ElementName=Root}"
+               IsVisible="{Binding ShowBareGlyphFallback, ElementName=Root}" />
+  </Grid>
+</UserControl>

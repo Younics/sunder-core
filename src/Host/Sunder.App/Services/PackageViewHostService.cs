@@ -46,7 +46,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly List<object> _ownedDisposables;
     private readonly List<AppPackageLoadContext> _loadContexts;
     private readonly PackageRuntimeFaultReporter? _faultReporter;
-    private readonly string? _sessionFolder;
+    private readonly AppPackageSourcePreparer _sourcePreparer;
     private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
     private readonly AppPackageExtensionCatalog _extensionCatalog;
     private readonly IPackageShellViewService? _shellViewService;
@@ -56,7 +56,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleSemaphore = new(1, 1);
     private readonly object _stateLock = new();
-    private int _shadowFolderSequence;
     private bool _disposed;
 
     internal PackageViewHostService(
@@ -80,7 +79,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _ownedDisposables = ownedDisposables.ToList();
         _loadContexts = loadContexts.ToList();
         _faultReporter = faultReporter;
-        _sessionFolder = sessionFolder;
+        _sourcePreparer = new AppPackageSourcePreparer(sessionFolder);
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         _extensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
         _shellViewService = shellViewService;
@@ -132,62 +131,62 @@ public sealed class PackageViewHostService : IAsyncDisposable
         await _lifecycleSemaphore.WaitAsync(cancellationToken);
         try
         {
-        var forceReloadPackages = forceReloadPackageIds is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(forceReloadPackageIds, StringComparer.OrdinalIgnoreCase);
-        var activePackagesById = activePackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
-        var sourcesByPackageId = packageSources
-            .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var forceReloadPackages = forceReloadPackageIds is null
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(forceReloadPackageIds, StringComparer.OrdinalIgnoreCase);
+            var activePackagesById = activePackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
+            var sourcesByPackageId = packageSources
+                .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-        string[] loadedPackageIds;
-        lock (_stateLock)
-        {
-            loadedPackageIds = _loadedPackages.Keys.Where(packageId => !activePackagesById.ContainsKey(packageId)).ToArray();
-        }
-
-        foreach (var loadedPackageId in loadedPackageIds)
-        {
-            await UnloadPackageAsync(loadedPackageId, cancellationToken);
-        }
-
-        foreach (var activePackage in activePackages)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!sourcesByPackageId.TryGetValue(activePackage.PackageId, out var source))
-            {
-                await DisablePackageAsync(
-                    activePackage.PackageId,
-                    "Runtime did not provide a loadable app-side package source.",
-                    PackageFailureOrigin.AppActivation,
-                    cancellationToken: cancellationToken);
-                continue;
-            }
-
-            var forceReload = forceReloadPackages.Contains(activePackage.PackageId);
-            var isSameLoadedPackage = false;
-            var isLoadedPackage = false;
+            string[] loadedPackageIds;
             lock (_stateLock)
             {
-                if (_loadedPackages.TryGetValue(activePackage.PackageId, out var loadedPackage) && loadedPackage is not null)
+                loadedPackageIds = _loadedPackages.Keys.Where(packageId => !activePackagesById.ContainsKey(packageId)).ToArray();
+            }
+
+            foreach (var loadedPackageId in loadedPackageIds)
+            {
+                await UnloadPackageAsync(loadedPackageId, cancellationToken);
+            }
+
+            foreach (var activePackage in activePackages)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!sourcesByPackageId.TryGetValue(activePackage.PackageId, out var source))
                 {
-                    isLoadedPackage = true;
-                    isSameLoadedPackage = IsSameLoadedPackage(loadedPackage, activePackage, source);
+                    await DisablePackageAsync(
+                        activePackage.PackageId,
+                        "Runtime did not provide a loadable app-side package source.",
+                        PackageFailureOrigin.AppActivation,
+                        cancellationToken: cancellationToken);
+                    continue;
                 }
-            }
 
-            if (!forceReload && isSameLoadedPackage)
-            {
-                continue;
-            }
+                var forceReload = forceReloadPackages.Contains(activePackage.PackageId);
+                var isSameLoadedPackage = false;
+                var isLoadedPackage = false;
+                lock (_stateLock)
+                {
+                    if (_loadedPackages.TryGetValue(activePackage.PackageId, out var loadedPackage) && loadedPackage is not null)
+                    {
+                        isLoadedPackage = true;
+                        isSameLoadedPackage = IsSameLoadedPackage(loadedPackage, activePackage, source);
+                    }
+                }
 
-            if (isLoadedPackage)
-            {
-                await UnloadPackageAsync(activePackage.PackageId, cancellationToken);
-            }
+                if (!forceReload && isSameLoadedPackage)
+                {
+                    continue;
+                }
 
-            await LoadPackageAsync(activePackage, source, cancellationToken);
-        }
+                if (isLoadedPackage)
+                {
+                    await UnloadPackageAsync(activePackage.PackageId, cancellationToken);
+                }
+
+                await LoadPackageAsync(activePackage, source, cancellationToken);
+            }
         }
         finally
         {
@@ -352,7 +351,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         var preparedSource = await Task.Run(
-            () => PreparePackageSource(source),
+            () => _sourcePreparer.Prepare(source),
             cancellationToken);
         if (preparedSource is null)
         {
@@ -366,7 +365,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
         if (!string.Equals(preparedSource.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase))
         {
-            TryDeleteDirectory(preparedSource.Folder);
+            AppPackageSourcePreparer.TryDeleteDirectory(preparedSource.Folder);
             await DisablePackageAsync(
                 package.PackageId,
                 $"Runtime package source '{source.Folder}' resolved to package '{preparedSource.PackageId}'.",
@@ -404,7 +403,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
                 _loadContexts.Add(loadContext);
             }
             var entryAssembly = loadContext.LoadPackageEntryAssembly();
-            var moduleType = ResolvePackageModuleType(entryAssembly, out var moduleResolutionError);
+            var moduleType = AppPackageModuleResolver.Resolve(entryAssembly, out var moduleResolutionError);
             if (moduleType is null)
             {
                 throw new InvalidOperationException(moduleResolutionError);
@@ -688,150 +687,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
         }
 
         return null;
-    }
-
-    private AppPreparedPackageSource? PreparePackageSource(PackageSourceDescriptor source)
-    {
-        if (string.IsNullOrWhiteSpace(source.Folder) || !Directory.Exists(source.Folder))
-        {
-            return null;
-        }
-
-        var shadowRoot = _sessionFolder ?? AppPackageSessionDirectories.CreateSessionFolder();
-        Directory.CreateDirectory(shadowRoot);
-        var sequence = Interlocked.Increment(ref _shadowFolderSequence);
-        var shadowFolder = Path.Combine(shadowRoot, $"{sequence:D4}-{SanitizeFolderName(source.PackageId)}");
-        Directory.CreateDirectory(shadowFolder);
-        switch (source.Kind)
-        {
-            case PackageSourceKind.Dev:
-                CopyDirectory(source.Folder, shadowFolder);
-                break;
-            case PackageSourceKind.Installed:
-                PrepareInstalledPackageSource(source.Folder, shadowFolder);
-                break;
-            default:
-                TryDeleteDirectory(shadowFolder);
-                return null;
-        }
-
-        var manifestPath = Path.Combine(shadowFolder, "sunder-package.json");
-        if (!File.Exists(manifestPath))
-        {
-            TryDeleteDirectory(shadowFolder);
-            return null;
-        }
-
-        var manifest = AppPackageManifest.Load(manifestPath);
-        return string.IsNullOrWhiteSpace(manifest?.Id)
-            ? null
-            : new AppPreparedPackageSource(manifest.Id, shadowFolder);
-    }
-
-    private static void PrepareInstalledPackageSource(string sourceFolder, string shadowFolder)
-    {
-        var manifestPath = ResolveInstalledPackageManifestPath(sourceFolder);
-        if (File.Exists(manifestPath))
-        {
-            File.Copy(manifestPath, Path.Combine(shadowFolder, "sunder-package.json"), overwrite: true);
-        }
-
-        var libraryFolder = ResolveInstalledPackageFolder(sourceFolder, "lib");
-        if (Directory.Exists(libraryFolder))
-        {
-            CopyDirectory(libraryFolder, Path.Combine(shadowFolder, "lib"));
-        }
-
-        var assetFolder = ResolveInstalledPackageFolder(sourceFolder, "assets");
-        if (Directory.Exists(assetFolder))
-        {
-            CopyDirectory(assetFolder, Path.Combine(shadowFolder, "assets"));
-        }
-    }
-
-    private static string ResolveInstalledPackageManifestPath(string sourceFolder)
-    {
-        var packagedManifestPath = Path.Combine(sourceFolder, "manifest", "sunder-package.json");
-        return File.Exists(packagedManifestPath)
-            ? packagedManifestPath
-            : Path.Combine(sourceFolder, "sunder-package.json");
-    }
-
-    private static string ResolveInstalledPackageFolder(string sourceFolder, string folderName)
-    {
-        var packagedFolder = Path.Combine(sourceFolder, "payload", folderName);
-        return Directory.Exists(packagedFolder)
-            ? packagedFolder
-            : Path.Combine(sourceFolder, folderName);
-    }
-
-    private static void CopyDirectory(string sourceFolder, string destinationFolder)
-    {
-        Directory.CreateDirectory(destinationFolder);
-        foreach (var sourceFile in Directory.EnumerateFiles(sourceFolder, "*", SearchOption.AllDirectories))
-        {
-            var relativePath = Path.GetRelativePath(sourceFolder, sourceFile);
-            var destinationPath = Path.Combine(destinationFolder, relativePath);
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-            File.Copy(sourceFile, destinationPath, overwrite: true);
-        }
-    }
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError("Failed to delete an app package session folder.", ex);
-        }
-    }
-
-    private static string SanitizeFolderName(string? folderName)
-    {
-        if (string.IsNullOrWhiteSpace(folderName))
-        {
-            return "package";
-        }
-
-        var invalidCharacters = Path.GetInvalidFileNameChars();
-        return new string(folderName.Select(ch => invalidCharacters.Contains(ch) ? '_' : ch).ToArray());
-    }
-
-    private static Type? ResolvePackageModuleType(Assembly entryAssembly, out string? error)
-    {
-        var moduleTypes = entryAssembly.GetTypes()
-            .Where(static type => type is { IsClass: true, IsAbstract: false, IsPublic: true }
-                && typeof(ISunderPackageModule).IsAssignableFrom(type))
-            .ToArray();
-
-        if (moduleTypes.Length == 0)
-        {
-            error = "Package entry assembly does not contain a public ISunderPackageModule implementation.";
-            return null;
-        }
-
-        if (moduleTypes.Length > 1)
-        {
-            error = "Package entry assembly contains multiple public ISunderPackageModule implementations: "
-                + string.Join(", ", moduleTypes.Select(static type => type.FullName));
-            return null;
-        }
-
-        var moduleType = moduleTypes[0];
-        if (moduleType.GetConstructor(Type.EmptyTypes) is null)
-        {
-            error = $"Package module '{moduleType.FullName}' must declare a public parameterless constructor.";
-            return null;
-        }
-
-        error = null;
-        return moduleType;
     }
 
     private static bool IsSameLoadedPackage(

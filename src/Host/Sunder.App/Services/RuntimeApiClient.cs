@@ -1,10 +1,13 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using Sunder.Protocol;
 
 namespace Sunder.App.Services;
 
 public sealed class RuntimeApiClient : IRuntimeApiClient
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly HttpClient _httpClient;
     private readonly Func<Uri> _getRuntimeBaseUri;
 
@@ -306,24 +309,94 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken
     )
     {
-        using var response = await sendAsync();
-        var result = await response.Content.ReadFromJsonAsync<PackageOperationResult>(
-            cancellationToken: cancellationToken
-        );
-        if (result is not null)
+        try
         {
-            return result;
+            using var response = await sendAsync();
+            var result = await ReadPackageOperationResultAsync(response, cancellationToken);
+            if (result is not null)
+            {
+                return response.IsSuccessStatusCode || !result.Success
+                    ? result
+                    : CreatePackageOperationFailureResult(response);
+            }
+
+            return response.IsSuccessStatusCode
+                ? CreatePackageOperationSuccessResult()
+                : CreatePackageOperationFailureResult(response);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            return CreatePackageOperationFailureResult("Runtime package operation timed out.", ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            return CreatePackageOperationFailureResult("Runtime package operation request failed.", ex.Message);
+        }
+    }
+
+    private static async Task<PackageOperationResult?> ReadPackageOperationResultAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return null;
         }
 
-        return response.IsSuccessStatusCode
-            ? new PackageOperationResult(true, null, RequiresAppRestart: true, [], [])
-            : new PackageOperationResult(
-                false,
-                response.ReasonPhrase,
-                RequiresAppRestart: false,
-                [],
-                [response.ReasonPhrase ?? "Package operation failed."]
-            );
+        try
+        {
+            return JsonSerializer.Deserialize<PackageOperationResult>(content, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            AppSessionLog.WriteError("Failed to parse a runtime package operation response.", ex);
+            return response.IsSuccessStatusCode
+                ? CreatePackageOperationFailureResult("Runtime returned an invalid package operation response.", ex.Message)
+                : CreatePackageOperationFailureResult(response, content);
+        }
+    }
+
+    private static PackageOperationResult CreatePackageOperationSuccessResult()
+        => new(true, null, RequiresAppRestart: true, [], []);
+
+    private static PackageOperationResult CreatePackageOperationFailureResult(HttpResponseMessage response, string? responseBody = null)
+    {
+        var statusText = string.IsNullOrWhiteSpace(response.ReasonPhrase)
+            ? ((int)response.StatusCode).ToString()
+            : $"{(int)response.StatusCode} {response.ReasonPhrase}";
+        var message = $"Runtime package operation failed with HTTP {statusText}.";
+        var body = NormalizeResponseBody(responseBody);
+        return string.IsNullOrWhiteSpace(body)
+            ? CreatePackageOperationFailureResult(message)
+            : CreatePackageOperationFailureResult($"{message} {body}");
+    }
+
+    private static PackageOperationResult CreatePackageOperationFailureResult(string message, string? detail = null)
+    {
+        var normalizedMessage = string.IsNullOrWhiteSpace(message) ? "Package operation failed." : message.Trim();
+        var normalizedDetail = NormalizeResponseBody(detail);
+        IReadOnlyList<string> errors = string.IsNullOrWhiteSpace(normalizedDetail)
+            || string.Equals(normalizedDetail, normalizedMessage, StringComparison.Ordinal)
+                ? [normalizedMessage]
+                : [normalizedMessage, normalizedDetail];
+
+        return new PackageOperationResult(false, normalizedMessage, RequiresAppRestart: false, [], errors);
+    }
+
+    private static string? NormalizeResponseBody(string? responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+        {
+            return null;
+        }
+
+        var trimmed = responseBody.Trim();
+        return trimmed.Length <= 500 ? trimmed : $"{trimmed[..500]}...";
     }
 
     public void Dispose()

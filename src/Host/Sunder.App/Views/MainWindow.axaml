@@ -332,39 +332,7 @@
                   x:Name="LeftTopPanelBorder"
                   Classes="side-shell-panel"
                   IsVisible="{Binding HasLeftTopPanelContent}">
-            <Border Classes="shell-panel-content-clip">
-              <Grid>
-              <Grid Margin="16"
-                    IsVisible="{Binding LeftTopPanel.ShowFallbackLines}"
-                    RowDefinitions="Auto,Auto,*"
-                    RowSpacing="14">
-                <StackPanel Spacing="6">
-                  <TextBlock Classes="panel-header-text" Text="{Binding LeftTopPanel.Title}" />
-                  <TextBlock Classes="caption" Text="{Binding LeftTopPanel.Subtitle}" TextWrapping="Wrap" />
-                  <TextBlock Classes="workspace-state-text" Text="{Binding LeftTopPanel.Summary}" TextWrapping="Wrap" />
-                </StackPanel>
-                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
-                <ScrollViewer Grid.Row="2">
-                  <ItemsControl ItemsSource="{Binding LeftTopPanel.Lines}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="x:String">
-                        <TextBlock Classes="status-text"
-                                   Margin="0,0,0,8"
-                                   Text="{Binding}"
-                                   TextWrapping="Wrap" />
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                </ScrollViewer>
-              </Grid>
-              <ContentControl HorizontalAlignment="Stretch"
-                              VerticalAlignment="Stretch"
-                              HorizontalContentAlignment="Stretch"
-                              VerticalContentAlignment="Stretch"
-                              IsVisible="{Binding LeftTopPanel.HasHostedView}"
-                              Content="{Binding LeftTopPanel.HostedView}" />
-              </Grid>
-            </Border>
+            <controls:ShellPanelHost DataContext="{Binding LeftTopPanel}" />
           </Border>
 
           <GridSplitter x:Name="LeftColumnGridSplitter"
@@ -443,39 +411,7 @@
                   x:Name="RightTopPanelBorder"
                   Classes="side-shell-panel"
                   IsVisible="{Binding HasRightTopPanelContent}">
-            <Border Classes="shell-panel-content-clip">
-              <Grid>
-              <Grid Margin="16"
-                    IsVisible="{Binding RightTopPanel.ShowFallbackLines}"
-                    RowDefinitions="Auto,Auto,*"
-                    RowSpacing="14">
-                <StackPanel Spacing="6">
-                  <TextBlock Classes="panel-header-text" Text="{Binding RightTopPanel.Title}" />
-                  <TextBlock Classes="caption" Text="{Binding RightTopPanel.Subtitle}" TextWrapping="Wrap" />
-                  <TextBlock Classes="workspace-state-text" Text="{Binding RightTopPanel.Summary}" TextWrapping="Wrap" />
-                </StackPanel>
-                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
-                <ScrollViewer Grid.Row="2">
-                  <ItemsControl ItemsSource="{Binding RightTopPanel.Lines}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="x:String">
-                        <TextBlock Classes="status-text"
-                                   Margin="0,0,0,8"
-                                   Text="{Binding}"
-                                   TextWrapping="Wrap" />
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                </ScrollViewer>
-              </Grid>
-              <ContentControl HorizontalAlignment="Stretch"
-                              VerticalAlignment="Stretch"
-                              HorizontalContentAlignment="Stretch"
-                              VerticalContentAlignment="Stretch"
-                              IsVisible="{Binding RightTopPanel.HasHostedView}"
-                              Content="{Binding RightTopPanel.HostedView}" />
-              </Grid>
-            </Border>
+            <controls:ShellPanelHost DataContext="{Binding RightTopPanel}" />
           </Border>
         </Grid>
 
@@ -495,39 +431,7 @@
                   x:Name="LeftBottomPanelBorder"
                   Classes="bottom-shell-panel"
                   IsVisible="{Binding HasLeftBottomPanelContent}">
-            <Border Classes="shell-panel-content-clip">
-              <Grid>
-              <Grid Margin="16"
-                    IsVisible="{Binding LeftBottomPanel.ShowFallbackLines}"
-                    RowDefinitions="Auto,Auto,*"
-                    RowSpacing="14">
-                <StackPanel Spacing="6">
-                  <TextBlock Classes="panel-header-text" Text="{Binding LeftBottomPanel.Title}" />
-                  <TextBlock Classes="caption" Text="{Binding LeftBottomPanel.Subtitle}" TextWrapping="Wrap" />
-                  <TextBlock Classes="workspace-state-text" Text="{Binding LeftBottomPanel.Summary}" TextWrapping="Wrap" />
-                </StackPanel>
-                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
-                <ScrollViewer Grid.Row="2">
-                  <ItemsControl ItemsSource="{Binding LeftBottomPanel.Lines}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="x:String">
-                        <TextBlock Classes="status-text"
-                                   Margin="0,0,0,8"
-                                   Text="{Binding}"
-                                   TextWrapping="Wrap" />
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                </ScrollViewer>
-              </Grid>
-              <ContentControl HorizontalAlignment="Stretch"
-                              VerticalAlignment="Stretch"
-                              HorizontalContentAlignment="Stretch"
-                              VerticalContentAlignment="Stretch"
-                              IsVisible="{Binding LeftBottomPanel.HasHostedView}"
-                              Content="{Binding LeftBottomPanel.HostedView}" />
-              </Grid>
-            </Border>
+            <controls:ShellPanelHost DataContext="{Binding LeftBottomPanel}" />
           </Border>
 
           <GridSplitter x:Name="BottomColumnGridSplitter"
@@ -543,39 +447,7 @@
                   x:Name="RightBottomPanelBorder"
                   Classes="bottom-shell-panel"
                   IsVisible="{Binding HasRightBottomPanelContent}">
-            <Border Classes="shell-panel-content-clip">
-              <Grid>
-              <Grid Margin="16"
-                    IsVisible="{Binding RightBottomPanel.ShowFallbackLines}"
-                    RowDefinitions="Auto,Auto,*"
-                    RowSpacing="14">
-                <StackPanel Spacing="6">
-                  <TextBlock Classes="panel-header-text" Text="{Binding RightBottomPanel.Title}" />
-                  <TextBlock Classes="caption" Text="{Binding RightBottomPanel.Subtitle}" TextWrapping="Wrap" />
-                  <TextBlock Classes="workspace-state-text" Text="{Binding RightBottomPanel.Summary}" TextWrapping="Wrap" />
-                </StackPanel>
-                <Border Grid.Row="1" Height="1" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
-                <ScrollViewer Grid.Row="2">
-                  <ItemsControl ItemsSource="{Binding RightBottomPanel.Lines}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="x:String">
-                        <TextBlock Classes="status-text"
-                                   Margin="0,0,0,8"
-                                   Text="{Binding}"
-                                   TextWrapping="Wrap" />
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                </ScrollViewer>
-              </Grid>
-              <ContentControl HorizontalAlignment="Stretch"
-                              VerticalAlignment="Stretch"
-                              HorizontalContentAlignment="Stretch"
-                              VerticalContentAlignment="Stretch"
-                              IsVisible="{Binding RightBottomPanel.HasHostedView}"
-                              Content="{Binding RightBottomPanel.HostedView}" />
-              </Grid>
-            </Border>
+            <controls:ShellPanelHost DataContext="{Binding RightBottomPanel}" />
           </Border>
         </Grid>
       </Grid>
@@ -621,15 +493,8 @@
       <Border x:Name="PackageDragGhost"
               Classes="package-bar-button-surface drag-ghost-surface"
               IsVisible="False">
-        <Grid>
-          <Image x:Name="PackageDragGhostIcon"
-                 RenderOptions.BitmapInterpolationMode="HighQuality"
-                 Stretch="Uniform"
-                 Margin="5"
-                 IsVisible="False" />
-          <TextBlock x:Name="PackageDragGhostGlyph"
-                     Classes="glyph-text" />
-        </Grid>
+        <controls:PackageIconView x:Name="PackageDragGhostIcon"
+                                  ImageMargin="5" />
       </Border>
     </Canvas>
 

@@ -64,6 +64,26 @@ public sealed class BackgroundProcessQueueServiceTests
     }
 
     [Fact]
+    public void ProcessChanged_WhenSubscriberThrows_ContinuesNotifyingRemainingSubscribers()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var receivedQueuedSnapshot = false;
+
+        queue.ProcessChanged += (_, _) => throw new InvalidOperationException("Subscriber failed.");
+        queue.ProcessChanged += (_, e) =>
+        {
+            if (e.Snapshot.State == BackgroundProcessState.Queued)
+            {
+                receivedQueuedSnapshot = true;
+            }
+        };
+
+        queue.Enqueue(CreateRequest("event", "work", _ => Task.CompletedTask));
+
+        Assert.True(receivedQueuedSnapshot);
+    }
+
+    [Fact]
     public async Task Cancel_WhenProcessIsQueued_MarksCancelledWithoutStartingIt()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);

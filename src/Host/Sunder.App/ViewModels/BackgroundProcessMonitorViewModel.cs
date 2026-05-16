@@ -153,7 +153,7 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
             .ThenBy(snapshot => snapshot.QueuedAtUtc)
             .ToArray();
 
-        ReplaceItems(Processes, snapshots.Select(snapshot => new BackgroundProcessItemViewModel(snapshot, CancelProcess)).ToArray());
+        Processes.ReplaceWith(snapshots.Select(snapshot => new BackgroundProcessItemViewModel(snapshot, CancelProcess)));
         ActiveProcessCount = snapshots.Length;
         RunningProcessCount = snapshots.Count(snapshot => snapshot.State is BackgroundProcessState.Running or BackgroundProcessState.Cancelling);
 
@@ -221,15 +221,6 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
             BackgroundProcessState.Cancelling => "Cancelling...",
             _ => string.IsNullOrWhiteSpace(snapshot.StatusText) ? snapshot.Title : snapshot.StatusText,
         };
-
-    private static void ReplaceItems<T>(ObservableCollection<T> target, IReadOnlyList<T> items)
-    {
-        target.Clear();
-        foreach (var item in items)
-        {
-            target.Add(item);
-        }
-    }
 
     private static double ClampPopoverWidth(double value)
         => Math.Clamp(value, MinimumPopoverWidth, MaximumPopoverWidth);
