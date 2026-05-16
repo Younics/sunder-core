@@ -2,7 +2,7 @@
 
 `Sunder.Sdk` contains the public contracts used to build Sunder runtime packages.
 
-Use this package when you want to create a package that can be loaded by the Sunder runtime, contribute Avalonia views to the Sunder shell, register background services, expose typed extension points, or consume package-scoped storage, configuration, secrets, logging, and theme resources.
+Use this package when you want to create a package that can be loaded by the Sunder runtime, contribute Avalonia views to the Sunder shell, register background services, queue background processes, expose typed extension points, or consume package-scoped storage, configuration, secrets, logging, and theme resources.
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
@@ -141,7 +141,34 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 - `LoggerFactory`
 - `Logging`
 
+Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work and `IPackageNotificationService` for user-visible notifications.
+
 Use package storage, configuration, and secrets abstractions for mutable package data. Do not write mutable state into the installed package folder.
+
+## Background Processes
+
+Use `IBackgroundProcessQueue` for package work that should keep running outside the current button click or view lifecycle, such as downloads, imports, model pulls, or indexing.
+
+```csharp
+queue.Enqueue(new BackgroundProcessRequest(
+    Title: "Import dataset",
+    GroupKey: "my.company.package:imports",
+    Indicator: BackgroundProcessIndicator.Settings,
+    ConcurrencyMode: BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+    CanCancel: true,
+    ExecuteAsync: async context =>
+    {
+        context.ReportIndeterminate("Importing dataset...");
+        await ImportAsync(context.CancellationToken);
+        context.ReportProgress(100, "Import complete");
+    },
+    Metadata: new Dictionary<string, string>
+    {
+        ["dataset"] = "customers",
+    }));
+```
+
+`BackgroundProcessIndicator.Hidden` keeps the process out of all footer indicators. `Main`, `Packages`, and `Settings` show it in exactly one host indicator surface. `GroupKey` is for concurrency and package-side listing; it is not used for UI placement.
 
 ## Extension Catalog
 

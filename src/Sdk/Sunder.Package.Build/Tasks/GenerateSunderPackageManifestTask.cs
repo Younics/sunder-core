@@ -314,6 +314,16 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             case ("Sunder.Sdk.Abstractions", "IPackageBackgroundService"):
                 capabilities.Add(SunderSdkCapabilities.BackgroundServicesV1);
                 break;
+            case ("Sunder.Sdk.Abstractions", "IBackgroundProcessQueue"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessRequest"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessSnapshot"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessContext"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessChangedEventArgs"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessConcurrencyMode"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessState"):
+            case ("Sunder.Sdk.Abstractions", "BackgroundProcessIndicator"):
+                capabilities.Add(SunderSdkCapabilities.BackgroundProcessesV1);
+                break;
             case ("Sunder.Sdk.Abstractions", "IPackageExtensionCatalog"):
             case ("Sunder.Sdk.Abstractions", "PackageExtensionPoint`1"):
                 capabilities.Add(SunderSdkCapabilities.ExtensionsV1);

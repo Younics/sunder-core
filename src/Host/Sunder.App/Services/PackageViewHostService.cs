@@ -35,7 +35,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         [],
         [],
         faultReporter: null,
-        sessionFolder: null);
+        sessionFolder: null,
+        backgroundProcessQueue: null);
 
     private readonly AppPackageViewRegistry _viewRegistry;
     private readonly Dictionary<Assembly, string> _assemblyPackageMap = [];
@@ -51,6 +52,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly IPackageShellViewService? _shellViewService;
     private readonly IPackageSettingsNavigationService? _settingsNavigationService;
     private readonly NotificationCenterService? _notificationCenter;
+    private readonly BackgroundProcessQueueService _backgroundProcessQueue;
     private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleSemaphore = new(1, 1);
     private readonly object _stateLock = new();
@@ -69,7 +71,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppPackageExtensionCatalog? extensionCatalog = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
-        NotificationCenterService? notificationCenter = null)
+        NotificationCenterService? notificationCenter = null,
+        BackgroundProcessQueueService? backgroundProcessQueue = null)
     {
         _viewRegistry = viewRegistry;
         _backgroundServices = backgroundServices;
@@ -83,6 +86,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _shellViewService = shellViewService;
         _settingsNavigationService = settingsNavigationService;
         _notificationCenter = notificationCenter;
+        _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
     }
 
     public event EventHandler<PackageViewHostFaultEventArgs>? PackageFaulted;
@@ -94,6 +98,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
         NotificationCenterService? notificationCenter = null,
+        BackgroundProcessQueueService? backgroundProcessQueue = null,
         CancellationToken cancellationToken = default)
     {
         AppPackageSessionDirectories.CleanupStaleSessions();
@@ -110,7 +115,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             new AppPackageExtensionCatalog(),
             shellViewService,
             settingsNavigationService,
-            notificationCenter);
+            notificationCenter,
+            backgroundProcessQueue);
 
         await hostService.ApplyPackageDeltaAsync(activePackages, packageSources, cancellationToken: cancellationToken);
         return hostService;
@@ -417,6 +423,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
             services.AddSingleton<IPackageExtensionCatalog>(_extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(_shellViewService ?? DisabledPackageShellViewService.Instance);
             services.AddSingleton<IPackageSettingsNavigationService>(_settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
+            services.AddSingleton<IBackgroundProcessQueue>(_ =>
+            {
+                var packageBackgroundProcessQueue = new PackageScopedBackgroundProcessQueue(package.PackageId, package.DisplayName, _backgroundProcessQueue);
+                packageBackgroundProcessQueue.Start();
+                return packageBackgroundProcessQueue;
+            });
             services.AddSingleton<IPackageNotificationService>(_notificationCenter is null
                 ? NullPackageNotificationService.Instance
                 : new AppPackageNotificationService(_notificationCenter, package.PackageId, package.DisplayName));

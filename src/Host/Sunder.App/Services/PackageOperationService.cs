@@ -1,5 +1,6 @@
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
+using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Services;
@@ -18,13 +19,58 @@ public enum PackageOperationKind
 public sealed record PackageOperationMetadata(
     string? PackageId,
     PackageOperationKind Kind,
-    string DisplayName);
+    string DisplayName)
+{
+    private const string OperationMetadataKey = "sunder.packageOperation";
+    private const string PackageIdMetadataKey = "packageId";
+    private const string KindMetadataKey = "kind";
+    private const string DisplayNameMetadataKey = "displayName";
+
+    public static bool TryCreate(IReadOnlyDictionary<string, string> metadata, out PackageOperationMetadata operationMetadata)
+    {
+        if (metadata.TryGetValue(OperationMetadataKey, out var operationMarker)
+            && bool.TryParse(operationMarker, out var isPackageOperation)
+            && isPackageOperation
+            && metadata.TryGetValue(KindMetadataKey, out var kindValue)
+            && Enum.TryParse<PackageOperationKind>(kindValue, ignoreCase: true, out var kind)
+            && metadata.TryGetValue(DisplayNameMetadataKey, out var displayName))
+        {
+            operationMetadata = new PackageOperationMetadata(
+                metadata.TryGetValue(PackageIdMetadataKey, out var packageId) && !string.IsNullOrWhiteSpace(packageId) ? packageId : null,
+                kind,
+                displayName);
+            return true;
+        }
+
+        operationMetadata = null!;
+        return false;
+    }
+
+    public IReadOnlyDictionary<string, string> ToMetadata()
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [OperationMetadataKey] = bool.TrueString,
+            [KindMetadataKey] = Kind.ToString(),
+            [DisplayNameMetadataKey] = DisplayName,
+        };
+
+        if (!string.IsNullOrWhiteSpace(PackageId))
+        {
+            metadata[PackageIdMetadataKey] = PackageId;
+        }
+
+        return metadata;
+    }
+}
 
 public sealed class PackageOperationChangedEventArgs(BackgroundProcessSnapshot snapshot) : EventArgs
 {
     public BackgroundProcessSnapshot Snapshot { get; } = snapshot;
 
-    public PackageOperationMetadata Metadata => (PackageOperationMetadata)Snapshot.Metadata!;
+    public PackageOperationMetadata Metadata => PackageOperationMetadata.TryCreate(Snapshot.Metadata, out var metadata)
+        ? metadata
+        : throw new InvalidOperationException("Background process is not a package operation.");
 }
 
 public sealed class PackageOperationService
@@ -64,7 +110,7 @@ public sealed class PackageOperationService
     public BackgroundProcessSnapshot? GetActiveOperationForPackage(string packageId)
         => ListOperations()
             .Where(snapshot => snapshot.IsActive)
-            .FirstOrDefault(snapshot => snapshot.Metadata is PackageOperationMetadata metadata
+            .FirstOrDefault(snapshot => PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
                                         && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
     public BackgroundProcessSnapshot? GetActivePackageStoreOperation()
@@ -197,7 +243,8 @@ public sealed class PackageOperationService
     public BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl)
     {
         var activeUpdateAll = ListOperations().FirstOrDefault(snapshot => snapshot.IsActive
-            && snapshot.Metadata is PackageOperationMetadata { Kind: PackageOperationKind.UpdateAll });
+            && PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
+            && metadata.Kind == PackageOperationKind.UpdateAll);
         if (activeUpdateAll is not null)
         {
             return activeUpdateAll;
@@ -238,11 +285,11 @@ public sealed class PackageOperationService
         return _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
             title,
             PackageStoreGroupKey,
-            true,
+            BackgroundProcessIndicator.Packages,
             BackgroundProcessConcurrencyMode.SequentialWithinGroup,
             canCancel,
-            new PackageOperationMetadata(packageId, kind, displayName),
-            executeAsync));
+            executeAsync,
+            new PackageOperationMetadata(packageId, kind, displayName).ToMetadata()));
     }
 
     private bool TryReturnActivePackageOperation(string packageId, out BackgroundProcessSnapshot snapshot)
@@ -389,5 +436,5 @@ public sealed class PackageOperationService
     }
 
     private static bool IsPackageOperation(BackgroundProcessSnapshot snapshot)
-        => snapshot.Metadata is PackageOperationMetadata;
+        => PackageOperationMetadata.TryCreate(snapshot.Metadata, out _);
 }

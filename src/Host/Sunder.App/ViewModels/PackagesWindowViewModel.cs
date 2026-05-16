@@ -10,6 +10,7 @@ using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
+using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.ViewModels;
@@ -84,7 +85,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             ? BackgroundProcessMonitorViewModel.Empty
             : new BackgroundProcessMonitorViewModel(
                 backgroundProcessQueue,
-                snapshot => string.Equals(snapshot.GroupKey, PackageOperationService.PackageStoreGroupKey, StringComparison.OrdinalIgnoreCase),
+                BackgroundProcessIndicator.Packages,
                 "No package processes.",
                 backgroundProcessPopoverWidth,
                 backgroundProcessPopoverHeight,
@@ -1446,7 +1447,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     private string? GetPreferredPackageIdForCompletedOperation(BackgroundProcessSnapshot snapshot)
     {
-        if (snapshot.Metadata is PackageOperationMetadata { PackageId: { Length: > 0 } packageId })
+        if (PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
+            && metadata.PackageId is { Length: > 0 } packageId)
         {
             return packageId;
         }

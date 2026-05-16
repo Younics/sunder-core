@@ -29,7 +29,8 @@ public sealed class WindowLauncher : IWindowLauncher
         NotificationCenterService notificationCenter,
         ShellStateService shellStateService,
         ShellState shellState,
-        SunderUpdateService? updateService = null)
+        SunderUpdateService? updateService = null,
+        BackgroundProcessQueueService? backgroundProcessQueue = null)
     {
         _packageViewHostService = packageViewHostService;
         _runtimeApiClientFactory = runtimeApiClientFactory;
@@ -38,7 +39,7 @@ public sealed class WindowLauncher : IWindowLauncher
         _shellStateService = shellStateService;
         _shellState = shellState;
         _updateService = updateService ?? new SunderUpdateService();
-        _backgroundProcessQueue = new BackgroundProcessQueueService();
+        _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _packageOperationService = new PackageOperationService(
             _backgroundProcessQueue,
             _runtimeApiClientFactory,
@@ -95,7 +96,7 @@ public sealed class WindowLauncher : IWindowLauncher
 
     public void CloseForShutdown()
     {
-        _ = _packageOperationService.CancelAllAsync();
+        _ = _backgroundProcessQueue.CancelAllAsync();
 
         if (_settingsWindow is not null)
         {
@@ -112,7 +113,7 @@ public sealed class WindowLauncher : IWindowLauncher
     }
 
     public async Task CancelBackgroundProcessesAsync(CancellationToken cancellationToken = default)
-        => await _packageOperationService.CancelAllAsync(cancellationToken);
+        => await _backgroundProcessQueue.CancelAllAsync(cancellationToken);
 
     private SettingsWindow CreateSettingsWindow()
     {
@@ -122,7 +123,11 @@ public sealed class WindowLauncher : IWindowLauncher
                 _runtimeApiClientFactory.CreateClient(),
                 _packageViewHostService,
                 _cliInstallationService,
-                _updateService),
+                _updateService,
+                _backgroundProcessQueue,
+                _shellState.BackgroundProcessPopoverWidth,
+                _shellState.BackgroundProcessPopoverHeight,
+                PersistBackgroundProcessPopoverSize),
         };
 
         window.Closed += (_, _) =>

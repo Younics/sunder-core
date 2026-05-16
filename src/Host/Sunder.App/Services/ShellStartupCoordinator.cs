@@ -97,6 +97,7 @@ public sealed class ShellStartupCoordinator(Application application)
         PackageViewHostService packageViewHostService;
         var shellViewService = new AppPackageShellViewService();
         var settingsNavigationService = new AppPackageSettingsNavigationService();
+        var backgroundProcessQueue = new BackgroundProcessQueueService();
         try
         {
             var packageFaultReporter = new PackageRuntimeFaultReporter(runtimeApiClientFactory);
@@ -106,7 +107,8 @@ public sealed class ShellStartupCoordinator(Application application)
                 packageFaultReporter,
                 shellViewService,
                 settingsNavigationService,
-                notificationCenter).ConfigureAwait(false);
+                notificationCenter,
+                backgroundProcessQueue).ConfigureAwait(false);
             activePackages = packageViewHostService.FilterEnabledPackages(activePackages);
             LogStartupPhase("app package activation", phaseStopwatch);
         }
@@ -131,7 +133,7 @@ public sealed class ShellStartupCoordinator(Application application)
         {
             themeManager.ApplyTheme(shellSnapshot.State.ThemeId);
 
-            var windowLauncher = new WindowLauncher(packageViewHostService, runtimeApiClientFactory, cliInstallationService, notificationCenter, shellStateService, shellState, updateService);
+            var windowLauncher = new WindowLauncher(packageViewHostService, runtimeApiClientFactory, cliInstallationService, notificationCenter, shellStateService, shellState, updateService, backgroundProcessQueue);
             settingsNavigationService.Attach(windowLauncher);
             var mainWindowViewModel = new MainWindowViewModel(
                 windowLauncher,

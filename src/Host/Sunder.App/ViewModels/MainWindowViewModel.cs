@@ -82,7 +82,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             ? BackgroundProcessMonitorViewModel.Empty
             : new BackgroundProcessMonitorViewModel(
                 backgroundProcessQueue,
-                snapshot => !snapshot.IsHidden,
+                BackgroundProcessIndicator.Main,
                 "No visible processes.",
                 _shellState.BackgroundProcessPopoverWidth,
                 _shellState.BackgroundProcessPopoverHeight,

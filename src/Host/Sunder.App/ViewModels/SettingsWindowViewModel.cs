@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
@@ -19,12 +20,25 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IRuntimeApiClient runtimeApiClient,
         PackageViewHostService packageViewHostService,
         CliInstallationService cliInstallationService,
-        SunderUpdateService? updateService = null)
+        SunderUpdateService? updateService = null,
+        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
+        double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
+        Action<double, double>? persistBackgroundProcessPopoverSize = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageViewHostService = packageViewHostService;
         _cliInstallationService = cliInstallationService;
         _updateService = updateService ?? new SunderUpdateService();
+        BackgroundProcesses = backgroundProcessQueue is null
+            ? BackgroundProcessMonitorViewModel.Empty
+            : new BackgroundProcessMonitorViewModel(
+                backgroundProcessQueue,
+                BackgroundProcessIndicator.Settings,
+                "No background processes.",
+                backgroundProcessPopoverWidth,
+                backgroundProcessPopoverHeight,
+                persistBackgroundProcessPopoverSize);
 
         CoreSections =
         [
@@ -54,6 +68,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<string> SelectedCoreLines { get; }
 
     public ObservableCollection<SettingsFieldSectionViewModel> SelectedPackageSections { get; }
+
+    public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
 
     public bool HasPackageSections => PackageSections.Count > 0;
 
@@ -393,6 +409,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
+        {
+            BackgroundProcesses.Dispose();
+        }
+
         _runtimeApiClient.Dispose();
     }
 

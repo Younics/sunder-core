@@ -1,6 +1,7 @@
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Protocol;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -91,11 +92,61 @@ public sealed class SettingsWindowViewModelTests
         Assert.Empty(viewModel.SelectedPackageSections);
     }
 
+    [Fact]
+    public async Task BackgroundProcesses_IncludesOnlySettingsIndicatorProcessesInSettingsFooter()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            PackageViewHostService.Empty,
+            new CliInstallationService(),
+            backgroundProcessQueue: queue);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        queue.Enqueue(new BackgroundProcessRequest(
+            "Hidden work",
+            "hidden:work",
+            BackgroundProcessIndicator.Hidden,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            async _ => await release.Task));
+        queue.Enqueue(new BackgroundProcessRequest(
+            "Settings package work",
+            "package:test:work",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            async _ => await release.Task));
+
+        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
+        viewModel.BackgroundProcesses.Refresh();
+
+        Assert.Equal("Settings package work", Assert.Single(viewModel.BackgroundProcesses.Processes).Title);
+        release.SetResult();
+        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+    }
+
     private static SettingsWindowViewModel CreateViewModel(FakeRuntimeApiClient runtimeClient) =>
         new(
             runtimeClient,
             PackageViewHostService.Empty,
             new CliInstallationService());
+
+    private static async Task WaitForConditionAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                Assert.True(condition());
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+    }
 
     private static PackageConfigurationSchemaDescriptor CreateSchema(
         string packageId,

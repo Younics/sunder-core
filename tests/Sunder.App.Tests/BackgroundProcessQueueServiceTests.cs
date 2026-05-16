@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -108,26 +109,26 @@ public sealed class BackgroundProcessQueueServiceTests
     }
 
     [Fact]
-    public void Enqueue_WhenHiddenIsSet_ExposesHiddenSnapshot()
+    public void Enqueue_WhenHiddenIndicatorIsSet_ExposesHiddenSnapshot()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
 
-        var process = queue.Enqueue(CreateRequest("hidden", "work", _ => Task.CompletedTask, isHidden: true));
+        var process = queue.Enqueue(CreateRequest("hidden", "work", _ => Task.CompletedTask, indicator: BackgroundProcessIndicator.Hidden));
 
-        Assert.True(process.IsHidden);
-        Assert.True(queue.GetProcess(process.ProcessId)?.IsHidden);
+        Assert.Equal(BackgroundProcessIndicator.Hidden, process.Indicator);
+        Assert.Equal(BackgroundProcessIndicator.Hidden, queue.GetProcess(process.ProcessId)?.Indicator);
     }
 
     [Fact]
-    public async Task BackgroundProcessMonitor_WithVisibleFilter_ExcludesHiddenProcesses()
+    public async Task BackgroundProcessMonitor_WithMainIndicatorFilter_ExcludesHiddenProcesses()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 2);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(CreateRequest("hidden", "hidden-work", async _ => await release.Task, isHidden: true));
-        queue.Enqueue(CreateRequest("visible", "visible-work", async _ => await release.Task));
+        queue.Enqueue(CreateRequest("hidden", "hidden-work", async _ => await release.Task, indicator: BackgroundProcessIndicator.Hidden));
+        queue.Enqueue(CreateRequest("visible", "visible-work", async _ => await release.Task, indicator: BackgroundProcessIndicator.Main));
 
         await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
-        using var monitor = new BackgroundProcessMonitorViewModel(queue, snapshot => !snapshot.IsHidden);
+        using var monitor = new BackgroundProcessMonitorViewModel(queue, BackgroundProcessIndicator.Main);
 
         Assert.Collection(monitor.Processes, process => Assert.Equal("visible", process.Title));
 
@@ -137,21 +138,64 @@ public sealed class BackgroundProcessQueueServiceTests
     }
 
     [Fact]
-    public async Task BackgroundProcessMonitor_WithPackageGroupFilter_IncludesHiddenPackageProcesses()
+    public async Task BackgroundProcessMonitor_WithPackageIndicatorFilter_IncludesOnlyPackageProcesses()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 2);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(CreateRequest("package", PackageOperationService.PackageStoreGroupKey, async _ => await release.Task, isHidden: true));
-        queue.Enqueue(CreateRequest("visible", "other", async _ => await release.Task));
+        queue.Enqueue(CreateRequest("package", PackageOperationService.PackageStoreGroupKey, async _ => await release.Task, indicator: BackgroundProcessIndicator.Packages));
+        queue.Enqueue(CreateRequest("visible", "other", async _ => await release.Task, indicator: BackgroundProcessIndicator.Main));
 
         await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
         using var monitor = new BackgroundProcessMonitorViewModel(
             queue,
-            snapshot => string.Equals(snapshot.GroupKey, PackageOperationService.PackageStoreGroupKey, StringComparison.OrdinalIgnoreCase));
+            BackgroundProcessIndicator.Packages);
 
         Assert.Collection(monitor.Processes, process => Assert.Equal("package", process.Title));
 
         monitor.Dispose();
+        release.SetResult();
+        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+    }
+
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_MapsPackageProcessesAndPublishesChanges()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        using var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        packageQueue.Start();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var changes = new ConcurrentQueue<BackgroundProcessSnapshot>();
+        packageQueue.ProcessChanged += (_, e) => changes.Enqueue(e.Snapshot);
+
+        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+            "Pull image",
+            "docker-image-pulls",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            async context =>
+            {
+                context.ReportIndeterminate("Pulling layer");
+                await release.Task;
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["imageReference"] = "agent0ai/agent-zero:latest",
+            }));
+
+        Assert.Equal(BackgroundProcessIndicator.Settings, snapshot.Indicator);
+        Assert.Equal("docker-image-pulls", snapshot.GroupKey);
+        Assert.Equal("agent0ai/agent-zero:latest", snapshot.Metadata["imageReference"]);
+        await WaitForConditionAsync(() => changes.Any(change => change.StatusText == "Pulling layer"));
+
+        var appSnapshot = Assert.Single(queue.ListProcesses());
+        Assert.Equal("package:test.package:docker-image-pulls", appSnapshot.GroupKey);
+        Assert.True(PackageScopedBackgroundProcessMetadata.TryCreate(appSnapshot.Metadata, out var packageMetadata));
+        Assert.Equal("Test Package", packageMetadata.PackageDisplayName);
+
+        var listed = Assert.Single(packageQueue.ListProcesses("docker-image-pulls"));
+        Assert.Equal(snapshot.ProcessId, listed.ProcessId);
+
         release.SetResult();
         await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
     }
@@ -161,14 +205,13 @@ public sealed class BackgroundProcessQueueServiceTests
         string groupKey,
         Func<BackgroundProcessContext, Task> executeAsync,
         bool canCancel = true,
-        bool isHidden = false)
+        BackgroundProcessIndicator indicator = BackgroundProcessIndicator.Hidden)
         => new(
             title,
             groupKey,
-            isHidden,
+            indicator,
             BackgroundProcessConcurrencyMode.SequentialWithinGroup,
             canCancel,
-            Metadata: null,
             executeAsync);
 
     private static async Task WaitForConditionAsync(Func<bool> condition)

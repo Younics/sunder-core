@@ -125,6 +125,7 @@ SDK areas:
 | Secrets | `IPackageSecrets` | Package-scoped secret values |
 | Logging | `IPackageLogging`, `IPackageEventLogger` | Package event logging and `ILoggerFactory` access |
 | Notifications | `IPackageNotificationService` | User-visible package notifications |
+| Background processes | `IBackgroundProcessQueue`, `BackgroundProcessRequest` | Host-visible queued work with progress, cancellation, and indicator placement |
 | Shell integration | `IPackageShellViewService`, `IPackageViewNavigationTarget` | Shell navigation and hotbar/workspace integration |
 | Callbacks | `IPackageCallbackHandler` | Generic browser/local callback sessions |
 | Auth | `IPackageAuthHandler` | Auth status and disconnect integration |
@@ -241,6 +242,29 @@ await notificationService.PublishAsync(new PackageNotificationRequest(
     Severity: PackageNotificationSeverity.Success),
     cancellationToken);
 ```
+
+Queue a background process for long-running package work:
+
+```csharp
+backgroundProcesses.Enqueue(new BackgroundProcessRequest(
+    Title: "Pull model image",
+    GroupKey: "my.company.package:model-pulls",
+    Indicator: BackgroundProcessIndicator.Settings,
+    ConcurrencyMode: BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+    CanCancel: true,
+    ExecuteAsync: async context =>
+    {
+        context.ReportIndeterminate("Pulling model image...");
+        await PullModelImageAsync(context.CancellationToken);
+        context.ReportProgress(100, "Model image is ready.");
+    },
+    Metadata: new Dictionary<string, string>
+    {
+        ["image"] = "my-model:latest",
+    }));
+```
+
+`BackgroundProcessIndicator.Hidden` keeps internal work out of all host footer indicators. Use `Main`, `Packages`, or `Settings` to show the process in exactly one host indicator surface. Use `GroupKey` only for concurrency, deduplication, and package-side listing.
 
 Register callback and auth integration:
 

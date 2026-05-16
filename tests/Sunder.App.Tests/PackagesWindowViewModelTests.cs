@@ -3,6 +3,7 @@ using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
+using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using Xunit;
 
@@ -318,14 +319,14 @@ public sealed class PackagesWindowViewModelTests
             Guid.NewGuid(),
             "Install Sunder Agent",
             PackageOperationService.PackageStoreGroupKey,
-            IsHidden: true,
+            BackgroundProcessIndicator.Packages,
             BackgroundProcessConcurrencyMode.SequentialWithinGroup,
             BackgroundProcessState.Completed,
             "Completed",
             100,
-            CanCancel: true,
-            metadata,
-            ErrorMessage: null,
+            true,
+            metadata.ToMetadata(),
+            null,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow);

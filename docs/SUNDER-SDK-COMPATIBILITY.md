@@ -37,6 +37,7 @@ Current SDK capabilities are:
 | `settings-views.v1` | settings view registration |
 | `workspaces.v1` | package view/workspace factories |
 | `background-services.v1` | package background services |
+| `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
 | `extensions.v1` | extension points, contribution registration, extension catalog queries |
 | `extensions.changes.v1` | extension catalog change monitoring |
 | `configuration.schema.v1` | package configuration schema contracts |

@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Models;
 using Sunder.App.Services;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.ViewModels;
 
@@ -15,21 +16,21 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
     public const double MaximumPopoverHeight = ShellState.MaximumBackgroundProcessPopoverHeight;
 
     private readonly BackgroundProcessQueueService? _backgroundProcesses;
-    private readonly Func<BackgroundProcessSnapshot, bool> _filter;
+    private readonly BackgroundProcessIndicator _indicator;
     private readonly string _emptyText;
     private readonly Action<double, double>? _persistPopoverSize;
     private bool _disposed;
 
     public BackgroundProcessMonitorViewModel(
         BackgroundProcessQueueService backgroundProcesses,
-        Func<BackgroundProcessSnapshot, bool> filter,
+        BackgroundProcessIndicator indicator,
         string emptyText = "No active processes.",
         double popoverWidth = 500,
         double popoverHeight = 360,
         Action<double, double>? persistPopoverSize = null)
     {
         _backgroundProcesses = backgroundProcesses;
-        _filter = filter;
+        _indicator = indicator;
         _emptyText = emptyText;
         _persistPopoverSize = persistPopoverSize;
         PopoverWidth = ClampPopoverWidth(popoverWidth);
@@ -40,7 +41,7 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
 
     private BackgroundProcessMonitorViewModel()
     {
-        _filter = _ => false;
+        _indicator = BackgroundProcessIndicator.Hidden;
         _emptyText = "No active processes.";
         FooterStatusText = _emptyText;
         PopoverWidth = 500;
@@ -147,7 +148,7 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
 
         var snapshots = _backgroundProcesses.ListProcesses()
             .Where(snapshot => snapshot.IsActive)
-            .Where(_filter)
+            .Where(snapshot => snapshot.Indicator == _indicator)
             .OrderBy(ProcessSortKey)
             .ThenBy(snapshot => snapshot.QueuedAtUtc)
             .ToArray();
@@ -297,9 +298,13 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
     private static string BuildDetailText(BackgroundProcessSnapshot snapshot)
     {
         var parts = new List<string>();
-        if (snapshot.Metadata is PackageOperationMetadata packageMetadata)
+        if (PackageOperationMetadata.TryCreate(snapshot.Metadata, out var packageMetadata))
         {
             parts.Add(packageMetadata.DisplayName);
+        }
+        else if (PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var packageProcessMetadata))
+        {
+            parts.Add(packageProcessMetadata.PackageDisplayName);
         }
 
         if (!string.IsNullOrWhiteSpace(snapshot.ErrorMessage))

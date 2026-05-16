@@ -1,6 +1,7 @@
 using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -36,7 +37,7 @@ public sealed class PackageOperationServiceTests
 
         var operation = service.EnqueueMarketplaceInstall("agent", "Agent", new Uri("https://registry.example/"));
 
-        Assert.True(operation.IsHidden);
+        Assert.Equal(BackgroundProcessIndicator.Packages, operation.Indicator);
         Assert.Equal(PackageOperationService.PackageStoreGroupKey, operation.GroupKey);
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
