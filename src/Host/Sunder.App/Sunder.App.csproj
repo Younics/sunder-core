@@ -89,7 +89,7 @@
           Condition="'$(DesignTimeBuild)' != 'true'">
     <MSBuild Projects="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj"
              Targets="Restore;Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishDir=$(PublishDir)RuntimeHost\"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishDir=$(PublishDir)RuntimeHost\"
              RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
   </Target>
 
@@ -103,7 +103,7 @@
 
     <MSBuild Projects="..\Sunder.Cli\Sunder.Cli.csproj"
              Targets="Restore;Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
              RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
   </Target>
 </Project>

@@ -1,10 +1,15 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
+using System.Reflection;
 using Sunder.App.Models;
+using Sunder.Protocol;
 
 namespace Sunder.App.Services;
 
 public sealed class RuntimeHostProcessManager(AppStartupOptions startupOptions)
 {
+    private const string RuntimeHostName = "Sunder.Runtime.Host";
+
     private readonly AppStartupOptions _startupOptions = startupOptions;
 
     public async Task EnsureStartedAsync(CancellationToken cancellationToken = default)
@@ -14,12 +19,35 @@ public sealed class RuntimeHostProcessManager(AppStartupOptions startupOptions)
     {
         runtimeUrl = RuntimeUrlHelper.Normalize(runtimeUrl);
 
-        if (await IsRuntimeHealthyAsync(runtimeUrl, cancellationToken))
+        var runtimeHostPath = ResolveRuntimeHostPath();
+        var requiredRuntimeHostVersion = runtimeHostPath is null
+            ? null
+            : TryResolveRuntimeHostVersion(runtimeHostPath);
+
+        var runningStatus = await TryGetRuntimeStatusAsync(runtimeUrl, cancellationToken);
+        if (CanReuseRunningRuntime(runningStatus, requiredRuntimeHostVersion))
         {
             return;
         }
 
-        var runtimeHostPath = ResolveRuntimeHostPath();
+        if (ShouldReplaceRunningRuntime(runningStatus, requiredRuntimeHostVersion))
+        {
+            var runningVersion = runningStatus!.Version;
+            AppSessionLog.WriteInfo(
+                $"Replacing running Sunder.Runtime.Host {runningVersion} with bundled version {requiredRuntimeHostVersion}.");
+            await ShutdownRuntimeAsync(runtimeUrl, cancellationToken);
+            var stopped = await WaitForStoppedRuntimeAsync(runtimeUrl, cancellationToken);
+            if (!stopped)
+            {
+                throw new InvalidOperationException(
+                    $"Sunder.Runtime.Host {runningVersion} did not shut down in time to start bundled version {requiredRuntimeHostVersion}.");
+            }
+        }
+        else if (runningStatus is not null || await IsRuntimeHealthyAsync(runtimeUrl, cancellationToken))
+        {
+            return;
+        }
+
         if (runtimeHostPath is null)
         {
             throw new InvalidOperationException(
@@ -29,7 +57,7 @@ public sealed class RuntimeHostProcessManager(AppStartupOptions startupOptions)
 
         Process.Start(CreateStartInfo(runtimeHostPath, runtimeUrl));
 
-        var started = await WaitForHealthyRuntimeAsync(runtimeUrl, cancellationToken);
+        var started = await WaitForAcceptableRuntimeAsync(runtimeUrl, requiredRuntimeHostVersion, cancellationToken);
         if (!started)
         {
             throw new InvalidOperationException($"Sunder.Runtime.Host did not become healthy at '{runtimeUrl}' in time.");
@@ -58,11 +86,17 @@ public sealed class RuntimeHostProcessManager(AppStartupOptions startupOptions)
         return startInfo;
     }
 
-    private async Task<bool> WaitForHealthyRuntimeAsync(Uri runtimeUrl, CancellationToken cancellationToken)
+    private async Task<bool> WaitForAcceptableRuntimeAsync(
+        Uri runtimeUrl,
+        string? requiredRuntimeHostVersion,
+        CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 40; attempt++)
         {
-            if (await IsRuntimeHealthyAsync(runtimeUrl, cancellationToken))
+            var status = await TryGetRuntimeStatusAsync(runtimeUrl, cancellationToken);
+            if (status is not null
+                && IsSunderRuntimeHost(status)
+                && CanReuseRunningRuntime(status, requiredRuntimeHostVersion))
             {
                 return true;
             }
@@ -71,6 +105,54 @@ public sealed class RuntimeHostProcessManager(AppStartupOptions startupOptions)
         }
 
         return false;
+    }
+
+    private async Task<bool> WaitForStoppedRuntimeAsync(Uri runtimeUrl, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            if (!await IsRuntimeHealthyAsync(runtimeUrl, cancellationToken))
+            {
+                return true;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private async Task<SystemStatusResponse?> TryGetRuntimeStatusAsync(
+        Uri runtimeUrl,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            return await httpClient.GetFromJsonAsync<SystemStatusResponse>(
+                new Uri(runtimeUrl, "api/system"),
+                cancellationToken);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task ShutdownRuntimeAsync(Uri runtimeUrl, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var _ = await httpClient.PostAsync(
+                new Uri(runtimeUrl, "api/system/shutdown"),
+                content: null,
+                cancellationToken);
+        }
+        catch
+        {
+            // Startup will verify that the old host actually stopped before launching the bundled host.
+        }
     }
 
     private async Task<bool> IsRuntimeHealthyAsync(Uri runtimeUrl, CancellationToken cancellationToken)
@@ -109,6 +191,99 @@ public sealed class RuntimeHostProcessManager(AppStartupOptions startupOptions)
 #endif
             ;
     }
+
+    internal static bool CanReuseRunningRuntime(
+        SystemStatusResponse? runningStatus,
+        string? requiredRuntimeHostVersion)
+    {
+        if (runningStatus is null)
+        {
+            return false;
+        }
+
+        if (!IsSunderRuntimeHost(runningStatus) || string.IsNullOrWhiteSpace(requiredRuntimeHostVersion))
+        {
+            return true;
+        }
+
+        return RuntimeHostVersionComparer.TryCompare(
+            runningStatus.Version,
+            requiredRuntimeHostVersion,
+            out var comparison)
+            ? comparison >= 0
+            : true;
+    }
+
+    internal static bool ShouldReplaceRunningRuntime(
+        SystemStatusResponse? runningStatus,
+        string? requiredRuntimeHostVersion)
+    {
+        if (runningStatus is null
+            || !IsSunderRuntimeHost(runningStatus)
+            || string.IsNullOrWhiteSpace(requiredRuntimeHostVersion))
+        {
+            return false;
+        }
+
+        return RuntimeHostVersionComparer.TryCompare(
+            runningStatus.Version,
+            requiredRuntimeHostVersion,
+            out var comparison)
+            && comparison < 0;
+    }
+
+    internal static string? TryResolveRuntimeHostVersion(string runtimeHostPath)
+    {
+        try
+        {
+            var assemblyPath = ResolveRuntimeHostAssemblyPath(runtimeHostPath);
+            if (assemblyPath is null)
+            {
+                return null;
+            }
+
+            var versionInfo = FileVersionInfo.GetVersionInfo(assemblyPath);
+            if (!string.IsNullOrWhiteSpace(versionInfo.ProductVersion))
+            {
+                return versionInfo.ProductVersion.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(versionInfo.FileVersion))
+            {
+                return versionInfo.FileVersion.Trim();
+            }
+
+            return AssemblyName.GetAssemblyName(assemblyPath).Version?.ToString(3);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveRuntimeHostAssemblyPath(string runtimeHostPath)
+    {
+        if (string.Equals(Path.GetExtension(runtimeHostPath), ".dll", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(runtimeHostPath))
+        {
+            return runtimeHostPath;
+        }
+
+        var runtimeHostDirectory = Path.GetDirectoryName(runtimeHostPath);
+        if (!string.IsNullOrWhiteSpace(runtimeHostDirectory))
+        {
+            var assemblyPath = Path.Combine(runtimeHostDirectory, "Sunder.Runtime.Host.dll");
+            if (File.Exists(assemblyPath))
+            {
+                return assemblyPath;
+            }
+        }
+
+        return File.Exists(runtimeHostPath) ? runtimeHostPath : null;
+    }
+
+    private static bool IsSunderRuntimeHost(SystemStatusResponse status)
+        => string.Equals(status.Name, RuntimeHostName, StringComparison.OrdinalIgnoreCase);
 
     private static string? ResolveFromPath(string? path)
     {

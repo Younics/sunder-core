@@ -1,4 +1,5 @@
 using Sunder.Protocol;
+using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
 
@@ -11,7 +12,7 @@ internal static class SystemEndpoints
         var group = endpoints.MapGroup("/api/system");
         group.MapGet(
             "",
-            () => Results.Ok(new SystemStatusResponse("Sunder.Runtime.Host", "0.1.0", true, startedAtUtc)));
+            () => Results.Ok(new SystemStatusResponse("Sunder.Runtime.Host", RuntimeHostVersion.Current, true, startedAtUtc)));
 
         group.MapPost(
             "shutdown",
