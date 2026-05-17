@@ -9,6 +9,8 @@ public partial class WindowChromeControls : UserControl
     public WindowChromeControls()
     {
         InitializeComponent();
+        StandardControls.IsVisible = !OperatingSystem.IsMacOS();
+        MacControls.IsVisible = OperatingSystem.IsMacOS();
     }
 
     private Window? OwnerWindow => this.FindAncestorOfType<Window>();

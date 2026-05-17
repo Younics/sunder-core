@@ -16,8 +16,8 @@
         </StackPanel>
         <Border Width="1" Height="12" Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
         <StackPanel Orientation="Horizontal" Spacing="6">
-          <Path Width="13"
-                Height="13"
+          <Path Width="9"
+                Height="9"
                 Classes="icon-stroke"
                 Data="{StaticResource Sunder.Icon.Sync}" />
           <TextBlock Classes="status-text" Text="{Binding SyncStatusText}" />

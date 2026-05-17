@@ -15,6 +15,7 @@
           VerticalAlignment="Center">
       <StackPanel x:Name="ToolbarLeftMenuHost"
                   Orientation="Horizontal"
+                  Margin="5, 0, 0, 0"
                   Spacing="14"
                   Height="40"
                   VerticalAlignment="Center">
@@ -57,10 +58,30 @@
                     VerticalAlignment="Center"
                     ToolTip.Tip="View and package actions"
                     Click="MoreActionsButton_OnClick">
-              <Path Width="15"
-                    Height="15"
-                    Classes="icon-fill"
-                    Data="{StaticResource Sunder.Icon.More}" />
+              <Grid Width="16"
+                    Height="16"
+                    ColumnDefinitions="*,*,*"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <Ellipse Grid.Column="0"
+                         Width="3"
+                         Height="3"
+                         Classes="toolbar-dot"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center" />
+                <Ellipse Grid.Column="1"
+                         Width="3"
+                         Height="3"
+                         Classes="toolbar-dot"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center" />
+                <Ellipse Grid.Column="2"
+                         Width="3"
+                         Height="3"
+                         Classes="toolbar-dot"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center" />
+              </Grid>
             </Button>
           </StackPanel>
 

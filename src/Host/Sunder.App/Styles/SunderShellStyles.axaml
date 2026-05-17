@@ -40,11 +40,19 @@
     <Setter Property="Stretch" Value="Uniform" />
   </Style>
 
+  <Style Selector="Ellipse.toolbar-dot">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+  </Style>
+
   <Style Selector="Button.toolbar-icon:pointerover Path.icon-stroke, Button.window-action-button:pointerover Path.icon-stroke, Button.search-clear-button:pointerover Path.icon-stroke, Button.toast-close-button:pointerover Path.icon-stroke, Button.update-prompt-close-button:pointerover Path.icon-stroke">
     <Setter Property="Stroke" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
   <Style Selector="Button.toolbar-icon:pointerover Path.icon-fill, Button.window-action-button:pointerover Path.icon-fill, Button.search-clear-button:pointerover Path.icon-fill, Button.rail-button:pointerover Path.icon-fill">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.toolbar-icon:pointerover Ellipse.toolbar-dot">
     <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
@@ -226,6 +234,18 @@
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.mac-window-action-button">
+    <Setter Property="Width" Value="18" />
+    <Setter Property="Height" Value="18" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="CornerRadius" Value="9" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
 
   <Style Selector="Menu.toolbar-main-menu">

@@ -3,11 +3,11 @@
   <StreamGeometry x:Key="Sunder.Icon.Close">M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75</StreamGeometry>
   <StreamGeometry x:Key="Sunder.Icon.Download">M8 2.75 L8 10.25 M4.75 7 L8 10.25 L11.25 7 M4 12.75 L12 12.75</StreamGeometry>
   <StreamGeometry x:Key="Sunder.Icon.Maximize">M4 4 L12 4 L12 12 L4 12 Z</StreamGeometry>
-  <StreamGeometry x:Key="Sunder.Icon.Minimize">M4 11.5 L12 11.5</StreamGeometry>
-  <StreamGeometry x:Key="Sunder.Icon.More">M3.75 8 m-1 0 a1 1 0 1 0 2 0 a1 1 0 1 0 -2 0 M8 8 m-1 0 a1 1 0 1 0 2 0 a1 1 0 1 0 -2 0 M12.25 8 m-1 0 a1 1 0 1 0 2 0 a1 1 0 1 0 -2 0</StreamGeometry>
+  <StreamGeometry x:Key="Sunder.Icon.Minimize">M4 8 L12 8</StreamGeometry>
+  <StreamGeometry x:Key="Sunder.Icon.More">M3.75 7.9 m-1 0 a1 1 0 1 0 2 0 a1 1 0 1 0 -2 0 M8 7.9 m-1 0 a1 1 0 1 0 2 0 a1 1 0 1 0 -2 0 M12.25 7.9 m-1 0 a1 1 0 1 0 2 0 a1 1 0 1 0 -2 0</StreamGeometry>
   <StreamGeometry x:Key="Sunder.Icon.Packages">M3.25 3.25 L7.25 3.25 L7.25 7.25 L3.25 7.25 Z M8.75 3.25 L12.75 3.25 L12.75 7.25 L8.75 7.25 Z M3.25 8.75 L7.25 8.75 L7.25 12.75 L3.25 12.75 Z M8.75 8.75 L12.75 8.75 L12.75 12.75 L8.75 12.75 Z</StreamGeometry>
   <StreamGeometry x:Key="Sunder.Icon.Refresh">M12.2 5.4 A4.8 4.8 0 1 0 12.1 10.8 M12.2 5.4 L12.2 2.6 M12.2 5.4 L9.45 5.4</StreamGeometry>
   <StreamGeometry x:Key="Sunder.Icon.Runtime">M4 3.5 L12 3.5 L12 6 L4 6 Z M4 7.25 L12 7.25 L12 9.75 L4 9.75 Z M4 11 L12 11 L12 12.5 L4 12.5 Z</StreamGeometry>
-  <StreamGeometry x:Key="Sunder.Icon.Settings">M8 5.25 A2.75 2.75 0 1 1 8 10.75 A2.75 2.75 0 0 1 8 5.25 M8 2.5 L8 4 M8 12 L8 13.5 M2.5 8 L4 8 M12 8 L13.5 8 M4.1 4.1 L5.15 5.15 M10.85 10.85 L11.9 11.9 M11.9 4.1 L10.85 5.15 M5.15 10.85 L4.1 11.9</StreamGeometry>
+  <StreamGeometry x:Key="Sunder.Icon.Settings">M8 5.35 A2.65 2.65 0 1 1 8 10.65 A2.65 2.65 0 0 1 8 5.35 M9.35 2.4 L9.7 3.95 A4.35 4.35 0 0 1 10.55 4.3 L11.95 3.5 L12.7 4.8 L11.4 5.7 A4.35 4.35 0 0 1 11.55 6.6 L13 7.2 L13 8.8 L11.55 9.4 A4.35 4.35 0 0 1 11.4 10.3 L12.7 11.2 L11.95 12.5 L10.55 11.7 A4.35 4.35 0 0 1 9.7 12.05 L9.35 13.6 L6.65 13.6 L6.3 12.05 A4.35 4.35 0 0 1 5.45 11.7 L4.05 12.5 L3.3 11.2 L4.6 10.3 A4.35 4.35 0 0 1 4.45 9.4 L3 8.8 L3 7.2 L4.45 6.6 A4.35 4.35 0 0 1 4.6 5.7 L3.3 4.8 L4.05 3.5 L5.45 4.3 A4.35 4.35 0 0 1 6.3 3.95 L6.65 2.4 Z</StreamGeometry>
   <StreamGeometry x:Key="Sunder.Icon.Sync">M12.25 6.1 A4.6 4.6 0 0 0 4.15 4.55 M4.15 4.55 L4.15 2.25 M4.15 4.55 L6.45 4.55 M3.75 9.9 A4.6 4.6 0 0 0 11.85 11.45 M11.85 11.45 L11.85 13.75 M11.85 11.45 L9.55 11.45</StreamGeometry>
 </ResourceDictionary>

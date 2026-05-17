@@ -4,29 +4,61 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              x:Class="Sunder.App.Views.Controls.WindowChromeControls"
              mc:Ignorable="d">
-  <StackPanel Orientation="Horizontal"
-              Spacing="8"
-              VerticalAlignment="Center">
-    <Button Classes="window-action-button"
-            Click="MinimizeButton_OnClick">
-      <Path Width="12"
-            Height="12"
-            Classes="icon-stroke"
-            Data="{StaticResource Sunder.Icon.Minimize}" />
-    </Button>
-    <Button Classes="window-action-button"
-            Click="ToggleFullScreenButton_OnClick">
-      <Path Width="12"
-            Height="12"
-            Classes="icon-stroke"
-            Data="{StaticResource Sunder.Icon.Maximize}" />
-    </Button>
-    <Button Classes="window-action-button close-button"
-            Click="CloseButton_OnClick">
-      <Path Width="12"
-            Height="12"
-            Classes="icon-stroke"
-            Data="{StaticResource Sunder.Icon.Close}" />
-    </Button>
-  </StackPanel>
+  <Grid VerticalAlignment="Center">
+    <StackPanel x:Name="StandardControls"
+                Orientation="Horizontal"
+                Spacing="8"
+                VerticalAlignment="Center">
+      <Button Classes="window-action-button"
+              Click="MinimizeButton_OnClick">
+        <Path Width="12"
+              Height="12"
+              Classes="icon-stroke"
+              Data="{StaticResource Sunder.Icon.Minimize}" />
+      </Button>
+      <Button Classes="window-action-button"
+              Click="ToggleFullScreenButton_OnClick">
+        <Path Width="12"
+              Height="12"
+              Classes="icon-stroke"
+              Data="{StaticResource Sunder.Icon.Maximize}" />
+      </Button>
+      <Button Classes="window-action-button close-button"
+              Click="CloseButton_OnClick">
+        <Path Width="12"
+              Height="12"
+              Classes="icon-stroke"
+              Data="{StaticResource Sunder.Icon.Close}" />
+      </Button>
+    </StackPanel>
+
+    <StackPanel x:Name="MacControls"
+                Orientation="Horizontal"
+                Margin="0, 0, 10, 0"
+                Spacing="8"
+                IsVisible="False"
+                VerticalAlignment="Center">
+      <Button Classes="mac-window-action-button"
+              ToolTip.Tip="Full screen"
+              Click="ToggleFullScreenButton_OnClick">
+          <Grid Width="14" Height="14">
+              <Ellipse Fill="#28C840" Stroke="#1EAD35" StrokeThickness="1" />
+          </Grid>
+      </Button>
+      <Button Classes="mac-window-action-button"
+              ToolTip.Tip="Minimize"
+              Click="MinimizeButton_OnClick">
+        <Grid Width="14" Height="14">
+          <Ellipse Fill="#FFBD2E" Stroke="#DEA123" StrokeThickness="1" />
+        </Grid>
+      </Button>
+      <Button Classes="mac-window-action-button"
+              ToolTip.Tip="Close"
+              Click="CloseButton_OnClick">
+          <Grid Width="14" Height="14">
+              <Ellipse Fill="#FF5F57" Stroke="#E0443E" StrokeThickness="1" />
+          </Grid>
+      </Button>
+    </StackPanel>
+  </Grid>
 </UserControl>
