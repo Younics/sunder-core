@@ -1,13 +1,14 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Sunder.App.Composition;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
 
 namespace Sunder.App.Services;
 
-public sealed class WindowLauncher : IWindowLauncher
+public sealed class WindowLauncher : IWindowLauncher, IDisposable
 {
     private readonly PackageViewHostService _packageViewHostService;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
@@ -18,9 +19,13 @@ public sealed class WindowLauncher : IWindowLauncher
     private readonly SunderUpdateService _updateService;
     private readonly BackgroundProcessQueueService _backgroundProcessQueue;
     private readonly PackageOperationService _packageOperationService;
+    private readonly SettingsWindowFactory? _settingsWindowFactory;
+    private readonly PackagesWindowFactory? _packagesWindowFactory;
+    private readonly bool _ownsBackgroundProcessQueue;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
     private MainWindowViewModel? _mainWindowViewModel;
+    private bool _disposed;
 
     public WindowLauncher(
         PackageViewHostService packageViewHostService,
@@ -30,7 +35,9 @@ public sealed class WindowLauncher : IWindowLauncher
         ShellStateService shellStateService,
         ShellState shellState,
         SunderUpdateService? updateService = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null)
+        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        SettingsWindowFactory? settingsWindowFactory = null,
+        PackagesWindowFactory? packagesWindowFactory = null)
     {
         _packageViewHostService = packageViewHostService;
         _runtimeApiClientFactory = runtimeApiClientFactory;
@@ -39,6 +46,9 @@ public sealed class WindowLauncher : IWindowLauncher
         _shellStateService = shellStateService;
         _shellState = shellState;
         _updateService = updateService ?? new SunderUpdateService();
+        _settingsWindowFactory = settingsWindowFactory;
+        _packagesWindowFactory = packagesWindowFactory;
+        _ownsBackgroundProcessQueue = backgroundProcessQueue is null;
         _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _packageOperationService = new PackageOperationService(
             _backgroundProcessQueue,
@@ -96,8 +106,6 @@ public sealed class WindowLauncher : IWindowLauncher
 
     public void CloseForShutdown()
     {
-        _ = _backgroundProcessQueue.CancelAllAsync();
-
         if (_settingsWindow is not null)
         {
             _settingsWindow.CloseForShutdown();
@@ -110,6 +118,24 @@ public sealed class WindowLauncher : IWindowLauncher
             _packagesWindow = null;
         }
 
+        Dispose();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _packageOperationService.Dispose();
+        if (_ownsBackgroundProcessQueue)
+        {
+            _backgroundProcessQueue.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     public async Task CancelBackgroundProcessesAsync(CancellationToken cancellationToken = default)
@@ -117,18 +143,19 @@ public sealed class WindowLauncher : IWindowLauncher
 
     private SettingsWindow CreateSettingsWindow()
     {
-        var window = new SettingsWindow(_shellStateService, _shellState)
-        {
-            DataContext = new SettingsWindowViewModel(
-                _runtimeApiClientFactory.CreateClient(),
-                _packageViewHostService,
-                _cliInstallationService,
-                _updateService,
-                _backgroundProcessQueue,
-                _shellState.BackgroundProcessPopoverWidth,
-                _shellState.BackgroundProcessPopoverHeight,
-                PersistBackgroundProcessPopoverSize),
-        };
+        var window = _settingsWindowFactory?.Create(_packageViewHostService, PersistBackgroundProcessPopoverSize)
+            ?? new SettingsWindow(_shellStateService, _shellState)
+            {
+                DataContext = new SettingsWindowViewModel(
+                    _runtimeApiClientFactory.CreateClient(),
+                    _packageViewHostService,
+                    _cliInstallationService,
+                    _updateService,
+                    _backgroundProcessQueue,
+                    _shellState.BackgroundProcessPopoverWidth,
+                    _shellState.BackgroundProcessPopoverHeight,
+                    PersistBackgroundProcessPopoverSize),
+            };
 
         window.Closed += (_, _) =>
         {
@@ -143,17 +170,24 @@ public sealed class WindowLauncher : IWindowLauncher
 
     private PackagesWindow CreatePackagesWindow()
     {
-        var window = new PackagesWindow(_shellStateService, _shellState);
-        window.DataContext = new PackagesWindowViewModel(
-            _runtimeApiClientFactory.CreateClient(),
-            new PackageArchivePicker(window),
+        var window = _packagesWindowFactory?.Create(
             ApplyPackageLifecycleChangesAsync,
             _packageOperationService,
-            _backgroundProcessQueue,
-            notificationCenter: _notificationCenter,
-            backgroundProcessPopoverWidth: _shellState.BackgroundProcessPopoverWidth,
-            backgroundProcessPopoverHeight: _shellState.BackgroundProcessPopoverHeight,
-            persistBackgroundProcessPopoverSize: PersistBackgroundProcessPopoverSize);
+            PersistBackgroundProcessPopoverSize);
+        if (window is null)
+        {
+            window = new PackagesWindow(_shellStateService, _shellState);
+            window.DataContext = new PackagesWindowViewModel(
+                _runtimeApiClientFactory.CreateClient(),
+                new PackageArchivePicker(window),
+                ApplyPackageLifecycleChangesAsync,
+                _packageOperationService,
+                _backgroundProcessQueue,
+                notificationCenter: _notificationCenter,
+                backgroundProcessPopoverWidth: _shellState.BackgroundProcessPopoverWidth,
+                backgroundProcessPopoverHeight: _shellState.BackgroundProcessPopoverHeight,
+                persistBackgroundProcessPopoverSize: PersistBackgroundProcessPopoverSize);
+        }
 
         window.Closed += (_, _) =>
         {

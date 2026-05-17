@@ -25,6 +25,24 @@ public sealed class AppPackageViewRegistryTests
     }
 
     [Fact]
+    public void GetOrCreateView_WhenCachedViewExists_DisposesUnusedReplacement()
+    {
+        TrackedDataContext.Created.Clear();
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        registry.RegisterPackageView<TrackedDataContextPackageView>("test.package", "test.view", serviceProvider);
+
+        var first = registry.GetOrCreateView("test.view", _ => false, ReportFailure);
+        var second = registry.GetOrCreateView("test.view", _ => false, ReportFailure);
+
+        Assert.Same(first, second);
+        Assert.Collection(
+            TrackedDataContext.Created,
+            dataContext => Assert.False(dataContext.IsDisposed),
+            dataContext => Assert.True(dataContext.IsDisposed));
+    }
+
+    [Fact]
     public void RemoveCachedViews_DisposesCachedViewDataContext()
     {
         var registry = new AppPackageViewRegistry();
@@ -93,6 +111,60 @@ public sealed class AppPackageViewRegistryTests
     }
 
     [Fact]
+    public void RegisterPackageView_WhenViewIdBelongsToAnotherPackage_Throws()
+    {
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        registry.RegisterPackageView<TestPackageView>("test.package", "test.view", serviceProvider);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            registry.RegisterPackageView<TestPackageView>("other.package", "test.view", serviceProvider));
+
+        Assert.Contains("test.package", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetOrCreateView_WhenPackageIsUnregisteredDuringCreation_DoesNotCacheCreatedView()
+    {
+        SelfUnregisteringPackageView.Created.Clear();
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        SelfUnregisteringPackageView.OnCreate = () => registry.UnregisterPackage("test.package");
+        registry.RegisterPackageView<SelfUnregisteringPackageView>("test.package", "test.view", serviceProvider);
+
+        try
+        {
+            var view = registry.GetOrCreateView("test.view", _ => false, ReportFailure);
+
+            Assert.Null(view);
+            var createdView = Assert.Single(SelfUnregisteringPackageView.Created);
+            Assert.True(createdView.IsDisposed);
+            Assert.Null(registry.GetOrCreateView("test.view", _ => false, ReportFailure));
+        }
+        finally
+        {
+            SelfUnregisteringPackageView.OnCreate = null;
+        }
+    }
+
+    [Fact]
+    public void UnregisterPackage_WhenCachedViewDisposeThrows_DoesNotThrowAndContinuesCleanup()
+    {
+        ThrowingDisposePackageView.ControlDisposeCalled = false;
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().BuildServiceProvider();
+        registry.RegisterPackageView<ThrowingDisposePackageView>("test.package", "test.view", serviceProvider);
+        var view = Assert.IsType<ThrowingDisposePackageView>(registry.GetOrCreateView("test.view", _ => false, ReportFailure));
+        var dataContext = Assert.IsType<ThrowingDisposableDataContext>(view.DataContext);
+
+        registry.UnregisterPackage("test.package");
+
+        Assert.True(dataContext.DisposeCalled);
+        Assert.True(ThrowingDisposePackageView.ControlDisposeCalled);
+        Assert.Null(registry.GetOrCreateView("test.view", _ => false, ReportFailure));
+    }
+
+    [Fact]
     public void ListSettingsViewPackages_FiltersDisabledPackagesAndUsesDescriptors()
     {
         var registry = new AppPackageViewRegistry(new Dictionary<string, PackageSettingsViewDescriptor>(StringComparer.OrdinalIgnoreCase)
@@ -119,6 +191,53 @@ public sealed class AppPackageViewRegistryTests
     {
     }
 
+    private sealed class SelfUnregisteringPackageView : Control, IDisposable
+    {
+        public static List<SelfUnregisteringPackageView> Created { get; } = [];
+
+        public static Action? OnCreate { get; set; }
+
+        public SelfUnregisteringPackageView()
+        {
+            Created.Add(this);
+            OnCreate?.Invoke();
+        }
+
+        public bool IsDisposed { get; private set; }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+        }
+    }
+
+    private sealed class ThrowingDisposePackageView : Control, IDisposable
+    {
+        public static bool ControlDisposeCalled { get; set; }
+
+        public ThrowingDisposePackageView()
+        {
+            DataContext = new ThrowingDisposableDataContext();
+        }
+
+        public void Dispose()
+        {
+            ControlDisposeCalled = true;
+            throw new InvalidOperationException("Control dispose failed.");
+        }
+    }
+
+    private sealed class ThrowingDisposableDataContext : IDisposable
+    {
+        public bool DisposeCalled { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeCalled = true;
+            throw new InvalidOperationException("Data context dispose failed.");
+        }
+    }
+
     private sealed class DisposableDataContextPackageView : Control
     {
         public DisposableDataContextPackageView()
@@ -129,6 +248,31 @@ public sealed class AppPackageViewRegistryTests
 
     private sealed class DisposableDataContext : IDisposable
     {
+        public bool IsDisposed { get; private set; }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+        }
+    }
+
+    private sealed class TrackedDataContextPackageView : Control
+    {
+        public TrackedDataContextPackageView()
+        {
+            DataContext = new TrackedDataContext();
+        }
+    }
+
+    private sealed class TrackedDataContext : IDisposable
+    {
+        public static List<TrackedDataContext> Created { get; } = [];
+
+        public TrackedDataContext()
+        {
+            Created.Add(this);
+        }
+
         public bool IsDisposed { get; private set; }
 
         public void Dispose()

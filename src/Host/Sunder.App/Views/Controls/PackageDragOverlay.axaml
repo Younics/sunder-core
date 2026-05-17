@@ -1,0 +1,19 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.PackageDragOverlay"
+             IsHitTestVisible="False"
+             ClipToBounds="False"
+             mc:Ignorable="d">
+  <Canvas IsHitTestVisible="False"
+          ClipToBounds="False">
+    <Border x:Name="PackageDragGhost"
+            Classes="package-bar-button-surface drag-ghost-surface"
+            IsVisible="False">
+      <controls:PackageIconView x:Name="PackageDragGhostIcon"
+                                ImageMargin="5" />
+    </Border>
+  </Canvas>
+</UserControl>

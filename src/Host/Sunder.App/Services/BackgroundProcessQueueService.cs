@@ -2,49 +2,44 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
+public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDisposable, IAsyncDisposable
 {
     private const int DefaultMaxCompletedHistory = 200;
     private readonly object _syncRoot = new();
     private readonly List<BackgroundProcessWorkItem> _processes = [];
     private readonly Dictionary<Guid, Task> _runningTasks = [];
+    private readonly BackgroundProcessEventPublisher _events;
     private readonly int _maxParallelism;
     private readonly int _maxCompletedHistory;
+    private bool _disposed;
 
     public BackgroundProcessQueueService(int maxParallelism = 4, int maxCompletedHistory = DefaultMaxCompletedHistory)
     {
+        _events = new BackgroundProcessEventPublisher(this);
         _maxParallelism = Math.Max(1, maxParallelism);
         _maxCompletedHistory = Math.Max(0, maxCompletedHistory);
     }
 
-    public event EventHandler<BackgroundProcessChangedEventArgs>? ProcessChanged;
+    public event EventHandler<BackgroundProcessChangedEventArgs>? ProcessChanged
+    {
+        add => _events.ProcessChanged += value;
+        remove => _events.ProcessChanged -= value;
+    }
 
     public BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.Title))
-        {
-            throw new ArgumentException("Background process title is required.", nameof(request));
-        }
-
-        if (string.IsNullOrWhiteSpace(request.GroupKey))
-        {
-            throw new ArgumentException("Background process group key is required.", nameof(request));
-        }
-
-        if (request.ExecuteAsync is null)
-        {
-            throw new ArgumentException("Background process execute delegate is required.", nameof(request));
-        }
-
+        BackgroundProcessRequestValidator.Validate(request);
         var normalizedRequest = request with { Metadata = NormalizeMetadata(request.Metadata) };
-        var item = new BackgroundProcessWorkItem(Guid.NewGuid(), normalizedRequest, DateTimeOffset.UtcNow)
-        {
-            StatusText = "Queued",
-        };
+        var item = new BackgroundProcessWorkItem(Guid.NewGuid(), normalizedRequest, DateTimeOffset.UtcNow);
 
         BackgroundProcessSnapshot snapshot;
         lock (_syncRoot)
         {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(BackgroundProcessQueueService));
+            }
+
             _processes.Add(item);
             snapshot = item.ToSnapshot();
         }
@@ -77,42 +72,83 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
     public bool Cancel(Guid processId)
         => TryCancel(processId, force: false);
 
+    public void Dispose()
+    {
+        Dispose(waitForRunningTasks: false);
+        GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var runningTasks = Dispose(waitForRunningTasks: true);
+        await BackgroundProcessCancellation.WaitForRunningTasksAsync(runningTasks, cancellationToken: default).ConfigureAwait(false);
+        TrimCompletedHistory();
+        GC.SuppressFinalize(this);
+    }
+
     public async Task CancelAllAsync(CancellationToken cancellationToken = default)
     {
         BackgroundProcessSnapshot[] changedSnapshots;
+        CancellationTokenSource[] cancellationTokenSourcesToCancel;
         Task[] runningTasks;
         lock (_syncRoot)
         {
-            changedSnapshots = CancelAllCore();
+            (changedSnapshots, cancellationTokenSourcesToCancel) = CancelAllCore();
             runningTasks = _runningTasks.Values.ToArray();
         }
 
+        BackgroundProcessCancellation.Deliver(cancellationTokenSourcesToCancel);
         foreach (var snapshot in changedSnapshots)
         {
             Publish(snapshot);
         }
 
-        if (runningTasks.Length == 0)
-        {
-            TrimCompletedHistory();
-            return;
-        }
-
-        try
-        {
-            await Task.WhenAll(runningTasks).WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            // Individual process failures are reflected through process state snapshots.
-        }
-
+        await BackgroundProcessCancellation.WaitForRunningTasksAsync(runningTasks, cancellationToken).ConfigureAwait(false);
         TrimCompletedHistory();
     }
+
+    private Task[] Dispose(bool waitForRunningTasks)
+    {
+        BackgroundProcessSnapshot[] changedSnapshots;
+        CancellationTokenSource[] cancellationTokenSourcesToCancel;
+        Task[] runningTasks;
+        lock (_syncRoot)
+        {
+            if (_disposed && _runningTasks.Count == 0)
+            {
+                return [];
+            }
+
+            _disposed = true;
+            (changedSnapshots, cancellationTokenSourcesToCancel) = CancelAllCore();
+            runningTasks = _runningTasks.Values.ToArray();
+        }
+
+        BackgroundProcessCancellation.Deliver(cancellationTokenSourcesToCancel);
+        foreach (var snapshot in changedSnapshots)
+        {
+            Publish(snapshot);
+        }
+
+        if (!waitForRunningTasks)
+        {
+            TrimCompletedHistory();
+            return [];
+        }
+
+        return runningTasks;
+    }
+
+    internal Task CancelPackageProcessesAsync(string packageId, CancellationToken cancellationToken = default)
+        => CancelMatchingAsync(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase),
+            cancellationToken);
+
+    internal void CancelPackageProcesses(string packageId)
+        => CancelMatching(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
     internal void UpdateProcess(
         Guid processId,
@@ -129,25 +165,85 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(statusText))
-            {
-                item.StatusText = statusText;
-            }
-
-            if (updateProgress)
-            {
-                item.ProgressPercent = progressPercent is null ? null : Math.Clamp(progressPercent.Value, 0, 100);
-            }
-
+            item.Update(statusText, progressPercent, updateProgress);
             snapshot = item.ToSnapshot();
         }
 
         Publish(snapshot);
     }
 
+    internal async Task CancelMatchingAsync(
+        Func<BackgroundProcessSnapshot, bool> predicate,
+        CancellationToken cancellationToken)
+    {
+        var runningTasks = CancelMatching(predicate);
+        await BackgroundProcessCancellation.WaitForRunningTasksAsync(runningTasks, cancellationToken).ConfigureAwait(false);
+        TrimCompletedHistory();
+    }
+
+    private Task[] CancelMatching(Func<BackgroundProcessSnapshot, bool> predicate)
+    {
+        BackgroundProcessSnapshot[] changedSnapshots;
+        CancellationTokenSource[] cancellationTokenSourcesToCancel;
+        Task[] runningTasks;
+        var shouldSchedule = false;
+        lock (_syncRoot)
+        {
+            var changed = new List<BackgroundProcessSnapshot>();
+            var cancellationTokenSources = new List<CancellationTokenSource>();
+            var tasks = new List<Task>();
+            foreach (var item in _processes)
+            {
+                if (!predicate(item.ToSnapshot()))
+                {
+                    continue;
+                }
+
+                if (_runningTasks.TryGetValue(item.ProcessId, out var runningTask))
+                {
+                    tasks.Add(runningTask);
+                }
+
+                if (item.State == BackgroundProcessState.Queued)
+                {
+                    item.MarkQueuedCancelled(DateTimeOffset.UtcNow);
+                    changed.Add(item.ToSnapshot());
+                    shouldSchedule = true;
+                    continue;
+                }
+
+                if (item.State == BackgroundProcessState.Running)
+                {
+                    item.MarkCancelling();
+                    cancellationTokenSources.Add(item.CancellationTokenSource);
+                    changed.Add(item.ToSnapshot());
+                }
+            }
+
+            changedSnapshots = changed.ToArray();
+            cancellationTokenSourcesToCancel = cancellationTokenSources.ToArray();
+            runningTasks = tasks.Distinct().ToArray();
+        }
+
+        BackgroundProcessCancellation.Deliver(cancellationTokenSourcesToCancel);
+        foreach (var snapshot in changedSnapshots)
+        {
+            Publish(snapshot);
+        }
+
+        if (shouldSchedule)
+        {
+            ScheduleEligibleProcesses();
+        }
+
+        TrimCompletedHistory();
+        return runningTasks;
+    }
+
     private bool TryCancel(Guid processId, bool force)
     {
         BackgroundProcessSnapshot? snapshot = null;
+        CancellationTokenSource? cancellationTokenSourceToCancel = null;
         var shouldSchedule = false;
         lock (_syncRoot)
         {
@@ -164,21 +260,19 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
 
             if (item.State == BackgroundProcessState.Queued)
             {
-                item.State = BackgroundProcessState.Cancelled;
-                item.StatusText = "Cancelled";
-                item.CompletedAtUtc = DateTimeOffset.UtcNow;
+                item.MarkQueuedCancelled(DateTimeOffset.UtcNow);
                 snapshot = item.ToSnapshot();
                 shouldSchedule = true;
             }
             else
             {
-                item.State = BackgroundProcessState.Cancelling;
-                item.StatusText = "Cancelling...";
-                item.CancellationTokenSource.Cancel();
+                item.MarkCancelling();
+                cancellationTokenSourceToCancel = item.CancellationTokenSource;
                 snapshot = item.ToSnapshot();
             }
         }
 
+        BackgroundProcessCancellation.Deliver(cancellationTokenSourceToCancel);
         Publish(snapshot);
         if (shouldSchedule)
         {
@@ -189,77 +283,52 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
         return true;
     }
 
-    private BackgroundProcessSnapshot[] CancelAllCore()
+    private (BackgroundProcessSnapshot[] ChangedSnapshots, CancellationTokenSource[] CancellationTokenSourcesToCancel) CancelAllCore()
     {
         var changed = new List<BackgroundProcessSnapshot>();
+        var cancellationTokenSources = new List<CancellationTokenSource>();
         foreach (var item in _processes)
         {
             if (item.State == BackgroundProcessState.Queued)
             {
-                item.State = BackgroundProcessState.Cancelled;
-                item.StatusText = "Cancelled";
-                item.CompletedAtUtc = DateTimeOffset.UtcNow;
+                item.MarkQueuedCancelled(DateTimeOffset.UtcNow);
                 changed.Add(item.ToSnapshot());
                 continue;
             }
 
             if (item.State == BackgroundProcessState.Running)
             {
-                item.State = BackgroundProcessState.Cancelling;
-                item.StatusText = "Cancelling...";
-                item.CancellationTokenSource.Cancel();
+                item.MarkCancelling();
+                cancellationTokenSources.Add(item.CancellationTokenSource);
                 changed.Add(item.ToSnapshot());
             }
         }
 
-        return changed.ToArray();
+        return (changed.ToArray(), cancellationTokenSources.ToArray());
     }
 
     private void ScheduleEligibleProcesses()
     {
-        List<BackgroundProcessWorkItem> processesToStart = [];
-        List<BackgroundProcessSnapshot> changedSnapshots = [];
+        BackgroundProcessWorkItem[] processesToStart;
 
         lock (_syncRoot)
         {
-            while (_runningTasks.Count + processesToStart.Count < _maxParallelism)
+            if (_disposed)
             {
-                var candidate = _processes.FirstOrDefault(process =>
-                    process.State == BackgroundProcessState.Queued
-                    && !IsGroupBlocked(process, processesToStart));
-                if (candidate is null)
-                {
-                    break;
-                }
-
-                candidate.State = BackgroundProcessState.Running;
-                candidate.StatusText = "Starting...";
-                candidate.StartedAtUtc = DateTimeOffset.UtcNow;
-                processesToStart.Add(candidate);
-                changedSnapshots.Add(candidate.ToSnapshot());
+                return;
             }
 
+            processesToStart = BackgroundProcessScheduler.StartEligibleProcesses(_processes, _runningTasks.Count, _maxParallelism);
             foreach (var item in processesToStart)
             {
                 _runningTasks[item.ProcessId] = Task.Run(() => RunProcessAsync(item));
             }
         }
 
-        foreach (var snapshot in changedSnapshots)
+        foreach (var snapshot in processesToStart.Select(process => process.ToSnapshot()))
         {
             Publish(snapshot);
         }
-    }
-
-    private bool IsGroupBlocked(BackgroundProcessWorkItem candidate, IReadOnlyList<BackgroundProcessWorkItem> processesToStart)
-    {
-        return _processes.Concat(processesToStart)
-            .Any(process =>
-                process.ProcessId != candidate.ProcessId
-                && process.State is BackgroundProcessState.Running or BackgroundProcessState.Cancelling
-                && string.Equals(process.Request.GroupKey, candidate.Request.GroupKey, StringComparison.OrdinalIgnoreCase)
-                && (process.Request.ConcurrencyMode == BackgroundProcessConcurrencyMode.SequentialWithinGroup
-                    || candidate.Request.ConcurrencyMode == BackgroundProcessConcurrencyMode.SequentialWithinGroup));
     }
 
     private async Task RunProcessAsync(BackgroundProcessWorkItem item)
@@ -275,10 +344,7 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
             await item.Request.ExecuteAsync(context).ConfigureAwait(false);
             lock (_syncRoot)
             {
-                item.State = BackgroundProcessState.Completed;
-                item.StatusText = "Completed";
-                item.ProgressPercent = 100;
-                item.CompletedAtUtc = DateTimeOffset.UtcNow;
+                item.CompleteAfterSuccessfulExecution(DateTimeOffset.UtcNow);
                 completedSnapshot = item.ToSnapshot();
             }
         }
@@ -286,9 +352,7 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
         {
             lock (_syncRoot)
             {
-                item.State = BackgroundProcessState.Cancelled;
-                item.StatusText = "Cancelled";
-                item.CompletedAtUtc = DateTimeOffset.UtcNow;
+                item.CompleteAfterCancellation(DateTimeOffset.UtcNow);
                 completedSnapshot = item.ToSnapshot();
             }
         }
@@ -296,10 +360,7 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
         {
             lock (_syncRoot)
             {
-                item.State = BackgroundProcessState.Failed;
-                item.StatusText = "Failed";
-                item.ErrorMessage = ex.Message;
-                item.CompletedAtUtc = DateTimeOffset.UtcNow;
+                item.CompleteAfterFailure(ex, DateTimeOffset.UtcNow);
                 completedSnapshot = item.ToSnapshot();
             }
         }
@@ -310,7 +371,7 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
                 _runningTasks.Remove(item.ProcessId);
             }
 
-            item.CancellationTokenSource.Dispose();
+            item.DisposeCancellationTokenSource();
         }
 
         Publish(completedSnapshot);
@@ -320,89 +381,19 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue
 
     private void TrimCompletedHistory()
     {
-        if (_maxCompletedHistory == 0)
-        {
-            return;
-        }
-
         lock (_syncRoot)
         {
-            var completed = _processes
-                .Where(process => process.State is BackgroundProcessState.Completed or BackgroundProcessState.Failed or BackgroundProcessState.Cancelled)
-                .OrderByDescending(process => process.CompletedAtUtc)
-                .Skip(_maxCompletedHistory)
-                .ToArray();
-            foreach (var item in completed)
-            {
-                _processes.Remove(item);
-            }
+            BackgroundProcessHistory.TrimCompleted(_processes, _maxCompletedHistory);
         }
     }
 
     private void Publish(BackgroundProcessSnapshot? snapshot)
     {
-        var handlers = ProcessChanged;
-        if (snapshot is null || handlers is null)
-        {
-            return;
-        }
-
-        var args = new BackgroundProcessChangedEventArgs(snapshot);
-        foreach (var handler in handlers.GetInvocationList())
-        {
-            try
-            {
-                ((EventHandler<BackgroundProcessChangedEventArgs>)handler)(this, args);
-            }
-            catch (Exception ex)
-            {
-                AppSessionLog.WriteError("A background process change subscriber failed.", ex);
-            }
-        }
+        _events.Publish(snapshot);
     }
 
     private static IReadOnlyDictionary<string, string> NormalizeMetadata(IReadOnlyDictionary<string, string>? metadata)
         => metadata is null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(metadata, StringComparer.OrdinalIgnoreCase);
-
-    private sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProcessRequest request, DateTimeOffset queuedAtUtc)
-    {
-        public Guid ProcessId { get; } = processId;
-
-        public BackgroundProcessRequest Request { get; } = request;
-
-        public CancellationTokenSource CancellationTokenSource { get; } = new();
-
-        public BackgroundProcessState State { get; set; } = BackgroundProcessState.Queued;
-
-        public string StatusText { get; set; } = string.Empty;
-
-        public double? ProgressPercent { get; set; }
-
-        public string? ErrorMessage { get; set; }
-
-        public DateTimeOffset QueuedAtUtc { get; } = queuedAtUtc;
-
-        public DateTimeOffset? StartedAtUtc { get; set; }
-
-        public DateTimeOffset? CompletedAtUtc { get; set; }
-
-        public BackgroundProcessSnapshot ToSnapshot()
-            => new(
-                ProcessId,
-                Request.Title,
-                Request.GroupKey,
-                Request.Indicator,
-                Request.ConcurrencyMode,
-                State,
-                StatusText,
-                ProgressPercent,
-                Request.CanCancel,
-                Request.Metadata!,
-                ErrorMessage,
-                QueuedAtUtc,
-                StartedAtUtc,
-                CompletedAtUtc);
-    }
 }

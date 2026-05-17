@@ -47,8 +47,20 @@ public sealed class AppUpdateSettingsService
     {
         lock (_syncRoot)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_settingsFilePath)!);
-            File.WriteAllText(_settingsFilePath, JsonSerializer.Serialize(settings, JsonOptions));
+            var directory = Path.GetDirectoryName(_settingsFilePath)!;
+            Directory.CreateDirectory(directory);
+
+            var tempFilePath = Path.Combine(directory, $"{Path.GetFileName(_settingsFilePath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllText(tempFilePath, JsonSerializer.Serialize(settings, JsonOptions));
+                File.Move(tempFilePath, _settingsFilePath, overwrite: true);
+            }
+            catch
+            {
+                TryDeleteTempFile(tempFilePath);
+                throw;
+            }
         }
     }
 
@@ -74,6 +86,21 @@ public sealed class AppUpdateSettingsService
         catch
         {
             // Corrupt update settings should never block app startup.
+        }
+    }
+
+    private static void TryDeleteTempFile(string tempFilePath)
+    {
+        try
+        {
+            if (File.Exists(tempFilePath))
+            {
+                File.Delete(tempFilePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to delete a temporary update settings file.", ex);
         }
     }
 }

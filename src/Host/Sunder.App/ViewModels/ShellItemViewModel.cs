@@ -1,15 +1,12 @@
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
 
-public partial class ShellItemViewModel : ViewModelBase, IDisposable
+public partial class ShellItemViewModel : PackageIconItemViewModel
 {
     private readonly Action<ShellItemViewModel> _onSelect;
-    private readonly bool _ownsIconImage;
-    private bool _isDisposed;
 
     public ShellItemViewModel(
         string id,
@@ -23,36 +20,21 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
         bool isDragPreview = false,
         IImage? iconImage = null,
         bool ownsIconImage = true)
+        : base(iconUri, iconImage, ownsIconImage)
     {
         Id = id;
         Glyph = glyph;
-        IconUri = iconUri;
         Title = title;
         PackageDisplayName = packageDisplayName;
         ToolTipText = toolTipText;
         Placement = placement;
         _onSelect = onSelect;
         IsDragPreview = isDragPreview;
-        _ownsIconImage = ownsIconImage;
-        IconImage = iconImage;
-
-        if (IconUri is not null && IconImage is null)
-        {
-            _ = LoadIconAsync(IconUri);
-        }
     }
 
     public string Id { get; }
 
     public string Glyph { get; }
-
-    public Uri? IconUri { get; }
-
-    public bool HasIconImage => IconImage is not null;
-
-    public bool ShowGlyphFallback => IconImage is null;
-
-    public bool HasIconLoadError => !string.IsNullOrWhiteSpace(IconLoadError);
 
     public string Title { get; }
 
@@ -75,52 +57,6 @@ public partial class ShellItemViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private bool _isSelected;
 
-    [ObservableProperty]
-    private IImage? _iconImage;
-
-    [ObservableProperty]
-    private string _iconLoadError = string.Empty;
-
-    partial void OnIconImageChanged(IImage? value)
-    {
-        OnPropertyChanged(nameof(HasIconImage));
-        OnPropertyChanged(nameof(ShowGlyphFallback));
-    }
-
-    partial void OnIconLoadErrorChanged(string value)
-        => OnPropertyChanged(nameof(HasIconLoadError));
-
     [RelayCommand]
     private void Select() => _onSelect(this);
-
-    public void Dispose()
-    {
-        _isDisposed = true;
-        if (_ownsIconImage && IconImage is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
-
-        IconImage = null;
-    }
-
-    private async Task LoadIconAsync(Uri iconUri)
-    {
-        var result = await PackageIconImageLoader.LoadAsync(iconUri);
-        await UiThread.InvokeAsync(() =>
-        {
-            if (_isDisposed)
-            {
-                if (result.Image is IDisposable disposable)
-                {
-                    disposable.Dispose();
-                }
-
-                return;
-            }
-
-            IconLoadError = result.Error ?? string.Empty;
-            IconImage = result.Image;
-        });
-    }
 }

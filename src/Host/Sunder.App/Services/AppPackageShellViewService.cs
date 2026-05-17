@@ -1,5 +1,3 @@
-using System.Runtime.ExceptionServices;
-using Avalonia.Threading;
 using Sunder.App.ViewModels;
 using Sunder.Sdk.Abstractions;
 
@@ -7,25 +5,43 @@ namespace Sunder.App.Services;
 
 public sealed class AppPackageShellViewService : IPackageShellViewService
 {
-    private static readonly TimeSpan SynchronousUiInvokeTimeout = TimeSpan.FromSeconds(5);
     private MainWindowViewModel? _viewModel;
+    private PackageHotbarView[] _hotbarViews = [];
 
     public void Attach(MainWindowViewModel viewModel)
-        => _viewModel = viewModel;
+    {
+        if (ReferenceEquals(_viewModel, viewModel))
+        {
+            RefreshSnapshot(viewModel);
+            return;
+        }
+
+        if (_viewModel is not null)
+        {
+            _viewModel.ShellViewStateChanged -= OnShellViewStateChanged;
+        }
+
+        _viewModel = viewModel;
+        _viewModel.ShellViewStateChanged += OnShellViewStateChanged;
+        RefreshSnapshot(viewModel);
+    }
 
     public void Detach(MainWindowViewModel viewModel)
     {
         if (ReferenceEquals(_viewModel, viewModel))
         {
+            _viewModel.ShellViewStateChanged -= OnShellViewStateChanged;
             _viewModel = null;
+            Volatile.Write(ref _hotbarViews, []);
         }
     }
 
     public IReadOnlyList<PackageHotbarView> ListHotbarViews()
-        => Invoke(() => _viewModel?.ListHotbarViews() ?? [], Array.Empty<PackageHotbarView>());
+        => Volatile.Read(ref _hotbarViews);
 
     public bool IsViewInHotbar(string viewId)
-        => Invoke(() => _viewModel?.IsViewInHotbar(viewId) == true, fallback: false);
+        => Volatile.Read(ref _hotbarViews)
+            .Any(view => string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase));
 
     public ValueTask<bool> AddViewToDefaultHotbarAsync(
         string viewId,
@@ -59,45 +75,6 @@ public sealed class AppPackageShellViewService : IPackageShellViewService
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => ValueTask.FromResult(viewModel.ClosePackageViewPanel(viewId)), cancellationToken);
 
-    private static T Invoke<T>(Func<T> action, T fallback)
-    {
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            return action();
-        }
-
-        using var completion = new ManualResetEventSlim();
-        var result = fallback;
-        Exception? exception = null;
-        Dispatcher.UIThread.Post(() =>
-        {
-            try
-            {
-                result = action();
-            }
-            catch (Exception ex)
-            {
-                exception = ex;
-            }
-            finally
-            {
-                completion.Set();
-            }
-        });
-
-        if (!completion.Wait(SynchronousUiInvokeTimeout))
-        {
-            return fallback;
-        }
-
-        if (exception is not null)
-        {
-            ExceptionDispatchInfo.Capture(exception).Throw();
-        }
-
-        return result;
-    }
-
     private async ValueTask<bool> InvokeAsync(
         Func<MainWindowViewModel, ValueTask<bool>> action,
         CancellationToken cancellationToken)
@@ -109,11 +86,17 @@ public sealed class AppPackageShellViewService : IPackageShellViewService
             return false;
         }
 
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            return await action(viewModel);
-        }
-
-        return await Dispatcher.UIThread.InvokeAsync(async () => await action(viewModel));
+        return await UiThread.InvokeAsync(async () => await action(viewModel));
     }
+
+    private void OnShellViewStateChanged()
+    {
+        if (_viewModel is not null)
+        {
+            RefreshSnapshot(_viewModel);
+        }
+    }
+
+    private void RefreshSnapshot(MainWindowViewModel viewModel)
+        => Volatile.Write(ref _hotbarViews, viewModel.ListHotbarViews().ToArray());
 }

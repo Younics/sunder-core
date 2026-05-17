@@ -93,6 +93,135 @@ public sealed class SettingsWindowViewModelTests
     }
 
     [Fact]
+    public async Task SelectPackageSettingsAsync_WhenEarlierFieldLoadCompletesLater_DoesNotOverwriteCurrentSelection()
+    {
+        var agentValuesStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAgentValues = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var runtimeClient = new FakeRuntimeApiClient
+        {
+            ConfigurationSchemas =
+            [
+                CreateSchema("agent", "Agent"),
+                CreateSchema("tools", "Tools"),
+            ],
+            GetConfigurationValuesAsyncCallback = async (packageId, cancellationToken) =>
+            {
+                if (string.Equals(packageId, "agent", StringComparison.OrdinalIgnoreCase))
+                {
+                    agentValuesStarted.SetResult();
+                    await releaseAgentValues.Task.WaitAsync(cancellationToken);
+                }
+
+                return new PackageConfigurationValuesResponse(
+                    packageId,
+                    new Dictionary<string, string?> { ["apiKey"] = packageId },
+                    []);
+            },
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.RefreshPackageSectionsAsync();
+
+        var agentSelectionTask = viewModel.SelectPackageSettingsAsync("agent");
+        await agentValuesStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(await viewModel.SelectPackageSettingsAsync("tools"));
+
+        releaseAgentValues.SetResult();
+        Assert.False(await agentSelectionTask);
+
+        Assert.Equal("Tools", viewModel.SelectedTitle);
+        var section = Assert.Single(viewModel.SelectedPackageSections);
+        var field = Assert.IsType<TextSettingsFieldViewModel>(Assert.Single(section.Fields));
+        Assert.Equal("tools", field.Value);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_WhenSelectionChangesDuringSave_DoesNotOverwriteCurrentSelectionStatus()
+    {
+        var saveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var savedPackageIds = new List<string>();
+        using var runtimeClient = new FakeRuntimeApiClient
+        {
+            ConfigurationSchemas =
+            [
+                CreateSchema("agent", "Agent"),
+                CreateSchema("tools", "Tools"),
+            ],
+            SaveConfigurationValuesAsyncCallback = async (packageId, _, cancellationToken) =>
+            {
+                savedPackageIds.Add(packageId);
+                saveStarted.SetResult();
+                await releaseSave.Task.WaitAsync(cancellationToken);
+            },
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.RefreshPackageSectionsAsync();
+        Assert.True(await viewModel.SelectPackageSettingsAsync("agent"));
+
+        var applyTask = viewModel.ApplyAsync();
+        await saveStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(await viewModel.SelectPackageSettingsAsync("tools"));
+        releaseSave.SetResult();
+        var applied = await applyTask;
+
+        Assert.False(applied);
+        Assert.Equal(["agent"], savedPackageIds);
+        Assert.Equal("Tools", viewModel.SelectedTitle);
+        Assert.Equal(string.Empty, viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenPackageConfigurationSaveFails_ReturnsFalseAndKeepsWindowOpenableStatus()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient
+        {
+            ConfigurationSchemas = [CreateSchema("agent", "Agent")],
+            SaveConfigurationValuesAsyncCallback = (_, _, _) => throw new InvalidOperationException("Save failed."),
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.RefreshPackageSectionsAsync();
+        Assert.True(await viewModel.SelectPackageSettingsAsync("agent"));
+
+        var saved = await viewModel.SaveAsync();
+
+        Assert.False(saved);
+        Assert.Equal("Save failed.", viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task Dispose_CancelsInFlightPackageSectionLoad()
+    {
+        var loadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var loadCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var runtimeClient = new FakeRuntimeApiClient
+        {
+            GetConfigurationSchemasAsyncCallback = async cancellationToken =>
+            {
+                loadStarted.SetResult();
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    loadCancelled.SetResult();
+                    throw;
+                }
+
+                return [];
+            },
+        };
+        var viewModel = CreateViewModel(runtimeClient);
+        await loadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        viewModel.Dispose();
+
+        await loadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Empty(viewModel.PackageSections);
+    }
+
+    [Fact]
     public async Task BackgroundProcesses_IncludesOnlySettingsIndicatorProcessesInSettingsFooter()
     {
         using var runtimeClient = new FakeRuntimeApiClient();
@@ -180,6 +309,12 @@ public sealed class SettingsWindowViewModelTests
 
         public Dictionary<string, PackageConfigurationValuesResponse?> ConfigurationValues { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        public Func<CancellationToken, Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>>>? GetConfigurationSchemasAsyncCallback { get; init; }
+
+        public Func<string, CancellationToken, Task<PackageConfigurationValuesResponse?>>? GetConfigurationValuesAsyncCallback { get; init; }
+
+        public Func<string, IReadOnlyDictionary<string, string?>, CancellationToken, Task>? SaveConfigurationValuesAsyncCallback { get; init; }
+
         public int GetPackageConfigurationValuesCallCount { get; private set; }
 
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default) =>
@@ -240,6 +375,11 @@ public sealed class SettingsWindowViewModelTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (GetConfigurationSchemasAsyncCallback is not null)
+            {
+                return GetConfigurationSchemasAsyncCallback(cancellationToken);
+            }
+
             return Task.FromResult(ConfigurationSchemas);
         }
 
@@ -249,6 +389,11 @@ public sealed class SettingsWindowViewModelTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             GetPackageConfigurationValuesCallCount++;
+            if (GetConfigurationValuesAsyncCallback is not null)
+            {
+                return GetConfigurationValuesAsyncCallback(packageId, cancellationToken);
+            }
+
             ConfigurationValues.TryGetValue(packageId, out var values);
             return Task.FromResult(values);
         }
@@ -256,8 +401,11 @@ public sealed class SettingsWindowViewModelTests
         public Task SavePackageConfigurationValuesAsync(
             string packageId,
             IReadOnlyDictionary<string, string?> values,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return SaveConfigurationValuesAsyncCallback?.Invoke(packageId, values, cancellationToken) ?? Task.CompletedTask;
+        }
 
         public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(
             string packageId,

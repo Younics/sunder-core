@@ -1,0 +1,98 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.ShellToolbar"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <Border x:Name="ToolbarDragHost"
+          PointerPressed="ToolbarDragHost_OnPointerPressed"
+          Classes="toolbar-surface">
+    <Grid ColumnDefinitions="Auto,*,Auto"
+          Height="40"
+          VerticalAlignment="Center">
+      <StackPanel x:Name="ToolbarLeftMenuHost"
+                  Orientation="Horizontal"
+                  Spacing="14"
+                  Height="40"
+                  VerticalAlignment="Center">
+        <Border Classes="toolbar-logo-badge large">
+          <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+                 RenderOptions.BitmapInterpolationMode="HighQuality"
+                 Stretch="Uniform" />
+        </Border>
+
+        <Grid x:Name="ToolbarLeftActionHost"
+              Height="40"
+              VerticalAlignment="Center">
+          <StackPanel x:Name="ToolbarDefaultActions"
+                      Orientation="Horizontal"
+                      Spacing="14"
+                      Height="40"
+                      VerticalAlignment="Center">
+            <Button Classes="toolbar-icon"
+                    Command="{Binding OpenPackagesCommand}"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="Packages">
+              <Path Width="15"
+                    Height="15"
+                    Classes="icon-stroke"
+                    Data="{StaticResource Sunder.Icon.Packages}" />
+            </Button>
+
+            <Button Classes="toolbar-icon"
+                    Command="{Binding OpenSettingsCommand}"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="Settings">
+              <Path Width="16"
+                    Height="16"
+                    Classes="icon-stroke"
+                    Data="{StaticResource Sunder.Icon.Settings}" />
+            </Button>
+
+            <Button x:Name="MoreActionsButton"
+                    Classes="toolbar-icon"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="View and package actions"
+                    Click="MoreActionsButton_OnClick">
+              <Path Width="15"
+                    Height="15"
+                    Classes="icon-fill"
+                    Data="{StaticResource Sunder.Icon.More}" />
+            </Button>
+          </StackPanel>
+
+          <Menu x:Name="ToolbarMainMenu"
+                Classes="toolbar-main-menu"
+                IsVisible="False"
+                Height="40"
+                VerticalAlignment="Center" />
+        </Grid>
+      </StackPanel>
+
+      <controls:PackageIconBar x:Name="MiddlePackageIconBar"
+                               Grid.Column="1"
+                               Width="548"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               DataContext="{Binding MiddleBar}" />
+
+      <StackPanel Grid.Column="2"
+                  Orientation="Horizontal"
+                  Spacing="8"
+                  VerticalAlignment="Center">
+        <controls:RuntimeStatusButton />
+        <controls:NotificationToolbarButton />
+
+        <Border Width="1"
+                Height="18"
+                Margin="4,0"
+                Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+        <controls:WindowChromeControls />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

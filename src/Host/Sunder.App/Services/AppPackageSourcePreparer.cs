@@ -18,30 +18,43 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
         var sequence = Interlocked.Increment(ref _shadowFolderSequence);
         var shadowFolder = Path.Combine(shadowRoot, $"{sequence:D4}-{SanitizeFolderName(source.PackageId)}");
         Directory.CreateDirectory(shadowFolder);
-        switch (source.Kind)
+        var prepared = false;
+        try
         {
-            case PackageSourceKind.Dev:
-                CopyDirectory(source.Folder, shadowFolder);
-                break;
-            case PackageSourceKind.Installed:
-                PrepareInstalledPackageSource(source.Folder, shadowFolder);
-                break;
-            default:
-                TryDeleteDirectory(shadowFolder);
+            switch (source.Kind)
+            {
+                case PackageSourceKind.Dev:
+                    CopyDirectory(source.Folder, shadowFolder);
+                    break;
+                case PackageSourceKind.Installed:
+                    PrepareInstalledPackageSource(source.Folder, shadowFolder);
+                    break;
+                default:
+                    return null;
+            }
+
+            var manifestPath = Path.Combine(shadowFolder, "sunder-package.json");
+            if (!File.Exists(manifestPath))
+            {
                 return null;
-        }
+            }
 
-        var manifestPath = Path.Combine(shadowFolder, "sunder-package.json");
-        if (!File.Exists(manifestPath))
+            var manifest = AppPackageManifest.Load(manifestPath);
+            if (string.IsNullOrWhiteSpace(manifest?.Id))
+            {
+                return null;
+            }
+
+            prepared = true;
+            return new AppPreparedPackageSource(manifest.Id, shadowFolder);
+        }
+        finally
         {
-            TryDeleteDirectory(shadowFolder);
-            return null;
+            if (!prepared)
+            {
+                TryDeleteDirectory(shadowFolder);
+            }
         }
-
-        var manifest = AppPackageManifest.Load(manifestPath);
-        return string.IsNullOrWhiteSpace(manifest?.Id)
-            ? null
-            : new AppPreparedPackageSource(manifest.Id, shadowFolder);
     }
 
     public static void TryDeleteDirectory(string path)

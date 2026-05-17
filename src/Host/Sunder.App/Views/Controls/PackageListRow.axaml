@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.PackageListRow"
+             x:Name="Root"
+             mc:Ignorable="d">
+  <Border Classes="package-list-row"
+          Classes.selected="{Binding IsSelected, ElementName=Root}">
+    <Grid ColumnDefinitions="Auto,*,Auto"
+          RowDefinitions="Auto,Auto,Auto"
+          ColumnSpacing="12"
+          RowSpacing="0">
+      <controls:PackageIconView Width="30"
+                                Height="30"
+                                IconImage="{Binding IconImage, ElementName=Root}"
+                                HasIconImage="{Binding HasIconImage, ElementName=Root}"
+                                Glyph="{Binding Glyph, ElementName=Root}"
+                                ShowFallbackContainer="{Binding ShowGlyphFallback, ElementName=Root}"
+                                GlyphFontSize="13"
+                                GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
+
+      <StackPanel Grid.Column="1"
+                  Spacing="0">
+        <TextBlock Classes="section-title"
+                   Text="{Binding Title, ElementName=Root}"
+                   TextWrapping="Wrap" />
+        <TextBlock Classes="caption"
+                   Text="{Binding PackageId, ElementName=Root}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Border Grid.Column="2"
+              Classes="package-row-badge">
+        <TextBlock Text="{Binding PrimaryBadge, ElementName=Root}" />
+      </Border>
+
+      <StackPanel Grid.Row="1"
+                  Grid.Column="1"
+                  Grid.ColumnSpan="2"
+                  Orientation="Horizontal"
+                  Spacing="6"
+                  Margin="0,5,0,0"
+                  IsVisible="{Binding ShowBadgeRow, ElementName=Root}">
+        <Border Classes="package-row-badge"
+                IsVisible="{Binding ShowDetailBadge, ElementName=Root}">
+          <TextBlock Text="{Binding DetailBadge, ElementName=Root}" />
+        </Border>
+        <Border Classes="package-row-badge"
+                Classes.update="{Binding ActionBadgeIsUpdate, ElementName=Root}"
+                IsVisible="{Binding ShowActionBadge, ElementName=Root}">
+          <TextBlock Text="{Binding ActionBadge, ElementName=Root}" />
+        </Border>
+      </StackPanel>
+
+      <TextBlock Grid.Row="2"
+                 Grid.Column="1"
+                 Grid.ColumnSpan="2"
+                 Classes="caption"
+                 Margin="0,5,0,0"
+                 Text="{Binding OperationStatusText, ElementName=Root}"
+                 IsVisible="{Binding ShowOperationStatus, ElementName=Root}"
+                 TextWrapping="Wrap" />
+    </Grid>
+  </Border>
+</UserControl>

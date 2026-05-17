@@ -129,6 +129,121 @@ public sealed class BackgroundProcessQueueServiceTests
     }
 
     [Fact]
+    public async Task DisposeAsync_CancelsQueuedAndRunningProcessesAndWaitsForCleanup()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queuedStarted = false;
+
+        var running = queue.Enqueue(CreateRequest("running", "work", async context =>
+        {
+            started.SetResult();
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(1), context.CancellationToken);
+            }
+            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+            {
+                cancellationObserved.SetResult();
+                await allowCleanup.Task;
+            }
+        }, canCancel: false));
+        var queued = queue.Enqueue(CreateRequest("queued", "work", _ =>
+        {
+            queuedStarted = true;
+            return Task.CompletedTask;
+        }, canCancel: false));
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var disposeTask = queue.DisposeAsync().AsTask();
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(disposeTask.IsCompleted);
+        Assert.Equal(BackgroundProcessState.Cancelling, queue.GetProcess(running.ProcessId)?.State);
+        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(queued.ProcessId)?.State);
+        Assert.False(queuedStarted);
+
+        allowCleanup.SetResult();
+        await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.All(queue.ListProcesses(), process => Assert.Equal(BackgroundProcessState.Cancelled, process.State));
+    }
+
+    [Fact]
+    public async Task Dispose_CancelsRunningProcessesWithoutWaitingForCleanup()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var running = queue.Enqueue(CreateRequest("running", "work", async context =>
+        {
+            started.SetResult();
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(1), context.CancellationToken);
+            }
+            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+            {
+                cancellationObserved.SetResult();
+                await allowCleanup.Task;
+            }
+        }, canCancel: false));
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        queue.Dispose();
+
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(BackgroundProcessState.Cancelling, queue.GetProcess(running.ProcessId)?.State);
+
+        allowCleanup.SetResult();
+        await WaitForConditionAsync(() => queue.GetProcess(running.ProcessId)?.State == BackgroundProcessState.Cancelled);
+    }
+
+    [Fact]
+    public void Enqueue_AfterDispose_ThrowsObjectDisposedException()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        queue.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => queue.Enqueue(CreateRequest("after dispose", "work", _ => Task.CompletedTask)));
+    }
+
+    [Fact]
+    public async Task Cancellation_AfterDispose_IsSafeNoOp()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        queue.Dispose();
+
+        Assert.False(queue.Cancel(Guid.NewGuid()));
+        await queue.CancelAllAsync();
+    }
+
+    [Fact]
+    public async Task Cancel_WhenRunningProcessReturnsAfterCancellation_MarksCancelled()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var process = queue.Enqueue(CreateRequest("cancel", "work", async _ =>
+        {
+            started.SetResult();
+            await release.Task;
+        }));
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(queue.Cancel(process.ProcessId));
+        release.SetResult();
+
+        await WaitForConditionAsync(() => queue.GetProcess(process.ProcessId)?.IsTerminal == true);
+        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(process.ProcessId)?.State);
+    }
+
+    [Fact]
     public void Enqueue_WhenHiddenIndicatorIsSet_ExposesHiddenSnapshot()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -137,6 +252,51 @@ public sealed class BackgroundProcessQueueServiceTests
 
         Assert.Equal(BackgroundProcessIndicator.Hidden, process.Indicator);
         Assert.Equal(BackgroundProcessIndicator.Hidden, queue.GetProcess(process.ProcessId)?.Indicator);
+    }
+
+    [Fact]
+    public async Task CompletedHistory_TrimsToConfiguredMaximum()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1, maxCompletedHistory: 2);
+
+        queue.Enqueue(CreateRequest("a", "work-a", _ => Task.CompletedTask));
+        queue.Enqueue(CreateRequest("b", "work-b", _ => Task.CompletedTask));
+        queue.Enqueue(CreateRequest("c", "work-c", _ => Task.CompletedTask));
+
+        await WaitForConditionAsync(() => queue.ListProcesses().Count == 2 && queue.ListProcesses().All(process => process.IsTerminal));
+
+        var titles = queue.ListProcesses().Select(process => process.Title).ToArray();
+        Assert.DoesNotContain("a", titles);
+        Assert.Contains("b", titles);
+        Assert.Contains("c", titles);
+    }
+
+    [Fact]
+    public async Task CompletedHistory_WhenMaximumIsZero_RemovesTerminalProcesses()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1, maxCompletedHistory: 0);
+
+        queue.Enqueue(CreateRequest("removed", "work", _ => Task.CompletedTask));
+
+        await WaitForConditionAsync(() => queue.ListProcesses().Count == 0);
+    }
+
+    [Fact]
+    public async Task Enqueue_WhenProcessFails_PublishesFailedSnapshotWithErrorMessage()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var snapshots = new ConcurrentQueue<BackgroundProcessSnapshot>();
+        queue.ProcessChanged += (_, e) => snapshots.Enqueue(e.Snapshot);
+
+        var process = queue.Enqueue(CreateRequest("failure", "work", _ => throw new InvalidOperationException("boom")));
+
+        await WaitForConditionAsync(() => queue.GetProcess(process.ProcessId)?.State == BackgroundProcessState.Failed);
+
+        var failed = queue.GetProcess(process.ProcessId);
+        Assert.Equal("boom", failed?.ErrorMessage);
+        Assert.Contains(snapshots, snapshot => snapshot.ProcessId == process.ProcessId
+                                              && snapshot.State == BackgroundProcessState.Failed
+                                              && snapshot.ErrorMessage == "boom");
     }
 
     [Fact]
@@ -218,6 +378,112 @@ public sealed class BackgroundProcessQueueServiceTests
 
         release.SetResult();
         await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+    }
+
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_Start_WhenCalledTwice_DoesNotDuplicateChangeEvents()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        using var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        packageQueue.Start();
+        packageQueue.Start();
+        var queuedChangeCount = 0;
+        packageQueue.ProcessChanged += (_, e) =>
+        {
+            if (e.Snapshot.State == BackgroundProcessState.Queued)
+            {
+                queuedChangeCount++;
+            }
+        };
+
+        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+            "Package work",
+            "work",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            _ => Task.CompletedTask));
+
+        Assert.Equal(1, queuedChangeCount);
+        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+    }
+
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_StopAsync_CancelsAndAwaitsRunningProcesses()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+            "Long package work",
+            "work",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            CanCancel: false,
+            async context =>
+            {
+                started.SetResult();
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(1), context.CancellationToken);
+                }
+                catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+                {
+                    cancellationObserved.SetResult();
+                    await allowCleanup.Task;
+                }
+            }));
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var stopTask = packageQueue.StopAsync();
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(stopTask.IsCompleted);
+
+        allowCleanup.SetResult();
+        await stopTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(snapshot.ProcessId)?.State);
+    }
+
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_AfterStop_RejectsNewWorkAndHidesPackageProcesses()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+            "Package work",
+            "work",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            _ => Task.CompletedTask));
+
+        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await packageQueue.StopAsync();
+
+        Assert.Empty(packageQueue.ListProcesses());
+        Assert.False(packageQueue.Cancel(snapshot.ProcessId));
+        Assert.Throws<ObjectDisposedException>(() => packageQueue.Enqueue(new BackgroundProcessRequest(
+            "Late package work",
+            "work",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            _ => Task.CompletedTask)));
+    }
+
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_StartAfterStop_ThrowsObjectDisposedException()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+
+        await packageQueue.StopAsync();
+
+        Assert.Throws<ObjectDisposedException>(() => packageQueue.Start());
     }
 
     private static BackgroundProcessRequest CreateRequest(

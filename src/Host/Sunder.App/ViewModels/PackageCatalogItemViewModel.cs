@@ -1,16 +1,13 @@
-using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
 
 namespace Sunder.App.ViewModels;
 
-public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDisposable
+public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewModel, IPackageOperationStateViewModel
 {
     private readonly Action<PackageCatalogItemViewModel> _onSelect;
-    private bool _isDisposed;
 
     public PackageCatalogItemViewModel(
         SessionPackageDescriptor? sessionPackage,
@@ -18,12 +15,12 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
         RegistryPackageUpdate? update,
         Uri? iconUri,
         Action<PackageCatalogItemViewModel> onSelect)
+        : base(iconUri)
     {
         PackageId = sessionPackage?.PackageId ?? installedPackage!.PackageId;
         DisplayName = sessionPackage?.DisplayName ?? installedPackage!.Name;
         Version = sessionPackage?.Version ?? installedPackage!.Version;
         Glyph = ToGlyph(sessionPackage?.Icon ?? installedPackage?.Icon, DisplayName);
-        IconUri = iconUri;
         StatusText = ToStatusText(sessionPackage, installedPackage);
         IsEnabled = sessionPackage?.IsEnabled ?? installedPackage?.IsEnabled ?? false;
         IsFailed = sessionPackage?.Readiness == PackageReadinessState.Failed;
@@ -39,11 +36,6 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
         DeprecatedUpdateMessage = update?.DeprecatedMessage;
         OperationHint = ToOperationHint(installedPackage, update);
         _onSelect = onSelect;
-
-        if (IconUri is not null)
-        {
-            _ = LoadIconAsync(IconUri);
-        }
     }
 
     public string PackageId { get; }
@@ -53,14 +45,6 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
     public string Version { get; }
 
     public string Glyph { get; }
-
-    public Uri? IconUri { get; }
-
-    public bool HasIconImage => IconImage is not null;
-
-    public bool ShowGlyphFallback => IconImage is null;
-
-    public bool HasIconLoadError => !string.IsNullOrWhiteSpace(IconLoadError);
 
     public bool ShowOperationStatus => HasActiveOperation;
 
@@ -100,12 +84,6 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
     private bool _isSelected;
 
     [ObservableProperty]
-    private IImage? _iconImage;
-
-    [ObservableProperty]
-    private string _iconLoadError = string.Empty;
-
-    [ObservableProperty]
     private bool _hasActiveOperation;
 
     [ObservableProperty]
@@ -120,51 +98,11 @@ public sealed partial class PackageCatalogItemViewModel : ViewModelBase, IDispos
     [ObservableProperty]
     private string _operationStatusText = string.Empty;
 
-    partial void OnIconImageChanged(IImage? value)
-    {
-        OnPropertyChanged(nameof(HasIconImage));
-        OnPropertyChanged(nameof(ShowGlyphFallback));
-    }
-
-    partial void OnIconLoadErrorChanged(string value)
-        => OnPropertyChanged(nameof(HasIconLoadError));
-
     partial void OnHasActiveOperationChanged(bool value)
         => OnPropertyChanged(nameof(ShowOperationStatus));
 
     [RelayCommand]
     private void Select() => _onSelect(this);
-
-    public void Dispose()
-    {
-        _isDisposed = true;
-        if (IconImage is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
-
-        IconImage = null;
-    }
-
-    private async Task LoadIconAsync(Uri iconUri)
-    {
-        var result = await PackageIconImageLoader.LoadAsync(iconUri);
-        await UiThread.InvokeAsync(() =>
-        {
-            if (_isDisposed)
-            {
-                if (result.Image is IDisposable disposable)
-                {
-                    disposable.Dispose();
-                }
-
-                return;
-            }
-
-            IconLoadError = result.Error ?? string.Empty;
-            IconImage = result.Image;
-        });
-    }
 
     private static string ToGlyph(PackageIconDescriptor? icon, string displayName)
     {

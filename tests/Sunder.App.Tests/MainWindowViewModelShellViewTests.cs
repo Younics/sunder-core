@@ -45,6 +45,35 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public void ClosePackageViewPanel_WhenOnlyMiddleViewIsSelected_ClearsMiddleSelection()
+    {
+        using var harness = CreateHarness();
+
+        var closed = harness.ViewModel.ClosePackageViewPanel("agent.chat");
+
+        Assert.True(closed);
+        Assert.False(harness.ViewModel.HasMiddleSelection);
+        Assert.False(harness.ViewModel.MiddlePanel.HasHostedView);
+        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.chat" && !view.IsOpen);
+    }
+
+    [Fact]
+    public async Task ClosePackageViewPanel_WhenClosingFirstMiddleView_SelectsNextMiddleView()
+    {
+        using var harness = CreateHarness();
+        harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.Middle, 1);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
+
+        var closed = harness.ViewModel.ClosePackageViewPanel("agent.chat");
+
+        var hotbarViews = harness.ViewModel.ListHotbarViews();
+        Assert.True(closed);
+        Assert.True(harness.ViewModel.HasMiddleSelection);
+        Assert.Contains(hotbarViews, view => view.ViewId == "agent.chat" && !view.IsOpen);
+        Assert.Contains(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
+    }
+
+    [Fact]
     public async Task RemovePackageViewFromHotbar_HidesViewAndClosesPanel()
     {
         using var harness = CreateHarness();
@@ -88,6 +117,27 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.Contains(group.Views, view => view.ViewId == "agent.chat" && view.Glyph == "A" && view.IsInHotbar);
         Assert.Contains(group.Views, view => view.ViewId == "agent.workspaces" && view.Glyph == "W" && view.IsInHotbar);
         Assert.Contains(group.Views, view => view.ViewId == "agent.subsessions" && view.Glyph == "S" && !view.IsInHotbar);
+    }
+
+    [Fact]
+    public async Task PackageShellViewService_ListHotbarViews_UsesSnapshotWhenCalledOffUiThread()
+    {
+        var shellViewService = new AppPackageShellViewService();
+        using var harness = CreateHarness(shellViewService: shellViewService);
+
+        var initialViews = await Task.Run(() => shellViewService.ListHotbarViews());
+
+        Assert.Contains(initialViews, view => view.ViewId == "agent.chat" && view.IsOpen);
+        Assert.False(shellViewService.IsViewInHotbar("agent.subsessions"));
+
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
+
+        var updatedViews = await Task.Run(() => shellViewService.ListHotbarViews());
+        Assert.True(shellViewService.IsViewInHotbar("agent.subsessions"));
+        Assert.Contains(updatedViews, view => view.ViewId == "agent.subsessions" && view.IsOpen);
+
+        harness.ViewModel.Dispose();
+        Assert.Empty(shellViewService.ListHotbarViews());
     }
 
     [Fact]
@@ -221,6 +271,30 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task ApplyPackageLifecycleChangesAsync_WhenCalledConcurrently_SerializesRuntimeRefreshes()
+    {
+        var gatedRuntime = new GatedPackageLifecycleRuntime();
+        var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
+            [],
+            [],
+            getActivePackagesAsync: gatedRuntime.GetActivePackagesAsync,
+            getActivePackageSourcesAsync: gatedRuntime.GetActivePackageSourcesAsync);
+        using var harness = CreateHarness(runtimeApiClientFactory);
+
+        var firstRefresh = harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+        Assert.Equal(1, gatedRuntime.ActivePackageCallCount);
+
+        var secondRefresh = harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+        Assert.Equal(1, gatedRuntime.ActivePackageCallCount);
+
+        gatedRuntime.ReleaseNextActivePackageCall();
+        await WaitForConditionAsync(() => gatedRuntime.ActivePackageCallCount == 2);
+
+        gatedRuntime.ReleaseNextActivePackageCall();
+        await Task.WhenAll(firstRefresh, secondRefresh);
+    }
+
+    [Fact]
     public void MovePackageView_WhenSelectedMiddleViewMovesOut_SelectsFirstRemainingMiddleView()
     {
         var rootPath = CreateTempDirectory();
@@ -240,6 +314,53 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.True(harness.ViewModel.MiddlePanel.HasHostedView);
         Assert.False(harness.ViewModel.MiddlePanel.ShowFallbackLines);
         Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+    }
+
+    [Fact]
+    public async Task MovePackageView_WhenMovedDownWithinSameBar_NormalizesTargetIndexAfterRemoval()
+    {
+        using var harness = CreateHarness();
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.Middle, 2));
+
+        harness.ViewModel.MovePackageView("agent.chat", RailPlacement.Middle, 2);
+
+        Assert.Equal(
+            ["agent.workspaces", "agent.chat", "agent.subsessions"],
+            GetMiddleHotbarOrder(harness.ViewModel));
+    }
+
+    [Fact]
+    public async Task MovePackageView_WhenMovedUpWithinSameBar_PreservesRequestedTargetIndex()
+    {
+        using var harness = CreateHarness();
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.Middle, 2));
+
+        harness.ViewModel.MovePackageView("agent.subsessions", RailPlacement.Middle, 1);
+
+        Assert.Equal(
+            ["agent.chat", "agent.subsessions", "agent.workspaces"],
+            GetMiddleHotbarOrder(harness.ViewModel));
+    }
+
+    [Fact]
+    public async Task BottomSplitPanelContent_IsTrueOnlyWhenBothBottomPanelsHaveContent()
+    {
+        using var harness = CreateHarness();
+
+        Assert.False(harness.ViewModel.HasAnyBottomPanelContent);
+        Assert.False(harness.ViewModel.HasBottomSplitPanelContent);
+
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.chat", PackageHotbarPlacement.LeftBottom, 0, openPanel: true));
+
+        Assert.True(harness.ViewModel.HasAnyBottomPanelContent);
+        Assert.False(harness.ViewModel.HasBottomSplitPanelContent);
+
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.RightBottom, 0, openPanel: true));
+
+        Assert.True(harness.ViewModel.HasAnyBottomPanelContent);
+        Assert.True(harness.ViewModel.HasBottomSplitPanelContent);
     }
 
     [Fact]
@@ -271,10 +392,77 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.Equal(widths.LeftWidth, widths.RightWidth);
     }
 
-    private static MainWindowViewModelHarness CreateHarness(IRuntimeApiClientFactory? runtimeApiClientFactory = null)
+    [Fact]
+    public void ShellLayoutCalculator_CalculatesVerticalWeightsForBottomPanels()
+    {
+        var noBottom = ShellLayoutCalculator.CalculateVerticalWeights(0.42, hasBottom: false);
+        var clampedLow = ShellLayoutCalculator.CalculateVerticalWeights(0, hasBottom: true);
+        var clampedHigh = ShellLayoutCalculator.CalculateVerticalWeights(1, hasBottom: true);
+
+        Assert.Equal((1, 0, 0), noBottom);
+        Assert.Equal(0.10, clampedLow.TopWeight);
+        Assert.Equal(ShellLayoutCalculator.SplitterThickness, clampedLow.SplitterHeight);
+        Assert.Equal(0.90, clampedLow.BottomWeight, precision: 10);
+        Assert.Equal(0.90, clampedHigh.TopWeight);
+        Assert.Equal(0.10, clampedHigh.BottomWeight, precision: 10);
+    }
+
+    [Fact]
+    public void ShellLayoutCalculator_CalculatesBottomColumnWeightsForVisiblePanels()
+    {
+        Assert.Equal((1, 0), ShellLayoutCalculator.CalculateBottomColumnWeights(0.35, hasLeftBottom: true, hasRightBottom: false));
+        Assert.Equal((0, 1), ShellLayoutCalculator.CalculateBottomColumnWeights(0.35, hasLeftBottom: false, hasRightBottom: true));
+        Assert.Equal((0, 0), ShellLayoutCalculator.CalculateBottomColumnWeights(0.35, hasLeftBottom: false, hasRightBottom: false));
+
+        var both = ShellLayoutCalculator.CalculateBottomColumnWeights(1, hasLeftBottom: true, hasRightBottom: true);
+        Assert.Equal(0.99, both.LeftWeight);
+        Assert.Equal(0.01, both.RightWeight, precision: 10);
+    }
+
+    [Fact]
+    public async Task ApplyRuntimeAddressAsync_WhenAddressIsInvalid_DoesNotUseRuntimeApiClient()
+    {
+        using var harness = CreateHarness(new ThrowingRuntimeApiClientFactory());
+
+        harness.ViewModel.RuntimeAddressText = "not a url";
+        await harness.ViewModel.ApplyRuntimeAddressCommand.ExecuteAsync(null);
+
+        Assert.False(harness.ViewModel.IsRuntimeBusy);
+        Assert.True(harness.ViewModel.IsRuntimeRunning);
+        Assert.Equal("Runtime address invalid", harness.ViewModel.SystemStatusText);
+        Assert.Contains("not a url", harness.ViewModel.RuntimeLastError);
+    }
+
+    [Fact]
+    public async Task RefreshRuntimeAsync_WhenStatusAndHealthFail_ClearsBusyState()
+    {
+        var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
+            [],
+            [],
+            _ => Task.FromException<SystemStatusResponse?>(new InvalidOperationException("status failed")),
+            _ => Task.FromException<bool>(new InvalidOperationException("health failed")));
+        using var harness = CreateHarness(runtimeApiClientFactory);
+
+        await harness.ViewModel.RefreshRuntimeCommand.ExecuteAsync(null);
+
+        Assert.False(harness.ViewModel.IsRuntimeBusy);
+        Assert.False(harness.ViewModel.IsRuntimeRunning);
+        Assert.False(harness.ViewModel.IsRuntimeReady);
+        Assert.Equal("Runtime unavailable", harness.ViewModel.RuntimeStatusText);
+        Assert.Equal("Runtime unavailable", harness.ViewModel.SystemStatusText);
+        Assert.Equal("status failed", harness.ViewModel.RuntimeLastError);
+    }
+
+    private static MainWindowViewModelHarness CreateHarness(
+        IRuntimeApiClientFactory? runtimeApiClientFactory = null,
+        AppPackageShellViewService? shellViewService = null)
     {
         var rootPath = CreateTempDirectory();
-        return CreateHarness(rootPath, runtimeApiClientFactory ?? new ThrowingRuntimeApiClientFactory(), PackageViewHostService.Empty);
+        return CreateHarness(
+            rootPath,
+            runtimeApiClientFactory ?? new ThrowingRuntimeApiClientFactory(),
+            PackageViewHostService.Empty,
+            shellViewService: shellViewService);
     }
 
     private static MainWindowViewModelHarness CreateActivePackageHarness()
@@ -292,7 +480,8 @@ public sealed class MainWindowViewModelShellViewTests
         string rootPath,
         IRuntimeApiClientFactory runtimeApiClientFactory,
         PackageViewHostService packageViewHostService,
-        PackageViewHostService? disposablePackageViewHostService = null)
+        PackageViewHostService? disposablePackageViewHostService = null,
+        AppPackageShellViewService? shellViewService = null)
     {
         var state = new ShellState
         {
@@ -329,7 +518,8 @@ public sealed class MainWindowViewModelShellViewTests
             runtimeApiClientFactory,
             new RuntimeHostProcessManager(new AppStartupOptions()),
             new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow),
-            new NotificationCenterService(Path.Combine(rootPath, "notifications.json")));
+            new NotificationCenterService(Path.Combine(rootPath, "notifications.json")),
+            shellViewService);
         return new MainWindowViewModelHarness(viewModel, rootPath, disposablePackageViewHostService);
     }
 
@@ -408,6 +598,28 @@ public sealed class MainWindowViewModelShellViewTests
         return path;
     }
 
+    private static async Task WaitForConditionAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                Assert.True(condition());
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
+    private static string[] GetMiddleHotbarOrder(MainWindowViewModel viewModel)
+        => viewModel.ListHotbarViews()
+            .Where(view => view.Placement == PackageHotbarPlacement.Middle)
+            .OrderBy(view => view.Order)
+            .Select(view => view.ViewId)
+            .ToArray();
+
     private sealed class MainWindowViewModelHarness(
         MainWindowViewModel viewModel,
         string rootPath,
@@ -476,29 +688,43 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class StaticRuntimeApiClientFactory(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources) : IRuntimeApiClientFactory
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
+        Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
+        Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
+        Func<CancellationToken, Task<IReadOnlyList<PackageSourceDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(activePackages, packageSources);
+        public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(
+            activePackages,
+            packageSources,
+            getSystemStatusAsync,
+            isRuntimeHealthyAsync,
+            getActivePackagesAsync,
+            getActivePackageSourcesAsync);
     }
 
     private sealed class StaticRuntimeApiClient(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources) : IRuntimeApiClient
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
+        Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
+        Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
+        Func<CancellationToken, Task<IReadOnlyList<PackageSourceDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClient
     {
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<SystemStatusResponse?>(null);
+            => getSystemStatusAsync?.Invoke(cancellationToken) ?? Task.FromResult<SystemStatusResponse?>(null);
 
         public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(true);
+            => isRuntimeHealthyAsync?.Invoke(cancellationToken) ?? Task.FromResult(true);
 
         public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(activePackages);
+            => getActivePackagesAsync?.Invoke(cancellationToken) ?? Task.FromResult(activePackages);
 
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
         public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(packageSources);
+            => getActivePackageSourcesAsync?.Invoke(cancellationToken) ?? Task.FromResult(packageSources);
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
@@ -556,6 +782,54 @@ public sealed class MainWindowViewModelShellViewTests
         }
     }
 
+    private sealed class GatedPackageLifecycleRuntime
+    {
+        private readonly object _gate = new();
+        private readonly Queue<TaskCompletionSource> _activePackageCallReleases = [];
+        private int _activePackageCallCount;
+
+        public int ActivePackageCallCount
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _activePackageCallCount;
+                }
+            }
+        }
+
+        public async Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken)
+        {
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                _activePackageCallCount++;
+                _activePackageCallReleases.Enqueue(release);
+            }
+
+            await release.Task.WaitAsync(cancellationToken);
+            return [];
+        }
+
+        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<PackageSourceDescriptor>>([]);
+        }
+
+        public void ReleaseNextActivePackageCall()
+        {
+            TaskCompletionSource release;
+            lock (_gate)
+            {
+                release = _activePackageCallReleases.Dequeue();
+            }
+
+            release.SetResult();
+        }
+    }
+
     private sealed class DisposablePackageView : Control, IDisposable
     {
         public bool IsDisposed { get; private set; }
@@ -569,13 +843,71 @@ public sealed class MainWindowViewModelShellViewTests
 
 public sealed class ShellLifecycleTestPackageModule : ISunderPackageModule
 {
+    public const string SkipViewMarkerFileName = "skip-view";
+
+    public const string ThrowAfterViewMarkerFileName = "throw-after-view";
+
+    public const string RegisterBackgroundServiceMarkerFileName = "register-background-service";
+
+    public const string ThrowOnBackgroundStartMarkerFileName = "throw-background-start";
+
+    public const string BackgroundServiceStartedFileName = "background-service-started";
+
+    public const string BackgroundServiceStoppedFileName = "background-service-stopped";
+
+    private string? _packageFolder;
+
     public void ConfigureServices(IServiceCollection services, IPackageContext context)
     {
+        _packageFolder = context.InstallPath;
+        if (HasMarker(RegisterBackgroundServiceMarkerFileName) || HasMarker(ThrowOnBackgroundStartMarkerFileName))
+        {
+            services.AddSingleton(new ShellLifecycleTestBackgroundService(context.InstallPath));
+        }
     }
 
     public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
     {
-        registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration("agent.chat", "Chat"));
+        if (HasMarker(RegisterBackgroundServiceMarkerFileName) || HasMarker(ThrowOnBackgroundStartMarkerFileName))
+        {
+            registry.RegisterBackgroundService<ShellLifecycleTestBackgroundService>();
+        }
+
+        if (!HasMarker(SkipViewMarkerFileName))
+        {
+            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration("agent.chat", "Chat"));
+        }
+
+        if (HasMarker(ThrowAfterViewMarkerFileName))
+        {
+            throw new InvalidOperationException("Test package requested activation failure after registering contributions.");
+        }
+    }
+
+    private bool HasMarker(string fileName)
+        => !string.IsNullOrWhiteSpace(_packageFolder)
+           && File.Exists(Path.Combine(_packageFolder, fileName));
+}
+
+public sealed class ShellLifecycleTestBackgroundService(string packageFolder) : IPackageBackgroundService
+{
+    public Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        File.WriteAllText(Path.Combine(packageFolder, ShellLifecycleTestPackageModule.BackgroundServiceStartedFileName), string.Empty);
+        if (File.Exists(Path.Combine(packageFolder, ShellLifecycleTestPackageModule.ThrowOnBackgroundStartMarkerFileName)))
+        {
+            throw new InvalidOperationException("Test package requested background service start failure.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        File.WriteAllText(Path.Combine(packageFolder, ShellLifecycleTestPackageModule.BackgroundServiceStoppedFileName), string.Empty);
+        return Task.CompletedTask;
     }
 }
 

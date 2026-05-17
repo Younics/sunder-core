@@ -1,0 +1,99 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.RuntimeStatusButton"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <Button Classes="toolbar-icon server-status-button"
+          VerticalAlignment="Center"
+          ToolTip.Tip="Sunder server">
+    <Button.Content>
+      <Grid Width="16"
+            Height="16">
+        <Path Width="14"
+              Height="14"
+              Classes="icon-stroke"
+              Data="{StaticResource Sunder.Icon.Runtime}"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center" />
+        <Ellipse Width="6"
+                 Height="6"
+                 HorizontalAlignment="Right"
+                 VerticalAlignment="Bottom"
+                 Fill="{Binding RuntimeStatusBrush}" />
+      </Grid>
+    </Button.Content>
+    <Button.Flyout>
+      <Flyout FlyoutPresenterClasses="runtime-flyout-surface">
+        <StackPanel x:DataType="vm:MainWindowViewModel"
+                    Width="340"
+                    Spacing="12">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="section-title" Text="Sunder Server" />
+            <TextBlock Classes="caption" Text="Inspect runtime status and update the API endpoint." />
+          </StackPanel>
+
+          <Border Height="1"
+                  Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+          <Grid ColumnDefinitions="Auto,*"
+                RowDefinitions="Auto,Auto,Auto"
+                ColumnSpacing="12"
+                RowSpacing="6">
+            <TextBlock Classes="caption" Text="Name" />
+            <TextBlock Grid.Column="1" Classes="status-text" Text="{Binding RuntimeName}" />
+
+            <TextBlock Grid.Row="1" Classes="caption" Text="Version" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Classes="status-text" Text="{Binding RuntimeVersion}" />
+
+            <TextBlock Grid.Row="2" Classes="caption" Text="Status" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Classes="status-text" Text="{Binding RuntimeStatusText}" />
+          </Grid>
+
+          <StackPanel Spacing="6"
+                      IsVisible="{Binding ShowRuntimeAddressEditor}">
+            <TextBlock Classes="caption" Text="API address" />
+            <TextBox Text="{Binding RuntimeAddressText}"
+                     PlaceholderText="http://127.0.0.1:5275/" />
+          </StackPanel>
+
+          <TextBlock Classes="caption runtime-error-text"
+                     IsVisible="{Binding ShowRuntimeError}"
+                     Text="{Binding RuntimeLastError}"
+                     TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+                ColumnSpacing="8">
+            <Button Classes="secondary-action compact-action"
+                    Content="Apply"
+                    Command="{Binding ApplyRuntimeAddressCommand}"
+                    IsVisible="{Binding ShowApplyRuntimeButton}"
+                    IsEnabled="{Binding CanManageRuntime}" />
+
+            <Button Grid.Column="2"
+                    Classes="secondary-action compact-action"
+                    Content="Refresh"
+                    Command="{Binding RefreshRuntimeCommand}"
+                    IsEnabled="{Binding CanManageRuntime}" />
+
+            <Button Grid.Column="3"
+                    Classes="primary-action compact-action"
+                    Content="Start"
+                    Command="{Binding StartRuntimeCommand}"
+                    IsVisible="{Binding ShowStartRuntimeButton}"
+                    IsEnabled="{Binding CanManageRuntime}" />
+
+            <Button Grid.Column="3"
+                    Classes="secondary-action compact-action danger-action"
+                    Content="Stop"
+                    Command="{Binding StopRuntimeCommand}"
+                    IsVisible="{Binding ShowStopRuntimeButton}"
+                    IsEnabled="{Binding CanManageRuntime}" />
+          </Grid>
+        </StackPanel>
+      </Flyout>
+    </Button.Flyout>
+  </Button>
+</UserControl>

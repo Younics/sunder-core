@@ -18,7 +18,7 @@
         ExtendClientAreaToDecorationsHint="True"
         Classes="secondary-window">
   <Window.DataTemplates>
-    <DataTemplate DataType="vm:TextSettingsFieldViewModel">
+    <DataTemplate DataType="vm:TextSettingsFieldViewModel" x:DataType="vm:TextSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
         <TextBlock Classes="section-title" Text="{Binding Label}" />
@@ -29,7 +29,7 @@
                  PlaceholderText="{Binding Placeholder}" />
       </StackPanel>
     </DataTemplate>
-    <DataTemplate DataType="vm:SecretSettingsFieldViewModel">
+    <DataTemplate DataType="vm:SecretSettingsFieldViewModel" x:DataType="vm:SecretSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
         <TextBlock Classes="section-title" Text="{Binding Label}" />
@@ -37,10 +37,11 @@
                    Text="{Binding Description}"
                    TextWrapping="Wrap" />
         <TextBox Text="{Binding Value}"
+                 PasswordChar="*"
                  PlaceholderText="{Binding Placeholder}" />
       </StackPanel>
     </DataTemplate>
-    <DataTemplate DataType="vm:BooleanSettingsFieldViewModel">
+    <DataTemplate DataType="vm:BooleanSettingsFieldViewModel" x:DataType="vm:BooleanSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
         <CheckBox Content="{Binding Label}"
@@ -50,7 +51,7 @@
                    TextWrapping="Wrap" />
       </StackPanel>
     </DataTemplate>
-    <DataTemplate DataType="vm:SelectSettingsFieldViewModel">
+    <DataTemplate DataType="vm:SelectSettingsFieldViewModel" x:DataType="vm:SelectSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
         <TextBlock Classes="section-title" Text="{Binding Label}" />
@@ -80,10 +81,7 @@
         <StackPanel Orientation="Horizontal"
                     Spacing="10"
                     VerticalAlignment="Center">
-          <Border Width="32"
-                  Height="32"
-                  CornerRadius="8"
-                  Padding="3">
+          <Border Classes="toolbar-logo-badge">
             <Image Source="avares://Sunder.App/Assets/Images/icon.png"
                    RenderOptions.BitmapInterpolationMode="HighQuality"
                    Stretch="Uniform" />
@@ -211,14 +209,14 @@
                         <Button Classes="primary-action"
                                 Content="Install or Repair CLI"
                                 IsEnabled="{Binding CanInstallOrRepairCli}"
-                                Click="InstallOrRepairCliButton_OnClick" />
+                                Command="{Binding InstallOrRepairCliFromUiCommand}" />
                         <Button Classes="secondary-action"
                                 Content="Refresh Status"
-                                Click="RefreshCliStatusButton_OnClick" />
+                                Command="{Binding RefreshCliStatusFromUiCommand}" />
                         <Button Classes="secondary-action"
                                 Content="Uninstall CLI"
                                 IsEnabled="{Binding CanUninstallCli}"
-                                Click="UninstallCliButton_OnClick" />
+                                Command="{Binding UninstallCliFromUiCommand}" />
                       </StackPanel>
                     </StackPanel>
                   </Border>
@@ -309,7 +307,7 @@
                                 Classes="secondary-action"
                                 Content="Check Now"
                                 IsEnabled="{Binding CanCheckForAppUpdates}"
-                                Click="CheckForUpdatesButton_OnClick" />
+                                Command="{Binding CheckForUpdatesFromUiCommand}" />
                       </Grid>
 
                       <Grid ColumnDefinitions="160,*"
@@ -343,7 +341,7 @@
                           </StackPanel>
                           <ItemsControl ItemsSource="{Binding Fields}">
                             <ItemsControl.ItemTemplate>
-                              <DataTemplate>
+                              <DataTemplate x:DataType="vm:SettingsFieldViewModel">
                                 <ContentControl Content="{Binding}" />
                               </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -382,7 +380,7 @@
         <Button Classes="secondary-action"
                 IsVisible="{Binding ShowApplySaveButtons}"
                 Content="Apply"
-                Click="ApplyButton_OnClick" />
+                Command="{Binding ApplyFromUiCommand}" />
         <Button Classes="primary-action"
                 IsVisible="{Binding ShowApplySaveButtons}"
                 Content="Save"

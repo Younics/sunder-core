@@ -7,6 +7,30 @@
              x:Class="Sunder.App.Views.Controls.PackageIconBar"
              x:DataType="vm:PackageIconBarViewModel"
              mc:Ignorable="d">
+  <UserControl.Resources>
+    <DataTemplate x:Key="PackageIconBarItemTemplate" x:DataType="vm:ShellItemViewModel">
+      <Border Classes="package-bar-item-host"
+              Classes.drag-preview="{Binding IsDragPreview}"
+              Classes.horizontal="{Binding IsHorizontalBar}"
+              Classes.vertical="{Binding IsVerticalBar}"
+              Tag="{Binding Id}"
+              ToolTip.Tip="{Binding ToolTipText}">
+        <Grid IsHitTestVisible="False">
+          <Border Classes="package-bar-button-surface"
+                  Classes.top-bar-surface="{Binding IsHorizontalBar}"
+                  Classes.drag-preview="{Binding IsDragPreview}"
+                  Classes.selected="{Binding IsSelected}">
+            <controls:PackageIconView IconImage="{Binding IconImage}"
+                                      HasIconImage="{Binding HasIconImage}"
+                                      Glyph="{Binding Glyph}"
+                                      ShowBareGlyphFallback="{Binding ShowGlyphFallback}"
+                                      ImageMargin="5" />
+          </Border>
+        </Grid>
+      </Border>
+    </DataTemplate>
+  </UserControl.Resources>
+
   <Border x:Name="BarRoot"
           Classes="package-bar-host"
           Classes.horizontal="{Binding IsHorizontal}"
@@ -25,26 +49,7 @@
             </ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:ShellItemViewModel">
-              <Border Classes="package-bar-item-host"
-                      Classes.drag-preview="{Binding IsDragPreview}"
-                      Classes.horizontal="{Binding IsHorizontalBar}"
-                      Classes.vertical="{Binding IsVerticalBar}"
-                      Tag="{Binding Id}"
-                      ToolTip.Tip="{Binding ToolTipText}">
-                <Grid IsHitTestVisible="False">
-                  <Border Classes="package-bar-button-surface"
-                          Classes.drag-preview="{Binding IsDragPreview}"
-                          Classes.selected="{Binding IsSelected}">
-                    <controls:PackageIconView IconImage="{Binding IconImage}"
-                                              HasIconImage="{Binding HasIconImage}"
-                                              Glyph="{Binding Glyph}"
-                                              ShowBareGlyphFallback="{Binding ShowGlyphFallback}"
-                                              ImageMargin="5" />
-                  </Border>
-                </Grid>
-              </Border>
-            </DataTemplate>
+            <StaticResource ResourceKey="PackageIconBarItemTemplate" />
           </ItemsControl.ItemTemplate>
         </ItemsControl>
 
@@ -52,7 +57,10 @@
                 Classes="rail-button package-bar-button overflow-button"
                 Click="OverflowButton_OnClick"
                 ToolTip.Tip="More package views">
-          <TextBlock Classes="glyph-text" Text="⋯" />
+          <Path Width="15"
+                Height="15"
+                Classes="icon-fill"
+                Data="{StaticResource Sunder.Icon.More}" />
         </Button>
       </StackPanel>
 
@@ -68,26 +76,7 @@
             </ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:ShellItemViewModel">
-              <Border Classes="package-bar-item-host"
-                      Classes.drag-preview="{Binding IsDragPreview}"
-                      Classes.horizontal="{Binding IsHorizontalBar}"
-                      Classes.vertical="{Binding IsVerticalBar}"
-                      Tag="{Binding Id}"
-                      ToolTip.Tip="{Binding ToolTipText}">
-                <Grid IsHitTestVisible="False">
-                  <Border Classes="package-bar-button-surface top-bar-surface"
-                          Classes.drag-preview="{Binding IsDragPreview}"
-                          Classes.selected="{Binding IsSelected}">
-                    <controls:PackageIconView IconImage="{Binding IconImage}"
-                                              HasIconImage="{Binding HasIconImage}"
-                                              Glyph="{Binding Glyph}"
-                                              ShowBareGlyphFallback="{Binding ShowGlyphFallback}"
-                                              ImageMargin="5" />
-                  </Border>
-                </Grid>
-              </Border>
-            </DataTemplate>
+            <StaticResource ResourceKey="PackageIconBarItemTemplate" />
           </ItemsControl.ItemTemplate>
         </ItemsControl>
 
@@ -95,7 +84,10 @@
                 Classes="rail-button package-bar-button top-bar-button overflow-button"
                 Click="OverflowButton_OnClick"
                 ToolTip.Tip="More package views">
-          <TextBlock Classes="glyph-text" Text="⋯" />
+          <Path Width="15"
+                Height="15"
+                Classes="icon-fill"
+                Data="{StaticResource Sunder.Icon.More}" />
         </Button>
       </StackPanel>
     </Grid>

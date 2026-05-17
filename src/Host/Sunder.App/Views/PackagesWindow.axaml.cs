@@ -11,42 +11,43 @@ namespace Sunder.App.Views;
 public partial class PackagesWindow : Window
 {
     private PackagesWindowViewModel? ViewModel => DataContext as PackagesWindowViewModel;
-    private readonly ShellStateService? _shellStateService;
-    private readonly ShellState? _shellState;
+    private readonly SecondaryWindowStateController? _stateController;
+    private readonly SecondaryWindowLifecycleController _lifecycleController;
     private PackagesWindowViewModel? _subscribedViewModel;
-    private bool _allowClose;
 
     public PackagesWindow()
     {
         InitializeComponent();
-        KeyDown += OnKeyDown;
+        _lifecycleController = new SecondaryWindowLifecycleController(
+            this,
+            () => _stateController?.PersistWindowState(),
+            OnLifecycleClosed);
         DataContextChanged += OnDataContextChanged;
         Opened += OnOpened;
-        Closing += OnClosing;
-        Closed += OnClosed;
     }
 
     public PackagesWindow(ShellStateService shellStateService, ShellState shellState)
         : this()
     {
-        _shellStateService = shellStateService;
-        _shellState = shellState;
-        PackagesContentGrid.ColumnDefinitions[0].Width = new GridLength(shellState.PackagesSidebarWidth);
-        ShellWindowPlacementService.Apply(this, shellState.PackagesWindowPlacement);
+        _stateController = new SecondaryWindowStateController(
+            this,
+            shellStateService,
+            shellState,
+            PackagesContentGrid.ColumnDefinitions[0],
+            PackagesListPane,
+            state => state.PackagesSidebarWidth,
+            (state, width) => state.PackagesSidebarWidth = width,
+            state => state.PackagesWindowPlacement,
+            (state, placement) => state.PackagesWindowPlacement = placement);
+        _stateController.ApplyInitialWindowState();
     }
 
     public void CloseForShutdown()
-    {
-        _allowClose = true;
-        Close();
-    }
+        => _lifecycleController.CloseForShutdown();
 
     private async void OnOpened(object? sender, EventArgs e)
     {
-        if (_shellState is not null)
-        {
-            PackagesContentGrid.ColumnDefinitions[0].Width = new GridLength(_shellState.PackagesSidebarWidth);
-        }
+        _stateController?.ApplySidebarWidth();
 
         if (ViewModel is not null)
         {
@@ -56,36 +57,14 @@ public partial class PackagesWindow : Window
 
     private void PackagesSplitter_OnDragCompleted(object? sender, VectorEventArgs e)
     {
-        PersistListWidth();
+        _stateController?.PersistSidebarWidth();
     }
 
     private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
         => WindowDragHost.BeginWindowDragOrToggleMaximize(this, e);
 
-    private void OnKeyDown(object? sender, KeyEventArgs e)
+    private void OnLifecycleClosed()
     {
-        if (e.Key == Key.Escape)
-        {
-            Close();
-        }
-    }
-
-    private void OnClosing(object? sender, WindowClosingEventArgs e)
-    {
-        if (_allowClose)
-        {
-            PersistWindowState();
-            return;
-        }
-
-        e.Cancel = true;
-        PersistWindowState();
-        Hide();
-    }
-
-    private void OnClosed(object? sender, EventArgs e)
-    {
-        PersistWindowState();
         SubscribeToViewModel(null);
         ViewModel?.Dispose();
         DataContext = null;
@@ -123,27 +102,5 @@ public partial class PackagesWindow : Window
 
         var galleryWindow = new PackageImageGalleryWindow(media, selectedIndex);
         await galleryWindow.ShowDialog(this);
-    }
-
-    private void PersistWindowState()
-    {
-        if (_shellState is null || _shellStateService is null)
-        {
-            return;
-        }
-
-        PersistListWidth();
-        _shellState.PackagesWindowPlacement = ShellWindowPlacementService.Capture(this, _shellState.PackagesWindowPlacement);
-        _shellStateService.Save(_shellState);
-    }
-
-    private void PersistListWidth()
-    {
-        if (_shellState is null || PackagesListPane.Bounds.Width <= 0)
-        {
-            return;
-        }
-
-        _shellState.PackagesSidebarWidth = Math.Clamp(PackagesListPane.Bounds.Width, 180, 900);
     }
 }

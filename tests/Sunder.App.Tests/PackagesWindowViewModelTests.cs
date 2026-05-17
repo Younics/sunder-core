@@ -93,6 +93,70 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task EnableSelectedPackageCommand_WhenOperationServicePresent_QueuesBackgroundOperation()
+    {
+        var runtimeClient = new FakeRuntimeApiClient(
+            [CreateInstalledPackage("agent", isEnabled: false)]
+        );
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var notificationCenter = CreateNotificationCenter();
+        var lifecycleApplications = new List<IReadOnlyList<string>>();
+        using var operationService = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (packageIds, _) =>
+            {
+                lifecycleApplications.Add(packageIds.ToArray());
+                return Task.CompletedTask;
+            },
+            notificationCenter);
+        using var viewModel = new PackagesWindowViewModel(
+            runtimeClient,
+            new FakePackageArchivePicker(),
+            packageOperationService: operationService,
+            backgroundProcessQueue: queue,
+            notificationCenter: notificationCenter)
+        {
+            Mode = PackageWindowMode.Installed,
+            RegistryUrlText = string.Empty,
+        };
+
+        await viewModel.InitializeAsync();
+        await viewModel.EnableSelectedPackageCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => queue.ListProcesses().Any(IsCompletedEnableOperation));
+
+        Assert.Equal(["agent"], runtimeClient.EnabledPackageIds);
+        Assert.Collection(lifecycleApplications, packageIds => Assert.Equal(["agent"], packageIds));
+    }
+
+    [Fact]
+    public async Task InstalledPackageCommands_CanExecuteReflectsSelectionAndBusyState()
+    {
+        var runtimeClient = new FakeRuntimeApiClient(
+            [CreateInstalledPackage("agent", isEnabled: false)]
+        );
+        using var viewModel = CreateViewModel(runtimeClient, CreateNotificationCenter());
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.RefreshCommand.CanExecute(null));
+        Assert.True(viewModel.InstallPackageCommand.CanExecute(null));
+        Assert.True(viewModel.EnableSelectedPackageCommand.CanExecute(null));
+        Assert.False(viewModel.DisableSelectedPackageCommand.CanExecute(null));
+        Assert.True(viewModel.UninstallSelectedPackageCommand.CanExecute(null));
+        Assert.False(viewModel.UpdateSelectedInstalledPackageCommand.CanExecute(null));
+
+        viewModel.IsBusy = true;
+
+        Assert.False(viewModel.RefreshCommand.CanExecute(null));
+        Assert.False(viewModel.InstallPackageCommand.CanExecute(null));
+        Assert.False(viewModel.EnableSelectedPackageCommand.CanExecute(null));
+        Assert.False(viewModel.DisableSelectedPackageCommand.CanExecute(null));
+        Assert.False(viewModel.UninstallSelectedPackageCommand.CanExecute(null));
+        Assert.False(viewModel.UpdateSelectedInstalledPackageCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task InstalledPackages_UsePackageIconAssetUriWhenAvailable()
     {
         var runtimeClient = new FakeRuntimeApiClient(
@@ -243,6 +307,169 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task MarketplaceSelection_WhenEarlierDetailsCompleteLater_DoesNotOverwriteCurrentDetails()
+    {
+        var agentDetailsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var agentDetailsCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAgentDetails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ =>
+            [
+                CreateRegistryPackage("sunder.package.agent", "9.0.0"),
+                CreateRegistryPackage("sunder.package.tools", "2.0.0"),
+            ],
+            PackageDetails = async (packageId, cancellationToken) =>
+            {
+                if (string.Equals(packageId, "sunder.package.agent", StringComparison.OrdinalIgnoreCase))
+                {
+                    agentDetailsStarted.SetResult();
+                    try
+                    {
+                        await releaseAgentDetails.Task.WaitAsync(cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        agentDetailsCancelled.SetResult();
+                        throw;
+                    }
+
+                    return CreateRegistryPackageDetails(packageId, "9.0.0");
+                }
+
+                return CreateRegistryPackageDetails(packageId, "2.0.0");
+            },
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40)
+        );
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        var searchTask = viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await agentDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await viewModel.MarketplacePackages[1].SelectCommand.ExecuteAsync(null);
+        await agentDetailsCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("Sunder.package.tools", viewModel.SelectedPackageTitle);
+        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+
+        releaseAgentDetails.SetResult();
+        await searchTask;
+
+        Assert.Equal("Sunder.package.tools", viewModel.SelectedPackageTitle);
+        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+    }
+
+    [Fact]
+    public async Task MarketplaceSelection_WhenDetailsContainProfile_PopulatesProfileSections()
+    {
+        var profile = new RegistryPackageProfile(
+            "sunder.package.agent",
+            "Detailed local agent package.",
+            "# Sunder Agent",
+            "https://example.test/agent",
+            "https://example.test/source",
+            "https://example.test/issues",
+            " MIT ",
+            ["agent", " local ", "agent", ""],
+            [],
+            DateTimeOffset.UtcNow);
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            PackageDetails = (packageId, _) => Task.FromResult<RegistryPackageDetails?>(
+                CreateRegistryPackageDetails(packageId, "1.0.0", profile)),
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+
+        Assert.Equal("Detailed local agent package.", viewModel.SelectedPackageSummary);
+        Assert.True(viewModel.HasMarketplaceReadme);
+        Assert.True(viewModel.HasMarketplaceProfile);
+        Assert.False(viewModel.HasMarketplaceProfileMedia);
+        Assert.Collection(
+            viewModel.MarketplaceProfileLinks,
+            link =>
+            {
+                Assert.Equal("Website", link.Label);
+                Assert.Equal(new Uri("https://example.test/agent"), link.NavigateUri);
+            },
+            link =>
+            {
+                Assert.Equal("Source", link.Label);
+                Assert.Equal(new Uri("https://example.test/source"), link.NavigateUri);
+            },
+            link =>
+            {
+                Assert.Equal("Issues", link.Label);
+                Assert.Equal(new Uri("https://example.test/issues"), link.NavigateUri);
+            });
+        Assert.Collection(
+            viewModel.MarketplaceProfileMetadata,
+            item =>
+            {
+                Assert.Equal("License", item.Label);
+                Assert.Equal("MIT", item.Value);
+            });
+        Assert.Collection(
+            viewModel.MarketplaceProfileTags,
+            tag => Assert.Equal("agent", tag),
+            tag => Assert.Equal("local", tag));
+    }
+
+    [Fact]
+    public async Task InstallSelectedMarketplacePackageCommand_InstallsSelectedVersion()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent", "2.0.0")],
+            PackageDetails = (packageId, _) => Task.FromResult<RegistryPackageDetails?>(new RegistryPackageDetails(
+                packageId,
+                ToDisplayName(packageId),
+                null,
+                "2.0.0",
+                null,
+                [
+                    new RegistryPackageVersionSummary("2.0.0", false, null, DateTimeOffset.UtcNow),
+                    new RegistryPackageVersionSummary("1.5.0", false, null, DateTimeOffset.UtcNow.AddDays(-1)),
+                ],
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                Profile: null)),
+            InstallPlan = new RegistryResolveInstallPlanResponse(
+                true,
+                [CreatePlanItem("sunder.package.agent", "1.5.0")],
+                [],
+                [],
+                []),
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        viewModel.MarketplaceVersions.Single(version => version.Version == "1.5.0").SelectCommand.Execute(null);
+        await viewModel.InstallSelectedMarketplacePackageCommand.ExecuteAsync(null);
+
+        Assert.NotNull(registryClient.LastInstallPlanRequest);
+        Assert.Equal("sunder.package.agent", registryClient.LastInstallPlanRequest.PackageId);
+        Assert.Equal("1.5.0", registryClient.LastInstallPlanRequest.Version);
+        Assert.Null(registryClient.LastInstallPlanRequest.Tag);
+    }
+
+    [Fact]
     public async Task SearchText_WhenSwitchingModes_RestoresModeSpecificSearch()
     {
         var registryClient = new FakeRegistryApiClient
@@ -375,16 +602,32 @@ public sealed class PackagesWindowViewModelTests
             StatusMessage: isEnabled ? null : "Disabled"
         );
 
-    private static RegistryPackageSummary CreateRegistryPackage(string packageId) =>
+    private static RegistryPackageSummary CreateRegistryPackage(string packageId, string latestVersion = "1.0.0") =>
         new(
             packageId,
             ToDisplayName(packageId),
             null,
-            "1.0.0",
+            latestVersion,
             null,
             false,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow
+        );
+
+    private static RegistryPackageDetails CreateRegistryPackageDetails(
+        string packageId,
+        string version,
+        RegistryPackageProfile? profile = null) =>
+        new(
+            packageId,
+            ToDisplayName(packageId),
+            null,
+            version,
+            null,
+            [new RegistryPackageVersionSummary(version, false, null, DateTimeOffset.UtcNow)],
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            profile
         );
 
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
@@ -426,6 +669,12 @@ public sealed class PackagesWindowViewModelTests
         }
     }
 
+    private static bool IsCompletedEnableOperation(BackgroundProcessSnapshot snapshot)
+        => snapshot.State == BackgroundProcessState.Completed
+           && PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
+           && metadata.Kind == PackageOperationKind.Enable
+           && string.Equals(metadata.PackageId, "agent", StringComparison.OrdinalIgnoreCase);
+
     private sealed class FakePackageArchivePicker : IPackageArchivePicker
     {
         public Task<string?> PickPackagePathAsync(CancellationToken cancellationToken = default) =>
@@ -457,7 +706,12 @@ public sealed class PackagesWindowViewModelTests
 
         public Func<string?, IReadOnlyList<RegistryPackageSummary>> SearchResults { get; init; } = _ => [];
 
+        public Func<string, CancellationToken, Task<RegistryPackageDetails?>> PackageDetails { get; init; } =
+            (packageId, _) => Task.FromResult<RegistryPackageDetails?>(CreateRegistryPackageDetails(packageId, "1.0.0"));
+
         public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
+
+        public RegistryResolveInstallPlanRequest? LastInstallPlanRequest { get; private set; }
 
         public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(
             string? query,
@@ -485,18 +739,7 @@ public sealed class PackagesWindowViewModelTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<RegistryPackageDetails?>(
-                new RegistryPackageDetails(
-                    packageId,
-                    ToDisplayName(packageId),
-                    null,
-                    "1.0.0",
-                    null,
-                    [new RegistryPackageVersionSummary("1.0.0", false, null, DateTimeOffset.UtcNow)],
-                    DateTimeOffset.UtcNow,
-                    DateTimeOffset.UtcNow
-                )
-            );
+            return PackageDetails(packageId, cancellationToken);
         }
 
         public Task<RegistryPackageVersionDetails?> GetVersionAsync(
@@ -513,7 +756,12 @@ public sealed class PackagesWindowViewModelTests
         public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
             RegistryResolveInstallPlanRequest request,
             CancellationToken cancellationToken = default
-        ) => Task.FromResult(InstallPlan);
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastInstallPlanRequest = request;
+            return Task.FromResult(InstallPlan);
+        }
 
         public Task DownloadArtifactAsync(
             RegistryPackageArtifact artifact,
@@ -538,6 +786,8 @@ public sealed class PackagesWindowViewModelTests
             installedPackages.ToList();
 
         public int GetInstalledPackagesCallCount { get; private set; }
+
+        public List<string> EnabledPackageIds { get; } = [];
 
         public PackageOperationResult? EnableResult { get; init; }
 
@@ -626,6 +876,7 @@ public sealed class PackagesWindowViewModelTests
                 return Task.FromResult(EnableResult);
             }
 
+            EnabledPackageIds.Add(packageId);
             SetPackageEnabled(packageId, isEnabled: true);
             return Task.FromResult(
                 new PackageOperationResult(

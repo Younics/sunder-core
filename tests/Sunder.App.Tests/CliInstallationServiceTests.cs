@@ -217,13 +217,19 @@ public sealed class CliInstallationServiceTests
     {
         var testRoot = CreateTempDirectory();
         CreateBundledCli(testRoot, CliInstallPlatform.Windows, "v1");
+        var bundledCliDirectory = Path.Combine(testRoot, "app", "Cli");
+        File.WriteAllText(Path.Combine(bundledCliDirectory, "Sunder.Protocol.dll"), "protocol");
         var environment = new FakeCliEnvironmentVariableStore { UserPath = @"C:\Users\test\bin" };
         var service = CreateService(testRoot, CliInstallPlatform.Windows, environment);
         var installResult = await service.EnsureInstalledAsync();
+        var installedCompanionPath = Path.Combine(installResult.Status.Paths.InstalledCliDirectory, "Sunder.Protocol.dll");
+        Assert.True(File.Exists(installedCompanionPath));
 
         var status = await service.UninstallAsync();
 
         Assert.False(File.Exists(installResult.Status.Paths.InstalledCliPath));
+        Assert.False(File.Exists(installedCompanionPath));
+        Assert.False(Directory.Exists(installResult.Status.Paths.InstalledCliDirectory));
         Assert.False(File.Exists(installResult.Status.Paths.ShimPath));
         Assert.False(status.IsInstalled);
         Assert.False(status.IsShimInstalled);

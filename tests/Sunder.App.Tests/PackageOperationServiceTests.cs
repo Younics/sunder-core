@@ -2,6 +2,7 @@ using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Registry.Shared;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Notifications;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -72,6 +73,85 @@ public sealed class PackageOperationServiceTests
     }
 
     [Fact]
+    public async Task EnqueueLocalInstall_WhenLifecycleApplyFails_CompletesWithWarningNotification()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => throw new InvalidOperationException("shell refresh failed"),
+            notificationCenter);
+
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        var completed = queue.GetProcess(operation.ProcessId);
+        Assert.Equal(["agent"], runtimeClient.InstalledPackageIds);
+        Assert.Contains("running shell did not apply the change", completed?.StatusText);
+        var notification = Assert.Single(notificationCenter.ListNotifications());
+        Assert.Equal("Restart Sunder to apply package changes", notification.Title);
+        Assert.Equal(PackageNotificationSeverity.Warning, notification.Severity);
+        Assert.Contains("shell refresh failed", notification.Message);
+    }
+
+    [Fact]
+    public async Task EnqueueEnable_RunsInBackgroundAndAppliesLifecycleChanges()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var lifecycleApplications = new List<IReadOnlyList<string>>();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (packageIds, _) =>
+            {
+                lifecycleApplications.Add(packageIds.ToArray());
+                return Task.CompletedTask;
+            },
+            notificationCenter);
+
+        var operation = service.EnqueueEnable("agent", "Agent");
+
+        Assert.Equal(BackgroundProcessIndicator.Packages, operation.Indicator);
+        Assert.False(operation.CanCancel);
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        Assert.Equal(["agent"], runtimeClient.EnabledPackageIds);
+        Assert.Collection(lifecycleApplications, packageIds => Assert.Equal(["agent"], packageIds));
+    }
+
+    [Fact]
+    public async Task EnqueueDisable_RunsInBackgroundAndAppliesLifecycleChanges()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var lifecycleApplications = new List<IReadOnlyList<string>>();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (packageIds, _) =>
+            {
+                lifecycleApplications.Add(packageIds.ToArray());
+                return Task.CompletedTask;
+            },
+            notificationCenter);
+
+        var operation = service.EnqueueDisable("agent", "Agent");
+
+        Assert.Equal(BackgroundProcessIndicator.Packages, operation.Indicator);
+        Assert.False(operation.CanCancel);
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        Assert.Equal(["agent"], runtimeClient.DisabledPackageIds);
+        Assert.Collection(lifecycleApplications, packageIds => Assert.Equal(["agent"], packageIds));
+    }
+
+    [Fact]
     public async Task EnqueueMarketplaceInstall_WhenPackageAlreadyHasActiveOperation_ReturnsExistingOperation()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -101,6 +181,155 @@ public sealed class PackageOperationServiceTests
 
         Assert.Equal(first.ProcessId, second.ProcessId);
         await service.CancelAllAsync();
+    }
+
+    [Fact]
+    public async Task EnqueueEnable_WhenCalledConcurrentlyForSamePackage_ReturnsSingleOperation()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient
+        {
+            EnableDelay = TimeSpan.FromSeconds(1),
+        };
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+        var releaseCallers = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callers = Enumerable.Range(0, 20)
+            .Select(_ => Task.Run(async () =>
+            {
+                await releaseCallers.Task;
+                return service.EnqueueEnable("agent", "Agent");
+            }))
+            .ToArray();
+
+        releaseCallers.SetResult();
+        var operations = await Task.WhenAll(callers);
+
+        Assert.Single(operations.Select(operation => operation.ProcessId).Distinct());
+        await service.CancelAllAsync();
+    }
+
+    [Fact]
+    public async Task CancelAllAsync_DoesNotCancelNonPackageProcesses()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var runtimeClient = new FakeRuntimeApiClient
+        {
+            InstallDelay = TimeSpan.FromMinutes(1),
+        };
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+        var nonPackageStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowNonPackageCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nonPackageProcess = queue.Enqueue(new BackgroundProcessRequest(
+            "Non-package work",
+            "non-package",
+            BackgroundProcessIndicator.Main,
+            BackgroundProcessConcurrencyMode.ParallelWithinGroup,
+            CanCancel: true,
+            async _ =>
+            {
+                nonPackageStarted.SetResult();
+                await allowNonPackageCompletion.Task;
+            }));
+        await nonPackageStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var packageOperation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        await WaitForConditionAsync(() => queue.GetProcess(packageOperation.ProcessId)?.State == BackgroundProcessState.Running);
+
+        await service.CancelAllAsync();
+
+        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(packageOperation.ProcessId)?.State);
+        Assert.Equal(BackgroundProcessState.Running, queue.GetProcess(nonPackageProcess.ProcessId)?.State);
+        allowNonPackageCompletion.SetResult();
+        await WaitForConditionAsync(() => queue.GetProcess(nonPackageProcess.ProcessId)?.State == BackgroundProcessState.Completed);
+    }
+
+    [Fact]
+    public async Task CancelOperation_DoesNotCancelNonPackageProcesses()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+        var nonPackageStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowNonPackageCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nonPackageProcess = queue.Enqueue(new BackgroundProcessRequest(
+            "Non-package work",
+            "non-package",
+            BackgroundProcessIndicator.Main,
+            BackgroundProcessConcurrencyMode.ParallelWithinGroup,
+            CanCancel: true,
+            async _ =>
+            {
+                nonPackageStarted.SetResult();
+                await allowNonPackageCompletion.Task;
+            }));
+        await nonPackageStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var cancelled = service.CancelOperation(nonPackageProcess.ProcessId);
+
+        Assert.False(cancelled);
+        Assert.Equal(BackgroundProcessState.Running, queue.GetProcess(nonPackageProcess.ProcessId)?.State);
+        allowNonPackageCompletion.SetResult();
+        await WaitForConditionAsync(() => queue.GetProcess(nonPackageProcess.ProcessId)?.State == BackgroundProcessState.Completed);
+    }
+
+    [Fact]
+    public void Dispose_RejectsFurtherPackageOperations()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+
+        service.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => service.ListOperations());
+        Assert.Throws<ObjectDisposedException>(() => service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg")));
+        Assert.Throws<ObjectDisposedException>(() => service.CancelOperation(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void Dispose_UnsubscribesFromBackgroundProcessChanges()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+        var operationChangeCount = 0;
+        service.OperationChanged += (_, _) => operationChangeCount++;
+
+        service.Dispose();
+        queue.Enqueue(new BackgroundProcessRequest(
+            "Install Agent",
+            PackageOperationService.PackageStoreGroupKey,
+            BackgroundProcessIndicator.Packages,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            _ => Task.CompletedTask,
+            new PackageOperationMetadata("agent", PackageOperationKind.InstallLocal, "Agent").ToMetadata()));
+
+        Assert.Equal(0, operationChangeCount);
     }
 
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
@@ -182,7 +411,13 @@ public sealed class PackageOperationServiceTests
     {
         public List<string> InstalledPackageIds { get; } = [];
 
+        public List<string> EnabledPackageIds { get; } = [];
+
+        public List<string> DisabledPackageIds { get; } = [];
+
         public TimeSpan InstallDelay { get; init; }
+
+        public TimeSpan EnableDelay { get; init; }
 
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
@@ -224,11 +459,30 @@ public sealed class PackageOperationServiceTests
         public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        public async Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
+        {
+            if (EnableDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(EnableDelay, cancellationToken);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            EnabledPackageIds.Add(packageId);
+            return new PackageOperationResult(true, $"Enabled {packageId}.", RequiresAppRestart: false, [], [])
+            {
+                ImpactedPackageIds = [packageId],
+            };
+        }
 
         public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisabledPackageIds.Add(packageId);
+            return Task.FromResult(new PackageOperationResult(true, $"Disabled {packageId}.", RequiresAppRestart: false, [], [])
+            {
+                ImpactedPackageIds = [packageId],
+            });
+        }
 
         public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();

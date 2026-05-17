@@ -12,7 +12,9 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
     private static readonly HttpClient ImageHttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
     private static readonly SemaphoreSlim ImageLoadSemaphore = new(2, 2);
     private readonly Func<RegistryPackageMediaItemViewModel, Task> _onSelectAsync;
+    private readonly CancellationTokenSource _disposeCts = new();
     private Task? _loadTask;
+    private bool _disposed;
 
     public RegistryPackageMediaItemViewModel(
         RegistryPackageMedia media,
@@ -49,80 +51,129 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
 
     public async Task EnsureImageLoadedAsync(CancellationToken cancellationToken = default)
     {
-        _loadTask ??= LoadImageAsync(cancellationToken);
-        await _loadTask;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_disposed)
+        {
+            return;
+        }
+
+        _loadTask ??= LoadImageAsync(_disposeCts.Token);
+        await _loadTask.WaitAsync(cancellationToken);
     }
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _disposeCts.Cancel();
         Image?.Dispose();
         Image = null;
+        if (_loadTask?.IsCompleted == false)
+        {
+            _ = _loadTask.ContinueWith(
+                task =>
+                {
+                    _ = task.Exception;
+                    _disposeCts.Dispose();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        else
+        {
+            _disposeCts.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     private async Task LoadImageAsync(CancellationToken cancellationToken)
     {
-        var semaphoreAcquired = false;
+        Bitmap? bitmap = null;
         await SetImageLoadingAsync(true);
         try
         {
-            await ImageLoadSemaphore.WaitAsync(cancellationToken);
-            semaphoreAcquired = true;
-            using var response = await ImageHttpClient.GetAsync(Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            if (response.Content.Headers.ContentLength > MaxMediaImageBytes)
+            if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri))
             {
-                await UiThread.InvokeAsync(() => Image = null);
+                await ClearImageAsync(cancellationToken);
                 return;
             }
 
-            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var memory = await ReadBoundedImageAsync(source, MaxMediaImageBytes, cancellationToken);
-            memory.Position = 0;
-            var bitmap = new Bitmap(memory);
-            await UiThread.InvokeAsync(() => Image = bitmap);
+            var download = await BoundedImageContentLoader
+                .LoadAsync(ImageHttpClient, ImageLoadSemaphore, uri, MaxMediaImageBytes, cancellationToken)
+                .ConfigureAwait(false);
+            if (download.Error is not null || download.Content is null)
+            {
+                await ClearImageAsync(cancellationToken);
+                return;
+            }
+
+            using var memory = download.Content;
+            bitmap = new Bitmap(memory);
+            await ApplyLoadedBitmapAsync(bitmap, cancellationToken);
+            bitmap = null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch
         {
-            await UiThread.InvokeAsync(() => Image = null);
+            await ClearImageAsync(cancellationToken);
         }
         finally
         {
-            if (semaphoreAcquired)
-            {
-                ImageLoadSemaphore.Release();
-            }
-
+            bitmap?.Dispose();
             await SetImageLoadingAsync(false);
         }
     }
 
-    private static async Task<MemoryStream> ReadBoundedImageAsync(
-        Stream source,
-        long maxBytes,
-        CancellationToken cancellationToken)
+    private Task ApplyLoadedBitmapAsync(Bitmap bitmap, CancellationToken cancellationToken)
     {
-        var memory = new MemoryStream();
-        var buffer = new byte[81920];
-        long totalBytes = 0;
-        while (true)
+        return UiThread.InvokeAsync(() =>
         {
-            var bytesRead = await source.ReadAsync(buffer, cancellationToken);
-            if (bytesRead == 0)
+            if (_disposed || cancellationToken.IsCancellationRequested)
             {
-                return memory;
+                bitmap.Dispose();
+                return;
             }
 
-            totalBytes += bytesRead;
-            if (totalBytes > maxBytes)
+            Image?.Dispose();
+            Image = bitmap;
+        });
+    }
+
+    private Task ClearImageAsync(CancellationToken cancellationToken)
+    {
+        return UiThread.InvokeAsync(() =>
+        {
+            if (_disposed || cancellationToken.IsCancellationRequested)
             {
-                memory.Dispose();
-                throw new InvalidOperationException($"Image content exceeds the {maxBytes} byte limit.");
+                return;
             }
 
-            memory.Write(buffer, 0, bytesRead);
-        }
+            Image?.Dispose();
+            Image = null;
+        });
     }
 
     private Task SetImageLoadingAsync(bool value)
-        => UiThread.InvokeAsync(() => IsImageLoading = value);
+    {
+        if (_disposed)
+        {
+            return Task.CompletedTask;
+        }
+
+        return UiThread.InvokeAsync(() =>
+        {
+            if (!_disposed)
+            {
+                IsImageLoading = value;
+            }
+        });
+    }
 }

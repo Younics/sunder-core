@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.PackageWarningsPanel"
+             x:DataType="vm:PackagesWindowViewModel"
+             mc:Ignorable="d">
+  <Border Classes="card-surface">
+    <StackPanel Spacing="8">
+      <TextBlock Classes="section-title" Text="Warnings" />
+      <ItemsControl ItemsSource="{Binding WarningLines}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="x:String">
+            <TextBlock Classes="muted"
+                       Margin="0,0,0,6"
+                       Text="{Binding}"
+                       TextWrapping="Wrap" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </Border>
+</UserControl>

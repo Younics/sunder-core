@@ -56,4 +56,54 @@ internal static class UiThread
         }, priority);
         return completion.Task;
     }
+
+    public static Task<T> InvokeAsync<T>(Func<T> action)
+        => InvokeAsync(action, DispatcherPriority.Normal);
+
+    public static Task<T> InvokeAsync<T>(Func<T> action, DispatcherPriority priority)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            return Task.FromResult(action());
+        }
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                completion.SetResult(action());
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        }, priority);
+        return completion.Task;
+    }
+
+    public static Task<T> InvokeAsync<T>(Func<Task<T>> action)
+        => InvokeAsync(action, DispatcherPriority.Normal);
+
+    public static Task<T> InvokeAsync<T>(Func<Task<T>> action, DispatcherPriority priority)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            return action();
+        }
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                completion.SetResult(await action());
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        }, priority);
+        return completion.Task;
+    }
 }

@@ -1,4 +1,3 @@
-using Avalonia.Threading;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
@@ -29,13 +28,7 @@ public sealed class AppPackageSettingsNavigationService : IPackageSettingsNaviga
             return false;
         }
 
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            launcher.ShowSettings();
-            return true;
-        }
-
-        return await Dispatcher.UIThread.InvokeAsync(() =>
+        return await UiThread.InvokeAsync(() =>
         {
             launcher.ShowSettings();
             return true;
@@ -59,11 +52,6 @@ public sealed class AppPackageSettingsNavigationService : IPackageSettingsNaviga
             return false;
         }
 
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            return await launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken);
-        }
-
-        return await Dispatcher.UIThread.InvokeAsync(() => launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken));
+        return await UiThread.InvokeAsync(() => launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken));
     }
 }

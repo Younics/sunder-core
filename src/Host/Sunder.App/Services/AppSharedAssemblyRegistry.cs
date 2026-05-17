@@ -56,6 +56,38 @@ internal sealed class AppSharedAssemblyRegistry
         }
     }
 
+    public void RemoveProbeDirectories(IEnumerable<string> probeDirectories)
+    {
+        var normalizedProbeDirectories = probeDirectories
+            .Where(static probeDirectory => !string.IsNullOrWhiteSpace(probeDirectory))
+            .Select(NormalizeDirectoryPath)
+            .ToArray();
+        if (normalizedProbeDirectories.Length == 0)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            foreach (var assemblyName in _sharedAssemblyPaths
+                         .Where(entry => IsPathInDirectories(entry.Value, normalizedProbeDirectories))
+                         .Select(static entry => entry.Key)
+                         .ToArray())
+            {
+                _sharedAssemblyPaths.Remove(assemblyName);
+                _sharedAssemblyNames.Remove(assemblyName);
+            }
+
+            foreach (var assemblyName in _sharedAssemblies
+                         .Where(entry => IsAssemblyLoadedFromDirectories(entry.Value, normalizedProbeDirectories))
+                         .Select(static entry => entry.Key)
+                         .ToArray())
+            {
+                _sharedAssemblies.Remove(assemblyName);
+            }
+        }
+    }
+
     private void RegisterOptionalHostAssemblyName(string assemblyName)
     {
         _optionalHostAssemblies.Add(assemblyName);
@@ -298,6 +330,33 @@ internal sealed class AppSharedAssemblyRegistry
         }
 
         return false;
+    }
+
+    private static bool IsAssemblyLoadedFromDirectories(Assembly assembly, IReadOnlyList<string> normalizedDirectories)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(assembly.Location)
+                   && IsPathInDirectories(assembly.Location, normalizedDirectories);
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPathInDirectories(string path, IReadOnlyList<string> normalizedDirectories)
+    {
+        var normalizedPath = Path.GetFullPath(path);
+        return normalizedDirectories.Any(directory => normalizedPath.StartsWith(directory, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeDirectoryPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        return fullPath.EndsWith(Path.DirectorySeparatorChar) || fullPath.EndsWith(Path.AltDirectorySeparatorChar)
+            ? fullPath
+            : fullPath + Path.DirectorySeparatorChar;
     }
 
     private readonly record struct AssemblyCandidate(string Path, AssemblyName Name);

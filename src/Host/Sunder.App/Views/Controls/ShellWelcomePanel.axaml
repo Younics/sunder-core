@@ -1,0 +1,47 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.ShellWelcomePanel"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <Border Classes="welcome-card">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+          RowSpacing="18">
+      <Border Classes="welcome-logo-frame">
+        <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+               RenderOptions.BitmapInterpolationMode="HighQuality"
+               Stretch="Uniform" />
+      </Border>
+
+      <StackPanel Grid.Row="1"
+                  Spacing="8"
+                  HorizontalAlignment="Center">
+        <TextBlock Classes="welcome-eyebrow"
+                   Text="YOUR NEW WORKSPACE" />
+        <TextBlock Classes="welcome-title"
+                   Text="Welcome to Sunder" />
+        <TextBlock Classes="welcome-subtitle"
+                   Text="Install packages or move package views into the middle bar to shape this workspace around your workflow."
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Border Grid.Row="2"
+              Height="1"
+              Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+      <StackPanel Grid.Row="3"
+                  Orientation="Horizontal"
+                  Spacing="12"
+                  HorizontalAlignment="Center">
+        <Button Classes="primary-action"
+                Content="Browse Packages"
+                Command="{Binding OpenPackagesCommand}" />
+        <Button Classes="secondary-action"
+                Content="Open Settings"
+                Command="{Binding OpenSettingsCommand}" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

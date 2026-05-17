@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.ToastHost"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <ItemsControl ItemsSource="{Binding Toasts}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top">
+    <ItemsControl.ItemsPanel>
+      <ItemsPanelTemplate>
+        <StackPanel Spacing="8" />
+      </ItemsPanelTemplate>
+    </ItemsControl.ItemsPanel>
+    <ItemsControl.ItemTemplate>
+      <DataTemplate x:DataType="vm:ToastNotificationViewModel">
+        <Border Classes="toast-card">
+          <Grid ColumnDefinitions="Auto,*,Auto"
+                ColumnSpacing="10">
+            <Border Classes="toast-severity-dot">
+              <TextBlock Classes="notification-severity-glyph"
+                         Text="{Binding SeverityGlyph}" />
+            </Border>
+            <StackPanel Grid.Column="1"
+                        Spacing="2"
+                        Width="280">
+              <TextBlock Text="{Binding Title}"
+                         FontWeight="SemiBold"
+                         TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Message}"
+                         TextWrapping="Wrap"
+                         Foreground="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+            </StackPanel>
+            <Button Grid.Column="2"
+                    Classes="toast-close-button"
+                    Command="{Binding $parent[ItemsControl].DataContext.DismissToastNotificationCommand}"
+                    CommandParameter="{Binding}"
+                    ToolTip.Tip="Dismiss notification">
+              <Path Width="10"
+                    Height="10"
+                    Classes="icon-stroke"
+                    Data="{StaticResource Sunder.Icon.Close}" />
+            </Button>
+          </Grid>
+        </Border>
+      </DataTemplate>
+    </ItemsControl.ItemTemplate>
+  </ItemsControl>
+</UserControl>

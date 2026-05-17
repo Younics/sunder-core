@@ -156,7 +156,8 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     private IEnumerable<ShellItemViewModel> BuildVisibleItems(IEnumerable<ShellItemViewModel> items)
     {
         var visibleItems = items.ToList();
-        if (string.IsNullOrWhiteSpace(_previewDraggedViewId) || string.IsNullOrWhiteSpace(_previewGlyph))
+        if (string.IsNullOrWhiteSpace(_previewDraggedViewId)
+            || (string.IsNullOrWhiteSpace(_previewGlyph) && _previewIconImage is null))
         {
             return visibleItems;
         }
@@ -170,7 +171,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
             : visibleItems.Count;
         visibleItems.Insert(normalizedIndex, new ShellItemViewModel(
             id: "__drag-preview__",
-            glyph: _previewGlyph,
+            glyph: _previewGlyph ?? string.Empty,
             iconUri: null,
             title: string.Empty,
             packageDisplayName: string.Empty,

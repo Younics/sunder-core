@@ -1,6 +1,5 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:controls="using:Sunder.App.Views.Controls">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <Style Selector="Window.shell-window, Window.secondary-window, Window.loading-window">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Background.App}" />
@@ -12,6 +11,45 @@
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Padding" Value="8,7" />
+  </Style>
+
+  <Style Selector="Border.toolbar-logo-badge">
+    <Setter Property="Width" Value="32" />
+    <Setter Property="Height" Value="32" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="3" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Border.toolbar-logo-badge.large">
+    <Setter Property="Width" Value="36" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="CornerRadius" Value="9" />
+  </Style>
+
+  <Style Selector="Path.icon-stroke">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="Stretch" Value="Uniform" />
+    <Setter Property="Stroke" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="StrokeLineCap" Value="Round" />
+    <Setter Property="StrokeThickness" Value="1.45" />
+  </Style>
+
+  <Style Selector="Path.icon-fill">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="Stretch" Value="Uniform" />
+  </Style>
+
+  <Style Selector="Button.toolbar-icon:pointerover Path.icon-stroke, Button.window-action-button:pointerover Path.icon-stroke, Button.search-clear-button:pointerover Path.icon-stroke, Button.toast-close-button:pointerover Path.icon-stroke, Button.update-prompt-close-button:pointerover Path.icon-stroke">
+    <Setter Property="Stroke" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.toolbar-icon:pointerover Path.icon-fill, Button.window-action-button:pointerover Path.icon-fill, Button.search-clear-button:pointerover Path.icon-fill, Button.rail-button:pointerover Path.icon-fill">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.close-button:pointerover Path.icon-stroke">
+    <Setter Property="Stroke" Value="{DynamicResource Sunder.Brush.Foreground.OnDanger}" />
   </Style>
 
   <Style Selector="Border.panel-header-surface">
@@ -94,90 +132,6 @@
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
     <Setter Property="Padding" Value="14" />
-  </Style>
-
-  <Style Selector="Border.notification-empty-state">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
-    <Setter Property="Padding" Value="14" />
-  </Style>
-
-  <Style Selector="Border.notification-row">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
-    <Setter Property="Padding" Value="12" />
-    <Setter Property="Margin" Value="0,0,0,8" />
-  </Style>
-
-  <Style Selector="Border.notification-row:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
-  </Style>
-
-  <Style Selector="Border.notification-severity-dot, Border.toast-severity-dot">
-    <Setter Property="Width" Value="22" />
-    <Setter Property="Height" Value="22" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-  </Style>
-
-  <Style Selector="TextBlock.notification-severity-glyph">
-    <Setter Property="HorizontalAlignment" Value="Center" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-    <Setter Property="FontSize" Value="11" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
-  </Style>
-
-  <Style Selector="Border.notification-unread-pill">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Padding" Value="7,2" />
-    <Setter Property="VerticalAlignment" Value="Top" />
-  </Style>
-
-  <Style Selector="Border.notification-unread-pill TextBlock">
-    <Setter Property="FontSize" Value="10" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
-  </Style>
-
-  <Style Selector="Border.toast-card">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
-    <Setter Property="Padding" Value="12" />
-    <Setter Property="BoxShadow" Value="{DynamicResource Sunder.Shadow.Toast}" />
-  </Style>
-
-  <Style Selector="Button.toast-close-button">
-    <Setter Property="Width" Value="22" />
-    <Setter Property="Height" Value="22" />
-    <Setter Property="Padding" Value="0" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
-    <Setter Property="FontSize" Value="11" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="HorizontalContentAlignment" Value="Center" />
-    <Setter Property="VerticalContentAlignment" Value="Center" />
-    <Setter Property="VerticalAlignment" Value="Top" />
-  </Style>
-
-  <Style Selector="Button.toast-close-button:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
   <Style Selector="Border.update-prompt-card">
@@ -302,18 +256,6 @@
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
-  <Style Selector="MenuItem.package-bar-context-menu-item">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-    <Setter Property="FontSize" Value="13" />
-    <Setter Property="Padding" Value="10,7" />
-    <Setter Property="MinWidth" Value="132" />
-  </Style>
-
-  <Style Selector="MenuItem.package-bar-context-menu-item:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
   <Style Selector="Border.toolbar-menu-icon-badge">
     <Setter Property="Width" Value="20" />
     <Setter Property="Height" Value="20" />
@@ -356,114 +298,6 @@
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Info}" />
-  </Style>
-
-  <Style Selector="Border.package-bar-host">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="CornerRadius" Value="3" />
-  </Style>
-
-  <Style Selector="Border.package-bar-host.horizontal">
-    <Setter Property="MinHeight" Value="40" />
-  </Style>
-
-  <Style Selector="Border.package-bar-host.drag-over">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.DragOver}" />
-  </Style>
-
-  <Style Selector="Border.package-bar-host.horizontal.drag-over">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-  </Style>
-
-  <Style Selector="controls|PackageIconBar.side-top-lane StackPanel.package-bar-vertical-content">
-    <Setter Property="Margin" Value="0,10,0,0" />
-  </Style>
-
-  <Style Selector="controls|PackageIconBar.side-bottom-lane StackPanel.package-bar-vertical-content">
-    <Setter Property="Margin" Value="0,0,0,10" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="Padding" Value="2" />
-    <Setter Property="CornerRadius" Value="3" />
-    <Setter Property="Cursor" Value="Hand" />
-    <Setter Property="Transitions">
-      <Transitions>
-        <ThicknessTransition Property="Margin" Duration="0:0:0.08" />
-      </Transitions>
-    </Setter>
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host:pointerover Button.package-bar-button">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="Border.package-bar-button-surface">
-    <Setter Property="Width" Value="38" />
-    <Setter Property="Height" Value="38" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderThickness" Value="1" />
-  </Style>
-
-  <Style Selector="Border.package-bar-button-surface.top-bar-surface">
-    <Setter Property="Width" Value="36" />
-    <Setter Property="Height" Value="36" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host:pointerover Border.package-bar-button-surface">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host.drag-preview">
-    <Setter Property="Cursor" Value="Arrow" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host.drag-preview Border.package-bar-button-surface.drag-preview">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Selection}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="Opacity" Value="0.95" />
-  </Style>
-
-  <Style Selector="Border.package-bar-button-surface.selected">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-  </Style>
-
-  <Style Selector="Border.drag-ghost-surface">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Selection}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="Opacity" Value="0.95" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host.vertical.drop-before">
-    <Setter Property="Margin" Value="0,46,0,0" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host.vertical.drop-after">
-    <Setter Property="Margin" Value="0,0,0,46" />
-  </Style>
-
-  <Style Selector="Button.package-bar-button">
-    <Setter Property="Width" Value="38" />
-    <Setter Property="Height" Value="38" />
-  </Style>
-
-  <Style Selector="Button.package-bar-button.top-bar-button">
-    <Setter Property="Width" Value="36" />
-    <Setter Property="Height" Value="36" />
-  </Style>
-
-  <Style Selector="Button.package-bar-button.overflow-button">
-    <Setter Property="FontSize" Value="18" />
   </Style>
 
   <Style Selector="Button.side-rail-button">
@@ -511,97 +345,6 @@
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="Border.marketplace-profile-card">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
-  </Style>
-
-  <Style Selector="Border.marketplace-profile-row">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
-    <Setter Property="Padding" Value="10,9" />
-    <Setter Property="Margin" Value="0,0,0,7" />
-  </Style>
-
-  <Style Selector="Border.marketplace-profile-link-row:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-profile-label">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-profile-value">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="HyperlinkButton.marketplace-profile-link">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="HorizontalAlignment" Value="Left" />
-    <Setter Property="HorizontalContentAlignment" Value="Left" />
-    <Setter Property="Padding" Value="0" />
-  </Style>
-
-  <Style Selector="HyperlinkButton.marketplace-profile-link:pointerover">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="HyperlinkButton.marketplace-profile-link:visited">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
-  </Style>
-
-  <Style Selector="Border.marketplace-tag-chip">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Margin" Value="0,0,6,6" />
-    <Setter Property="Padding" Value="8,4" />
-  </Style>
-
-  <Style Selector="Border.marketplace-tag-chip TextBlock">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="FontSize" Value="12" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-  </Style>
-
-  <Style Selector="Button.marketplace-image-thumb">
-    <Setter Property="Width" Value="148" />
-    <Setter Property="Height" Value="100" />
-    <Setter Property="Padding" Value="7" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="16" />
-    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-    <Setter Property="VerticalContentAlignment" Value="Stretch" />
-  </Style>
-
-  <Style Selector="Button.marketplace-image-thumb:pointerover">
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-  </Style>
-
-  <Style Selector="Border.marketplace-image-frame">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Background.App}" />
-    <Setter Property="CornerRadius" Value="12" />
-    <Setter Property="ClipToBounds" Value="True" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-image-loading">
-    <Setter Property="HorizontalAlignment" Value="Center" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
   </Style>
 
   <Style Selector="TextBlock.runtime-error-text">
@@ -714,168 +457,5 @@
     <Setter Property="FontSize" Value="11" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
     <Setter Property="VerticalAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="Button.process-monitor-button">
-    <Setter Property="MinWidth" Value="260" />
-    <Setter Property="Width" Value="320" />
-    <Setter Property="Height" Value="22" />
-    <Setter Property="Padding" Value="10,0" />
-    <Setter Property="CornerRadius" Value="4" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-    <Setter Property="VerticalContentAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="Button.process-monitor-button:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-  </Style>
-
-  <Style Selector="TextBlock.process-monitor-footer-text">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
-  </Style>
-
-  <Style Selector="Border.process-monitor-count-pill">
-    <Setter Property="MinWidth" Value="24" />
-    <Setter Property="Height" Value="18" />
-    <Setter Property="Padding" Value="6,0" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-  </Style>
-
-  <Style Selector="Border.process-monitor-count-pill TextBlock">
-    <Setter Property="HorizontalAlignment" Value="Center" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-    <Setter Property="FontSize" Value="11" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
-  </Style>
-
-  <Style Selector="FlyoutPresenter.process-monitor-flyout">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
-    <Setter Property="Padding" Value="14" />
-  </Style>
-
-  <Style Selector="Border.process-monitor-popup-surface">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
-  </Style>
-
-  <Style Selector="Border.process-monitor-row">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
-    <Setter Property="Padding" Value="12" />
-    <Setter Property="Margin" Value="0,0,0,8" />
-  </Style>
-
-  <Style Selector="TextBlock.process-monitor-title">
-    <Setter Property="FontSize" Value="13" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="Button.process-monitor-close-button">
-    <Setter Property="Width" Value="28" />
-    <Setter Property="Height" Value="28" />
-  </Style>
-
-  <Style Selector="ProgressBar.process-monitor-progress">
-    <Setter Property="Height" Value="4" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="ProgressBar.process-monitor-progress.compact">
-    <Setter Property="Height" Value="3" />
-  </Style>
-
-  <Style Selector="Button.process-monitor-cancel-button">
-    <Setter Property="Padding" Value="10,3" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
-    <Setter Property="FontSize" Value="12" />
-  </Style>
-
-  <Style Selector="Button.process-monitor-cancel-button:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="Thumb.process-monitor-resize-thumb">
-    <Setter Property="Opacity" Value="0" />
-  </Style>
-
-  <Style Selector="Thumb.process-monitor-resize-thumb.process-monitor-resize-left, Thumb.process-monitor-resize-thumb.process-monitor-resize-right">
-    <Setter Property="Width" Value="8" />
-  </Style>
-
-  <Style Selector="Thumb.process-monitor-resize-thumb.process-monitor-resize-top, Thumb.process-monitor-resize-thumb.process-monitor-resize-bottom">
-    <Setter Property="Height" Value="8" />
-  </Style>
-
-  <Style Selector="Thumb.process-monitor-resize-thumb.process-monitor-resize-top-left, Thumb.process-monitor-resize-thumb.process-monitor-resize-top-right, Thumb.process-monitor-resize-thumb.process-monitor-resize-bottom-left, Thumb.process-monitor-resize-thumb.process-monitor-resize-bottom-right">
-    <Setter Property="Width" Value="16" />
-    <Setter Property="Height" Value="16" />
-  </Style>
-
-  <Style Selector="Window.loading-window">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Workspace}" />
-  </Style>
-
-  <Style Selector="Border.loading-splash-surface">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Workspace}" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
-  </Style>
-
-  <Style Selector="TextBlock.loading-title">
-    <Setter Property="FontSize" Value="56" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="TextBlock.loading-version">
-    <Setter Property="FontSize" Value="20" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
-  </Style>
-
-  <Style Selector="TextBlock.loading-subtitle">
-    <Setter Property="FontSize" Value="16" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
-  </Style>
-
-  <Style Selector="TextBlock.loading-footer">
-    <Setter Property="FontSize" Value="15" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-  </Style>
-
-  <Style Selector="TextBlock.loading-caption">
-    <Setter Property="FontSize" Value="13" />
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
-  </Style>
-
-  <Style Selector="Border.loading-progress-track">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Height" Value="6" />
-  </Style>
-
-  <Style Selector="Border.loading-progress-fill">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Height" Value="6" />
   </Style>
 </Styles>

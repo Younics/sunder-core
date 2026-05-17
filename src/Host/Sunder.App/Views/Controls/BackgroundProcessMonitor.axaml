@@ -66,8 +66,12 @@
                          HorizontalAlignment="Center" />
               <Button Grid.Column="1"
                       Classes="window-action-button process-monitor-close-button"
-                      Content="−"
-                      Click="ClosePopupButton_OnClick" />
+                      Click="ClosePopupButton_OnClick">
+                <Path Width="12"
+                      Height="12"
+                      Classes="icon-stroke"
+                      Data="{StaticResource Sunder.Icon.Minimize}" />
+              </Button>
             </Grid>
 
             <Border Grid.Row="1"

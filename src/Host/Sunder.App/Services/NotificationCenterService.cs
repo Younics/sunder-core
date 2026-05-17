@@ -77,12 +77,12 @@ public sealed class NotificationCenterService
                 SaveStateCore();
             }
 
-            NotificationsChanged?.Invoke();
+            PublishNotificationsChanged();
         }
 
         if (request.DisplayMode is PackageNotificationDisplayMode.ToastOnly or PackageNotificationDisplayMode.ToastAndTray)
         {
-            ToastQueued?.Invoke(new AppToastNotification(
+            PublishToastQueued(new AppToastNotification(
                 notification.NotificationId,
                 notification.SourcePackageId,
                 notification.SourceDisplayName,
@@ -103,7 +103,7 @@ public sealed class NotificationCenterService
             SaveStateCore();
         }
 
-        NotificationsChanged?.Invoke();
+        PublishNotificationsChanged();
     }
 
     public void ClearAll(DateTimeOffset? clearedAtUtc = null)
@@ -115,7 +115,7 @@ public sealed class NotificationCenterService
             SaveStateCore();
         }
 
-        NotificationsChanged?.Invoke();
+        PublishNotificationsChanged();
     }
 
     private static AppNotificationRecord CreateNotification(
@@ -180,11 +180,78 @@ public sealed class NotificationCenterService
             Directory.CreateDirectory(stateDirectory);
         }
 
-        File.WriteAllText(_stateFilePath, JsonSerializer.Serialize(new PersistedNotificationState
+        var tempFilePath = Path.Combine(stateDirectory ?? string.Empty, $"{Path.GetFileName(_stateFilePath)}.{Guid.NewGuid():N}.tmp");
+        try
         {
-            LastReadAtUtc = _lastReadAtUtc,
-            Notifications = _notifications,
-        }, JsonOptions));
+            File.WriteAllText(tempFilePath, JsonSerializer.Serialize(new PersistedNotificationState
+            {
+                LastReadAtUtc = _lastReadAtUtc,
+                Notifications = _notifications,
+            }, JsonOptions));
+            File.Move(tempFilePath, _stateFilePath, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteTempFile(tempFilePath);
+            throw;
+        }
+    }
+
+    private void PublishNotificationsChanged()
+    {
+        var handlers = NotificationsChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Notification subscriber failed while handling notification state changes.", ex);
+            }
+        }
+    }
+
+    private void PublishToastQueued(AppToastNotification notification)
+    {
+        var handlers = ToastQueued;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<AppToastNotification> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(notification);
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Notification subscriber failed while handling queued toast notification.", ex);
+            }
+        }
+    }
+
+    private static void TryDeleteTempFile(string tempFilePath)
+    {
+        try
+        {
+            if (File.Exists(tempFilePath))
+            {
+                File.Delete(tempFilePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to delete a temporary notification state file.", ex);
+        }
     }
 
     private void QuarantineCorruptState()

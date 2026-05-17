@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Composition;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
@@ -11,6 +13,7 @@ namespace Sunder.App;
 public partial class App : Application
 {
     private PackageViewHostService _packageViewHostService = PackageViewHostService.Empty;
+    private ServiceProvider? _serviceProvider;
     private WindowLauncher? _windowLauncher;
 
     public override void Initialize()
@@ -25,6 +28,7 @@ public partial class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         RegisterExceptionHandlers();
+        _serviceProvider = SunderAppComposition.CreateServiceProvider(this, Program.StartupOptions);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -58,7 +62,9 @@ public partial class App : Application
         LoadingWindowViewModel loadingViewModel
     )
     {
-        var startup = await new ShellStartupCoordinator(this).StartAsync(
+        var startupCoordinator = (_serviceProvider ?? throw new InvalidOperationException("App services are not initialized."))
+            .GetRequiredService<ShellStartupCoordinator>();
+        var startup = await startupCoordinator.StartAsync(
             Program.StartupOptions,
             loadingViewModel
         );
@@ -162,6 +168,29 @@ public partial class App : Application
         catch (Exception ex)
         {
             AppSessionLog.WriteError("Failed to dispose the package view host service.", ex);
+        }
+
+        var serviceProvider = _serviceProvider;
+        _serviceProvider = null;
+        if (serviceProvider is not null)
+        {
+            try
+            {
+                await serviceProvider.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to dispose app services.", ex);
+            }
+        }
+
+        try
+        {
+            await AppSessionLog.FlushAsync();
+        }
+        catch
+        {
+            // Logging must never block shutdown.
         }
     }
 }

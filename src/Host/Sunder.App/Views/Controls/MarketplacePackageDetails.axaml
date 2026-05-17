@@ -1,0 +1,223 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia"
+             x:Class="Sunder.App.Views.Controls.MarketplacePackageDetails"
+             x:DataType="vm:PackagesWindowViewModel"
+             mc:Ignorable="d">
+  <StackPanel Spacing="16">
+    <Grid ColumnDefinitions="*,*,*"
+          ColumnSpacing="12">
+      <Border Classes="card-surface">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="caption" Text="Latest" />
+          <TextBlock Classes="section-title" Text="{Binding MarketplaceLatestVersion}" />
+        </StackPanel>
+      </Border>
+      <Border Grid.Column="1" Classes="card-surface">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="caption" Text="Installed" />
+          <TextBlock Classes="section-title" Text="{Binding MarketplaceInstalledVersion}" />
+        </StackPanel>
+      </Border>
+      <Border Grid.Column="2" Classes="card-surface">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="caption" Text="Selected Version" />
+          <TextBlock Classes="section-title" Text="{Binding MarketplaceSelectedVersion}" />
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <Border Classes="card-surface">
+      <Grid ColumnDefinitions="*,Auto,Auto"
+            RowDefinitions="Auto,Auto,Auto"
+            ColumnSpacing="10">
+        <StackPanel Spacing="3">
+          <TextBlock Classes="section-title" Text="Marketplace Actions" />
+          <TextBlock Classes="caption" Text="Installs use the latest registry version and apply through the local runtime." TextWrapping="Wrap" />
+        </StackPanel>
+        <Button Grid.Column="1"
+                Classes="primary-action"
+                Command="{Binding InstallSelectedMarketplacePackageCommand}"
+                Content="Install"
+                IsEnabled="{Binding CanInstallSelectedMarketplacePackage}"
+                IsVisible="{Binding ShowMarketplaceInstallButton}" />
+        <Button Grid.Column="1"
+                Classes="secondary-action"
+                Command="{Binding UninstallSelectedMarketplacePackageCommand}"
+                Content="Uninstall"
+                IsEnabled="{Binding CanUninstallSelectedMarketplacePackage}"
+                IsVisible="{Binding ShowMarketplaceUninstallButton}" />
+        <Button Grid.Column="2"
+                Classes="primary-action"
+                Command="{Binding UpdateSelectedMarketplacePackageCommand}"
+                Content="Update"
+                IsEnabled="{Binding CanUpdateSelectedMarketplacePackage}"
+                IsVisible="{Binding ShowMarketplaceUpdateButton}" />
+        <Button Grid.Column="1"
+                Classes="secondary-action"
+                Command="{Binding CancelSelectedPackageOperationCommand}"
+                Content="Cancel"
+                IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
+        <TextBlock Grid.Row="1"
+                   Grid.ColumnSpan="3"
+                   Classes="caption"
+                   Text="{Binding SelectedPackageOperationStatusText}"
+                   IsVisible="{Binding ShowSelectedPackageOperationStatus}"
+                   TextWrapping="Wrap" />
+        <ProgressBar Grid.Row="2"
+                     Grid.ColumnSpan="3"
+                     Margin="0,5,0,0"
+                     Minimum="0"
+                     Maximum="100"
+                     Value="{Binding SelectedPackageOperationProgressPercent}"
+                     IsIndeterminate="{Binding SelectedPackageOperationIsIndeterminate}"
+                     IsVisible="{Binding ShowSelectedPackageOperationStatus}" />
+      </Grid>
+    </Border>
+
+    <Border Classes="card-surface"
+            IsVisible="{Binding HasMarketplaceProfileMedia}">
+      <StackPanel Spacing="8">
+        <TextBlock Classes="section-title" Text="Images" />
+        <ScrollViewer Classes="marketplace-image-strip-scroll"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled">
+          <ItemsControl ItemsSource="{Binding MarketplaceProfileMedia}"
+                        Margin="0,0,0,12">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" Spacing="12" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
+                <Button Classes="marketplace-image-thumb"
+                        Command="{Binding SelectCommand}"
+                        ToolTip.Tip="{Binding Caption}">
+                  <Grid>
+                    <Border Classes="marketplace-image-frame">
+                      <Image Source="{Binding Image}"
+                             Stretch="UniformToFill" />
+                    </Border>
+                    <TextBlock Classes="caption marketplace-image-loading"
+                               Text="Loading..."
+                               IsVisible="{Binding IsImageLoading}" />
+                  </Grid>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </StackPanel>
+    </Border>
+
+    <Border Classes="card-surface"
+            IsVisible="{Binding HasMarketplaceReadme}">
+      <StackPanel Spacing="8">
+        <TextBlock Classes="section-title" Text="Overview" />
+        <md:MarkdownRenderer MarkdownBuilder="{Binding MarketplaceReadmeMarkdownBuilder}" />
+      </StackPanel>
+    </Border>
+
+    <Border Classes="card-surface marketplace-profile-card"
+            IsVisible="{Binding HasMarketplaceProfile}">
+      <StackPanel Spacing="12">
+        <StackPanel Spacing="2">
+          <TextBlock Classes="section-title" Text="Profile" />
+          <TextBlock Classes="caption" Text="Project links and package metadata." />
+        </StackPanel>
+
+        <ItemsControl ItemsSource="{Binding MarketplaceProfileLinks}"
+                      IsVisible="{Binding HasMarketplaceProfileLinks}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:RegistryPackageProfileLinkViewModel">
+              <Border Classes="marketplace-profile-row marketplace-profile-link-row">
+                <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
+                  <TextBlock Classes="caption marketplace-profile-label"
+                             Text="{Binding Label}" />
+                  <HyperlinkButton Grid.Column="1"
+                                   Classes="marketplace-profile-link"
+                                   NavigateUri="{Binding NavigateUri}">
+                    <TextBlock Text="{Binding DisplayUrl}"
+                               TextWrapping="Wrap" />
+                  </HyperlinkButton>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <ItemsControl ItemsSource="{Binding MarketplaceProfileMetadata}"
+                      IsVisible="{Binding HasMarketplaceProfileMetadata}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:RegistryPackageProfileMetadataItemViewModel">
+              <Border Classes="marketplace-profile-row">
+                <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
+                  <TextBlock Classes="caption marketplace-profile-label"
+                             Text="{Binding Label}" />
+                  <TextBlock Grid.Column="1"
+                             Classes="marketplace-profile-value"
+                             Text="{Binding Value}"
+                             TextWrapping="Wrap" />
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <StackPanel Spacing="6"
+                    IsVisible="{Binding HasMarketplaceProfileTags}">
+          <TextBlock Classes="caption marketplace-profile-label" Text="Tags" />
+          <ItemsControl ItemsSource="{Binding MarketplaceProfileTags}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <Border Classes="marketplace-tag-chip">
+                  <TextBlock Text="{Binding}" />
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <Border Classes="card-surface">
+      <StackPanel Spacing="8">
+        <TextBlock Classes="section-title" Text="Versions" />
+        <ListBox Classes="package-list"
+                 MaxHeight="280"
+                 ItemsSource="{Binding MarketplaceVersions}"
+                 SelectedItem="{Binding SelectedMarketplaceVersion, Mode=TwoWay}"
+                 IsVisible="{Binding HasMarketplaceVersions}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:RegistryPackageVersionItemViewModel">
+              <Border Classes="package-list-row"
+                      Classes.selected="{Binding IsSelected}">
+                <Grid ColumnDefinitions="*,Auto,Auto"
+                      ColumnSpacing="10">
+                  <TextBlock Classes="section-title" Text="{Binding Version}" />
+                  <Border Grid.Column="1" Classes="package-row-badge">
+                    <TextBlock Text="{Binding StatusText}" />
+                  </Border>
+                  <TextBlock Grid.Column="2" Classes="caption" Text="{Binding PublishedAtText}" VerticalAlignment="Center" />
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <TextBlock Classes="muted"
+                   IsVisible="{Binding ShowNoMarketplaceVersions}"
+                   Text="No versions loaded for the selected package."
+                   TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+  </StackPanel>
+</UserControl>

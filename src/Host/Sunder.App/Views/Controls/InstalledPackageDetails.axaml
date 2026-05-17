@@ -1,0 +1,61 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.InstalledPackageDetails"
+             x:DataType="vm:PackagesWindowViewModel"
+             mc:Ignorable="d">
+  <StackPanel Spacing="14">
+    <TextBlock Classes="caption" Text="{Binding SelectedPackageStatus}" />
+    <TextBlock Classes="muted" Text="{Binding SelectedPackageOperationHint}" TextWrapping="Wrap" />
+
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Classes="secondary-action"
+              Command="{Binding EnableSelectedPackageCommand}"
+              Content="Enable"
+              IsEnabled="{Binding CanEnableSelectedPackage}"
+              IsVisible="{Binding ShowEnableSelectedPackage}" />
+      <Button Classes="secondary-action"
+              Command="{Binding DisableSelectedPackageCommand}"
+              Content="Disable"
+              IsEnabled="{Binding CanDisableSelectedPackage}"
+              IsVisible="{Binding ShowDisableSelectedPackage}" />
+      <Button Classes="primary-action"
+              Command="{Binding UpdateSelectedInstalledPackageCommand}"
+              Content="Update"
+              IsEnabled="{Binding CanUpdateSelectedInstalledPackage}"
+              IsVisible="{Binding ShowUpdateSelectedInstalledPackage}" />
+      <Button Classes="secondary-action"
+              Command="{Binding UninstallSelectedPackageCommand}"
+              Content="Uninstall"
+              IsEnabled="{Binding CanUninstallSelectedPackage}" />
+      <Button Classes="secondary-action"
+              Command="{Binding CancelSelectedPackageOperationCommand}"
+              Content="Cancel"
+              IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
+    </StackPanel>
+
+    <TextBlock Classes="caption"
+               Text="{Binding SelectedPackageOperationStatusText}"
+               IsVisible="{Binding ShowSelectedPackageOperationStatus}"
+               TextWrapping="Wrap" />
+    <ProgressBar Minimum="0"
+                 Maximum="100"
+                 Margin="0,5,0,0"
+                 Value="{Binding SelectedPackageOperationProgressPercent}"
+                 IsIndeterminate="{Binding SelectedPackageOperationIsIndeterminate}"
+                 IsVisible="{Binding ShowSelectedPackageOperationStatus}" />
+
+    <Separator />
+    <TextBlock Classes="section-title" Text="Last Error" IsVisible="{Binding SelectedPackageHasError}" />
+    <TextBlock Classes="muted"
+               IsVisible="{Binding SelectedPackageHasError}"
+               Text="{Binding SelectedPackageError}"
+               TextWrapping="Wrap" />
+    <TextBlock Classes="muted"
+               IsVisible="{Binding ShowNoInstalledPackageError}"
+               Text="No package failure has been recorded for the selected package."
+               TextWrapping="Wrap" />
+  </StackPanel>
+</UserControl>

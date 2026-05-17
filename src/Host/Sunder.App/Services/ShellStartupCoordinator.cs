@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using Avalonia;
 using Avalonia.Threading;
+using Sunder.App.Composition;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
@@ -15,28 +15,74 @@ public sealed record ShellStartupResult(
     PackageViewHostService PackageViewHostService,
     WindowLauncher WindowLauncher);
 
-public sealed class ShellStartupCoordinator(Application application)
+public sealed class ShellStartupCoordinator
 {
-    private readonly Application _application = application;
+    private readonly ShellStateService _shellStateService;
+    private readonly ShellState _shellState;
+    private readonly RuntimeConnectionState _runtimeConnectionState;
+    private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
+    private readonly RuntimeHostProcessManager _runtimeHostProcessManager;
+    private readonly NotificationCenterService _notificationCenter;
+    private readonly CliInstallationService _cliInstallationService;
+    private readonly SunderUpdateService _updateService;
+    private readonly IThemeManager _themeManager;
+    private readonly AppPackageSettingsNavigationService _settingsNavigationService;
+    private readonly IShellCompositionService _shellCompositionService;
+    private readonly PackageViewHostServiceFactory _packageViewHostServiceFactory;
+    private readonly WindowLauncherFactory _windowLauncherFactory;
+    private readonly MainWindowFactory _mainWindowFactory;
+
+    public ShellStartupCoordinator(
+        ShellStateService shellStateService,
+        ShellState shellState,
+        RuntimeConnectionState runtimeConnectionState,
+        IRuntimeApiClientFactory runtimeApiClientFactory,
+        RuntimeHostProcessManager runtimeHostProcessManager,
+        NotificationCenterService notificationCenter,
+        CliInstallationService cliInstallationService,
+        SunderUpdateService updateService,
+        IThemeManager themeManager,
+        AppPackageSettingsNavigationService settingsNavigationService,
+        IShellCompositionService shellCompositionService,
+        PackageViewHostServiceFactory packageViewHostServiceFactory,
+        WindowLauncherFactory windowLauncherFactory,
+        MainWindowFactory mainWindowFactory)
+    {
+        _shellStateService = shellStateService;
+        _shellState = shellState;
+        _runtimeConnectionState = runtimeConnectionState;
+        _runtimeApiClientFactory = runtimeApiClientFactory;
+        _runtimeHostProcessManager = runtimeHostProcessManager;
+        _notificationCenter = notificationCenter;
+        _cliInstallationService = cliInstallationService;
+        _updateService = updateService;
+        _themeManager = themeManager;
+        _settingsNavigationService = settingsNavigationService;
+        _shellCompositionService = shellCompositionService;
+        _packageViewHostServiceFactory = packageViewHostServiceFactory;
+        _windowLauncherFactory = windowLauncherFactory;
+        _mainWindowFactory = mainWindowFactory;
+    }
 
     public async Task<ShellStartupResult> StartAsync(
         AppStartupOptions startupOptions,
         LoadingWindowViewModel loadingViewModel)
     {
-        var shellStateService = new ShellStateService();
-        var shellState = shellStateService.Load();
+        var shellStateService = _shellStateService;
+        var shellState = _shellState;
         IReadOnlyList<ActivePackageDescriptor> activePackages = [];
         IReadOnlyList<PackageSourceDescriptor> packageSources = [];
         var warnings = new List<string>();
         var errors = startupOptions.ParseErrors.ToList();
         SystemStatusResponse? systemStatus = null;
         var runtimeUrl = ResolveRuntimeUrl(startupOptions, shellState, warnings);
-        var runtimeConnectionState = new RuntimeConnectionState(runtimeUrl);
-        var runtimeApiClientFactory = new RuntimeApiClientFactory(runtimeConnectionState);
-        var runtimeHostProcessManager = new RuntimeHostProcessManager(startupOptions);
-        var notificationCenter = new NotificationCenterService();
-        var cliInstallationService = new CliInstallationService();
-        var updateService = new SunderUpdateService(SunderAppSettings.Load(), new AppUpdateSettingsService());
+        var runtimeConnectionState = _runtimeConnectionState;
+        runtimeConnectionState.RuntimeUrl = runtimeUrl;
+        var runtimeApiClientFactory = _runtimeApiClientFactory;
+        var runtimeHostProcessManager = _runtimeHostProcessManager;
+        var notificationCenter = _notificationCenter;
+        var cliInstallationService = _cliInstallationService;
+        var updateService = _updateService;
         var startupStopwatch = Stopwatch.StartNew();
         var phaseStopwatch = Stopwatch.StartNew();
 
@@ -44,7 +90,7 @@ public sealed class ShellStartupCoordinator(Application application)
 
         var themeManager = await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            var manager = new ThemeManager(_application);
+            var manager = _themeManager;
             manager.Initialize();
             manager.ApplyTheme(shellState.ThemeId);
             return manager;
@@ -95,20 +141,12 @@ public sealed class ShellStartupCoordinator(Application application)
         await SetProgressAsync(loadingViewModel, "Composing shell...", 318).ConfigureAwait(false);
 
         PackageViewHostService packageViewHostService;
-        var shellViewService = new AppPackageShellViewService();
-        var settingsNavigationService = new AppPackageSettingsNavigationService();
-        var backgroundProcessQueue = new BackgroundProcessQueueService();
+        var settingsNavigationService = _settingsNavigationService;
         try
         {
-            var packageFaultReporter = new PackageRuntimeFaultReporter(runtimeApiClientFactory);
-            packageViewHostService = await PackageViewHostService.CreateForPackagesAsync(
+            packageViewHostService = await _packageViewHostServiceFactory.CreateForPackagesAsync(
                 activePackages,
-                packageSources,
-                packageFaultReporter,
-                shellViewService,
-                settingsNavigationService,
-                notificationCenter,
-                backgroundProcessQueue).ConfigureAwait(false);
+                packageSources).ConfigureAwait(false);
             activePackages = packageViewHostService.FilterEnabledPackages(activePackages);
             LogStartupPhase("app package activation", phaseStopwatch);
         }
@@ -120,7 +158,7 @@ public sealed class ShellStartupCoordinator(Application application)
             activePackages = [];
         }
 
-        IShellCompositionService shellCompositionService = new ShellCompositionService();
+        var shellCompositionService = _shellCompositionService;
         var shellSnapshot = shellCompositionService.Compose(
             activePackages,
             shellState,
@@ -133,26 +171,14 @@ public sealed class ShellStartupCoordinator(Application application)
         {
             themeManager.ApplyTheme(shellSnapshot.State.ThemeId);
 
-            var windowLauncher = new WindowLauncher(packageViewHostService, runtimeApiClientFactory, cliInstallationService, notificationCenter, shellStateService, shellState, updateService, backgroundProcessQueue);
+            var windowLauncher = _windowLauncherFactory.Create(packageViewHostService);
             settingsNavigationService.Attach(windowLauncher);
-            var mainWindowViewModel = new MainWindowViewModel(
+            var (mainWindow, mainWindowViewModel) = _mainWindowFactory.Create(
                 windowLauncher,
-                shellStateService,
                 shellSnapshot,
                 packageViewHostService,
-                runtimeConnectionState,
-                runtimeApiClientFactory,
-                runtimeHostProcessManager,
                 systemStatus,
-                notificationCenter,
-                shellViewService,
-                updateService,
-                deferInitialHostedViews: true,
-                backgroundProcessQueue: windowLauncher.BackgroundProcesses);
-            var mainWindow = new MainWindow
-            {
-                DataContext = mainWindowViewModel,
-            };
+                deferInitialHostedViews: true);
 
             return new ShellStartupResult(mainWindow, mainWindowViewModel, packageViewHostService, windowLauncher);
         });

@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.AppUpdatePromptCard"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <Border Classes="update-prompt-card"
+          IsVisible="{Binding ShowUpdatePrompt}">
+    <Grid ColumnDefinitions="Auto,*,Auto"
+          RowDefinitions="Auto,Auto"
+          ColumnSpacing="12"
+          RowSpacing="12">
+      <Border Classes="update-prompt-icon">
+        <Path Width="15"
+              Height="15"
+              Classes="icon-stroke"
+              Data="{StaticResource Sunder.Icon.Download}"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center" />
+      </Border>
+
+      <StackPanel Grid.Column="1"
+                  Spacing="5"
+                  Width="320">
+        <TextBlock Classes="update-prompt-title"
+                   Text="Update available" />
+        <TextBlock Classes="caption"
+                   Text="{Binding UpdatePromptMessage}"
+                   TextWrapping="Wrap" />
+        <TextBlock Classes="caption"
+                   Text="{Binding UpdatePromptStatus}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Button Grid.Column="2"
+              Classes="update-prompt-close-button"
+              Command="{Binding DismissAppUpdatePromptCommand}"
+              IsEnabled="{Binding CanInstallAppUpdate}"
+              ToolTip.Tip="Dismiss update">
+        <Path Width="11"
+              Height="11"
+              Classes="icon-stroke"
+              Data="{StaticResource Sunder.Icon.Close}" />
+      </Button>
+
+      <StackPanel Grid.Row="1"
+                  Grid.Column="1"
+                  Grid.ColumnSpan="2"
+                  Orientation="Horizontal"
+                  Spacing="12">
+        <Button Classes="update-prompt-primary-action"
+                Content="Install and restart"
+                Command="{Binding InstallAvailableAppUpdateCommand}"
+                IsEnabled="{Binding CanInstallAppUpdate}" />
+        <Button Classes="update-prompt-secondary-action"
+                Content="Not yet"
+                Command="{Binding DismissAppUpdatePromptCommand}"
+                IsEnabled="{Binding CanInstallAppUpdate}" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

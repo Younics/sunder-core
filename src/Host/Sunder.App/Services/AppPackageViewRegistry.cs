@@ -1,4 +1,6 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Sdk.Abstractions;
 
@@ -26,20 +28,29 @@ internal sealed class AppPackageViewRegistry
 
     public void RegisterPackageView<TView>(string packageId, string viewId, IServiceProvider serviceProvider)
         where TView : Control
-    {
-        lock (_syncRoot)
-        {
-            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, typeof(TView), AppRegistrationKind.View, packageId);
-            TrackPackageViewId(packageId, viewId);
-        }
-    }
+        => RegisterPackageView(packageId, viewId, serviceProvider, typeof(TView), AppRegistrationKind.View);
 
     public void RegisterPackageViewFactory<TFactory>(string packageId, string viewId, IServiceProvider serviceProvider)
         where TFactory : class, IPackageWorkspaceFactory
+        => RegisterPackageView(packageId, viewId, serviceProvider, typeof(TFactory), AppRegistrationKind.Factory);
+
+    private void RegisterPackageView(
+        string packageId,
+        string viewId,
+        IServiceProvider serviceProvider,
+        Type implementationType,
+        AppRegistrationKind registrationKind)
     {
         lock (_syncRoot)
         {
-            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, typeof(TFactory), AppRegistrationKind.Factory, packageId);
+            if (_registeredViews.TryGetValue(viewId, out var existingRegistration)
+                && !string.Equals(existingRegistration.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Package view id '{viewId}' is already registered by package '{existingRegistration.PackageId}'.");
+            }
+
+            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, implementationType, registrationKind, packageId);
             TrackPackageViewId(packageId, viewId);
         }
     }
@@ -93,17 +104,29 @@ internal sealed class AppPackageViewRegistry
             return null;
         }
 
+        Control? unusedControl = null;
+        Control? result = null;
         lock (_syncRoot)
         {
-            if (_viewCache.TryGetValue(viewId, out var cachedView))
+            if (!_registeredViews.TryGetValue(viewId, out var currentRegistration)
+                || currentRegistration != registration)
             {
-                DisposeCachedControl(control);
-                return cachedView;
+                unusedControl = control;
             }
-
-            _viewCache[viewId] = control;
-            return control;
+            else if (_viewCache.TryGetValue(viewId, out var cachedView))
+            {
+                unusedControl = control;
+                result = cachedView;
+            }
+            else
+            {
+                _viewCache[viewId] = control;
+                result = control;
+            }
         }
+
+        DisposeCachedControl(unusedControl);
+        return result;
     }
 
     public bool HasSettingsView(string packageId)
@@ -179,21 +202,34 @@ internal sealed class AppPackageViewRegistry
             return null;
         }
 
+        Control? unusedControl = null;
+        Control? result = null;
         lock (_syncRoot)
         {
-            if (_settingsViewCache.TryGetValue(packageId, out var cachedView))
+            if (!_registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
+                || currentRegistration != registration)
             {
-                DisposeCachedControl(control);
-                return cachedView;
+                unusedControl = control;
             }
-
-            _settingsViewCache[packageId] = control;
-            return control;
+            else if (_settingsViewCache.TryGetValue(packageId, out var cachedView))
+            {
+                unusedControl = control;
+                result = cachedView;
+            }
+            else
+            {
+                _settingsViewCache[packageId] = control;
+                result = control;
+            }
         }
+
+        DisposeCachedControl(unusedControl);
+        return result;
     }
 
     public void RemoveCachedViews(string packageId)
     {
+        var controlsToDispose = new List<Control>();
         lock (_syncRoot)
         {
             if (_viewIdsByPackageId.TryGetValue(packageId, out var viewIds))
@@ -202,20 +238,37 @@ internal sealed class AppPackageViewRegistry
                 {
                     if (_viewCache.Remove(viewId, out var cachedView))
                     {
-                        DisposeCachedControl(cachedView);
+                        controlsToDispose.Add(cachedView);
                     }
                 }
             }
 
             if (_settingsViewCache.Remove(packageId, out var cachedSettingsView))
             {
-                DisposeCachedControl(cachedSettingsView);
+                controlsToDispose.Add(cachedSettingsView);
             }
         }
+
+        DisposeCachedControls(controlsToDispose);
+    }
+
+    public async Task RemoveCachedViewsAsync(string packageId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        {
+            RemoveCachedViews(packageId);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(
+            () => RemoveCachedViews(packageId),
+            DispatcherPriority.Normal);
     }
 
     public bool RemoveCachedView(string viewId)
     {
+        Control? controlToDispose;
         lock (_syncRoot)
         {
             if (!_viewCache.Remove(viewId, out var cachedView))
@@ -223,34 +276,53 @@ internal sealed class AppPackageViewRegistry
                 return false;
             }
 
-            DisposeCachedControl(cachedView);
-            return true;
+            controlToDispose = cachedView;
         }
+
+        DisposeCachedControl(controlToDispose);
+        return true;
     }
 
     public IReadOnlyList<string> UnregisterPackage(string packageId)
     {
+        var controlsToDispose = new List<Control>();
+        string[] removedViewIds;
         lock (_syncRoot)
         {
-            var removedViewIds = _viewIdsByPackageId.TryGetValue(packageId, out var viewIds) ? viewIds.ToArray() : [];
+            removedViewIds = _viewIdsByPackageId.TryGetValue(packageId, out var viewIds) ? viewIds.ToArray() : [];
             foreach (var viewId in removedViewIds)
             {
                 _registeredViews.Remove(viewId);
                 if (_viewCache.Remove(viewId, out var cachedView))
                 {
-                    DisposeCachedControl(cachedView);
+                    controlsToDispose.Add(cachedView);
                 }
             }
 
             _registeredSettingsViews.Remove(packageId);
             if (_settingsViewCache.Remove(packageId, out var cachedSettingsView))
             {
-                DisposeCachedControl(cachedSettingsView);
+                controlsToDispose.Add(cachedSettingsView);
             }
             _settingsViewPackagesById.Remove(packageId);
             _viewIdsByPackageId.Remove(packageId);
-            return removedViewIds;
         }
+
+        DisposeCachedControls(controlsToDispose);
+        return removedViewIds;
+    }
+
+    public async Task<IReadOnlyList<string>> UnregisterPackageAsync(string packageId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        {
+            return UnregisterPackage(packageId);
+        }
+
+        return await Dispatcher.UIThread.InvokeAsync(
+            () => UnregisterPackage(packageId),
+            DispatcherPriority.Normal);
     }
 
     private void TrackPackageViewId(string packageId, string viewId)
@@ -278,8 +350,21 @@ internal sealed class AppPackageViewRegistry
         return factory.CreateRootView(serviceProvider);
     }
 
-    private static void DisposeCachedControl(Control control)
+    private static void DisposeCachedControls(IEnumerable<Control> controls)
     {
+        foreach (var control in controls)
+        {
+            DisposeCachedControl(control);
+        }
+    }
+
+    private static void DisposeCachedControl(Control? control)
+    {
+        if (control is null)
+        {
+            return;
+        }
+
         object? dataContext = null;
         try
         {
@@ -292,12 +377,26 @@ internal sealed class AppPackageViewRegistry
 
         if (dataContext is IDisposable dataContextDisposable && !ReferenceEquals(dataContextDisposable, control))
         {
-            dataContextDisposable.Dispose();
+            try
+            {
+                dataContextDisposable.Dispose();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to dispose package view data context.", ex);
+            }
         }
 
         if (control is IDisposable controlDisposable)
         {
-            controlDisposable.Dispose();
+            try
+            {
+                controlDisposable.Dispose();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to dispose package view control.", ex);
+            }
         }
     }
 

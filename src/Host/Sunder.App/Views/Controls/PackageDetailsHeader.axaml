@@ -1,0 +1,32 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.PackageDetailsHeader"
+             x:DataType="vm:PackagesWindowViewModel"
+             mc:Ignorable="d">
+  <Grid ColumnDefinitions="Auto,*"
+        ColumnSpacing="12">
+    <controls:PackageIconView Width="64"
+                              Height="64"
+                              VerticalAlignment="Top"
+                              IsVisible="{Binding ShowSelectedPackageIcon}"
+                              IconImage="{Binding SelectedPackageIconImage}"
+                              HasIconImage="{Binding SelectedPackageHasIconImage}"
+                              Glyph="{Binding SelectedPackageGlyph}"
+                              ShowFallbackContainer="{Binding SelectedPackageShowGlyphFallback}"
+                              FallbackCornerRadius="10"
+                              FallbackPadding="5"
+                              GlyphFontSize="16"
+                              GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
+
+    <StackPanel Grid.Column="1"
+                Spacing="5">
+      <TextBlock Classes="page-title" Text="{Binding SelectedPackageTitle}" TextWrapping="Wrap" />
+      <TextBlock Classes="caption" Text="{Binding SelectedPackageSubtitle}" TextWrapping="Wrap" />
+      <TextBlock Classes="muted" Text="{Binding SelectedPackageSummary}" TextWrapping="Wrap" />
+    </StackPanel>
+  </Grid>
+</UserControl>

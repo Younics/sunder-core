@@ -10,6 +10,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
 
     private readonly HttpClient _httpClient;
     private readonly Func<Uri> _getRuntimeBaseUri;
+    private readonly bool _disposeHttpClient;
 
     public RuntimeApiClient(Uri runtimeBaseUri)
         : this(() => RuntimeUrlHelper.Normalize(runtimeBaseUri)) { }
@@ -17,10 +18,11 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     public RuntimeApiClient(RuntimeConnectionState runtimeConnectionState)
         : this(() => runtimeConnectionState.RuntimeUrl) { }
 
-    public RuntimeApiClient(Func<Uri> getRuntimeBaseUri)
+    public RuntimeApiClient(Func<Uri> getRuntimeBaseUri, HttpClient? httpClient = null)
     {
-        _httpClient = new HttpClient();
-        _getRuntimeBaseUri = getRuntimeBaseUri;
+        _httpClient = httpClient ?? new HttpClient();
+        _disposeHttpClient = httpClient is null;
+        _getRuntimeBaseUri = getRuntimeBaseUri ?? throw new ArgumentNullException(nameof(getRuntimeBaseUri));
     }
 
     public async Task<SystemStatusResponse?> GetSystemStatusAsync(
@@ -401,6 +403,9 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
 
     public void Dispose()
     {
-        _httpClient.Dispose();
+        if (_disposeHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 }

@@ -1,0 +1,116 @@
+<Styles xmlns="https://github.com/avaloniaui">
+  <Style Selector="Button.process-monitor-button">
+    <Setter Property="MinWidth" Value="260" />
+    <Setter Property="Width" Value="320" />
+    <Setter Property="Height" Value="22" />
+    <Setter Property="Padding" Value="10,0" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.process-monitor-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+  </Style>
+
+  <Style Selector="TextBlock.process-monitor-footer-text">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+  </Style>
+
+  <Style Selector="Border.process-monitor-count-pill">
+    <Setter Property="MinWidth" Value="24" />
+    <Setter Property="Height" Value="18" />
+    <Setter Property="Padding" Value="6,0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="Border.process-monitor-count-pill TextBlock">
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+  </Style>
+
+  <Style Selector="FlyoutPresenter.process-monitor-flyout">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
+    <Setter Property="Padding" Value="14" />
+  </Style>
+
+  <Style Selector="Border.process-monitor-popup-surface">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
+  </Style>
+
+  <Style Selector="Border.process-monitor-row">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+    <Setter Property="Padding" Value="12" />
+    <Setter Property="Margin" Value="0,0,0,8" />
+  </Style>
+
+  <Style Selector="TextBlock.process-monitor-title">
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.process-monitor-close-button">
+    <Setter Property="Width" Value="28" />
+    <Setter Property="Height" Value="28" />
+  </Style>
+
+  <Style Selector="ProgressBar.process-monitor-progress">
+    <Setter Property="Height" Value="4" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="ProgressBar.process-monitor-progress.compact">
+    <Setter Property="Height" Value="3" />
+  </Style>
+
+  <Style Selector="Button.process-monitor-cancel-button">
+    <Setter Property="Padding" Value="10,3" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <Style Selector="Button.process-monitor-cancel-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Thumb.process-monitor-resize-thumb">
+    <Setter Property="Opacity" Value="0" />
+  </Style>
+
+  <Style Selector="Thumb.process-monitor-resize-thumb.process-monitor-resize-left, Thumb.process-monitor-resize-thumb.process-monitor-resize-right">
+    <Setter Property="Width" Value="8" />
+  </Style>
+
+  <Style Selector="Thumb.process-monitor-resize-thumb.process-monitor-resize-top, Thumb.process-monitor-resize-thumb.process-monitor-resize-bottom">
+    <Setter Property="Height" Value="8" />
+  </Style>
+
+  <Style Selector="Thumb.process-monitor-resize-thumb.process-monitor-resize-top-left, Thumb.process-monitor-resize-thumb.process-monitor-resize-top-right, Thumb.process-monitor-resize-thumb.process-monitor-resize-bottom-left, Thumb.process-monitor-resize-thumb.process-monitor-resize-bottom-right">
+    <Setter Property="Width" Value="16" />
+    <Setter Property="Height" Value="16" />
+  </Style>
+</Styles>

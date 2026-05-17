@@ -6,12 +6,14 @@ internal sealed class PackageScopedBackgroundProcessQueue(
     string packageId,
     string packageDisplayName,
     BackgroundProcessQueueService backgroundProcesses)
-    : IBackgroundProcessQueue, IDisposable
+    : IBackgroundProcessQueue, IDisposable, IAsyncDisposable
 {
     private readonly string _packageId = packageId;
     private readonly string _packageDisplayName = packageDisplayName;
     private readonly BackgroundProcessQueueService _backgroundProcesses = backgroundProcesses;
+    private readonly object _lifecycleGate = new();
     private bool _disposed;
+    private bool _started;
 
     public event EventHandler<BackgroundProcessChangedEventArgs>? ProcessChanged;
 
@@ -33,19 +35,129 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             request.GroupKey,
             request.Metadata);
 
-        var snapshot = _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
-            request.Title,
-            BuildHostGroupKey(_packageId, request.GroupKey),
-            request.Indicator,
-            request.ConcurrencyMode,
-            request.CanCancel,
-            async context => await request.ExecuteAsync(context).ConfigureAwait(false),
-            metadata.ToHostMetadata()));
+        BackgroundProcessSnapshot snapshot;
+        lock (_lifecycleGate)
+        {
+            ThrowIfDisposed();
+            snapshot = _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
+                request.Title,
+                BuildHostGroupKey(_packageId, request.GroupKey),
+                request.Indicator,
+                request.ConcurrencyMode,
+                request.CanCancel,
+                async context => await request.ExecuteAsync(context).ConfigureAwait(false),
+                metadata.ToHostMetadata()));
+        }
 
         return ToPackageSnapshot(snapshot, metadata);
     }
 
     public IReadOnlyList<BackgroundProcessSnapshot> ListProcesses(string? groupKey = null)
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return [];
+            }
+        }
+
+        return ListProcessesCore(groupKey);
+    }
+
+    public bool Cancel(Guid processId)
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+        }
+
+        var snapshot = _backgroundProcesses.GetProcess(processId);
+        return snapshot is not null && TryMap(snapshot, out _) && _backgroundProcesses.Cancel(processId);
+    }
+
+    public void Dispose()
+    {
+        if (StopCore())
+        {
+            _backgroundProcesses.CancelPackageProcesses(_packageId);
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+        GC.SuppressFinalize(this);
+    }
+
+    internal async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        if (StopCore())
+        {
+            await _backgroundProcesses.CancelPackageProcessesAsync(_packageId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    internal void Start()
+    {
+        lock (_lifecycleGate)
+        {
+            ThrowIfDisposed();
+            if (_started)
+            {
+                return;
+            }
+
+            _started = true;
+            _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
+        }
+    }
+
+    private void BackgroundProcesses_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+        }
+
+        if (TryMap(e.Snapshot, out var packageSnapshot))
+        {
+            ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(packageSnapshot));
+        }
+    }
+
+    private bool StopCore()
+    {
+        bool wasStarted;
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            _disposed = true;
+            wasStarted = _started;
+            _started = false;
+        }
+
+        if (wasStarted)
+        {
+            _backgroundProcesses.ProcessChanged -= BackgroundProcesses_OnProcessChanged;
+        }
+
+        return true;
+    }
+
+    private IReadOnlyList<BackgroundProcessSnapshot> ListProcessesCore(string? groupKey = null)
     {
         var snapshots = new List<BackgroundProcessSnapshot>();
         foreach (var snapshot in _backgroundProcesses.ListProcesses())
@@ -61,34 +173,11 @@ internal sealed class PackageScopedBackgroundProcessQueue(
         return snapshots;
     }
 
-    public bool Cancel(Guid processId)
-    {
-        var snapshot = _backgroundProcesses.GetProcess(processId);
-        return snapshot is not null && TryMap(snapshot, out _) && _backgroundProcesses.Cancel(processId);
-    }
-
-    public void Dispose()
+    private void ThrowIfDisposed()
     {
         if (_disposed)
         {
-            return;
-        }
-
-        _disposed = true;
-        _backgroundProcesses.ProcessChanged -= BackgroundProcesses_OnProcessChanged;
-        foreach (var process in ListProcesses().Where(process => process.IsActive))
-        {
-            _backgroundProcesses.Cancel(process.ProcessId);
-        }
-    }
-
-    internal void Start() => _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
-
-    private void BackgroundProcesses_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
-    {
-        if (!_disposed && TryMap(e.Snapshot, out var packageSnapshot))
-        {
-            ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(packageSnapshot));
+            throw new ObjectDisposedException(nameof(PackageScopedBackgroundProcessQueue));
         }
     }
 

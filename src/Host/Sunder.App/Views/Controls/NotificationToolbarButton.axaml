@@ -1,0 +1,122 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.NotificationToolbarButton"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <Button Classes="toolbar-icon notification-button"
+          VerticalAlignment="Center"
+          ToolTip.Tip="Notifications"
+          Click="NotificationsButton_OnClick">
+    <Button.Content>
+      <Grid Width="16"
+            Height="16">
+        <Path Width="13"
+              Height="13"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Data="M7 1.35 C4.95 1.35 3.45 2.95 3.45 5.1 L3.45 7.45 L2.35 9.35 L11.65 9.35 L10.55 7.45 L10.55 5.1 C10.55 2.95 9.05 1.35 7 1.35 Z M5.85 10.65 C6.15 11.25 6.55 11.55 7 11.55 C7.45 11.55 7.85 11.25 8.15 10.65"
+              Fill="{DynamicResource Sunder.Brush.Transparent}"
+              Stretch="Uniform"
+              Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
+              StrokeThickness="1.35" />
+        <Ellipse Width="6"
+                 Height="6"
+                 HorizontalAlignment="Right"
+                 VerticalAlignment="Bottom"
+                 Fill="{DynamicResource Sunder.Brush.Accent}"
+                 IsVisible="{Binding HasUnreadNotifications}" />
+      </Grid>
+    </Button.Content>
+    <Button.Flyout>
+      <Flyout FlyoutPresenterClasses="runtime-flyout-surface">
+        <StackPanel x:DataType="vm:MainWindowViewModel"
+                    Width="360"
+                    Spacing="12">
+          <Grid ColumnDefinitions="*,Auto"
+                ColumnSpacing="12">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="section-title" Text="Notifications" />
+              <TextBlock Classes="caption" Text="Recent package and app events." />
+            </StackPanel>
+            <Button Grid.Column="1"
+                    Classes="toolbar-icon"
+                    Width="28"
+                    Height="28"
+                    VerticalAlignment="Top"
+                    Command="{Binding ClearNotificationsCommand}"
+                    IsVisible="{Binding HasNotifications}"
+                    ToolTip.Tip="Clear notifications">
+              <Path Width="14"
+                    Height="14"
+                    Data="M4 4.75 L12 4.75 M6.5 3.25 L9.5 3.25 M5.25 4.75 L5.75 12.75 L10.25 12.75 L10.75 4.75 M7.15 6.75 L7.15 10.75 M8.85 6.75 L8.85 10.75"
+                    Fill="{DynamicResource Sunder.Brush.Transparent}"
+                    Stretch="Uniform"
+                    Stroke="{DynamicResource Sunder.Brush.Foreground.Secondary}"
+                    StrokeLineCap="Round"
+                    StrokeThickness="1.35" />
+            </Button>
+          </Grid>
+
+          <Border Height="1"
+                  Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+          <Border Classes="notification-empty-state"
+                  IsVisible="{Binding HasNoNotifications}">
+            <TextBlock Classes="caption"
+                       Text="No notifications yet."
+                       TextWrapping="Wrap" />
+          </Border>
+
+          <ScrollViewer MaxHeight="360"
+                        VerticalScrollBarVisibility="Auto"
+                        IsVisible="{Binding HasNotifications}">
+            <ItemsControl ItemsSource="{Binding Notifications}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:NotificationItemViewModel">
+                  <Border Classes="notification-row">
+                    <Grid ColumnDefinitions="Auto,*"
+                          RowDefinitions="Auto,Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="4">
+                      <Border Grid.Row="0"
+                              Classes="notification-severity-dot"
+                              VerticalAlignment="Top"
+                              Margin="0,1,0,0">
+                        <TextBlock Classes="notification-severity-glyph"
+                                   Text="{Binding SeverityGlyph}" />
+                      </Border>
+                      <Grid Grid.Column="1"
+                            ColumnDefinitions="*,Auto"
+                            ColumnSpacing="8">
+                        <TextBlock Text="{Binding Title}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap" />
+                        <Border Grid.Column="1"
+                                Classes="notification-unread-pill"
+                                IsVisible="{Binding IsUnread}">
+                          <TextBlock Text="NEW" />
+                        </Border>
+                      </Grid>
+                      <TextBlock Grid.Row="1"
+                                 Grid.Column="1"
+                                 Text="{Binding Message}"
+                                 TextWrapping="Wrap"
+                                 Foreground="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+                      <TextBlock Grid.Row="2"
+                                 Grid.Column="1"
+                                 Classes="caption"
+                                 Text="{Binding SourceText}" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </StackPanel>
+      </Flyout>
+    </Button.Flyout>
+  </Button>
+</UserControl>

@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Protocol;
@@ -9,12 +11,13 @@ namespace Sunder.App.ViewModels;
 public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 {
     private readonly IRuntimeApiClient _runtimeApiClient;
-    private readonly PackageViewHostService _packageViewHostService;
-    private readonly CliInstallationService _cliInstallationService;
-    private readonly SunderUpdateService _updateService;
-    private readonly Dictionary<string, PackageConfigurationSchemaDescriptor> _schemasByPackageId = new(StringComparer.OrdinalIgnoreCase);
-    private SettingsSectionItemViewModel? _selectedSection;
-    private Task _packageSectionsLoadTask;
+    private readonly SettingsCliViewModel _cli;
+    private readonly SettingsUpdateViewModel _updates;
+    private readonly SettingsPackageSectionsViewModel _packageSettings;
+    private readonly SettingsPackageSectionRefreshCoordinator _packageSectionRefresh;
+    private readonly SettingsSectionSelectionState _selection = new();
+    private readonly CancellationTokenSource _disposeCts = new();
+    private bool _disposed;
 
     public SettingsWindowViewModel(
         IRuntimeApiClient runtimeApiClient,
@@ -27,9 +30,22 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         Action<double, double>? persistBackgroundProcessPopoverSize = null)
     {
         _runtimeApiClient = runtimeApiClient;
-        _packageViewHostService = packageViewHostService;
-        _cliInstallationService = cliInstallationService;
-        _updateService = updateService ?? new SunderUpdateService();
+        var resolvedUpdateService = updateService ?? new SunderUpdateService();
+        _cli = new SettingsCliViewModel(new SettingsCliCoordinator(cliInstallationService));
+        _cli.PropertyChanged += Cli_OnPropertyChanged;
+        _updates = new SettingsUpdateViewModel(new SettingsUpdateCoordinator(resolvedUpdateService));
+        _updates.PropertyChanged += Updates_OnPropertyChanged;
+        _packageSettings = new SettingsPackageSectionsViewModel(
+            new SettingsPackageSectionLoader(runtimeApiClient, packageViewHostService),
+            new SettingsPackageSelectionCoordinator(runtimeApiClient, packageViewHostService));
+        _packageSectionRefresh = new SettingsPackageSectionRefreshCoordinator(
+            _packageSettings,
+            () => _disposed,
+            () => _selection.SelectedSection?.PackageId,
+            PreservePackageSelectionAfterRefresh,
+            () => OnPropertyChanged(nameof(HasPackageSections)),
+            value => IsBusy = value,
+            value => StatusText = value);
         BackgroundProcesses = backgroundProcessQueue is null
             ? BackgroundProcessMonitorViewModel.Empty
             : new BackgroundProcessMonitorViewModel(
@@ -51,27 +67,24 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             new("advanced", "Advanced", "Diagnostic and power-user controls.", false),
         ];
 
-        PackageSections = [];
         SelectedCoreLines = [];
-        SelectedPackageSections = [];
 
-        _selectedSection = CoreSections[0];
-        _selectedSection.IsSelected = true;
-        ApplyCoreSelection(_selectedSection);
-        _packageSectionsLoadTask = LoadPackageSectionsAsync(preserveSelection: false);
+        _selection.PreserveSelection(CoreSections[0]);
+        ApplyCoreSelection(CoreSections[0]);
+        _packageSectionRefresh.RefreshAsync(preserveSelection: false, _disposeCts.Token);
     }
 
     public ObservableCollection<SettingsSectionItemViewModel> CoreSections { get; }
 
-    public ObservableCollection<SettingsSectionItemViewModel> PackageSections { get; }
+    public ObservableCollection<SettingsSectionItemViewModel> PackageSections => _packageSettings.PackageSections;
 
     public ObservableCollection<string> SelectedCoreLines { get; }
 
-    public ObservableCollection<SettingsFieldSectionViewModel> SelectedPackageSections { get; }
+    public ObservableCollection<SettingsFieldSectionViewModel> SelectedPackageSections => _packageSettings.SelectedPackageSections;
 
     public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
 
-    public bool HasPackageSections => PackageSections.Count > 0;
+    public bool HasPackageSections => _packageSettings.HasPackageSections;
 
     public bool IsCoreSelection => !IsPackageSelection;
 
@@ -89,9 +102,43 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowApplySaveButtons => !HasHostedSettingsView && !IsCliSelection;
 
-    public bool HasCliWarning => !string.IsNullOrWhiteSpace(CliWarningText);
+    public bool HasCliWarning => _cli.HasWarning;
 
-    public bool HasCliPathInstructions => !string.IsNullOrWhiteSpace(CliPathInstructions);
+    public bool HasCliPathInstructions => _cli.HasPathInstructions;
+
+    public string CliStatusText => _cli.StatusText;
+
+    public string CliStatusDescription => _cli.StatusDescription;
+
+    public string CliPlatformText => _cli.PlatformText;
+
+    public string CliBundledPath => _cli.BundledPath;
+
+    public string CliInstalledPath => _cli.InstalledPath;
+
+    public string CliShimPath => _cli.ShimPath;
+
+    public string CliWarningText => _cli.WarningText;
+
+    public string CliPathInstructions => _cli.PathInstructions;
+
+    public bool CanInstallOrRepairCli => _cli.CanInstallOrRepair;
+
+    public bool CanUninstallCli => _cli.CanUninstall;
+
+    public bool DownloadUpdatesAutomatically
+    {
+        get => _updates.DownloadUpdatesAutomatically;
+        set => _updates.DownloadUpdatesAutomatically = value;
+    }
+
+    public string UpdateCurrentVersionText => _updates.CurrentVersionText;
+
+    public string UpdateSourceText => _updates.SourceText;
+
+    public string UpdateStatusText => _updates.StatusText;
+
+    public bool CanCheckForAppUpdates => _updates.CanCheckForAppUpdates;
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _selectedTitle = "Appearance";
@@ -123,51 +170,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private object? _hostedSettingsView;
 
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliStatusText = "Not checked";
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliStatusDescription = "Open this section to check the terminal command install.";
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliPlatformText = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliBundledPath = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliInstalledPath = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliShimPath = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliWarningText = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _cliPathInstructions = string.Empty;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private bool _canInstallOrRepairCli;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private bool _canUninstallCli;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private bool _downloadUpdatesAutomatically;
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _updateCurrentVersionText = "Unknown";
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _updateSourceText = "Not configured";
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _updateStatusText = "Open this section to check app update status.";
-
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private bool _canCheckForAppUpdates;
-
     partial void OnIsPackageSelectionChanged(bool value)
     {
         OnPropertyChanged(nameof(IsCoreSelection));
@@ -197,29 +199,18 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowApplySaveButtons));
     }
 
-    partial void OnCliWarningTextChanged(string value)
-    {
-        OnPropertyChanged(nameof(HasCliWarning));
-    }
-
-    partial void OnCliPathInstructionsChanged(string value)
-    {
-        OnPropertyChanged(nameof(HasCliPathInstructions));
-    }
-
     public async Task SelectSectionAsync(SettingsSectionItemViewModel item)
     {
-        if (_selectedSection is not null)
+        if (_disposed)
         {
-            _selectedSection.IsSelected = false;
+            return;
         }
 
-        _selectedSection = item;
-        _selectedSection.IsSelected = true;
+        var selectionVersion = _selection.Select(item);
 
         if (item.IsPackage)
         {
-            await ApplyPackageSelectionAsync(item);
+            await ApplyPackageSelectionAsync(item, selectionVersion);
             return;
         }
 
@@ -230,56 +221,78 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public async Task ApplyAsync()
+    public async Task<bool> ApplyAsync()
     {
         if (IsUpdatesSelection)
         {
-            await SaveUpdateSettingsAsync();
-            return;
+            return await SaveUpdateSettingsAsync();
         }
 
-        if (!ShowGenericPackageSettings || _selectedSection?.PackageId is null)
+        var selectedSection = _selection.SelectedSection;
+        if (!ShowGenericPackageSettings || selectedSection?.PackageId is null)
         {
             StatusText = "Nothing to apply for the selected section yet.";
-            return;
+            return true;
         }
 
+        var packageId = selectedSection.PackageId;
+        var selectedTitle = SelectedTitle;
+        var selectionVersion = _selection.Version;
         IsBusy = true;
         try
         {
-            var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var field in SelectedPackageSections.SelectMany(section => section.Fields))
+            var values = PackageConfigurationFormSerializer.Serialize(SelectedPackageSections);
+            await _runtimeApiClient.SavePackageConfigurationValuesAsync(packageId, values);
+            if (IsCurrentSelection(selectedSection, selectionVersion))
             {
-                if (field is SecretSettingsFieldViewModel secretField)
-                {
-                    if (!string.IsNullOrWhiteSpace(secretField.Value))
-                    {
-                        values[field.Key] = secretField.Value;
-                    }
-
-                    continue;
-                }
-
-                values[field.Key] = field.GetPersistedValue();
+                StatusText = $"Applied settings for {selectedTitle}.";
+                return true;
             }
 
-            await _runtimeApiClient.SavePackageConfigurationValuesAsync(_selectedSection.PackageId, values);
-            StatusText = $"Applied settings for {_selectedSection.Title}.";
+            return false;
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            if (IsCurrentSelection(selectedSection, selectionVersion))
+            {
+                StatusText = ex.Message;
+            }
+
+            return false;
         }
         finally
         {
-            IsBusy = false;
+            if (IsCurrentSelection(selectedSection, selectionVersion))
+            {
+                IsBusy = false;
+            }
         }
     }
 
-    public async Task SaveAsync()
+    public async Task<bool> SaveAsync()
     {
-        await ApplyAsync();
+        return await ApplyAsync();
     }
+
+    [RelayCommand]
+    private async Task ApplyFromUiAsync()
+        => await ApplyAsync();
+
+    [RelayCommand]
+    private async Task InstallOrRepairCliFromUiAsync()
+        => await InstallOrRepairCliAsync();
+
+    [RelayCommand]
+    private async Task RefreshCliStatusFromUiAsync()
+        => await RefreshCliStatusAsync();
+
+    [RelayCommand]
+    private async Task UninstallCliFromUiAsync()
+        => await UninstallCliAsync();
+
+    [RelayCommand]
+    private async Task CheckForUpdatesFromUiAsync()
+        => await CheckForAppUpdatesAsync();
 
     public async Task<bool> SelectPackageSettingsAsync(
         string packageId,
@@ -287,18 +300,23 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (_disposed)
+        {
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(packageId))
         {
             return false;
         }
 
-        await _packageSectionsLoadTask;
-        var item = FindPackageSection(packageId);
+        await _packageSectionRefresh.CurrentLoadTask.WaitAsync(cancellationToken);
+        var item = _packageSettings.FindSection(packageId);
         if (item is null)
         {
-            _packageSectionsLoadTask = LoadPackageSectionsAsync(preserveSelection: true, cancellationToken);
-            await _packageSectionsLoadTask;
-            item = FindPackageSection(packageId);
+            using var reloadCts = CreateLifetimeCancellationTokenSource(cancellationToken, out var reloadToken);
+            await _packageSectionRefresh.RefreshAsync(preserveSelection: true, reloadToken).WaitAsync(cancellationToken);
+            item = _packageSettings.FindSection(packageId);
         }
 
         if (item is null)
@@ -308,14 +326,19 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
 
         await SelectSectionAsync(item);
+        if (!IsCurrentSelection(item))
+        {
+            return false;
+        }
+
         await NotifyHostedSettingsNavigatedAsync(packageId, parameters ?? new Dictionary<string, string?>(), cancellationToken);
         return true;
     }
 
     public async Task RefreshPackageSectionsAsync(CancellationToken cancellationToken = default)
     {
-        _packageSectionsLoadTask = LoadPackageSectionsAsync(preserveSelection: true, cancellationToken);
-        await _packageSectionsLoadTask;
+        using var refreshCts = CreateLifetimeCancellationTokenSource(cancellationToken, out var refreshToken);
+        await _packageSectionRefresh.RefreshAsync(preserveSelection: true, refreshToken).WaitAsync(cancellationToken);
     }
 
     public async Task RefreshCliStatusAsync(bool showSuccessStatus = true)
@@ -323,16 +346,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsBusy = true;
         try
         {
-            ApplyCliStatus(await _cliInstallationService.GetStatusAsync());
-            if (showSuccessStatus)
+            var statusText = await _cli.RefreshStatusAsync(showSuccessStatus);
+            if (!string.IsNullOrWhiteSpace(statusText))
             {
-                StatusText = "CLI status refreshed.";
+                StatusText = statusText;
             }
-        }
-        catch (Exception ex)
-        {
-            StatusText = ex.Message;
-            CliWarningText = ex.Message;
         }
         finally
         {
@@ -345,14 +363,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsBusy = true;
         try
         {
-            var result = await _cliInstallationService.EnsureInstalledAsync();
-            ApplyCliStatus(result.Status);
-            StatusText = result.Status.Summary;
-        }
-        catch (Exception ex)
-        {
-            StatusText = ex.Message;
-            CliWarningText = ex.Message;
+            var statusText = await _cli.InstallOrRepairAsync();
+            if (!string.IsNullOrWhiteSpace(statusText))
+            {
+                StatusText = statusText;
+            }
         }
         finally
         {
@@ -365,13 +380,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsBusy = true;
         try
         {
-            ApplyCliStatus(await _cliInstallationService.UninstallAsync());
-            StatusText = "CLI user install removed. Existing PATH entries were left unchanged.";
-        }
-        catch (Exception ex)
-        {
-            StatusText = ex.Message;
-            CliWarningText = ex.Message;
+            var statusText = await _cli.UninstallAsync();
+            if (!string.IsNullOrWhiteSpace(statusText))
+            {
+                StatusText = statusText;
+            }
         }
         finally
         {
@@ -387,28 +400,33 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public async Task CheckForAppUpdatesAsync()
     {
         IsBusy = true;
-        CanCheckForAppUpdates = false;
-        UpdateStatusText = "Checking GitHub Releases for app updates...";
         try
         {
-            var result = await _updateService.CheckForUpdatesAsync();
-            ApplyUpdateRuntimeStatus(result.RuntimeStatus);
-            UpdateStatusText = result.Message;
-        }
-        catch (Exception ex)
-        {
-            UpdateStatusText = ex.Message;
-            StatusText = ex.Message;
+            var statusText = await _updates.CheckForUpdatesAsync();
+            if (!string.IsNullOrWhiteSpace(statusText))
+            {
+                StatusText = statusText;
+            }
         }
         finally
         {
             IsBusy = false;
-            CanCheckForAppUpdates = _updateService.GetRuntimeStatus().CanCheckForUpdates;
         }
     }
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _selection.Dispose();
+        _packageSectionRefresh.Invalidate();
+        _disposeCts.Cancel();
+        _cli.PropertyChanged -= Cli_OnPropertyChanged;
+        _updates.PropertyChanged -= Updates_OnPropertyChanged;
         if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
         {
             BackgroundProcesses.Dispose();
@@ -416,69 +434,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         _runtimeApiClient.Dispose();
     }
-
-    private async Task LoadPackageSectionsAsync(bool preserveSelection, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        IsBusy = true;
-        var selectedPackageId = preserveSelection ? _selectedSection?.PackageId : null;
-        try
-        {
-            var schemas = await _runtimeApiClient.GetConfigurationSchemasAsync(cancellationToken);
-            PackageSections.Clear();
-            _schemasByPackageId.Clear();
-
-            foreach (var schema in schemas)
-            {
-                _schemasByPackageId[schema.PackageId] = schema;
-                PackageSections.Add(new SettingsSectionItemViewModel(
-                    schema.PackageId,
-                    schema.PackageDisplayName,
-                    schema.Summary ?? $"Configure {schema.PackageDisplayName}.",
-                    true,
-                    schema.PackageId
-                ));
-            }
-
-            foreach (var settingsViewPackage in _packageViewHostService.ListSettingsViewPackages())
-            {
-                if (_schemasByPackageId.ContainsKey(settingsViewPackage.PackageId))
-                {
-                    continue;
-                }
-
-                PackageSections.Add(new SettingsSectionItemViewModel(
-                    settingsViewPackage.PackageId,
-                    settingsViewPackage.DisplayName,
-                    settingsViewPackage.Summary ?? $"Configure {settingsViewPackage.DisplayName}.",
-                    true,
-                    settingsViewPackage.PackageId));
-            }
-
-            var orderedSections = PackageSections
-                .OrderBy(section => section.Title, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            PackageSections.Clear();
-            foreach (var section in orderedSections)
-            {
-                PackageSections.Add(section);
-            }
-
-            OnPropertyChanged(nameof(HasPackageSections));
-            PreservePackageSelectionAfterRefresh(selectedPackageId);
-        }
-        catch (Exception ex)
-        {
-            StatusText = ex.Message;
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
-
-    private SettingsSectionItemViewModel? FindPackageSection(string packageId)
-        => PackageSections.FirstOrDefault(section => string.Equals(section.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
     private async Task NotifyHostedSettingsNavigatedAsync(
         string packageId,
@@ -509,40 +464,23 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        var refreshedSelection = FindPackageSection(selectedPackageId);
+        var refreshedSelection = _packageSettings.FindSection(selectedPackageId);
         if (refreshedSelection is null)
         {
-            if (_selectedSection is not null)
-            {
-                _selectedSection.IsSelected = false;
-            }
-
-            _selectedSection = CoreSections[0];
-            _selectedSection.IsSelected = true;
-            ApplyCoreSelection(_selectedSection);
+            _selection.PreserveSelection(CoreSections[0]);
+            ApplyCoreSelection(CoreSections[0]);
             return;
         }
 
-        if (_selectedSection is not null)
-        {
-            _selectedSection.IsSelected = false;
-        }
+        _selection.PreserveSelection(refreshedSelection);
 
-        _selectedSection = refreshedSelection;
-        _selectedSection.IsSelected = true;
-
-        _schemasByPackageId.TryGetValue(selectedPackageId, out var schema);
-        SelectedTitle = schema?.PackageDisplayName ?? refreshedSelection.Title;
-        SelectedDescription = schema?.Summary ?? refreshedSelection.Description;
-        DetailsTitle = schema?.PackageDisplayName ?? refreshedSelection.Title;
-        DetailsText = $"Package id: {selectedPackageId}";
-        IsCliSelection = false;
-        IsUpdatesSelection = false;
-        IsPackageSelection = true;
+        _packageSettings.TryGetSchema(selectedPackageId, out var schema);
+        ApplyPackageSelectionHeader(refreshedSelection, schema);
     }
 
     private void ApplyCoreSelection(SettingsSectionItemViewModel item)
     {
+        IsBusy = false;
         HostedSettingsView = null;
         IsPackageSelection = false;
         IsCliSelection = string.Equals(item.Id, "cli", StringComparison.OrdinalIgnoreCase);
@@ -564,14 +502,14 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         if (!IsCliSelection)
         {
-            foreach (var line in GetCoreSectionLines(item.Id))
+            foreach (var line in CoreSettingsContentProvider.GetLines(item.Id))
             {
                 SelectedCoreLines.Add(line);
             }
         }
     }
 
-    private async Task ApplyPackageSelectionAsync(SettingsSectionItemViewModel item)
+    private async Task ApplyPackageSelectionAsync(SettingsSectionItemViewModel item, int selectionVersion)
     {
         if (item.PackageId is null)
         {
@@ -582,151 +520,155 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsBusy = true;
         try
         {
-            var hasSchema = _schemasByPackageId.TryGetValue(item.PackageId, out var schema);
-            SelectedTitle = schema?.PackageDisplayName ?? item.Title;
-            SelectedDescription = schema?.Summary ?? item.Description;
-            DetailsTitle = schema?.PackageDisplayName ?? item.Title;
-            DetailsText = $"Package id: {item.PackageId}";
-            IsCliSelection = false;
-            IsUpdatesSelection = false;
-            IsPackageSelection = true;
+            var hasSchema = _packageSettings.TryGetSchema(item.PackageId, out var schema);
+            ApplyPackageSelectionHeader(item, schema);
             SelectedCoreLines.Clear();
-            SelectedPackageSections.Clear();
+            _packageSettings.ClearSelectedSections();
             HostedSettingsView = null;
 
-            if (_packageViewHostService.HasSettingsView(item.PackageId))
+            var result = await _packageSettings.LoadSelectionAsync(
+                item.PackageId,
+                hasSchema ? schema : null,
+                _disposeCts.Token);
+            if (!IsCurrentSelection(item, selectionVersion))
             {
-                HostedSettingsView = _packageViewHostService.GetOrCreateSettingsView(item.PackageId);
-                StatusText = HostedSettingsView is null
-                    ? "Package settings view is unavailable."
-                    : string.Empty;
                 return;
             }
 
-            if (!hasSchema || schema is null)
-            {
-                StatusText = "This package does not provide configurable settings.";
-                return;
-            }
+            HostedSettingsView = result.HostedSettingsView;
+            _packageSettings.ApplySelectionResult(result);
 
-            var values = await _runtimeApiClient.GetPackageConfigurationValuesAsync(item.PackageId);
-            var valueMap = values?.Values ?? new Dictionary<string, string?>();
-            var storedSecretKeys = values?.StoredSecretKeys ?? [];
-
-            foreach (var section in schema.Sections)
-            {
-                var fieldViewModels = section.Fields
-                    .Select(field => CreateFieldViewModel(
-                        field,
-                        valueMap.TryGetValue(field.Key, out var currentValue) ? currentValue : field.DefaultValue,
-                        storedSecretKeys.Contains(field.Key, StringComparer.OrdinalIgnoreCase)))
-                    .ToArray();
-
-                SelectedPackageSections.Add(new SettingsFieldSectionViewModel(section.Title, section.Description, fieldViewModels));
-            }
-
-            StatusText = string.Empty;
+            StatusText = result.StatusText;
+        }
+        catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
-            ApplyCoreSelection(CoreSections[0]);
+            if (IsCurrentSelection(item, selectionVersion))
+            {
+                StatusText = ex.Message;
+                ApplyCoreSelection(CoreSections[0]);
+            }
         }
         finally
         {
-            IsBusy = false;
+            if (IsCurrentSelection(item, selectionVersion))
+            {
+                IsBusy = false;
+            }
         }
     }
 
-    private static SettingsFieldViewModel CreateFieldViewModel(
-        PackageConfigurationFieldDescriptor field,
-        string? value,
-        bool hasStoredSecretValue)
+    private void ApplyPackageSelectionHeader(
+        SettingsSectionItemViewModel item,
+        PackageConfigurationSchemaDescriptor? schema)
     {
-        return field.Kind switch
-        {
-            PackageConfigurationFieldKind.Secret => new SecretSettingsFieldViewModel(
-                field.Key,
-                field.Label,
-                field.Description,
-                field.IsRequired,
-                field.Placeholder,
-                hasStoredSecretValue,
-                null
-            ),
-            PackageConfigurationFieldKind.Boolean => new BooleanSettingsFieldViewModel(
-                field.Key,
-                field.Label,
-                field.Description,
-                field.IsRequired,
-                bool.TryParse(value, out var parsedBoolean) && parsedBoolean
-            ),
-            PackageConfigurationFieldKind.Select => new SelectSettingsFieldViewModel(
-                field.Key,
-                field.Label,
-                field.Description,
-                field.IsRequired,
-                field.Options.Select(option => new SettingsOptionItem(option.Value, option.Label)).ToArray(),
-                value
-            ),
-            _ => new TextSettingsFieldViewModel(
-                field.Key,
-                field.Label,
-                field.Description,
-                field.IsRequired,
-                field.Placeholder,
-                value
-            ),
-        };
+        SelectedTitle = schema?.PackageDisplayName ?? item.Title;
+        SelectedDescription = schema?.Summary ?? item.Description;
+        DetailsTitle = schema?.PackageDisplayName ?? item.Title;
+        DetailsText = $"Package id: {item.PackageId}";
+        IsCliSelection = false;
+        IsUpdatesSelection = false;
+        IsPackageSelection = true;
     }
 
-    private void ApplyCliStatus(CliInstallationStatus status)
+    private CancellationTokenSource? CreateLifetimeCancellationTokenSource(
+        CancellationToken cancellationToken,
+        out CancellationToken lifetimeToken)
     {
-        CliStatusText = status.Summary;
-        CliStatusDescription = status.IsFullyInstalled
-            ? "Sunder installs the command shim for this user but does not verify shell-profile PATH entries. Use the PATH instructions below, then run sunder --help in your terminal to confirm."
-            : status.Warning ?? "The sunder command is not fully configured.";
-        CliPlatformText = status.PlatformName;
-        CliBundledPath = status.Paths.BundledCliPath ?? "Not found";
-        CliInstalledPath = status.Paths.InstalledCliPath;
-        CliShimPath = status.Paths.ShimPath;
-        CliWarningText = status.Warning ?? string.Empty;
-        CliPathInstructions = status.PathInstructions;
-        CanInstallOrRepairCli = status.CanInstallOrRepair;
-        CanUninstallCli = status.IsInstalled || status.IsShimInstalled;
+        if (!cancellationToken.CanBeCanceled)
+        {
+            lifetimeToken = _disposeCts.Token;
+            return null;
+        }
+
+        var cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token);
+        lifetimeToken = cancellationTokenSource.Token;
+        return cancellationTokenSource;
+    }
+
+    private bool IsCurrentSelection(SettingsSectionItemViewModel item, int? selectionVersion = null)
+        => !_disposed && _selection.IsCurrent(item, selectionVersion);
+
+    private void Cli_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(SettingsCliViewModel.StatusText):
+                OnPropertyChanged(nameof(CliStatusText));
+                break;
+            case nameof(SettingsCliViewModel.StatusDescription):
+                OnPropertyChanged(nameof(CliStatusDescription));
+                break;
+            case nameof(SettingsCliViewModel.PlatformText):
+                OnPropertyChanged(nameof(CliPlatformText));
+                break;
+            case nameof(SettingsCliViewModel.BundledPath):
+                OnPropertyChanged(nameof(CliBundledPath));
+                break;
+            case nameof(SettingsCliViewModel.InstalledPath):
+                OnPropertyChanged(nameof(CliInstalledPath));
+                break;
+            case nameof(SettingsCliViewModel.ShimPath):
+                OnPropertyChanged(nameof(CliShimPath));
+                break;
+            case nameof(SettingsCliViewModel.WarningText):
+                OnPropertyChanged(nameof(CliWarningText));
+                break;
+            case nameof(SettingsCliViewModel.PathInstructions):
+                OnPropertyChanged(nameof(CliPathInstructions));
+                break;
+            case nameof(SettingsCliViewModel.HasWarning):
+                OnPropertyChanged(nameof(HasCliWarning));
+                break;
+            case nameof(SettingsCliViewModel.HasPathInstructions):
+                OnPropertyChanged(nameof(HasCliPathInstructions));
+                break;
+            case nameof(SettingsCliViewModel.CanInstallOrRepair):
+                OnPropertyChanged(nameof(CanInstallOrRepairCli));
+                break;
+            case nameof(SettingsCliViewModel.CanUninstall):
+                OnPropertyChanged(nameof(CanUninstallCli));
+                break;
+        }
+    }
+
+    private void Updates_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(SettingsUpdateViewModel.DownloadUpdatesAutomatically):
+                OnPropertyChanged(nameof(DownloadUpdatesAutomatically));
+                break;
+            case nameof(SettingsUpdateViewModel.CurrentVersionText):
+                OnPropertyChanged(nameof(UpdateCurrentVersionText));
+                break;
+            case nameof(SettingsUpdateViewModel.SourceText):
+                OnPropertyChanged(nameof(UpdateSourceText));
+                break;
+            case nameof(SettingsUpdateViewModel.StatusText):
+                OnPropertyChanged(nameof(UpdateStatusText));
+                break;
+            case nameof(SettingsUpdateViewModel.CanCheckForAppUpdates):
+                OnPropertyChanged(nameof(CanCheckForAppUpdates));
+                break;
+        }
     }
 
     private void ApplyUpdateSettings()
     {
-        var settings = _updateService.LoadSettings();
-        DownloadUpdatesAutomatically = settings.DownloadUpdatesAutomatically;
-        ApplyUpdateRuntimeStatus(_updateService.GetRuntimeStatus());
+        _updates.LoadSettings();
     }
 
-    private void ApplyUpdateRuntimeStatus(SunderUpdateRuntimeStatus status)
-    {
-        UpdateCurrentVersionText = status.CurrentVersion;
-        UpdateSourceText = status.Source;
-        UpdateStatusText = status.Message;
-        CanCheckForAppUpdates = status.CanCheckForUpdates;
-    }
-
-    private async Task SaveUpdateSettingsAsync()
+    private async Task<bool> SaveUpdateSettingsAsync()
     {
         IsBusy = true;
         try
         {
-            await _updateService.SaveSettingsAsync(new AppUpdateSettings
-            {
-                DownloadUpdatesAutomatically = DownloadUpdatesAutomatically,
-            });
-            StatusText = DownloadUpdatesAutomatically
-                ? "Sunder will download app updates in the background and apply them on the next start."
-                : "Automatic app update downloads are disabled.";
-        }
-        catch (Exception ex)
-        {
-            StatusText = ex.Message;
+            var result = await _updates.SaveSettingsAsync();
+            StatusText = result.StatusText;
+            return result.Success;
         }
         finally
         {
@@ -734,38 +676,4 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private static IReadOnlyList<string> GetCoreSectionLines(string sectionId)
-        => sectionId switch
-        {
-            "appearance" =>
-            [
-                "Appearance keeps host-level theme and presentation settings.",
-                "Package-owned UI should still consume Sunder semantic theme tokens instead of mutating shell chrome.",
-            ],
-            "runtime" =>
-            [
-                "Runtime settings will control shell behavior, loading preferences, and runtime diagnostics.",
-                "Package-specific configuration is rendered below the Packages separator when a package contributes a config schema.",
-            ],
-            "updates" =>
-            [
-                "Package updates and managed rollout workflows are planned but not implemented in this slice.",
-            ],
-            "notifications" =>
-            [
-                "Notification preferences will later control package alerts, runtime warnings, and task completion signals.",
-            ],
-            "privacy" =>
-            [
-                "Sunder remains local-first. Package-specific secrets and trust decisions will continue to evolve here.",
-            ],
-            "advanced" =>
-            [
-                "Advanced settings will eventually host diagnostic and power-user controls for package developers and operators.",
-            ],
-            _ =>
-            [
-                "Select a core section or a package entry to configure it.",
-            ],
-        };
 }

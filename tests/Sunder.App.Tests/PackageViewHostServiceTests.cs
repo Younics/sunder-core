@@ -59,6 +59,54 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task DisablePackageAsync_WaitsForPackageScopedBackgroundProcessesToStop()
+    {
+        var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundProcessQueue("agent", "Agent", backgroundProcesses);
+        var processStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        packageQueue.Enqueue(new BackgroundProcessRequest(
+            "Agent background work",
+            "work",
+            BackgroundProcessIndicator.Settings,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            CanCancel: false,
+            async context =>
+            {
+                processStarted.SetResult();
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(1), context.CancellationToken);
+                }
+                catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+                {
+                    cancellationObserved.SetResult();
+                    await allowCleanup.Task;
+                }
+            }));
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            backgroundProcessQueue: backgroundProcesses);
+
+        await processStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var disableTask = hostService.DisablePackageAsync("agent", "Activation failed.", PackageFailureOrigin.AppActivation);
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(disableTask.IsCompleted);
+
+        allowCleanup.SetResult();
+        await disableTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.All(backgroundProcesses.ListProcesses(), process => Assert.Equal(BackgroundProcessState.Cancelled, process.State));
+    }
+
+    [Fact]
     public async Task DisposeAsync_LeavesSessionFolderForProcessLifetime()
     {
         var sessionFolder = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -82,6 +130,56 @@ public sealed class PackageViewHostServiceTests
         {
             TryDeleteDirectory(sessionFolder);
         }
+    }
+
+    [Fact]
+    public void AppPackageSourcePreparer_Prepare_WhenManifestIdMissing_DeletesShadowFolder()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        var packageSourceFolder = Path.Combine(rootPath, "package-source");
+        Directory.CreateDirectory(sessionFolder);
+        Directory.CreateDirectory(packageSourceFolder);
+        File.WriteAllText(Path.Combine(packageSourceFolder, "sunder-package.json"), "{}");
+
+        try
+        {
+            var preparer = new AppPackageSourcePreparer(sessionFolder);
+            var preparedSource = preparer.Prepare(new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder));
+
+            Assert.Null(preparedSource);
+            Assert.Empty(Directory.EnumerateDirectories(sessionFolder));
+        }
+        finally
+        {
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_RejectsPublicOperations()
+    {
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder: null);
+
+        await hostService.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => hostService.ApplyPackageDeltaAsync([], []));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => hostService.DisablePackageAsync("agent", "Failed.", PackageFailureOrigin.AppActivation));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await hostService.NotifyViewNavigatedAsync("agent.chat", null));
+        Assert.Throws<ObjectDisposedException>(() => hostService.FilterEnabledPackages([CreateActiveAgentPackage()]));
+        Assert.Throws<ObjectDisposedException>(() => hostService.TryHandleUnhandledException(new InvalidOperationException("boom")));
+        Assert.Throws<ObjectDisposedException>(() => hostService.GetOrCreateView("agent.chat"));
+        Assert.Throws<ObjectDisposedException>(() => hostService.ReloadView("agent.chat"));
+        Assert.Throws<ObjectDisposedException>(() => hostService.HasSettingsView("agent"));
+        Assert.Throws<ObjectDisposedException>(() => hostService.ListSettingsViewPackages());
+        Assert.Throws<ObjectDisposedException>(() => hostService.GetOrCreateSettingsView("agent"));
     }
 
     [Fact]
@@ -139,6 +237,164 @@ public sealed class PackageViewHostServiceTests
             Assert.Equal(2, shadowFolders.Length);
             Assert.StartsWith("0001-agent", shadowFolders[0]);
             Assert.StartsWith("0002-agent", shadowFolders[1]);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageDeltaAsync_WhenActivationFails_RollsBackRegisteredViewsBeforeReload()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowAfterViewMarkerFileName), string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var viewRegistry = new AppPackageViewRegistry();
+        var hostService = new PackageViewHostService(
+            viewRegistry,
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+
+            Assert.Empty(viewRegistry.ListPackageViewIds("agent"));
+
+            File.Delete(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowAfterViewMarkerFileName));
+            File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.SkipViewMarkerFileName), string.Empty);
+            await hostService.ApplyPackageDeltaAsync([package], [source], ["agent"]);
+
+            Assert.Empty(viewRegistry.ListPackageViewIds("agent"));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageDeltaAsync_WhenBackgroundServiceStartFails_StopsRegisteredBackgroundService()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RegisterBackgroundServiceMarkerFileName), string.Empty);
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowOnBackgroundStartMarkerFileName), string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+
+            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.BackgroundServiceStartedFileName, SearchOption.AllDirectories));
+            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.BackgroundServiceStoppedFileName, SearchOption.AllDirectories));
+            Assert.Empty(hostService.FilterEnabledPackages([package]));
+            Assert.Equal(0, hostService.LoadedPackageCount);
+            Assert.Equal(0, hostService.OwnedDisposableCount);
+            Assert.Equal(0, hostService.LoadContextCount);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task DisablePackageAsync_WhenPackageLoaded_UnloadsResourcesAndKeepsPackageDisabled()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            var view = hostService.GetOrCreateView("agent.chat");
+            Assert.NotNull(view);
+
+            await hostService.DisablePackageAsync("agent", "Hosted view failed.", PackageFailureOrigin.AppHostedView);
+
+            Assert.True(Assert.IsType<bool>(view.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))?.GetValue(view)));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.Empty(hostService.FilterEnabledPackages([package]));
+            Assert.Equal(0, hostService.LoadedPackageCount);
+            Assert.Equal(0, hostService.OwnedDisposableCount);
+            Assert.Equal(0, hostService.LoadContextCount);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageDeltaAsync_WhenPackageDisabled_DoesNotReloadUntilForced()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            await hostService.DisablePackageAsync("agent", "Hosted view failed.", PackageFailureOrigin.AppHostedView);
+
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+            Assert.Empty(hostService.FilterEnabledPackages([package]));
+
+            await hostService.ApplyPackageDeltaAsync([package], [source], ["agent"]);
+
+            Assert.NotNull(hostService.GetOrCreateView("agent.chat"));
+            Assert.NotEmpty(hostService.FilterEnabledPackages([package]));
         }
         finally
         {

@@ -1,0 +1,125 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.ShellWorkspace"
+             x:DataType="vm:MainWindowViewModel"
+             mc:Ignorable="d">
+  <Grid Margin="0,4,0,4"
+        Background="{DynamicResource Sunder.Brush.Background.App}"
+        ColumnDefinitions="58,0,*,0,58">
+    <Grid Grid.Column="0"
+          RowDefinitions="*,8,*">
+      <controls:PackageIconBar Grid.Row="0"
+                               Classes="side-top-lane"
+                               DataContext="{Binding LeftTopBar}" />
+      <controls:PackageIconBar Grid.Row="2"
+                               Classes="side-bottom-lane"
+                               DataContext="{Binding LeftBottomBar}" />
+    </Grid>
+
+    <Grid Grid.Column="2"
+          x:Name="ShellContentGrid"
+          RowDefinitions="560,4,236">
+      <Grid Grid.Row="0"
+            x:Name="TopContentGrid"
+            ColumnDefinitions="280,4,*,4,280">
+        <Border Grid.Column="0"
+                x:Name="LeftTopPanelBorder"
+                Classes="side-shell-panel"
+                IsVisible="{Binding HasLeftTopPanelContent}">
+          <controls:ShellPanelHost DataContext="{Binding LeftTopPanel}" />
+        </Border>
+
+        <GridSplitter x:Name="LeftColumnGridSplitter"
+                      Grid.Column="1"
+                      Width="4"
+                      ResizeDirection="Columns"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="False"
+                      Background="{DynamicResource Sunder.Brush.Transparent}"
+                      IsVisible="{Binding HasLeftTopPanelContent}" />
+
+        <Border Grid.Column="2"
+                x:Name="MiddlePanelBorder"
+                Classes="workspace-shell-panel">
+          <Border Classes="shell-panel-content-clip">
+            <Grid>
+              <controls:ShellWelcomePanel IsVisible="{Binding MiddlePanel.ShowFallbackLines}" />
+              <ContentControl HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              HorizontalContentAlignment="Stretch"
+                              VerticalContentAlignment="Stretch"
+                              IsVisible="{Binding MiddlePanel.HasHostedView}"
+                              Content="{Binding MiddlePanel.HostedView}" />
+            </Grid>
+          </Border>
+        </Border>
+
+        <GridSplitter x:Name="RightColumnGridSplitter"
+                      Grid.Column="3"
+                      Width="4"
+                      ResizeDirection="Columns"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="False"
+                      Background="{DynamicResource Sunder.Brush.Transparent}"
+                      IsVisible="{Binding HasRightTopPanelContent}" />
+
+        <Border Grid.Column="4"
+                x:Name="RightTopPanelBorder"
+                Classes="side-shell-panel"
+                IsVisible="{Binding HasRightTopPanelContent}">
+          <controls:ShellPanelHost DataContext="{Binding RightTopPanel}" />
+        </Border>
+      </Grid>
+
+      <GridSplitter x:Name="BottomRowGridSplitter"
+                    Grid.Row="1"
+                    Height="4"
+                    ResizeDirection="Rows"
+                    ResizeBehavior="PreviousAndNext"
+                    ShowsPreview="False"
+                    Background="{DynamicResource Sunder.Brush.Transparent}"
+                    IsVisible="{Binding HasAnyBottomPanelContent}" />
+
+      <Grid Grid.Row="2"
+            x:Name="BottomContentGrid"
+            ColumnDefinitions="*,4,*">
+        <Border Grid.Column="0"
+                x:Name="LeftBottomPanelBorder"
+                Classes="bottom-shell-panel"
+                IsVisible="{Binding HasLeftBottomPanelContent}">
+          <controls:ShellPanelHost DataContext="{Binding LeftBottomPanel}" />
+        </Border>
+
+        <GridSplitter x:Name="BottomColumnGridSplitter"
+                      Grid.Column="1"
+                      Width="4"
+                      ResizeDirection="Columns"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="False"
+                      Background="{DynamicResource Sunder.Brush.Transparent}"
+                      IsVisible="{Binding HasBottomSplitPanelContent}" />
+
+        <Border Grid.Column="2"
+                x:Name="RightBottomPanelBorder"
+                Classes="bottom-shell-panel"
+                IsVisible="{Binding HasRightBottomPanelContent}">
+          <controls:ShellPanelHost DataContext="{Binding RightBottomPanel}" />
+        </Border>
+      </Grid>
+    </Grid>
+
+    <Grid Grid.Column="4"
+          RowDefinitions="*,8,*">
+      <controls:PackageIconBar Grid.Row="0"
+                               Classes="side-top-lane"
+                               DataContext="{Binding RightTopBar}" />
+      <controls:PackageIconBar Grid.Row="2"
+                               Classes="side-bottom-lane"
+                               DataContext="{Binding RightBottomBar}" />
+    </Grid>
+  </Grid>
+</UserControl>

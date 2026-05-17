@@ -60,6 +60,52 @@ public sealed class NotificationCenterServiceTests
     }
 
     [Fact]
+    public async Task PublishAsync_WhenSubscribersThrow_NotifiesRemainingSubscribers()
+    {
+        var statePath = Path.Combine(CreateTempDirectory(), "notifications.json");
+        var service = new NotificationCenterService(statePath);
+        var notificationChangedCount = 0;
+        AppToastNotification? queuedToast = null;
+        service.NotificationsChanged += () => throw new InvalidOperationException("notification subscriber failed");
+        service.NotificationsChanged += () => notificationChangedCount++;
+        service.ToastQueued += _ => throw new InvalidOperationException("toast subscriber failed");
+        service.ToastQueued += notification => queuedToast = notification;
+
+        await service.PublishAsync(
+            "agent",
+            "Agent",
+            new PackageNotificationRequest(
+                "Build complete",
+                "All checks passed.",
+                PackageNotificationDisplayMode.ToastAndTray,
+                PackageNotificationSeverity.Success));
+
+        Assert.Equal(1, notificationChangedCount);
+        Assert.NotNull(queuedToast);
+        Assert.Single(service.ListNotifications());
+    }
+
+    [Fact]
+    public async Task PublishAsync_TrayNotification_DoesNotLeaveTemporaryStateFiles()
+    {
+        var rootPath = CreateTempDirectory();
+        var statePath = Path.Combine(rootPath, "notifications.json");
+        var service = new NotificationCenterService(statePath);
+
+        await service.PublishAsync(
+            "agent",
+            "Agent",
+            new PackageNotificationRequest(
+                "Build complete",
+                "All checks passed.",
+                PackageNotificationDisplayMode.TrayOnly,
+                PackageNotificationSeverity.Success));
+
+        Assert.True(File.Exists(statePath));
+        Assert.Empty(Directory.EnumerateFiles(rootPath, "notifications.json.*.tmp"));
+    }
+
+    [Fact]
     public async Task MarkAllRead_PersistsTimestampAndClearsUnreadAfterReload()
     {
         var statePath = Path.Combine(CreateTempDirectory(), "notifications.json");

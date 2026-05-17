@@ -36,4 +36,14 @@ public sealed class PackageIconImageLoaderTests
             PackageIconImageLoader.PackageIconImageFormat.Unsupported,
             PackageIconImageLoader.ResolveIconFormat(contentType));
     }
+
+    [Fact]
+    public async Task LoadAsync_WhenCancelled_DoesNotConvertCancellationToFailedResult()
+    {
+        using var cancellationTokenSource = new CancellationTokenSource();
+        cancellationTokenSource.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            PackageIconImageLoader.LoadAsync(new Uri("https://example.invalid/icon.png"), cancellationTokenSource.Token));
+    }
 }

@@ -12,33 +12,37 @@ namespace Sunder.App.Views;
 public partial class SettingsWindow : Window
 {
     private SettingsWindowViewModel? ViewModel => DataContext as SettingsWindowViewModel;
-    private readonly ShellStateService? _shellStateService;
-    private readonly ShellState? _shellState;
-    private bool _allowClose;
+    private readonly SecondaryWindowStateController? _stateController;
+    private readonly SecondaryWindowLifecycleController _lifecycleController;
 
     public SettingsWindow()
     {
         InitializeComponent();
-        KeyDown += OnKeyDown;
+        _lifecycleController = new SecondaryWindowLifecycleController(
+            this,
+            () => _stateController?.PersistWindowState(),
+            OnLifecycleClosed);
         Opened += OnOpened;
-        Closing += OnClosing;
-        Closed += OnClosed;
     }
 
     public SettingsWindow(ShellStateService shellStateService, ShellState shellState)
         : this()
     {
-        _shellStateService = shellStateService;
-        _shellState = shellState;
-        SettingsContentGrid.ColumnDefinitions[0].Width = new GridLength(shellState.SettingsSidebarWidth);
-        ShellWindowPlacementService.Apply(this, shellState.SettingsWindowPlacement);
+        _stateController = new SecondaryWindowStateController(
+            this,
+            shellStateService,
+            shellState,
+            SettingsContentGrid.ColumnDefinitions[0],
+            SettingsSidebarPane,
+            state => state.SettingsSidebarWidth,
+            (state, width) => state.SettingsSidebarWidth = width,
+            state => state.SettingsWindowPlacement,
+            (state, placement) => state.SettingsWindowPlacement = placement);
+        _stateController.ApplyInitialWindowState();
     }
 
     public void CloseForShutdown()
-    {
-        _allowClose = true;
-        Close();
-    }
+        => _lifecycleController.CloseForShutdown();
 
     private async void SectionButton_OnClick(object? sender, RoutedEventArgs e)
     {
@@ -48,38 +52,17 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private async void ApplyButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is not null)
-        {
-            await ViewModel.ApplyAsync();
-        }
-    }
-
     private async void SaveButton_OnClick(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is not null)
         {
-            await ViewModel.SaveAsync();
+            if (!await ViewModel.SaveAsync())
+            {
+                return;
+            }
         }
 
         Close();
-    }
-
-    private async void InstallOrRepairCliButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is not null)
-        {
-            await ViewModel.InstallOrRepairCliAsync();
-        }
-    }
-
-    private async void RefreshCliStatusButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is not null)
-        {
-            await ViewModel.RefreshCliStatusAsync();
-        }
     }
 
     private async void CopyCliPathInstructionsButton_OnClick(object? sender, RoutedEventArgs e)
@@ -97,22 +80,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private async void UninstallCliButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is not null)
-        {
-            await ViewModel.UninstallCliAsync();
-        }
-    }
-
-    private async void CheckForUpdatesButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel is not null)
-        {
-            await ViewModel.CheckForAppUpdatesAsync();
-        }
-    }
-
     private void CancelButton_OnClick(object? sender, RoutedEventArgs e)
     {
         Close();
@@ -120,67 +87,20 @@ public partial class SettingsWindow : Window
 
     private void SettingsSplitter_OnDragCompleted(object? sender, VectorEventArgs e)
     {
-        PersistSidebarWidth();
+        _stateController?.PersistSidebarWidth();
     }
 
     private void OnOpened(object? sender, EventArgs e)
     {
-        if (_shellState is not null)
-        {
-            SettingsContentGrid.ColumnDefinitions[0].Width = new GridLength(_shellState.SettingsSidebarWidth);
-        }
+        _stateController?.ApplySidebarWidth();
     }
 
     private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
         => WindowDragHost.BeginWindowDragOrToggleMaximize(this, e);
 
-    private void OnKeyDown(object? sender, KeyEventArgs e)
+    private void OnLifecycleClosed()
     {
-        if (e.Key == Key.Escape)
-        {
-            Close();
-        }
-    }
-
-    private void OnClosing(object? sender, WindowClosingEventArgs e)
-    {
-        if (_allowClose)
-        {
-            PersistWindowState();
-            return;
-        }
-
-        e.Cancel = true;
-        PersistWindowState();
-        Hide();
-    }
-
-    private void OnClosed(object? sender, EventArgs e)
-    {
-        PersistWindowState();
         ViewModel?.Dispose();
         DataContext = null;
-    }
-
-    private void PersistWindowState()
-    {
-        if (_shellState is null || _shellStateService is null)
-        {
-            return;
-        }
-
-        PersistSidebarWidth();
-        _shellState.SettingsWindowPlacement = ShellWindowPlacementService.Capture(this, _shellState.SettingsWindowPlacement);
-        _shellStateService.Save(_shellState);
-    }
-
-    private void PersistSidebarWidth()
-    {
-        if (_shellState is null || SettingsSidebarPane.Bounds.Width <= 0)
-        {
-            return;
-        }
-
-        _shellState.SettingsSidebarWidth = Math.Clamp(SettingsSidebarPane.Bounds.Width, 180, 900);
     }
 }

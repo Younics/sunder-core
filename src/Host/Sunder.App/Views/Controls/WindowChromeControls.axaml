@@ -8,13 +8,25 @@
               Spacing="8"
               VerticalAlignment="Center">
     <Button Classes="window-action-button"
-            Content="−"
-            Click="MinimizeButton_OnClick" />
+            Click="MinimizeButton_OnClick">
+      <Path Width="12"
+            Height="12"
+            Classes="icon-stroke"
+            Data="{StaticResource Sunder.Icon.Minimize}" />
+    </Button>
     <Button Classes="window-action-button"
-            Content="□"
-            Click="ToggleFullScreenButton_OnClick" />
+            Click="ToggleFullScreenButton_OnClick">
+      <Path Width="12"
+            Height="12"
+            Classes="icon-stroke"
+            Data="{StaticResource Sunder.Icon.Maximize}" />
+    </Button>
     <Button Classes="window-action-button close-button"
-            Content="✕"
-            Click="CloseButton_OnClick" />
+            Click="CloseButton_OnClick">
+      <Path Width="12"
+            Height="12"
+            Classes="icon-stroke"
+            Data="{StaticResource Sunder.Icon.Close}" />
+    </Button>
   </StackPanel>
 </UserControl>

@@ -1,14 +1,7 @@
 using System.Reflection;
-using System.Runtime.Loader;
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Threading;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Services;
 
@@ -38,25 +31,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
         sessionFolder: null,
         backgroundProcessQueue: null);
 
-    private readonly AppPackageViewRegistry _viewRegistry;
-    private readonly Dictionary<Assembly, string> _assemblyPackageMap = [];
-    private readonly Dictionary<AssemblyLoadContext, string> _loadContextPackageMap = [];
     private readonly AppPackageBackgroundServiceCoordinator _backgroundServices;
-    private readonly HashSet<string> _disabledPackageIds;
-    private readonly List<object> _ownedDisposables;
-    private readonly List<AppPackageLoadContext> _loadContexts;
-    private readonly PackageRuntimeFaultReporter? _faultReporter;
-    private readonly AppPackageSourcePreparer _sourcePreparer;
-    private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
-    private readonly AppPackageExtensionCatalog _extensionCatalog;
-    private readonly IPackageShellViewService? _shellViewService;
-    private readonly IPackageSettingsNavigationService? _settingsNavigationService;
-    private readonly NotificationCenterService? _notificationCenter;
-    private readonly BackgroundProcessQueueService _backgroundProcessQueue;
-    private readonly Dictionary<string, AppLoadedPackageHandle> _loadedPackages = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _lifecycleSemaphore = new(1, 1);
-    private readonly object _stateLock = new();
-    private bool _disposed;
+    private readonly AppPackageHostComposition _composition;
+    private readonly AppPackageHostState _state;
+    private readonly AppPackageLifecycleGate _lifecycleGate = new(nameof(PackageViewHostService));
 
     internal PackageViewHostService(
         AppPackageViewRegistry viewRegistry,
@@ -73,22 +51,34 @@ public sealed class PackageViewHostService : IAsyncDisposable
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null)
     {
-        _viewRegistry = viewRegistry;
         _backgroundServices = backgroundServices;
-        _disabledPackageIds = disabledPackageIds;
-        _ownedDisposables = ownedDisposables.ToList();
-        _loadContexts = loadContexts.ToList();
-        _faultReporter = faultReporter;
-        _sourcePreparer = new AppPackageSourcePreparer(sessionFolder);
-        _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
-        _extensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
-        _shellViewService = shellViewService;
-        _settingsNavigationService = settingsNavigationService;
-        _notificationCenter = notificationCenter;
-        _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
+        _state = new AppPackageHostState(disabledPackageIds, ownedDisposables, loadContexts);
+        _composition = new AppPackageHostComposition(
+            this,
+            viewRegistry,
+            _backgroundServices,
+            _state,
+            faultReporter,
+            sessionFolder,
+            sharedAssemblyRegistry,
+            extensionCatalog,
+            shellViewService,
+            settingsNavigationService,
+            notificationCenter,
+            backgroundProcessQueue);
     }
 
-    public event EventHandler<PackageViewHostFaultEventArgs>? PackageFaulted;
+    public event EventHandler<PackageViewHostFaultEventArgs>? PackageFaulted
+    {
+        add => _composition.FaultNotifier.PackageFaulted += value;
+        remove => _composition.FaultNotifier.PackageFaulted -= value;
+    }
+
+    internal int LoadedPackageCount => _state.LoadedPackageCount;
+
+    internal int OwnedDisposableCount => _state.OwnedDisposableCount;
+
+    internal int LoadContextCount => _state.LoadContextCount;
 
     public static async Task<PackageViewHostService> CreateForPackagesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -128,85 +118,20 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await _lifecycleSemaphore.WaitAsync(cancellationToken);
-        try
-        {
-            var forceReloadPackages = forceReloadPackageIds is null
-                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                : new HashSet<string>(forceReloadPackageIds, StringComparer.OrdinalIgnoreCase);
-            var activePackagesById = activePackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
-            var sourcesByPackageId = packageSources
-                .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-
-            string[] loadedPackageIds;
-            lock (_stateLock)
-            {
-                loadedPackageIds = _loadedPackages.Keys.Where(packageId => !activePackagesById.ContainsKey(packageId)).ToArray();
-            }
-
-            foreach (var loadedPackageId in loadedPackageIds)
-            {
-                await UnloadPackageAsync(loadedPackageId, cancellationToken);
-            }
-
-            foreach (var activePackage in activePackages)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!sourcesByPackageId.TryGetValue(activePackage.PackageId, out var source))
-                {
-                    await DisablePackageAsync(
-                        activePackage.PackageId,
-                        "Runtime did not provide a loadable app-side package source.",
-                        PackageFailureOrigin.AppActivation,
-                        cancellationToken: cancellationToken);
-                    continue;
-                }
-
-                var forceReload = forceReloadPackages.Contains(activePackage.PackageId);
-                var isSameLoadedPackage = false;
-                var isLoadedPackage = false;
-                lock (_stateLock)
-                {
-                    if (_loadedPackages.TryGetValue(activePackage.PackageId, out var loadedPackage) && loadedPackage is not null)
-                    {
-                        isLoadedPackage = true;
-                        isSameLoadedPackage = IsSameLoadedPackage(loadedPackage, activePackage, source);
-                    }
-                }
-
-                if (!forceReload && isSameLoadedPackage)
-                {
-                    continue;
-                }
-
-                if (isLoadedPackage)
-                {
-                    await UnloadPackageAsync(activePackage.PackageId, cancellationToken);
-                }
-
-                await LoadPackageAsync(activePackage, source, cancellationToken);
-            }
-        }
-        finally
-        {
-            _lifecycleSemaphore.Release();
-        }
+        using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken);
+        await _composition.ApplyPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
     }
 
     public IReadOnlyList<ActivePackageDescriptor> FilterEnabledPackages(IReadOnlyList<ActivePackageDescriptor> activePackages)
     {
-        lock (_stateLock)
-        {
-            return activePackages
-                .Where(package => !_disabledPackageIds.Contains(package.PackageId))
-                .ToArray();
-        }
+        ThrowIfDisposed();
+        return _state.FilterEnabledPackages(activePackages);
     }
 
     public bool TryHandleUnhandledException(Exception exception)
     {
-        var packageId = ResolvePackageId(exception);
+        ThrowIfDisposed();
+        var packageId = _composition.AssemblyTracker.ResolvePackageId(exception);
         if (packageId is null)
         {
             return false;
@@ -221,16 +146,15 @@ public sealed class PackageViewHostService : IAsyncDisposable
     }
 
     public Control? GetOrCreateView(string viewId)
-        => _viewRegistry.GetOrCreateView(
-            viewId,
-            IsPackageDisabled,
-            (packageId, message, exception) => DisablePackage(packageId, message, PackageFailureOrigin.AppHostedView, exception));
+    {
+        ThrowIfDisposed();
+        return _composition.ViewFacade.GetOrCreateView(viewId);
+    }
 
     public Control? ReloadView(string viewId)
     {
         ThrowIfDisposed();
-        _viewRegistry.RemoveCachedView(viewId);
-        return GetOrCreateView(viewId);
+        return _composition.ViewFacade.ReloadView(viewId);
     }
 
     public async ValueTask NotifyViewNavigatedAsync(
@@ -239,95 +163,61 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var view = GetOrCreateView(viewId);
-        if (view is null)
-        {
-            return;
-        }
-
-        var context = new PackageViewNavigationContext(viewId, parameters ?? new Dictionary<string, string?>());
-        if (view is IPackageViewNavigationTarget viewTarget)
-        {
-            await viewTarget.OnNavigatedToAsync(context, cancellationToken);
-            return;
-        }
-
-        if (view.DataContext is IPackageViewNavigationTarget dataContextTarget)
-        {
-            await dataContextTarget.OnNavigatedToAsync(context, cancellationToken);
-        }
+        ThrowIfDisposed();
+        await _composition.ViewFacade.NotifyViewNavigatedAsync(viewId, parameters, cancellationToken);
     }
 
     public bool HasSettingsView(string packageId)
-        => _viewRegistry.HasSettingsView(packageId);
+    {
+        ThrowIfDisposed();
+        return _composition.ViewFacade.HasSettingsView(packageId);
+    }
 
     public IReadOnlyList<PackageSettingsViewDescriptor> ListSettingsViewPackages()
-        => _viewRegistry.ListSettingsViewPackages(IsPackageDisabled);
+    {
+        ThrowIfDisposed();
+        return _composition.ViewFacade.ListSettingsViewPackages();
+    }
 
     public Control? GetOrCreateSettingsView(string packageId)
-        => _viewRegistry.GetOrCreateSettingsView(
-            packageId,
-            IsPackageDisabled,
-            (failedPackageId, message, exception) => DisablePackage(failedPackageId, message, PackageFailureOrigin.AppHostedView, exception));
+    {
+        ThrowIfDisposed();
+        return _composition.ViewFacade.GetOrCreateSettingsView(packageId);
+    }
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        using var lifecycle = await _lifecycleGate.TryEnterDisposeAsync();
+        if (lifecycle is null)
         {
             return;
         }
 
-        _disposed = true;
-        string[] packageIds;
-        lock (_stateLock)
-        {
-            packageIds = _loadedPackages.Keys.ToArray();
-        }
+        var packageIds = _state.SnapshotLoadedPackageIds();
 
         foreach (var packageId in packageIds)
         {
-            await UnloadPackageAsync(packageId);
+            await _composition.UnloadPackageAsync(packageId);
         }
 
         await _backgroundServices.StopAllAsync();
-        await DisposeLegacyOwnedInstancesAsync();
+        await _composition.DisposeLegacyOwnedInstancesAsync();
         // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
         GC.SuppressFinalize(this);
     }
 
     internal static async Task DisposeOwnedInstanceAsync(object ownedInstance)
-    {
-        if (ownedInstance is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-            return;
-        }
-
-        if (ownedInstance is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
-    }
+        => await AppPackageResourceDisposer.DisposeOwnedInstanceAsync(ownedInstance);
 
     internal void RegisterPackageAssembly(string packageId, Assembly assembly)
-    {
-        lock (_stateLock)
-        {
-            _assemblyPackageMap[assembly] = packageId;
-            var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
-            if (loadContext is not null)
-            {
-                _loadContextPackageMap[loadContext] = packageId;
-            }
-        }
-    }
+        => _composition.RegisterPackageAssembly(packageId, assembly);
 
     internal void DisablePackage(
         string packageId,
         string message,
         PackageFailureOrigin origin,
         Exception? exception = null)
-        => _ = DisablePackageAsync(packageId, message, origin, exception);
+        => _composition.DisablePackage(packageId, message, origin, exception);
 
     internal async Task DisablePackageAsync(
         string packageId,
@@ -336,372 +226,11 @@ public sealed class PackageViewHostService : IAsyncDisposable
         Exception? exception = null,
         CancellationToken cancellationToken = default)
     {
-        if (!TryMarkPackageDisabled(packageId, message, origin, exception))
-        {
-            return;
-        }
-
-        await StopBackgroundServicesAsync(packageId, cancellationToken);
+        ThrowIfDisposed();
+        using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken);
+        await _composition.DisablePackageAsync(packageId, message, origin, exception, cancellationToken);
     }
-
-    private async Task LoadPackageAsync(
-        ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var preparedSource = await Task.Run(
-            () => _sourcePreparer.Prepare(source),
-            cancellationToken);
-        if (preparedSource is null)
-        {
-            await DisablePackageAsync(
-                package.PackageId,
-                $"Failed to prepare app-side package source '{source.Folder}'.",
-                PackageFailureOrigin.AppActivation,
-                cancellationToken: cancellationToken);
-            return;
-        }
-
-        if (!string.Equals(preparedSource.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase))
-        {
-            AppPackageSourcePreparer.TryDeleteDirectory(preparedSource.Folder);
-            await DisablePackageAsync(
-                package.PackageId,
-                $"Runtime package source '{source.Folder}' resolved to package '{preparedSource.PackageId}'.",
-                PackageFailureOrigin.AppActivation,
-                cancellationToken: cancellationToken);
-            return;
-        }
-
-        await ActivatePreparedPackageAsync(package, source, preparedSource, cancellationToken);
-    }
-
-    private async Task ActivatePreparedPackageAsync(
-        ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
-        AppPreparedPackageSource preparedSource,
-        CancellationToken cancellationToken)
-    {
-        ServiceProvider? serviceProvider = null;
-        AppPackageLoadContext? loadContext = null;
-        var packageActivated = false;
-        try
-        {
-            var manifest = AppPackageManifest.Load(Path.Combine(preparedSource.Folder, "sunder-package.json"));
-            if (manifest?.EntryAssembly is null)
-            {
-                throw new InvalidOperationException("App-side package manifest is missing entryAssembly.");
-            }
-
-            var packageInfo = new AppLoadedPackageInfo(package, preparedSource.Folder, manifest);
-            _sharedAssemblyRegistry.AddProbeDirectories([packageInfo.LibraryFolder]);
-
-            loadContext = new AppPackageLoadContext(package.PackageId, packageInfo.EntryAssemblyPath, _sharedAssemblyRegistry, RegisterPackageAssembly);
-            lock (_stateLock)
-            {
-                _loadContexts.Add(loadContext);
-            }
-            var entryAssembly = loadContext.LoadPackageEntryAssembly();
-            var moduleType = AppPackageModuleResolver.Resolve(entryAssembly, out var moduleResolutionError);
-            if (moduleType is null)
-            {
-                throw new InvalidOperationException(moduleResolutionError);
-            }
-
-            if (Activator.CreateInstance(moduleType) is not ISunderPackageModule module)
-            {
-                throw new InvalidOperationException($"Package module '{moduleType.FullName}' does not implement ISunderPackageModule.");
-            }
-
-            var packageContext = new AppPackageContext(package.PackageId, package.Version, packageInfo.Folder);
-            var services = new ServiceCollection();
-            services.AddSingleton<IPackageContext>(packageContext);
-            services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
-            services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
-            services.AddSingleton<IPackageExtensionCatalog>(_extensionCatalog);
-            services.AddSingleton<IPackageShellViewService>(_shellViewService ?? DisabledPackageShellViewService.Instance);
-            services.AddSingleton<IPackageSettingsNavigationService>(_settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
-            services.AddSingleton<IBackgroundProcessQueue>(_ =>
-            {
-                var packageBackgroundProcessQueue = new PackageScopedBackgroundProcessQueue(package.PackageId, package.DisplayName, _backgroundProcessQueue);
-                packageBackgroundProcessQueue.Start();
-                return packageBackgroundProcessQueue;
-            });
-            services.AddSingleton<IPackageNotificationService>(_notificationCenter is null
-                ? NullPackageNotificationService.Instance
-                : new AppPackageNotificationService(_notificationCenter, package.PackageId, package.DisplayName));
-            module.ConfigureServices(services, packageContext);
-            serviceProvider = services.BuildServiceProvider();
-            lock (_stateLock)
-            {
-                _ownedDisposables.Add(serviceProvider);
-            }
-
-            _viewRegistry.SetSettingsViewPackage(new PackageSettingsViewDescriptor(
-                package.PackageId,
-                package.DisplayName,
-                $"Configure {package.DisplayName}."));
-            var registry = new AppPackageContributionRegistry(serviceProvider, _viewRegistry, _backgroundServices, _extensionCatalog, package.PackageId);
-            module.RegisterContributions(registry, serviceProvider);
-            await _backgroundServices.StartAsync(package.PackageId, cancellationToken);
-
-            lock (_stateLock)
-            {
-                _disabledPackageIds.Remove(package.PackageId);
-                _loadedPackages[package.PackageId] = new AppLoadedPackageHandle(package, source, preparedSource.Folder, serviceProvider, loadContext);
-            }
-            packageActivated = true;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            await DisablePackageAsync(
-                package.PackageId,
-                $"Failed to activate package views: {ex.Message}",
-                PackageFailureOrigin.AppActivation,
-                ex,
-                CancellationToken.None);
-        }
-        finally
-        {
-            if (!packageActivated)
-            {
-                if (serviceProvider is not null)
-                {
-                    lock (_stateLock)
-                    {
-                        _ownedDisposables.Remove(serviceProvider);
-                    }
-                    await TryDisposeOwnedInstanceAsync(serviceProvider, $"Failed to dispose app-side services for package '{package.PackageId}'.");
-                }
-
-                if (loadContext is not null)
-                {
-                    lock (_stateLock)
-                    {
-                        _loadContexts.Remove(loadContext);
-                    }
-                    TryUnloadLoadContext(loadContext, package.PackageId);
-                }
-            }
-        }
-    }
-
-    private async Task UnloadPackageAsync(string packageId, CancellationToken cancellationToken = default)
-    {
-        AppLoadedPackageHandle? handle;
-        lock (_stateLock)
-        {
-            if (!_loadedPackages.Remove(packageId, out handle))
-            {
-                return;
-            }
-
-            _disabledPackageIds.Remove(packageId);
-        }
-
-        if (handle is null)
-        {
-            return;
-        }
-
-        await UnregisterPackageViewsAsync(packageId, cancellationToken);
-        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
-        await StopBackgroundServicesAsync(packageId, cancellationToken);
-
-        lock (_stateLock)
-        {
-            _ownedDisposables.Remove(handle.ServiceProvider);
-        }
-        await Task.Run(
-            async () => await TryDisposeOwnedInstanceAsync(handle.ServiceProvider, $"Failed to dispose app-side services for package '{packageId}'."),
-            cancellationToken);
-        lock (_stateLock)
-        {
-            _loadContexts.Remove(handle.LoadContext);
-        }
-        RemovePackageAssemblyMappings(packageId);
-        TryUnloadLoadContext(handle.LoadContext, packageId);
-    }
-
-    private bool TryMarkPackageDisabled(
-        string packageId,
-        string message,
-        PackageFailureOrigin origin,
-        Exception? exception)
-    {
-        lock (_stateLock)
-        {
-            if (!_disabledPackageIds.Add(packageId))
-            {
-                return false;
-            }
-        }
-
-        AppSessionLog.WriteError($"Disabled package '{packageId}' for the current app session. {message}", exception);
-        _faultReporter?.ReportPackageFault(packageId, origin, message);
-
-        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
-        RemoveCachedPackageViews(packageId);
-
-        var args = new PackageViewHostFaultEventArgs(packageId, message, origin);
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            PackageFaulted?.Invoke(this, args);
-            return true;
-        }
-
-        Dispatcher.UIThread.Post(() => PackageFaulted?.Invoke(this, args));
-        return true;
-    }
-
-    private async Task UnregisterPackageViewsAsync(string packageId, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
-        {
-            _viewRegistry.UnregisterPackage(packageId);
-            return;
-        }
-
-        await Dispatcher.UIThread.InvokeAsync(
-            () => _viewRegistry.UnregisterPackage(packageId),
-            DispatcherPriority.Normal);
-    }
-
-    private void RemoveCachedPackageViews(string packageId)
-    {
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
-        {
-            _viewRegistry.RemoveCachedViews(packageId);
-            return;
-        }
-
-        Dispatcher.UIThread.Post(() => _viewRegistry.RemoveCachedViews(packageId));
-    }
-
-    private async Task DisposeLegacyOwnedInstancesAsync()
-    {
-        object[] ownedDisposables;
-        AppPackageLoadContext[] loadContexts;
-        lock (_stateLock)
-        {
-            ownedDisposables = _ownedDisposables.ToArray();
-            loadContexts = _loadContexts.ToArray();
-        }
-
-        foreach (var disposable in ownedDisposables)
-        {
-            await Task.Run(
-                async () => await TryDisposeOwnedInstanceAsync(disposable, "Failed to dispose an app-side package service container."));
-        }
-
-        foreach (var loadContext in loadContexts)
-        {
-            TryUnloadLoadContext(loadContext, packageId: null);
-        }
-    }
-
-    private bool IsPackageDisabled(string packageId)
-    {
-        lock (_stateLock)
-        {
-            return _disabledPackageIds.Contains(packageId);
-        }
-    }
-
-    private Task StopBackgroundServicesAsync(string packageId, CancellationToken cancellationToken)
-        => Task.Run(
-            async () => await _backgroundServices.StopAsync(packageId, cancellationToken),
-            cancellationToken);
-
-    private static async Task TryDisposeOwnedInstanceAsync(object ownedInstance, string message)
-    {
-        try
-        {
-            await DisposeOwnedInstanceAsync(ownedInstance);
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError(message, ex);
-        }
-    }
-
-    private static void TryUnloadLoadContext(AppPackageLoadContext loadContext, string? packageId)
-    {
-        try
-        {
-            loadContext.Unload();
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError(packageId is null
-                ? "Failed to unload an app-side package load context."
-                : $"Failed to unload app-side package load context for '{packageId}'.", ex);
-        }
-    }
-
-    private void RemovePackageAssemblyMappings(string packageId)
-    {
-        lock (_stateLock)
-        {
-            foreach (var assembly in _assemblyPackageMap.Where(entry => string.Equals(entry.Value, packageId, StringComparison.OrdinalIgnoreCase)).Select(entry => entry.Key).ToArray())
-            {
-                _assemblyPackageMap.Remove(assembly);
-            }
-
-            foreach (var loadContext in _loadContextPackageMap.Where(entry => string.Equals(entry.Value, packageId, StringComparison.OrdinalIgnoreCase)).Select(entry => entry.Key).ToArray())
-            {
-                _loadContextPackageMap.Remove(loadContext);
-            }
-        }
-    }
-
-    private string? ResolvePackageId(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            var assembly = current.TargetSite?.DeclaringType?.Assembly;
-            if (assembly is null)
-            {
-                continue;
-            }
-
-            lock (_stateLock)
-            {
-                if (_assemblyPackageMap.TryGetValue(assembly, out var packageId))
-                {
-                    return packageId;
-                }
-
-                var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
-                if (loadContext is not null && _loadContextPackageMap.TryGetValue(loadContext, out packageId))
-                {
-                    return packageId;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsSameLoadedPackage(
-        AppLoadedPackageHandle loadedPackage,
-        ActivePackageDescriptor activePackage,
-        PackageSourceDescriptor source)
-        => string.Equals(loadedPackage.Package.Version, activePackage.Version, StringComparison.OrdinalIgnoreCase)
-           && loadedPackage.Source.Kind == source.Kind
-           && string.Equals(loadedPackage.Source.Folder, source.Folder, StringComparison.OrdinalIgnoreCase);
 
     private void ThrowIfDisposed()
-    {
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(nameof(PackageViewHostService));
-        }
-    }
+        => _lifecycleGate.ThrowIfDisposed();
 }

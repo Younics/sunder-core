@@ -9,15 +9,17 @@ namespace Sunder.App.Services;
 public sealed class RegistryApiClient : IRegistryApiClient
 {
     private readonly HttpClient _httpClient;
+    private readonly bool _disposeHttpClient;
 
-    public RegistryApiClient(Uri registryUrl)
+    public RegistryApiClient(Uri registryUrl, HttpClient? httpClient = null)
     {
         RegistryUrl = RegistryUrlHelper.Normalize(registryUrl);
-        _httpClient = new HttpClient
+        _httpClient = httpClient ?? new HttpClient
         {
             BaseAddress = RegistryUrl,
             Timeout = TimeSpan.FromSeconds(30),
         };
+        _disposeHttpClient = httpClient is null;
     }
 
     public Uri RegistryUrl { get; }
@@ -34,14 +36,14 @@ public sealed class RegistryApiClient : IRegistryApiClient
             path += $"&query={Uri.EscapeDataString(query.Trim())}";
         }
 
-        return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryPackageSummary>>(path, cancellationToken) ?? [];
+        return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryPackageSummary>>(CreateRequestUri(path), cancellationToken) ?? [];
     }
 
     public Task<RegistryPackageDetails?> GetPackageAsync(
         string packageId,
         CancellationToken cancellationToken = default)
         => GetFromJsonOrNullAsync<RegistryPackageDetails>(
-            $"api/packages/{Uri.EscapeDataString(packageId)}",
+            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}"),
             cancellationToken);
 
     public Task<RegistryPackageVersionDetails?> GetVersionAsync(
@@ -49,14 +51,14 @@ public sealed class RegistryApiClient : IRegistryApiClient
         string version,
         CancellationToken cancellationToken = default)
         => GetFromJsonOrNullAsync<RegistryPackageVersionDetails>(
-            $"api/packages/{Uri.EscapeDataString(packageId)}/versions/{Uri.EscapeDataString(version)}",
+            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/versions/{Uri.EscapeDataString(version)}"),
             cancellationToken);
 
     public async Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(
         RegistryResolveUpdatesRequest request,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.PostAsJsonAsync("api/packages/resolve-updates", request, cancellationToken);
+        using var response = await _httpClient.PostAsJsonAsync(CreateRequestUri("api/packages/resolve-updates"), request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<RegistryResolveUpdatesResponse>(cancellationToken: cancellationToken)
             ?? new RegistryResolveUpdatesResponse([]);
@@ -66,7 +68,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
         RegistryResolveInstallPlanRequest request,
         CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.PostAsJsonAsync("api/packages/resolve-install-plan", request, cancellationToken);
+        using var response = await _httpClient.PostAsJsonAsync(CreateRequestUri("api/packages/resolve-install-plan"), request, cancellationToken);
         RegistryResolveInstallPlanResponse? result = null;
         try
         {
@@ -95,7 +97,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
 
-        using var response = await _httpClient.GetAsync(artifact.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await _httpClient.GetAsync(CreateRequestUri(artifact.DownloadUrl), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
@@ -123,9 +125,14 @@ public sealed class RegistryApiClient : IRegistryApiClient
         }
     }
 
-    private async Task<T?> GetFromJsonOrNullAsync<T>(string path, CancellationToken cancellationToken)
+    private Uri CreateRequestUri(string path)
+        => Uri.TryCreate(path, UriKind.Absolute, out var absoluteUri)
+            ? absoluteUri
+            : new Uri(RegistryUrl, path);
+
+    private async Task<T?> GetFromJsonOrNullAsync<T>(Uri uri, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(path, cancellationToken);
+        using var response = await _httpClient.GetAsync(uri, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return default;
@@ -137,6 +144,9 @@ public sealed class RegistryApiClient : IRegistryApiClient
 
     public void Dispose()
     {
-        _httpClient.Dispose();
+        if (_disposeHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 }

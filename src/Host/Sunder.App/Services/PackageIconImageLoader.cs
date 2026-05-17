@@ -12,32 +12,25 @@ public static class PackageIconImageLoader
 
     public static async Task<PackageIconImageLoadResult> LoadAsync(Uri uri, CancellationToken cancellationToken = default)
     {
-        var semaphoreAcquired = false;
         try
         {
-            await ImageLoadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            semaphoreAcquired = true;
-            using var response = await ImageHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-
-            if (response.Content.Headers.ContentLength > MaxIconBytes)
+            var download = await BoundedImageContentLoader
+                .LoadAsync(ImageHttpClient, ImageLoadSemaphore, uri, MaxIconBytes, cancellationToken)
+                .ConfigureAwait(false);
+            if (download.Error is not null)
             {
-                var error = $"Package icon '{uri}' exceeds the {MaxIconBytes} byte limit.";
-                AppSessionLog.WriteError(error);
-                return PackageIconImageLoadResult.Failed(error);
+                AppSessionLog.WriteError(download.Error);
+                return PackageIconImageLoadResult.Failed(download.Error);
             }
 
-            var format = ResolveIconFormat(response.Content.Headers.ContentType?.MediaType);
+            using var memory = download.Content ?? throw new InvalidOperationException("Image download completed without content.");
+            var format = ResolveIconFormat(download.ContentType);
             if (format == PackageIconImageFormat.Unsupported)
             {
-                var error = $"Unsupported package icon content type '{response.Content.Headers.ContentType?.MediaType ?? "unknown"}' for '{uri}'.";
+                var error = $"Unsupported package icon content type '{download.ContentType ?? "unknown"}' for '{uri}'.";
                 AppSessionLog.WriteError(error);
                 return PackageIconImageLoadResult.Failed(error);
             }
-
-            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var memory = await ReadBoundedContentAsync(source, MaxIconBytes, cancellationToken).ConfigureAwait(false);
-            memory.Position = 0;
 
             if (format == PackageIconImageFormat.Svg)
             {
@@ -49,45 +42,15 @@ public static class PackageIconImageLoader
 
             return PackageIconImageLoadResult.Success(new Bitmap(memory));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             var error = $"Failed to load package icon '{uri}': {ex.Message}";
             AppSessionLog.WriteError(error, ex);
             return PackageIconImageLoadResult.Failed(error);
-        }
-        finally
-        {
-            if (semaphoreAcquired)
-            {
-                ImageLoadSemaphore.Release();
-            }
-        }
-    }
-
-    private static async Task<MemoryStream> ReadBoundedContentAsync(
-        Stream source,
-        long maxBytes,
-        CancellationToken cancellationToken)
-    {
-        var memory = new MemoryStream();
-        var buffer = new byte[81920];
-        long totalBytes = 0;
-        while (true)
-        {
-            var bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (bytesRead == 0)
-            {
-                return memory;
-            }
-
-            totalBytes += bytesRead;
-            if (totalBytes > maxBytes)
-            {
-                memory.Dispose();
-                throw new InvalidOperationException($"Image content exceeds the {maxBytes} byte limit.");
-            }
-
-            memory.Write(buffer, 0, bytesRead);
         }
     }
 
