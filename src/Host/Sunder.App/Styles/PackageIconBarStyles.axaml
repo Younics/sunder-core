@@ -94,14 +94,6 @@
     <Setter Property="Opacity" Value="0.95" />
   </Style>
 
-  <Style Selector="Border.package-bar-item-host.vertical.drop-before">
-    <Setter Property="Margin" Value="0,46,0,0" />
-  </Style>
-
-  <Style Selector="Border.package-bar-item-host.vertical.drop-after">
-    <Setter Property="Margin" Value="0,0,0,46" />
-  </Style>
-
   <Style Selector="Button.package-bar-button">
     <Setter Property="Width" Value="38" />
     <Setter Property="Height" Value="38" />

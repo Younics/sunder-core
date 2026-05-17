@@ -125,10 +125,7 @@ internal static class ShellHotbarStateMutator
         int? targetIndex)
     {
         var normalizedIndex = targetIndex.HasValue
-            ? Math.Clamp(
-                targetIndex.Value > originalIndex ? targetIndex.Value - 1 : targetIndex.Value,
-                0,
-                sourceOrder.Count)
+            ? Math.Clamp(targetIndex.Value, 0, sourceOrder.Count)
             : sourceOrder.Count;
 
         if (normalizedIndex == originalIndex)

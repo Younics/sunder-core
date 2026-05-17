@@ -317,7 +317,7 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
-    public async Task MovePackageView_WhenMovedDownWithinSameBar_NormalizesTargetIndexAfterRemoval()
+    public async Task MovePackageView_WhenMovedForwardWithinSameBar_UsesTargetIndexAfterRemoval()
     {
         using var harness = CreateHarness();
         Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
@@ -326,7 +326,21 @@ public sealed class MainWindowViewModelShellViewTests
         harness.ViewModel.MovePackageView("agent.chat", RailPlacement.Middle, 2);
 
         Assert.Equal(
-            ["agent.workspaces", "agent.chat", "agent.subsessions"],
+            ["agent.workspaces", "agent.subsessions", "agent.chat"],
+            GetMiddleHotbarOrder(harness.ViewModel));
+    }
+
+    [Fact]
+    public async Task MovePackageView_WhenDroppedIntoSameSlotWithinSameBar_DoesNotReorder()
+    {
+        using var harness = CreateHarness();
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.Middle, 2));
+
+        harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.Middle, 1);
+
+        Assert.Equal(
+            ["agent.chat", "agent.workspaces", "agent.subsessions"],
             GetMiddleHotbarOrder(harness.ViewModel));
     }
 
@@ -342,6 +356,20 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.Equal(
             ["agent.chat", "agent.subsessions", "agent.workspaces"],
             GetMiddleHotbarOrder(harness.ViewModel));
+    }
+
+    [Fact]
+    public async Task MovePackageView_WhenMovedForwardWithinVerticalBar_UsesTargetIndexAfterRemoval()
+    {
+        using var harness = CreateHarness();
+        harness.ViewModel.MovePackageView("agent.chat", RailPlacement.RightTop, 0);
+        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.RightTop, 2));
+
+        harness.ViewModel.MovePackageView("agent.chat", RailPlacement.RightTop, 2);
+
+        Assert.Equal(
+            ["agent.workspaces", "agent.subsessions", "agent.chat"],
+            GetRightTopHotbarOrder(harness.ViewModel));
     }
 
     [Fact]
@@ -616,6 +644,13 @@ public sealed class MainWindowViewModelShellViewTests
     private static string[] GetMiddleHotbarOrder(MainWindowViewModel viewModel)
         => viewModel.ListHotbarViews()
             .Where(view => view.Placement == PackageHotbarPlacement.Middle)
+            .OrderBy(view => view.Order)
+            .Select(view => view.ViewId)
+            .ToArray();
+
+    private static string[] GetRightTopHotbarOrder(MainWindowViewModel viewModel)
+        => viewModel.ListHotbarViews()
+            .Where(view => view.Placement == PackageHotbarPlacement.RightTop)
             .OrderBy(view => view.Order)
             .Select(view => view.ViewId)
             .ToArray();

@@ -6,7 +6,6 @@ internal static class PackageIconBarLayoutMetrics
     public const double DragThreshold = 6;
     public const double ItemExtent = 38;
     public const double ItemSpacing = 10;
-    public const double PreviewGapSize = 46;
 
     public static int CalculateVisibleCapacity(double availableLength)
         => Math.Max(1, (int)Math.Floor((availableLength + ItemSpacing) / (ItemExtent + ItemSpacing)));

@@ -11,6 +11,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     private readonly Func<string, ValueTask<bool>> _onReload;
     private readonly Func<string, bool> _onRemove;
     private int _visibleCapacity = int.MaxValue;
+    private string? _dragLayoutViewId;
     private string? _previewDraggedViewId;
     private string? _previewGlyph;
     private IImage? _previewIconImage;
@@ -83,6 +84,28 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     public bool RemoveItem(string viewId)
         => _onRemove(viewId);
 
+    public void BeginDragLayout(string viewId)
+    {
+        if (string.Equals(_dragLayoutViewId, viewId, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _dragLayoutViewId = viewId;
+        RefreshVisibleItems();
+    }
+
+    public void EndDragLayout()
+    {
+        if (_dragLayoutViewId is null)
+        {
+            return;
+        }
+
+        _dragLayoutViewId = null;
+        RefreshVisibleItems();
+    }
+
     public void ShowPreviewItem(ShellItemViewModel? draggedItem, int? insertIndex)
     {
         if (draggedItem is null)
@@ -125,47 +148,53 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
         var itemCount = Items.Count;
         if (itemCount == 0)
         {
-            ReplaceCollection(VisibleItems, BuildVisibleItems([]));
-            ReplaceCollection(OverflowItems, []);
+            ReplaceVisibleAndOverflow([], []);
             OnPropertyChanged(nameof(HasOverflow));
             return;
         }
 
         if (_visibleCapacity <= 0)
         {
-            ReplaceCollection(VisibleItems, BuildVisibleItems([]));
-            ReplaceCollection(OverflowItems, Items);
+            ReplaceVisibleAndOverflow([], Items);
             OnPropertyChanged(nameof(HasOverflow));
             return;
         }
 
         if (itemCount <= _visibleCapacity)
         {
-            ReplaceCollection(VisibleItems, BuildVisibleItems(Items));
-            ReplaceCollection(OverflowItems, []);
+            ReplaceVisibleAndOverflow(Items, []);
             OnPropertyChanged(nameof(HasOverflow));
             return;
         }
 
         var visibleCount = Math.Max(0, _visibleCapacity - 1);
-        ReplaceCollection(VisibleItems, BuildVisibleItems(Items.Take(visibleCount)));
-        ReplaceCollection(OverflowItems, Items.Skip(visibleCount));
+        ReplaceVisibleAndOverflow(Items.Take(visibleCount), Items.Skip(visibleCount));
         OnPropertyChanged(nameof(HasOverflow));
     }
 
-    private IEnumerable<ShellItemViewModel> BuildVisibleItems(IEnumerable<ShellItemViewModel> items)
+    private void ReplaceVisibleAndOverflow(IEnumerable<ShellItemViewModel> visibleItems, IEnumerable<ShellItemViewModel> overflowItems)
     {
-        var visibleItems = items.ToList();
+        var nextVisibleItems = _dragLayoutViewId is null
+            ? visibleItems.ToList()
+            : visibleItems.Where(item => !IsDragLayoutItem(item)).ToList();
+        var nextOverflowItems = _dragLayoutViewId is null
+            ? overflowItems
+            : overflowItems.Where(item => !IsDragLayoutItem(item));
+
+        InsertPreviewItem(nextVisibleItems);
+        ReplaceCollection(VisibleItems, nextVisibleItems);
+        ReplaceCollection(OverflowItems, nextOverflowItems);
+    }
+
+    private void InsertPreviewItem(List<ShellItemViewModel> visibleItems)
+    {
         if (string.IsNullOrWhiteSpace(_previewDraggedViewId)
             || (string.IsNullOrWhiteSpace(_previewGlyph) && _previewIconImage is null))
         {
-            return visibleItems;
+            return;
         }
 
-        visibleItems = visibleItems
-            .Where(item => !string.Equals(item.Id, _previewDraggedViewId, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
+        visibleItems.RemoveAll(item => string.Equals(item.Id, _previewDraggedViewId, StringComparison.OrdinalIgnoreCase));
         var normalizedIndex = _previewInsertIndex.HasValue
             ? Math.Clamp(_previewInsertIndex.Value, 0, visibleItems.Count)
             : visibleItems.Count;
@@ -181,8 +210,10 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
             isDragPreview: true,
             iconImage: _previewIconImage,
             ownsIconImage: false));
-        return visibleItems;
     }
+
+    private bool IsDragLayoutItem(ShellItemViewModel item)
+        => string.Equals(item.Id, _dragLayoutViewId, StringComparison.OrdinalIgnoreCase);
 
     private static void ReplaceCollection<T>(ObservableCollection<T> target, IEnumerable<T> items)
     {

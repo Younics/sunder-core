@@ -14,13 +14,10 @@ internal sealed class PackageIconBarDragController(
 {
     private Point? _dragStartPoint;
     private ShellItemViewModel? _pendingDragItem;
-    private Border? _pressedHost;
     private ShellItemViewModel? _draggedItem;
     private string? _draggedViewId;
     private PackageIconBarDragController? _targetController;
-    private Border? _previewAnchorHost;
     private int? _targetIndex;
-    private PackageIconBarDragLayoutSnapshot? _dragLayoutSnapshot;
     private PackageIconBarViewModel? ViewModel => viewModelAccessor();
 
     public void OnPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -47,7 +44,7 @@ internal sealed class PackageIconBarDragController(
             return;
         }
 
-        if (!TryResolveItemFromSource(e.Source, out var host, out var item))
+        if (!TryResolveItemFromSource(e.Source, out _, out var item))
         {
             return;
         }
@@ -55,7 +52,6 @@ internal sealed class PackageIconBarDragController(
         e.Pointer.Capture(barRoot);
         _dragStartPoint = GetRootPosition(e);
         _pendingDragItem = item;
-        _pressedHost = host;
         _draggedViewId = null;
         ClearDropIndicators();
         e.Handled = true;
@@ -134,106 +130,14 @@ internal sealed class PackageIconBarDragController(
         }
 
         barRoot.Classes.Add("drag-over");
-        if (viewModel.IsHorizontal)
-        {
-            viewModel.ShowPreviewItem(previewItem, targetIndex);
-            return;
-        }
-
-        if (_dragLayoutSnapshot?.TryGetPreviewAnchor(targetIndex.Value, out var host, out var insertAfter) != true || host is null)
-        {
-            return;
-        }
-
-        _previewAnchorHost = host;
-        _previewAnchorHost.Classes.Add(insertAfter ? "drop-after" : "drop-before");
+        viewModel.ShowPreviewItem(previewItem, targetIndex);
+        barRoot.UpdateLayout();
     }
 
     private void ClearDropIndicators()
     {
         viewModelAccessor()?.ClearPreviewItem();
-
-        if (_previewAnchorHost is not null)
-        {
-            _previewAnchorHost.Classes.Remove("drop-before");
-            _previewAnchorHost.Classes.Remove("drop-after");
-        }
-
-        _previewAnchorHost = null;
         barRoot.Classes.Remove("drag-over");
-    }
-
-    private void PrepareDragLayoutSnapshot(MainWindow ownerWindow)
-    {
-        ClearDropIndicators();
-
-        var viewModel = viewModelAccessor();
-        if (viewModel is null)
-        {
-            _dragLayoutSnapshot = null;
-            return;
-        }
-
-        var orderedHosts = GetOrderedItemHosts(ownerWindow, viewModel).ToArray();
-        if (orderedHosts.Length == 0)
-        {
-            var barOrigin = GetVisualOrigin(barRoot, ownerWindow);
-            var center = viewModel.IsHorizontal
-                ? new Point(barOrigin.X + barRoot.Bounds.Width / 2, barOrigin.Y + barRoot.Bounds.Height / 2)
-                : new Point(barOrigin.X + barRoot.Bounds.Width / 2, barOrigin.Y + 2 + PackageIconBarLayoutMetrics.ItemExtent / 2);
-            _dragLayoutSnapshot = new PackageIconBarDragLayoutSnapshot([], [], [center]);
-            return;
-        }
-
-        var midpoints = new double[orderedHosts.Length];
-        var itemCenters = new Point[orderedHosts.Length];
-        var slotCenters = new Point[orderedHosts.Length + 1];
-        for (var index = 0; index < orderedHosts.Length; index++)
-        {
-            var host = orderedHosts[index];
-            var origin = GetVisualOrigin(host, ownerWindow);
-            var center = new Point(origin.X + host.Bounds.Width / 2, origin.Y + host.Bounds.Height / 2);
-            itemCenters[index] = center;
-            if (viewModel.IsHorizontal)
-            {
-                midpoints[index] = center.X;
-            }
-            else
-            {
-                midpoints[index] = center.Y;
-                slotCenters[index] = new Point(center.X, origin.Y + PackageIconBarLayoutMetrics.PreviewGapSize / 2);
-            }
-        }
-
-        if (!viewModel.IsHorizontal)
-        {
-            var lastHost = orderedHosts[^1];
-            var lastOrigin = GetVisualOrigin(lastHost, ownerWindow);
-            slotCenters[^1] = new Point(itemCenters[^1].X, lastOrigin.Y + lastHost.Bounds.Height + PackageIconBarLayoutMetrics.PreviewGapSize / 2);
-        }
-
-        _dragLayoutSnapshot = new PackageIconBarDragLayoutSnapshot(orderedHosts, midpoints, slotCenters);
-    }
-
-    private void ClearDragLayoutSnapshot()
-    {
-        _dragLayoutSnapshot = null;
-    }
-
-    private static void PrepareDragLayoutSnapshots(MainWindow ownerWindow)
-    {
-        foreach (var bar in GetBars(ownerWindow))
-        {
-            bar.DragController.PrepareDragLayoutSnapshot(ownerWindow);
-        }
-    }
-
-    private static void ClearDragLayoutSnapshots(MainWindow ownerWindow)
-    {
-        foreach (var bar in GetBars(ownerWindow))
-        {
-            bar.DragController.ClearDragLayoutSnapshot();
-        }
     }
 
     private void StartLocalDrag(PointerEventArgs e, ShellItemViewModel item)
@@ -245,15 +149,11 @@ internal sealed class PackageIconBarDragController(
 
         _draggedViewId = item.Id;
         _draggedItem = item;
-        if (_pressedHost is not null)
-        {
-            _pressedHost.IsVisible = false;
-        }
+        viewModelAccessor()?.BeginDragLayout(item.Id);
 
         var ownerWindow = GetOwnerWindow();
         if (ownerWindow is not null)
         {
-            PrepareDragLayoutSnapshots(ownerWindow);
             ownerWindow.ShowPackageDragGhost(item, item.IsHorizontalBar, GetRootPosition(e));
         }
 
@@ -279,24 +179,20 @@ internal sealed class PackageIconBarDragController(
             return;
         }
 
-        if (targetController._dragLayoutSnapshot is null)
-        {
-            targetController.PrepareDragLayoutSnapshot(ownerWindow);
-        }
-
-        var targetIndex = targetController.GetStableTargetIndex(rootPosition);
+        var targetIndex = targetController.GetStableTargetIndex(ownerWindow, rootPosition);
         SetDragTarget(targetController, targetIndex);
     }
 
-    private int? GetStableTargetIndex(Point rootPosition)
+    private int? GetStableTargetIndex(MainWindow ownerWindow, Point rootPosition)
     {
         var viewModel = viewModelAccessor();
-        if (viewModel is null || _dragLayoutSnapshot is null)
+        if (viewModel is null)
         {
             return null;
         }
 
-        return _dragLayoutSnapshot.GetInsertIndex(rootPosition, viewModel.IsHorizontal);
+        var snapshot = CreateDragLayoutSnapshot(ownerWindow, viewModel);
+        return snapshot.GetInsertIndex(rootPosition, viewModel.IsHorizontal);
     }
 
     private void SetDragTarget(PackageIconBarDragController? targetController, int? targetIndex)
@@ -342,14 +238,10 @@ internal sealed class PackageIconBarDragController(
         var ownerWindow = GetOwnerWindow();
         if (ownerWindow is not null)
         {
-            ClearDragLayoutSnapshots(ownerWindow);
             ownerWindow.HidePackageDragGhost();
         }
 
-        if (_pressedHost is not null)
-        {
-            _pressedHost.IsVisible = true;
-        }
+        viewModelAccessor()?.EndDragLayout();
     }
 
     private void ClearPendingGesture()
@@ -357,7 +249,6 @@ internal sealed class PackageIconBarDragController(
         CancelLocalDrag();
         _dragStartPoint = null;
         _pendingDragItem = null;
-        _pressedHost = null;
     }
 
     private Point GetRootPosition(PointerEventArgs e)
@@ -374,18 +265,13 @@ internal sealed class PackageIconBarDragController(
             return;
         }
 
-        if (_targetController?.ViewModel?.IsHorizontal == true)
-        {
-            ownerWindow.HidePackageDragGhost();
-            return;
-        }
-
         if (_draggedItem is not null)
         {
-            ownerWindow.ShowPackageDragGhost(_draggedItem, _draggedItem.IsHorizontalBar, GetRootPosition(e));
+            var compact = _targetController?.ViewModel?.IsHorizontal ?? _draggedItem.IsHorizontalBar;
+            ownerWindow.ShowPackageDragGhost(_draggedItem, compact, GetRootPosition(e));
         }
 
-        if (_targetController?.TryGetPreviewGhostCenter(_targetIndex, out var previewCenter) == true)
+        if (_targetController?.TryGetPreviewGhostCenter(ownerWindow, out var previewCenter) == true)
         {
             ownerWindow.MovePackageDragGhost(previewCenter);
             return;
@@ -397,11 +283,35 @@ internal sealed class PackageIconBarDragController(
     private MainWindow? GetOwnerWindow()
         => owner.GetSelfAndVisualAncestors().OfType<MainWindow>().FirstOrDefault();
 
+    private PackageIconBarDragLayoutSnapshot CreateDragLayoutSnapshot(MainWindow ownerWindow, PackageIconBarViewModel viewModel)
+    {
+        var orderedHosts = GetOrderedItemHosts(ownerWindow, viewModel).ToArray();
+        var midpoints = new double[orderedHosts.Length];
+        for (var index = 0; index < orderedHosts.Length; index++)
+        {
+            var host = orderedHosts[index];
+            var origin = GetVisualOrigin(host, ownerWindow);
+            var center = new Point(origin.X + host.Bounds.Width / 2, origin.Y + host.Bounds.Height / 2);
+            if (viewModel.IsHorizontal)
+            {
+                midpoints[index] = center.X;
+            }
+            else
+            {
+                midpoints[index] = center.Y;
+            }
+        }
+
+        return new PackageIconBarDragLayoutSnapshot(midpoints);
+    }
+
     private IEnumerable<Border> GetOrderedItemHosts(MainWindow ownerWindow, PackageIconBarViewModel viewModel)
     {
         var hosts = barRoot.GetVisualDescendants()
             .OfType<Border>()
-            .Where(border => border.IsVisible && border.Classes.Contains("package-bar-item-host"))
+            .Where(border => border.IsVisible
+                && border.Classes.Contains("package-bar-item-host")
+                && border.DataContext is not ShellItemViewModel { IsDragPreview: true })
             .ToArray();
 
         return viewModel.IsHorizontal
@@ -429,15 +339,22 @@ internal sealed class PackageIconBarDragController(
         return rect.Contains(rootPosition);
     }
 
-    private bool TryGetPreviewGhostCenter(int? targetIndex, out Point center)
+    private bool TryGetPreviewGhostCenter(MainWindow ownerWindow, out Point center)
     {
         center = default;
-        if (!targetIndex.HasValue || _dragLayoutSnapshot is null)
+        var previewHost = barRoot.GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(border => border.IsVisible
+                && border.Classes.Contains("package-bar-item-host")
+                && border.DataContext is ShellItemViewModel { IsDragPreview: true });
+        if (previewHost is null)
         {
             return false;
         }
 
-        return _dragLayoutSnapshot.TryGetSlotCenter(targetIndex.Value, out center);
+        var origin = GetVisualOrigin(previewHost, ownerWindow);
+        center = new Point(origin.X + previewHost.Bounds.Width / 2, origin.Y + previewHost.Bounds.Height / 2);
+        return true;
     }
 
     private static IEnumerable<PackageIconBar> GetBars(MainWindow ownerWindow)
