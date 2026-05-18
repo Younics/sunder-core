@@ -1,7 +1,9 @@
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
+using Sunder.App.ViewModels;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Panels;
 
 internal sealed class ShellPanelContentPresenter(
     PackageViewHostService packageViewHostService,

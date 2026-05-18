@@ -5,6 +5,8 @@ using Sunder.Protocol;
 using Sunder.Registry.Shared;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
+using static Sunder.App.Tests.TestSupport.AsyncAssert;
+using static Sunder.App.Tests.TestSupport.TestPaths;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -642,32 +644,6 @@ public sealed class PackagesWindowViewModelTests
 
     private static string ToDisplayName(string packageId) =>
         string.Concat(packageId[..1].ToUpperInvariant(), packageId[1..]);
-
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(
-            Path.GetTempPath(),
-            "sunder-app-tests",
-            Guid.NewGuid().ToString("N")
-        );
-        Directory.CreateDirectory(path);
-        return path;
-    }
-
-    private static async Task WaitForConditionAsync(Func<bool> condition)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
-        while (!condition())
-        {
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                Assert.True(condition());
-                return;
-            }
-
-            await Task.Delay(10);
-        }
-    }
 
     private static bool IsCompletedEnableOperation(BackgroundProcessSnapshot snapshot)
         => snapshot.State == BackgroundProcessState.Completed

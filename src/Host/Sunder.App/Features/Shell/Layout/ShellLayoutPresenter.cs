@@ -1,7 +1,8 @@
 using Avalonia.Layout;
 using Sunder.App.Models;
+using Sunder.App.ViewModels;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Layout;
 
 internal sealed class ShellLayoutPresenter
 {

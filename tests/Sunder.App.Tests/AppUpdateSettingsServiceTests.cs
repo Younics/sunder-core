@@ -1,4 +1,5 @@
 using Sunder.App.Services;
+using static Sunder.App.Tests.TestSupport.TestPaths;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -34,10 +35,4 @@ public sealed class AppUpdateSettingsServiceTests
         Assert.Single(Directory.EnumerateFiles(rootPath, "update-settings.json.corrupt.*"));
     }
 
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
-    }
 }

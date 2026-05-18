@@ -1,7 +1,7 @@
 using Sunder.App.Models;
 using Sunder.Protocol;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Menus;
 
 internal static class PackageViewMenuProjector
 {

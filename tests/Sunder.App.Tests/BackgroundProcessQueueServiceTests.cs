@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Sdk.Abstractions;
+using static Sunder.App.Tests.TestSupport.AsyncAssert;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -500,18 +501,4 @@ public sealed class BackgroundProcessQueueServiceTests
             canCancel,
             executeAsync);
 
-    private static async Task WaitForConditionAsync(Func<bool> condition)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
-        while (!condition())
-        {
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                Assert.True(condition());
-                return;
-            }
-
-            await Task.Delay(10);
-        }
-    }
 }

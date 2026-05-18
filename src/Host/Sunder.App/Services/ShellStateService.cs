@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Themes;
 

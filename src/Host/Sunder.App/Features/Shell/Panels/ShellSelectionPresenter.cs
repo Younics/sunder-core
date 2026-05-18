@@ -1,6 +1,7 @@
 using Sunder.App.Models;
+using Sunder.App.ViewModels;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Panels;
 
 internal sealed class ShellSelectionPresenter
 {

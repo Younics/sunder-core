@@ -1,4 +1,4 @@
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Layout;
 
 internal static class ShellPanelSizing
 {

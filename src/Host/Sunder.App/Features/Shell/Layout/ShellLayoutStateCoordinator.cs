@@ -1,7 +1,8 @@
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Layout;
 
 internal sealed class ShellLayoutStateCoordinator : IDisposable
 {

@@ -1,4 +1,6 @@
-namespace Sunder.App.Models;
+using Sunder.App.Models;
+
+namespace Sunder.App.Features.Shell.Menus;
 
 public sealed record PackageViewMenuItem(
     string ViewId,

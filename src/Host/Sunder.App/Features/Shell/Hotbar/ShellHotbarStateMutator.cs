@@ -1,7 +1,8 @@
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.Sdk.Abstractions;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Hotbar;
 
 internal static class ShellHotbarStateMutator
 {

@@ -1,4 +1,6 @@
-namespace Sunder.App.Models;
+using Sunder.App.Models;
+
+namespace Sunder.App.Features.Shell.State;
 
 internal static class ShellStateSnapshotFactory
 {

@@ -1,7 +1,8 @@
 using Sunder.App.Models;
 using Sunder.App.Services;
+using Sunder.App.ViewModels;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Items;
 
 internal sealed class ShellItemViewModelFactory(IRuntimeApiClientFactory runtimeApiClientFactory)
 {

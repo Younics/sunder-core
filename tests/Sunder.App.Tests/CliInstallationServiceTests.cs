@@ -1,4 +1,5 @@
 using Sunder.App.Services;
+using static Sunder.App.Tests.TestSupport.TestPaths;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -262,13 +263,6 @@ public sealed class CliInstallationServiceTests
         var bundledCliPath = Path.Combine(bundledCliDirectory, fileName);
         File.WriteAllText(bundledCliPath, content);
         return bundledCliPath;
-    }
-
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
     }
 
     private sealed class FakeCliEnvironmentVariableStore : ICliEnvironmentVariableStore

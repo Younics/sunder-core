@@ -1,7 +1,8 @@
 using Sunder.Protocol;
+using Sunder.App.Models;
 using Sunder.Sdk.Abstractions;
 
-namespace Sunder.App.Models;
+namespace Sunder.App.Features.Shell.State;
 
 internal static class ShellPlacementCatalog
 {

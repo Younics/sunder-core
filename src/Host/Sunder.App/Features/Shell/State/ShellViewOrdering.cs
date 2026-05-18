@@ -1,6 +1,6 @@
 using Sunder.App.Models;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.State;
 
 internal static class ShellViewOrdering
 {

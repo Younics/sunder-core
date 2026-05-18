@@ -2,7 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
-using Sunder.App.Models;
+using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 

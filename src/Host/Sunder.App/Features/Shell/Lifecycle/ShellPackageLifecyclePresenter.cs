@@ -1,8 +1,9 @@
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Protocol;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Lifecycle;
 
 internal sealed class ShellPackageLifecyclePresenter(
     IShellCompositionService shellCompositionService,

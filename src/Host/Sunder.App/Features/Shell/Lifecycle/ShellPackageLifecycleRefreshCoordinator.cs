@@ -1,9 +1,10 @@
 using Avalonia;
 using Avalonia.Threading;
+using Sunder.App.Features.Shell.Panels;
 using Sunder.App.Services;
 using Sunder.Protocol;
 
-namespace Sunder.App.ViewModels;
+namespace Sunder.App.Features.Shell.Lifecycle;
 
 internal sealed class ShellPackageLifecycleRefreshCoordinator(
     AppPackageLifecycleCoordinator packageLifecycleCoordinator,

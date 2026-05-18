@@ -1,6 +1,7 @@
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Sdk.Notifications;
+using static Sunder.App.Tests.TestSupport.TestPaths;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -153,10 +154,4 @@ public sealed class NotificationCenterServiceTests
         Assert.False(reloaded.HasUnreadTrayNotifications());
     }
 
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
-    }
 }

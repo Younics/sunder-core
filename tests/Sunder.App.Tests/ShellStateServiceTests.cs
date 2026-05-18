@@ -2,6 +2,7 @@ using System.Text.Json;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.Themes;
+using static Sunder.App.Tests.TestSupport.TestPaths;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -129,10 +130,4 @@ public sealed class ShellStateServiceTests
         Assert.Equal(ShellState.DefaultPackagesSidebarWidth, state.PackagesSidebarWidth);
     }
 
-    private static string CreateTempDirectory()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
-    }
 }
