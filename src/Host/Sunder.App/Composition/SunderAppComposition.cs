@@ -24,6 +24,7 @@ internal static class SunderAppComposition
         services.AddSingleton<IRuntimeApiClientFactory>(provider => provider.GetRequiredService<RuntimeApiClientFactory>());
         services.AddSingleton<RuntimeHostProcessManager>();
         services.AddSingleton<NotificationCenterService>();
+        services.AddSingleton<DeveloperLogService>();
         services.AddSingleton<CliInstallationService>();
         services.AddSingleton<AppUpdateSettingsService>();
         services.AddSingleton<SunderUpdateService>();

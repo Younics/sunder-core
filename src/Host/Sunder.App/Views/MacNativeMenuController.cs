@@ -20,7 +20,9 @@ internal sealed class MacNativeMenuController : IDisposable
     private NativeMenu? _rootMenu;
     private NativeMenu? _viewSubmenu;
     private NativeMenu? _packagesSubmenu;
+    private NativeMenu? _developerSubmenu;
     private NativeMenuItem? _packagesMenu;
+    private NativeMenuItem? _developerLogsItem;
     private Bitmap? _defaultIcon;
     private MainWindowViewModel? _subscribedViewModel;
     private bool _packagesMenuDirty = true;
@@ -73,6 +75,14 @@ internal sealed class MacNativeMenuController : IDisposable
             _packagesSubmenu = null;
         }
 
+        if (_developerLogsItem is not null)
+        {
+            _developerLogsItem.Click -= DeveloperLogsItem_OnClick;
+            _developerLogsItem = null;
+        }
+
+        _developerSubmenu = null;
+
         _packagesMenu = null;
         _packageEntries.Clear();
         DisposeCachedIcons();
@@ -116,9 +126,21 @@ internal sealed class MacNativeMenuController : IDisposable
 
         _viewSubmenu.Add(_packagesMenu);
         _rootMenu.Add(viewMenu);
+        if (_viewModelAccessor()?.IsDeveloperMode == true)
+        {
+            _developerSubmenu = new NativeMenu();
+            _developerLogsItem = new NativeMenuItem { Header = "Logs" };
+            _developerLogsItem.Click += DeveloperLogsItem_OnClick;
+            _developerSubmenu.Add(_developerLogsItem);
+            _rootMenu.Add(new NativeMenuItem { Header = "Developer", Menu = _developerSubmenu });
+        }
+
         UpdatePackagesMenu();
         NativeMenu.SetMenu(_window, _rootMenu);
     }
+
+    private void DeveloperLogsItem_OnClick(object? sender, EventArgs e)
+        => _viewModelAccessor()?.OpenDeveloperLogsCommand.Execute(null);
 
     private void Menu_OnNeedsUpdate(object? sender, EventArgs e)
     {

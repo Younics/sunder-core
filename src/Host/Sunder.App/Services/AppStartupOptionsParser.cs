@@ -8,6 +8,7 @@ public static class AppStartupOptionsParser
     {
         var parseErrors = new List<string>();
         var devPackageFolders = new List<string>();
+        var watchDevPackages = false;
         var runtimeHostPath = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_HOST_PATH");
         var environmentRuntimeUrl = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_URL");
         var hasExplicitRuntimeUrl = !string.IsNullOrWhiteSpace(environmentRuntimeUrl);
@@ -29,6 +30,12 @@ public static class AppStartupOptionsParser
                     devPackageFolders.Add(Path.GetFullPath(devPackageFolder));
                 }
 
+                continue;
+            }
+
+            if (string.Equals(argument, "--watch", StringComparison.OrdinalIgnoreCase))
+            {
+                watchDevPackages = true;
                 continue;
             }
 
@@ -54,7 +61,22 @@ public static class AppStartupOptionsParser
                 {
                     runtimeHostPath = Path.GetFullPath(runtimeHostPathValue);
                 }
+
+                continue;
             }
+
+            if (!argument.StartsWith("--", StringComparison.Ordinal))
+            {
+                parseErrors.Add($"Unrecognized startup argument '{argument}'. Did you mean --dev-package {argument}?");
+            }
+        }
+
+        var normalizedDevPackageFolders = devPackageFolders
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (watchDevPackages && normalizedDevPackageFolders.Length == 0)
+        {
+            parseErrors.Add("--watch requires at least one --dev-package folder.");
         }
 
         return new AppStartupOptions
@@ -62,9 +84,8 @@ public static class AppStartupOptionsParser
             RuntimeUrl = runtimeUrl,
             HasExplicitRuntimeUrl = hasExplicitRuntimeUrl,
             RuntimeHostPath = string.IsNullOrWhiteSpace(runtimeHostPath) ? null : Path.GetFullPath(runtimeHostPath),
-            DevPackageFolders = devPackageFolders
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
+            DevPackageFolders = normalizedDevPackageFolders,
+            WatchDevPackages = watchDevPackages,
             ParseErrors = parseErrors,
         };
     }

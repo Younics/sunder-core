@@ -5,6 +5,7 @@ using Sunder.App.Composition;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.Protocol;
 
 namespace Sunder.App.Services;
 
@@ -14,6 +15,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
     private readonly CliInstallationService _cliInstallationService;
     private readonly NotificationCenterService _notificationCenter;
+    private readonly DeveloperLogService _developerLog;
     private readonly ShellStateService _shellStateService;
     private readonly ShellState _shellState;
     private readonly SunderUpdateService _updateService;
@@ -24,6 +26,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly bool _ownsBackgroundProcessQueue;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
+    private DeveloperLogWindow? _developerLogWindow;
     private MainWindowViewModel? _mainWindowViewModel;
     private bool _disposed;
 
@@ -34,6 +37,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         NotificationCenterService notificationCenter,
         ShellStateService shellStateService,
         ShellState shellState,
+        DeveloperLogService? developerLog = null,
         SunderUpdateService? updateService = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         SettingsWindowFactory? settingsWindowFactory = null,
@@ -43,6 +47,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _runtimeApiClientFactory = runtimeApiClientFactory;
         _cliInstallationService = cliInstallationService;
         _notificationCenter = notificationCenter;
+        _developerLog = developerLog ?? new DeveloperLogService();
         _shellStateService = shellStateService;
         _shellState = shellState;
         _updateService = updateService ?? new SunderUpdateService();
@@ -104,6 +109,17 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         ShowWindow(_packagesWindow);
     }
 
+    public void ShowDeveloperLogs()
+    {
+        if (!_developerLog.IsEnabled)
+        {
+            return;
+        }
+
+        _developerLogWindow ??= CreateDeveloperLogWindow();
+        ShowWindow(_developerLogWindow);
+    }
+
     public void CloseForShutdown()
     {
         if (_settingsWindow is not null)
@@ -116,6 +132,12 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         {
             _packagesWindow.CloseForShutdown();
             _packagesWindow = null;
+        }
+
+        if (_developerLogWindow is not null)
+        {
+            _developerLogWindow.CloseForShutdown();
+            _developerLogWindow = null;
         }
 
         Dispose();
@@ -140,6 +162,28 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     public async Task CancelBackgroundProcessesAsync(CancellationToken cancellationToken = default)
         => await _backgroundProcessQueue.CancelAllAsync(cancellationToken);
+
+    internal async Task<AppPackageHostStage> StagePackageLifecycleAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        CancellationToken cancellationToken = default)
+        => await _packageViewHostService.StageForPackagesAsync(activePackages, packageSources, cancellationToken).ConfigureAwait(false);
+
+    internal async Task CommitPackageLifecycleStageAsync(
+        AppPackageHostStage stage,
+        CancellationToken cancellationToken = default)
+    {
+        await _packageViewHostService.CommitStageAsync(stage, cancellationToken).ConfigureAwait(false);
+        if (_mainWindowViewModel is not null)
+        {
+            await _mainWindowViewModel.ApplyPackageLifecycleSnapshotAsync(
+                stage.ActivePackages,
+                cancellationToken,
+                deferHostedViewCreation: true).ConfigureAwait(false);
+        }
+
+        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     private SettingsWindow CreateSettingsWindow()
     {
@@ -194,6 +238,24 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
             if (ReferenceEquals(_packagesWindow, window))
             {
                 _packagesWindow = null;
+            }
+        };
+
+        return window;
+    }
+
+    private DeveloperLogWindow CreateDeveloperLogWindow()
+    {
+        var window = new DeveloperLogWindow
+        {
+            DataContext = new DeveloperLogWindowViewModel(_developerLog),
+        };
+
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_developerLogWindow, window))
+            {
+                _developerLogWindow = null;
             }
         };
 

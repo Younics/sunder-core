@@ -676,6 +676,10 @@ public sealed class MainWindowViewModelShellViewTests
         {
         }
 
+        public void ShowDeveloperLogs()
+        {
+        }
+
         public void CloseForShutdown()
         {
         }

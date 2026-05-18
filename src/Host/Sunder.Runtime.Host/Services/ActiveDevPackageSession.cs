@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Storage;
@@ -32,13 +33,19 @@ internal sealed class ActiveDevPackageSession
         string? sessionFolder,
         IDictionary<string, ActiveLoadedDevPackage> loadedPackages,
         IDictionary<string, SessionPackageDescriptor> sessionPackages,
-        RuntimePackageExtensionCatalog? extensionCatalog = null)
+        RuntimePackageExtensionCatalog? extensionCatalog = null,
+        RuntimeSharedAssemblyRegistry? sharedAssemblyRegistry = null,
+        bool backgroundServicesStarted = true)
     {
         SessionFolder = sessionFolder;
         _loadedPackageMap = new Dictionary<string, ActiveLoadedDevPackage>(loadedPackages, StringComparer.OrdinalIgnoreCase);
         _sessionPackageMap = new Dictionary<string, SessionPackageDescriptor>(sessionPackages, StringComparer.OrdinalIgnoreCase);
         _extensionCatalog = extensionCatalog ?? new RuntimePackageExtensionCatalog();
+        SharedAssemblyRegistry = sharedAssemblyRegistry;
+        _backgroundServicesStarted = backgroundServicesStarted;
     }
+
+    private bool _backgroundServicesStarted;
 
     public static ActiveDevPackageSession Empty { get; } = new(
         null,
@@ -47,6 +54,41 @@ internal sealed class ActiveDevPackageSession
     );
 
     public string? SessionFolder { get; }
+
+    private RuntimeSharedAssemblyRegistry? SharedAssemblyRegistry { get; }
+
+    public async Task StartBackgroundServicesAsync(ILogger logger, CancellationToken cancellationToken = default)
+    {
+        if (_backgroundServicesStarted)
+        {
+            return;
+        }
+
+        var startedServices = new List<(string PackageId, IPackageBackgroundService BackgroundService)>();
+        try
+        {
+            foreach (var package in _loadedPackageMap.Values)
+            {
+                foreach (var backgroundService in package.BackgroundServices)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await backgroundService.StartAsync(cancellationToken);
+                    startedServices.Add((package.Descriptor.PackageId, backgroundService));
+                }
+            }
+
+            _backgroundServicesStarted = true;
+        }
+        catch
+        {
+            foreach (var group in startedServices.GroupBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase))
+            {
+                await DevPackageLifecycle.StopBackgroundServicesAsync(group.Select(x => x.BackgroundService).ToArray(), group.Key, logger);
+            }
+
+            throw;
+        }
+    }
 
     public IReadOnlyDictionary<string, ActiveLoadedDevPackage> LoadedPackageMap => _loadedPackageMap;
 
@@ -176,6 +218,11 @@ internal sealed class ActiveDevPackageSession
 
     public async Task StopBackgroundServicesAsync(CancellationToken cancellationToken = default)
     {
+        if (!_backgroundServicesStarted)
+        {
+            return;
+        }
+
         foreach (var package in _loadedPackageMap.Values)
         {
             foreach (var backgroundService in package.BackgroundServices)
@@ -190,6 +237,8 @@ internal sealed class ActiveDevPackageSession
                 }
             }
         }
+
+        _backgroundServicesStarted = false;
     }
 
     public async Task DisposeAsync()
@@ -228,6 +277,8 @@ internal sealed class ActiveDevPackageSession
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }
+
+        SharedAssemblyRegistry?.Dispose();
 
         // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
 

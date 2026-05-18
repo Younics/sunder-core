@@ -13,7 +13,8 @@ public sealed record ShellStartupResult(
     MainWindow MainWindow,
     MainWindowViewModel MainWindowViewModel,
     PackageViewHostService PackageViewHostService,
-    WindowLauncher WindowLauncher);
+    WindowLauncher WindowLauncher,
+    DevPackageHotReloadSession? DevPackageHotReloadSession);
 
 public sealed class ShellStartupCoordinator
 {
@@ -23,6 +24,7 @@ public sealed class ShellStartupCoordinator
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
     private readonly RuntimeHostProcessManager _runtimeHostProcessManager;
     private readonly NotificationCenterService _notificationCenter;
+    private readonly DeveloperLogService _developerLog;
     private readonly CliInstallationService _cliInstallationService;
     private readonly SunderUpdateService _updateService;
     private readonly IThemeManager _themeManager;
@@ -39,6 +41,7 @@ public sealed class ShellStartupCoordinator
         IRuntimeApiClientFactory runtimeApiClientFactory,
         RuntimeHostProcessManager runtimeHostProcessManager,
         NotificationCenterService notificationCenter,
+        DeveloperLogService developerLog,
         CliInstallationService cliInstallationService,
         SunderUpdateService updateService,
         IThemeManager themeManager,
@@ -54,6 +57,7 @@ public sealed class ShellStartupCoordinator
         _runtimeApiClientFactory = runtimeApiClientFactory;
         _runtimeHostProcessManager = runtimeHostProcessManager;
         _notificationCenter = notificationCenter;
+        _developerLog = developerLog;
         _cliInstallationService = cliInstallationService;
         _updateService = updateService;
         _themeManager = themeManager;
@@ -81,6 +85,7 @@ public sealed class ShellStartupCoordinator
         var runtimeApiClientFactory = _runtimeApiClientFactory;
         var runtimeHostProcessManager = _runtimeHostProcessManager;
         var notificationCenter = _notificationCenter;
+        var developerLog = _developerLog;
         var cliInstallationService = _cliInstallationService;
         var updateService = _updateService;
         var startupStopwatch = Stopwatch.StartNew();
@@ -166,6 +171,10 @@ public sealed class ShellStartupCoordinator
             warnings,
             errors);
         LogStartupPhase("shell composition", phaseStopwatch);
+        if (startupOptions.DevPackageFolders.Count > 0)
+        {
+            developerLog.Enable();
+        }
 
         var result = await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -180,13 +189,29 @@ public sealed class ShellStartupCoordinator
                 systemStatus,
                 deferInitialHostedViews: true);
 
-            return new ShellStartupResult(mainWindow, mainWindowViewModel, packageViewHostService, windowLauncher);
+            return new ShellStartupResult(mainWindow, mainWindowViewModel, packageViewHostService, windowLauncher, DevPackageHotReloadSession: null);
         });
         LogStartupPhase("main window creation", phaseStopwatch);
+        DevPackageHotReloadSession? devPackageHotReloadSession = null;
+        if (startupOptions.DevPackageFolders.Count > 0)
+        {
+            developerLog.Info("dev", $"Developer mode enabled for {startupOptions.DevPackageFolders.Count} dev package folder(s).");
+            if (startupOptions.WatchDevPackages)
+            {
+                devPackageHotReloadSession = new DevPackageHotReloadSession(
+                    startupOptions.DevPackageFolders,
+                    runtimeApiClientFactory,
+                    result.WindowLauncher,
+                    developerLog,
+                    notificationCenter);
+                devPackageHotReloadSession.Start();
+            }
+        }
+
         AppSessionLog.WriteInfo($"Sunder startup composition completed in {startupStopwatch.ElapsedMilliseconds} ms.");
         _ = result.MainWindowViewModel.CheckForAppUpdatesOnStartupAsync();
 
-        return result;
+        return result with { DevPackageHotReloadSession = devPackageHotReloadSession };
     }
 
     private static async Task SetProgressAsync(

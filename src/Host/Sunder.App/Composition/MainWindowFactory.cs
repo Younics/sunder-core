@@ -12,6 +12,7 @@ public sealed class MainWindowFactory(
     IRuntimeApiClientFactory runtimeApiClientFactory,
     RuntimeHostProcessManager runtimeHostProcessManager,
     NotificationCenterService notificationCenter,
+    DeveloperLogService developerLog,
     AppPackageShellViewService shellViewService,
     SunderUpdateService updateService,
     BackgroundProcessQueueService backgroundProcessQueue,
@@ -38,7 +39,8 @@ public sealed class MainWindowFactory(
             updateService,
             deferInitialHostedViews,
             backgroundProcessQueue,
-            shellCompositionService: shellCompositionService);
+            shellCompositionService: shellCompositionService,
+            developerLog: developerLog);
 
         return (new MainWindow { DataContext = viewModel }, viewModel);
     }

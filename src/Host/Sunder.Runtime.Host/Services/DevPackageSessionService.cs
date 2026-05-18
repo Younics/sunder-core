@@ -12,6 +12,7 @@ internal sealed class DevPackageSessionService
     private readonly DevPackageConfigurationService _configurationService = new();
     private readonly PackageAuthSessionCoordinator _authCoordinator;
     private readonly DevPackageSessionState _sessionState;
+    private readonly Dictionary<string, PendingDevPackageStage> _pendingDevStages = new(StringComparer.OrdinalIgnoreCase);
     private bool _isDevPackageOverrideActive;
 
     public DevPackageSessionService(
@@ -138,11 +139,7 @@ internal sealed class DevPackageSessionService
             var warnings = new List<string>();
             var errors = new List<string>();
 
-            var folders = (request.Folders ?? [])
-                .Where(folder => !string.IsNullOrWhiteSpace(folder))
-                .Select(Path.GetFullPath)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var folders = NormalizeDevPackageFolders(request);
 
             if (folders.Count == 0)
             {
@@ -182,6 +179,107 @@ internal sealed class DevPackageSessionService
             var errors = new List<string>();
             warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
             return await LoadInstalledPackagesCoreAsync(warnings, errors);
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<DevPackageStageResult> StageDevPackagesAsync(DevPackageLoadRequest request)
+    {
+        await _reloadGate.WaitAsync();
+        try
+        {
+            var warnings = new List<string>();
+            var errors = new List<string>();
+            var folders = NormalizeDevPackageFolders(request);
+            if (folders.Count == 0)
+            {
+                errors.Add("At least one dev package folder is required for staging.");
+                return new DevPackageStageResult(null, [], [], warnings, errors);
+            }
+
+            var loadResult = await new DevPackageLoadService(_logger).LoadAsync(folders, startBackgroundServices: false);
+            warnings.AddRange(loadResult.Warnings);
+            errors.AddRange(loadResult.Errors);
+            if (loadResult.Session is null || errors.Count > 0)
+            {
+                if (loadResult.Session is not null)
+                {
+                    await loadResult.Session.DisposeAsync();
+                }
+
+                return new DevPackageStageResult(null, [], [], warnings, errors);
+            }
+
+            var stageId = Guid.NewGuid().ToString("N");
+            var stage = new PendingDevPackageStage(stageId, loadResult.Session);
+            _pendingDevStages[stageId] = stage;
+            return new DevPackageStageResult(
+                stageId,
+                loadResult.Session.GetActivePackages(),
+                loadResult.Session.GetActivePackageSources(),
+                warnings,
+                errors);
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<DevPackageLoadResult> CommitDevPackageStageAsync(string stageId, CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_pendingDevStages.Remove(stageId, out var stage))
+            {
+                return new DevPackageLoadResult([], [], [$"Dev package stage '{stageId}' was not found."]);
+            }
+
+            var warnings = new List<string>();
+            var errors = new List<string>();
+            try
+            {
+                await stage.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
+                warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+                _isDevPackageOverrideActive = true;
+                _sessionState.PublishSession(stage.Session);
+                return new DevPackageLoadResult(stage.Session.GetActivePackages(), warnings, errors);
+            }
+            catch (Exception ex)
+            {
+                await stage.Session.DisposeAsync();
+                if (ex is OperationCanceledException)
+                {
+                    throw;
+                }
+
+                errors.Add($"Failed to commit dev package stage '{stageId}': {ex.Message}");
+                _logger.LogError(ex, "Failed to commit dev package stage {StageId}", stageId);
+                return new DevPackageLoadResult(_sessionState.GetActivePackages(), warnings, errors);
+            }
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<bool> DiscardDevPackageStageAsync(string stageId)
+    {
+        await _reloadGate.WaitAsync();
+        try
+        {
+            if (!_pendingDevStages.Remove(stageId, out var stage))
+            {
+                return false;
+            }
+
+            await stage.Session.DisposeAsync();
+            return true;
         }
         finally
         {
@@ -279,19 +377,50 @@ internal sealed class DevPackageSessionService
         {
             var warnings = result.Warnings.ToList();
             var errors = result.Errors.ToList();
-            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
-            var loadResult = await LoadInstalledPackagesCoreAsync(warnings, errors);
-            if (loadResult.Errors.Count > 0)
+            var installedPackages = await _installedPackageStore.ListAsync(cancellationToken);
+            if (installedPackages.Count == 0)
             {
+                warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+                return result with { RequiresAppRestart = true, Warnings = warnings };
+            }
+
+            var loadResult = await new DevPackageLoadService(_logger).LoadInstalledAsync(installedPackages, startBackgroundServices: false);
+            warnings.AddRange(loadResult.Warnings);
+            errors.AddRange(loadResult.Errors);
+            if (loadResult.Session is null || errors.Count > 0)
+            {
+                if (loadResult.Session is not null)
+                {
+                    await loadResult.Session.DisposeAsync();
+                }
+
+                warnings.AddRange(errors.Select(error => $"Installed package changes are saved, but the running package session kept the previous loaded packages: {error}"));
                 return result with
                 {
                     RequiresAppRestart = true,
-                    Warnings = loadResult.Warnings,
-                    Errors = loadResult.Errors,
+                    Warnings = warnings,
                 };
             }
 
-            return result with { RequiresAppRestart = true, Warnings = loadResult.Warnings };
+            try
+            {
+                await loadResult.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await loadResult.Session.DisposeAsync();
+                warnings.Add($"Installed package changes are saved, but the running package session kept the previous loaded packages: {ex.Message}");
+                return result with
+                {
+                    RequiresAppRestart = true,
+                    Warnings = warnings,
+                };
+            }
+
+            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+            _sessionState.PublishSession(loadResult.Session);
+
+            return result with { RequiresAppRestart = true, Warnings = warnings };
         }
         finally
         {
@@ -304,5 +433,14 @@ internal sealed class DevPackageSessionService
 
     private ActiveLoadedDevPackage? GetLoadedPackage(string packageId)
         => _sessionState.GetLoadedPackage(packageId);
+
+    private static List<string> NormalizeDevPackageFolders(DevPackageLoadRequest request)
+        => (request.Folders ?? [])
+            .Where(folder => !string.IsNullOrWhiteSpace(folder))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private sealed record PendingDevPackageStage(string StageId, ActiveDevPackageSession Session);
 
 }

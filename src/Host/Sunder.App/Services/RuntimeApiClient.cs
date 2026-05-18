@@ -182,6 +182,68 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
             );
     }
 
+    public async Task<DevPackageStageResult> StageDevPackagesAsync(
+        IReadOnlyList<string> folders,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("api/dev/packages/stage"),
+            new DevPackageLoadRequest(folders),
+            cancellationToken
+        );
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<DevPackageStageResult>(
+                cancellationToken: cancellationToken
+            )
+            ?? new DevPackageStageResult(
+                null,
+                [],
+                [],
+                [],
+                ["Runtime returned an empty dev-package stage response."]
+            );
+    }
+
+    public async Task<DevPackageLoadResult> CommitDevPackageStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var response = await _httpClient.PostAsync(
+            CreateRequestUri($"api/dev/packages/stage/{Uri.EscapeDataString(stageId)}/commit"),
+            content: null,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<DevPackageLoadResult>(
+                cancellationToken: cancellationToken
+            )
+            ?? new DevPackageLoadResult(
+                [],
+                [],
+                ["Runtime returned an empty dev-package stage commit response."]
+            );
+    }
+
+    public async Task DiscardDevPackageStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreateRequestUri($"api/dev/packages/stage/{Uri.EscapeDataString(stageId)}"),
+            cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task<
         IReadOnlyList<PackageConfigurationSchemaDescriptor>
     > GetConfigurationSchemasAsync(CancellationToken cancellationToken = default) =>

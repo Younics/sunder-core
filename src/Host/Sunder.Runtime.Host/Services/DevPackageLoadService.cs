@@ -13,7 +13,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public async Task<DevPackageLoadSessionResult> LoadAsync(IReadOnlyList<string> folders)
+    public async Task<DevPackageLoadSessionResult> LoadAsync(IReadOnlyList<string> folders, bool startBackgroundServices = true)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -38,10 +38,11 @@ internal sealed class DevPackageLoadService(ILogger logger)
             preparedCandidates,
             warnings,
             errors,
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase),
+            startBackgroundServices);
     }
 
-    public async Task<DevPackageLoadSessionResult> LoadInstalledAsync(IReadOnlyList<InstalledPackageRecord> packages)
+    public async Task<DevPackageLoadSessionResult> LoadInstalledAsync(IReadOnlyList<InstalledPackageRecord> packages, bool startBackgroundServices = true)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -80,7 +81,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
             return new DevPackageLoadSessionResult(ActiveDevPackageSession.Empty, warnings, errors);
         }
 
-        return await LoadPreparedPackagesAsync(sessionFolder, preparedCandidates, warnings, errors, sessionPackages);
+        return await LoadPreparedPackagesAsync(sessionFolder, preparedCandidates, warnings, errors, sessionPackages, startBackgroundServices);
     }
 
     private async Task<DevPackageLoadSessionResult> LoadPreparedPackagesAsync(
@@ -88,7 +89,8 @@ internal sealed class DevPackageLoadService(ILogger logger)
         IReadOnlyList<PreparedDevPackage> preparedCandidates,
         ICollection<string> warnings,
         ICollection<string> errors,
-        IDictionary<string, SessionPackageDescriptor> initialSessionPackages)
+        IDictionary<string, SessionPackageDescriptor> initialSessionPackages,
+        bool startBackgroundServices)
     {
         if (preparedCandidates.Count == 0 && initialSessionPackages.Count == 0)
         {
@@ -130,7 +132,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
                 continue;
             }
 
-            var activation = await TryActivatePackageAsync(preparedPackage, sharedAssemblyRegistry, extensionCatalog, warnings, errors);
+            var activation = await TryActivatePackageAsync(preparedPackage, sharedAssemblyRegistry, extensionCatalog, warnings, errors, startBackgroundServices);
             if (!activation.Success)
             {
                 sessionPackages[preparedPackage.PackageId] = activation.SessionPackage;
@@ -142,7 +144,13 @@ internal sealed class DevPackageLoadService(ILogger logger)
             sessionPackages[preparedPackage.PackageId] = activation.SessionPackage;
         }
 
-        var session = new ActiveDevPackageSession(sessionFolder, loadedPackages, sessionPackages, extensionCatalog);
+        var session = new ActiveDevPackageSession(
+            sessionFolder,
+            loadedPackages,
+            sessionPackages,
+            extensionCatalog,
+            sharedAssemblyRegistry,
+            backgroundServicesStarted: startBackgroundServices);
         return new DevPackageLoadSessionResult(session, warnings.ToArray(), errors.ToArray());
     }
 
@@ -315,7 +323,8 @@ internal sealed class DevPackageLoadService(ILogger logger)
         RuntimeSharedAssemblyRegistry sharedAssemblyRegistry,
         RuntimePackageExtensionCatalog extensionCatalog,
         ICollection<string> warnings,
-        ICollection<string> errors
+        ICollection<string> errors,
+        bool startBackgroundServices
     )
     {
         ActiveDevPackageLoadContext? loadContext = null;
@@ -371,8 +380,11 @@ internal sealed class DevPackageLoadService(ILogger logger)
 
             foreach (var backgroundService in contributionRegistry.BackgroundServices)
             {
-                await backgroundService.StartAsync(CancellationToken.None);
-                startedBackgroundServices.Add(backgroundService);
+                if (startBackgroundServices)
+                {
+                    await backgroundService.StartAsync(CancellationToken.None);
+                    startedBackgroundServices.Add(backgroundService);
+                }
             }
 
             var loadedPackage = new ActiveLoadedDevPackage(

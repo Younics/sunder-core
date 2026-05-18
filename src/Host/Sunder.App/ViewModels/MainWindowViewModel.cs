@@ -59,7 +59,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         bool deferInitialHostedViews = false,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         AppPackageLifecycleCoordinator? packageLifecycleCoordinator = null,
-        IShellCompositionService? shellCompositionService = null)
+        IShellCompositionService? shellCompositionService = null,
+        DeveloperLogService? developerLog = null)
     {
         _windowLauncher = windowLauncher;
         var effectivePackageLifecycleCoordinator = packageLifecycleCoordinator ?? new AppPackageLifecycleCoordinator(packageViewHostService, runtimeApiClientFactory);
@@ -67,6 +68,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _appUpdatePrompt = new AppUpdatePromptViewModel(new AppUpdatePromptCoordinator(updateService ?? new SunderUpdateService()));
         _shellItemFactory = new ShellItemViewModelFactory(runtimeApiClientFactory);
         _shellState = shellSnapshot.State;
+        IsDeveloperMode = developerLog?.IsEnabled == true;
         _layoutStateCoordinator = new ShellLayoutStateCoordinator(
             shellStateService,
             _shellState,
@@ -190,6 +192,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
 
+    public bool IsDeveloperMode { get; }
+
     public ShellPanelViewModel LeftTopPanel => _shellLayout.LeftTopPanel;
 
     public ShellPanelViewModel MiddlePanel => _shellLayout.MiddlePanel;
@@ -231,6 +235,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     [RelayCommand]
     private void OpenPackages() => _windowLauncher.ShowPackages();
+
+    [RelayCommand]
+    private void OpenDeveloperLogs() => _windowLauncher.ShowDeveloperLogs();
 
     [RelayCommand]
     private void OpenSettings() => _windowLauncher.ShowSettings();
@@ -288,6 +295,30 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         CancellationToken cancellationToken = default,
         bool deferHostedViewCreation = false)
         => await _packageLifecycleRefreshCoordinator.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation);
+
+    internal async Task ApplyPackageLifecycleSnapshotAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        CancellationToken cancellationToken = default,
+        bool deferHostedViewCreation = false)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        {
+            _packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, deferHostedViewCreation);
+        }
+        else
+        {
+            await Dispatcher.UIThread.InvokeAsync(
+                () => _packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, deferHostedViewCreation),
+                DispatcherPriority.Normal,
+                cancellationToken);
+        }
+
+        if (deferHostedViewCreation)
+        {
+            _ = _deferredHostedViewActivator.ActivateAfterLifecycleAsync(cancellationToken);
+        }
+    }
 
     public async Task ActivateDeferredInitialHostedViewsAsync(CancellationToken cancellationToken = default)
         => await _deferredHostedViewActivator.ActivateInitialHostedViewsAsync(cancellationToken);

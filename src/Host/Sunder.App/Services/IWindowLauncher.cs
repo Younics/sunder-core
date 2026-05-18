@@ -11,5 +11,7 @@ public interface IWindowLauncher
 
     void ShowPackages();
 
+    void ShowDeveloperLogs();
+
     void CloseForShutdown();
 }

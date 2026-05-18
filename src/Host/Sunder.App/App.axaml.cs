@@ -15,6 +15,7 @@ public partial class App : Application
     private PackageViewHostService _packageViewHostService = PackageViewHostService.Empty;
     private ServiceProvider? _serviceProvider;
     private WindowLauncher? _windowLauncher;
+    private DevPackageHotReloadSession? _devPackageHotReloadSession;
 
     public override void Initialize()
     {
@@ -70,6 +71,7 @@ public partial class App : Application
         );
         _packageViewHostService = startup.PackageViewHostService;
         _windowLauncher = startup.WindowLauncher;
+        _devPackageHotReloadSession = startup.DevPackageHotReloadSession;
         var mainWindow = startup.MainWindow;
         var mainWindowViewModel = startup.MainWindowViewModel;
 
@@ -144,6 +146,10 @@ public partial class App : Application
     {
         var windowLauncher = _windowLauncher;
         _windowLauncher = null;
+        var devPackageHotReloadSession = _devPackageHotReloadSession;
+        _devPackageHotReloadSession = null;
+        devPackageHotReloadSession?.Dispose();
+
         if (windowLauncher is not null)
         {
             try

@@ -9,6 +9,7 @@ internal sealed class AppPackageHostComposition
     private readonly AppPackageDeltaCoordinator _deltaCoordinator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
+    private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
     private readonly AppPackageHostState _state;
     private readonly AppPackageUnloadCoordinator _unloadCoordinator;
 
@@ -37,6 +38,7 @@ internal sealed class AppPackageHostComposition
 
         var sourceLoader = new AppPackageSourceLoader(new AppPackageSourcePreparer(sessionFolder));
         var resolvedSharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
+        _sharedAssemblyRegistry = resolvedSharedAssemblyRegistry;
         var resolvedExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(backgroundServices, resolvedBackgroundProcessQueue);
@@ -143,6 +145,9 @@ internal sealed class AppPackageHostComposition
 
     public void RegisterPackageAssembly(string packageId, Assembly assembly)
         => AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
+
+    public void DisposeSharedAssemblies()
+        => _sharedAssemblyRegistry.Dispose();
 
     private async Task DisablePackageAndLogAsync(
         string packageId,

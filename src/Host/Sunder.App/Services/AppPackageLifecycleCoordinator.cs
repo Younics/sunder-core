@@ -22,11 +22,19 @@ public sealed class AppPackageLifecycleCoordinator(
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(impactedPackageIds, StringComparer.OrdinalIgnoreCase);
 
-        await packageViewHostService.ApplyPackageDeltaAsync(
-            activePackages,
-            packageSources,
-            impactedPackages,
-            cancellationToken).ConfigureAwait(false);
+        if (impactedPackages.Count > 0)
+        {
+            var stage = await packageViewHostService.StageForPackagesAsync(activePackages, packageSources, cancellationToken).ConfigureAwait(false);
+            await packageViewHostService.CommitStageAsync(stage, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await packageViewHostService.ApplyPackageDeltaAsync(
+                activePackages,
+                packageSources,
+                impactedPackages,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         return packageViewHostService.FilterEnabledPackages(activePackages);
     }

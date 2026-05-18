@@ -12,5 +12,7 @@ public sealed class AppStartupOptions
 
     public IReadOnlyList<string> DevPackageFolders { get; init; } = [];
 
+    public bool WatchDevPackages { get; init; }
+
     public IReadOnlyList<string> ParseErrors { get; init; } = [];
 }

@@ -67,6 +67,43 @@ public sealed class AppStartupOptionsParserTests
         Assert.Equal([currentDirectory], options.DevPackageFolders);
     }
 
+    [Fact]
+    public void Parse_WhenWatchIsSet_EnablesWatchMode()
+    {
+        using var environment = PreserveRuntimeEnvironment();
+        var currentDirectory = Directory.GetCurrentDirectory();
+
+        var options = AppStartupOptionsParser.Parse(["--dev-package", ".", "--watch"]);
+
+        Assert.True(options.WatchDevPackages);
+        Assert.Equal([currentDirectory], options.DevPackageFolders);
+        Assert.Empty(options.ParseErrors);
+    }
+
+    [Fact]
+    public void Parse_WhenWatchHasNoDevPackage_RecordsError()
+    {
+        using var environment = PreserveRuntimeEnvironment();
+
+        var options = AppStartupOptionsParser.Parse(["--watch"]);
+
+        Assert.True(options.WatchDevPackages);
+        Assert.Contains("--watch requires at least one --dev-package folder.", options.ParseErrors);
+    }
+
+    [Fact]
+    public void Parse_WhenWatchIsFollowedByPath_RecordsUnrecognizedArgument()
+    {
+        using var environment = PreserveRuntimeEnvironment();
+
+        var options = AppStartupOptionsParser.Parse(["--watch", "."]);
+
+        Assert.True(options.WatchDevPackages);
+        Assert.Empty(options.DevPackageFolders);
+        Assert.Contains(options.ParseErrors, error => error.Contains("Unrecognized startup argument", StringComparison.Ordinal));
+        Assert.Contains("--watch requires at least one --dev-package folder.", options.ParseErrors);
+    }
+
     private static EnvironmentScope PreserveRuntimeEnvironment()
         => new("SUNDER_RUNTIME_URL", "SUNDER_RUNTIME_HOST_PATH");
 

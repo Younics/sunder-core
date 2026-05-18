@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -7,9 +8,9 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class RuntimeSharedAssemblyRegistry
+internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
 {
-    private readonly Dictionary<string, Assembly> _sharedAssemblies = new(StringComparer.OrdinalIgnoreCase)
+    private readonly Dictionary<string, Assembly> _hostSharedAssemblies = new(StringComparer.OrdinalIgnoreCase)
     {
         [typeof(Control).Assembly.GetName().Name!] = typeof(Control).Assembly,
         [typeof(Avalonia.AvaloniaObject).Assembly.GetName().Name!] = typeof(Avalonia.AvaloniaObject).Assembly,
@@ -19,11 +20,16 @@ internal sealed class RuntimeSharedAssemblyRegistry
         [typeof(ISunderPackageModule).Assembly.GetName().Name!] = typeof(ISunderPackageModule).Assembly,
     };
 
+    private readonly Dictionary<string, Assembly> _packageSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _sharedAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AssemblyName> _sharedAssemblyNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _sharedAssemblyHashes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SharedPackageAssemblyLoadContext _sharedAssemblyLoadContext;
 
     public RuntimeSharedAssemblyRegistry(IEnumerable<string> probeDirectories)
     {
+        _sharedAssemblyLoadContext = new SharedPackageAssemblyLoadContext(ResolveHostSharedAssembly);
+
         RegisterOptionalHostAssembly("Avalonia");
         RegisterOptionalHostAssembly("Avalonia.Markup");
         RegisterOptionalHostAssembly("Avalonia.Dialogs");
@@ -46,7 +52,7 @@ internal sealed class RuntimeSharedAssemblyRegistry
 
     private void RegisterOptionalHostAssembly(string assemblyName)
     {
-        if (_sharedAssemblies.ContainsKey(assemblyName))
+        if (_hostSharedAssemblies.ContainsKey(assemblyName))
         {
             return;
         }
@@ -54,7 +60,7 @@ internal sealed class RuntimeSharedAssemblyRegistry
         try
         {
             var assembly = Assembly.Load(new AssemblyName(assemblyName));
-            _sharedAssemblies[assemblyName] = assembly;
+            _hostSharedAssemblies[assemblyName] = assembly;
         }
         catch
         {
@@ -69,11 +75,17 @@ internal sealed class RuntimeSharedAssemblyRegistry
             return null;
         }
 
-        if (_sharedAssemblies.TryGetValue(assemblyName.Name, out var sharedAssembly))
+        if (_hostSharedAssemblies.TryGetValue(assemblyName.Name, out var hostAssembly))
         {
             // Host-owned boundary assemblies are authoritative for the session.
             // Packages may reference older patch/minor versions of the same host-shared assembly.
-            return sharedAssembly;
+            return hostAssembly;
+        }
+
+        if (_packageSharedAssemblies.TryGetValue(assemblyName.Name, out var packageAssembly))
+        {
+            ValidateSharedContractCompatibility(assemblyName, packageAssembly);
+            return packageAssembly;
         }
 
         if (!_sharedAssemblyPaths.TryGetValue(assemblyName.Name, out var sharedAssemblyPath))
@@ -81,15 +93,9 @@ internal sealed class RuntimeSharedAssemblyRegistry
             return null;
         }
 
-        if (TryGetLoadedDefaultAssembly(assemblyName, out var loadedDefaultAssembly))
-        {
-            _sharedAssemblies[assemblyName.Name] = loadedDefaultAssembly;
-            return loadedDefaultAssembly;
-        }
-
-        var loadedAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(sharedAssemblyPath);
+        var loadedAssembly = _sharedAssemblyLoadContext.LoadPackageSharedAssembly(sharedAssemblyPath);
         ValidateSharedContractCompatibility(assemblyName, loadedAssembly);
-        _sharedAssemblies[assemblyName.Name] = loadedAssembly;
+        _packageSharedAssemblies[assemblyName.Name] = loadedAssembly;
         return loadedAssembly;
     }
 
@@ -147,7 +153,7 @@ internal sealed class RuntimeSharedAssemblyRegistry
             var assembly = LoadSharedAssembly(assemblyName);
             foreach (var reference in assembly.GetReferencedAssemblies())
             {
-                if (reference.Name is null || _sharedAssemblies.ContainsKey(reference.Name))
+                if (reference.Name is null || _hostSharedAssemblies.ContainsKey(reference.Name))
                 {
                     continue;
                 }
@@ -172,27 +178,26 @@ internal sealed class RuntimeSharedAssemblyRegistry
 
     private Assembly LoadSharedAssembly(string assemblyName)
     {
-        if (_sharedAssemblies.TryGetValue(assemblyName, out var sharedAssembly))
+        if (_hostSharedAssemblies.TryGetValue(assemblyName, out var hostAssembly))
         {
-            return sharedAssembly;
+            return hostAssembly;
+        }
+
+        if (_packageSharedAssemblies.TryGetValue(assemblyName, out var packageAssembly))
+        {
+            return packageAssembly;
         }
 
         var requestedAssemblyName = _sharedAssemblyNames[assemblyName];
-        if (TryGetLoadedDefaultAssembly(requestedAssemblyName, out var loadedDefaultAssembly))
-        {
-            _sharedAssemblies[assemblyName] = loadedDefaultAssembly;
-            return loadedDefaultAssembly;
-        }
-
-        var loadedAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(_sharedAssemblyPaths[assemblyName]);
+        var loadedAssembly = _sharedAssemblyLoadContext.LoadPackageSharedAssembly(_sharedAssemblyPaths[assemblyName]);
         ValidateSharedContractCompatibility(requestedAssemblyName, loadedAssembly);
-        _sharedAssemblies[assemblyName] = loadedAssembly;
+        _packageSharedAssemblies[assemblyName] = loadedAssembly;
         return loadedAssembly;
     }
 
     private void TryRegisterSharedAssemblyPath(AssemblyCandidate candidate, AssemblyName? requestedAssemblyName = null)
     {
-        if (candidate.Name.Name is null || _sharedAssemblies.ContainsKey(candidate.Name.Name))
+        if (candidate.Name.Name is null || _hostSharedAssemblies.ContainsKey(candidate.Name.Name))
         {
             return;
         }
@@ -205,10 +210,19 @@ internal sealed class RuntimeSharedAssemblyRegistry
 
         if (_sharedAssemblyPaths.TryGetValue(candidate.Name.Name, out var existingPath))
         {
-            if (!AssemblyName.ReferenceMatchesDefinition(_sharedAssemblyNames[candidate.Name.Name], candidate.Name))
+            var existingName = _sharedAssemblyNames[candidate.Name.Name];
+            if (!AssemblyName.ReferenceMatchesDefinition(existingName, candidate.Name))
             {
                 throw new InvalidOperationException(
                     $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use a single version per session.");
+            }
+
+            var existingHash = _sharedAssemblyHashes[candidate.Name.Name];
+            var candidateHash = ComputeSha256(candidate.Path);
+            if (!string.Equals(existingHash, candidateHash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use identical assembly content per session.");
             }
 
             return;
@@ -216,6 +230,8 @@ internal sealed class RuntimeSharedAssemblyRegistry
 
         _sharedAssemblyPaths[candidate.Name.Name] = candidate.Path;
         _sharedAssemblyNames[candidate.Name.Name] = candidate.Name;
+        _sharedAssemblyHashes[candidate.Name.Name] = ComputeSha256(candidate.Path);
+        _sharedAssemblyLoadContext.RegisterPackageSharedAssembly(candidate.Name.Name, candidate.Path);
     }
 
     private static AssemblyCandidate? FindCandidate(
@@ -248,28 +264,51 @@ internal sealed class RuntimeSharedAssemblyRegistry
         }
     }
 
-    private static bool TryGetLoadedDefaultAssembly(AssemblyName requestedAssemblyName, out Assembly assembly)
+    private Assembly? ResolveHostSharedAssembly(AssemblyName assemblyName)
     {
-        assembly = null!;
-        if (requestedAssemblyName.Name is null)
+        if (assemblyName.Name is null)
         {
-            return false;
+            return null;
         }
 
-        foreach (var loadedAssembly in AssemblyLoadContext.Default.Assemblies)
-        {
-            if (!string.Equals(loadedAssembly.GetName().Name, requestedAssemblyName.Name, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            ValidateSharedContractCompatibility(requestedAssemblyName, loadedAssembly);
-            assembly = loadedAssembly;
-            return true;
-        }
-
-        return false;
+        return _hostSharedAssemblies.TryGetValue(assemblyName.Name, out var assembly)
+            ? assembly
+            : null;
     }
 
+    private static string ComputeSha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    public void Dispose()
+        => _sharedAssemblyLoadContext.Unload();
+
     private readonly record struct AssemblyCandidate(string Path, AssemblyName Name);
+
+    private sealed class SharedPackageAssemblyLoadContext(Func<AssemblyName, Assembly?> resolveHostAssembly)
+        : AssemblyLoadContext($"Sunder.Runtime.SharedContracts.{Guid.NewGuid():N}", isCollectible: true)
+    {
+        private readonly Dictionary<string, string> _assemblyPaths = new(StringComparer.OrdinalIgnoreCase);
+
+        public void RegisterPackageSharedAssembly(string assemblyName, string path)
+            => _assemblyPaths[assemblyName] = path;
+
+        public Assembly LoadPackageSharedAssembly(string path)
+            => LoadFromAssemblyPath(path);
+
+        protected override Assembly? Load(AssemblyName assemblyName)
+        {
+            var hostAssembly = resolveHostAssembly(assemblyName);
+            if (hostAssembly is not null)
+            {
+                return hostAssembly;
+            }
+
+            return assemblyName.Name is not null && _assemblyPaths.TryGetValue(assemblyName.Name, out var path)
+                ? LoadFromAssemblyPath(path)
+                : null;
+        }
+    }
 }

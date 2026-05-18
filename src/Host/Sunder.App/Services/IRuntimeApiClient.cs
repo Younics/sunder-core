@@ -45,6 +45,21 @@ public interface IRuntimeApiClient : IDisposable
         IReadOnlyList<string> folders,
         CancellationToken cancellationToken = default);
 
+    Task<DevPackageStageResult> StageDevPackagesAsync(
+        IReadOnlyList<string> folders,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support dev package staging.");
+
+    Task<DevPackageLoadResult> CommitDevPackageStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support dev package staging.");
+
+    Task DiscardDevPackageStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support dev package staging.");
+
     Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(
         CancellationToken cancellationToken = default);
 

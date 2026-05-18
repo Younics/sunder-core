@@ -1,0 +1,76 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        x:Class="Sunder.App.Views.DeveloperLogWindow"
+        x:DataType="vm:DeveloperLogWindowViewModel"
+        mc:Ignorable="d"
+        Width="1100"
+        Height="680"
+        MinWidth="820"
+        MinHeight="480"
+        CanResize="True"
+        Title="Developer Logs"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        Classes="secondary-window">
+  <Grid RowDefinitions="52,*"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <Border Grid.Row="0"
+            x:Name="ToolbarDragHost"
+            PointerPressed="ToolbarDragHost_OnPointerPressed"
+            Classes="toolbar-surface">
+      <Grid ColumnDefinitions="Auto,*,Auto"
+            VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal"
+                    Spacing="10"
+                    VerticalAlignment="Center">
+          <Border Classes="toolbar-logo-badge">
+            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Stretch="Uniform" />
+          </Border>
+          <TextBlock Classes="section-title"
+                     VerticalAlignment="Center"
+                     Text="Developer Logs" />
+        </StackPanel>
+
+        <controls:WindowChromeControls Grid.Column="2" />
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1"
+            Margin="20,12,20,20"
+            Classes="panel-surface"
+            Padding="0">
+      <Border Classes="secondary-panel-content-clip"
+              Padding="14">
+        <Grid RowDefinitions="Auto,*" RowSpacing="8">
+          <Grid ColumnDefinitions="130,110,180,*" ColumnSpacing="10">
+            <TextBlock Classes="caption" Text="Time" />
+            <TextBlock Grid.Column="1" Classes="caption" Text="Level" />
+            <TextBlock Grid.Column="2" Classes="caption" Text="Source" />
+            <TextBlock Grid.Column="3" Classes="caption" Text="Message" />
+          </Grid>
+          <ScrollViewer Grid.Row="1">
+            <ItemsControl ItemsSource="{Binding Entries}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:DeveloperLogEntryViewModel">
+                  <Grid ColumnDefinitions="130,110,180,*" ColumnSpacing="10" Margin="0,0,0,6">
+                    <TextBlock Classes="caption" Text="{Binding TimestampText}" />
+                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding LevelText}" />
+                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding Source}" />
+                    <TextBlock Grid.Column="3" Text="{Binding Message}" TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Grid>
+      </Border>
+    </Border>
+  </Grid>
+</Window>
