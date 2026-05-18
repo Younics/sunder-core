@@ -16,6 +16,9 @@ internal sealed class AppPackageHostedViewFacade(
         return GetOrCreateView(viewId);
     }
 
+    public bool InvalidateView(string viewId)
+        => viewRegistry.RemoveCachedView(viewId);
+
     public async ValueTask NotifyViewNavigatedAsync(
         string viewId,
         IReadOnlyDictionary<string, string?>? parameters,

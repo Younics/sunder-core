@@ -4,7 +4,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-public enum PackageOperationKind
+internal enum PackageOperationKind
 {
     InstallMarketplace,
     UpdateMarketplace,
@@ -15,7 +15,7 @@ public enum PackageOperationKind
     Uninstall,
 }
 
-public sealed record PackageOperationMetadata(
+internal sealed record PackageOperationMetadata(
     string? PackageId,
     PackageOperationKind Kind,
     string DisplayName)
@@ -63,7 +63,7 @@ public sealed record PackageOperationMetadata(
     }
 }
 
-public sealed class PackageOperationChangedEventArgs(BackgroundProcessSnapshot snapshot) : EventArgs
+internal sealed class PackageOperationChangedEventArgs(BackgroundProcessSnapshot snapshot) : EventArgs
 {
     public BackgroundProcessSnapshot Snapshot { get; } = snapshot;
 
@@ -72,7 +72,7 @@ public sealed class PackageOperationChangedEventArgs(BackgroundProcessSnapshot s
         : throw new InvalidOperationException("Background process is not a package operation.");
 }
 
-public sealed class PackageOperationService : IDisposable
+internal sealed class PackageOperationService : IDisposable
 {
     public const string PackageStoreGroupKey = "package-store";
     private readonly BackgroundProcessQueueService _backgroundProcesses;

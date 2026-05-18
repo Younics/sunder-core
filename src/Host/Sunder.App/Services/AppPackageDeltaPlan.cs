@@ -68,4 +68,5 @@ internal enum AppPackageDeltaAction
     SkipLoaded = 2,
     SkipDisabled = 3,
     UnloadDisabled = 4,
+    MissingSource = 5,
 }

@@ -32,14 +32,14 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths, I
             var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(packagePath, stagingPath, cancellationToken);
             if (validation.Errors.Count > 0 || validation.Manifest is null)
             {
-                return new PackageOperationResult(false, "Package validation failed.", false, validation.Warnings, validation.Errors);
+                return new PackageOperationResult(false, "Package validation failed.", RuntimeSessionApplied: false, RequiresAppRestart: false, validation.Warnings, validation.Errors);
             }
 
             var manifest = validation.Manifest;
             var compatibilityErrors = SunderSdkCompatibilityProfile.Validate(manifest);
             if (compatibilityErrors.Count > 0)
             {
-                return new PackageOperationResult(false, "Package SDK compatibility validation failed.", false, validation.Warnings, compatibilityErrors);
+                return new PackageOperationResult(false, "Package SDK compatibility validation failed.", RuntimeSessionApplied: false, RequiresAppRestart: false, validation.Warnings, compatibilityErrors);
             }
 
             installedPath = paths.GetInstalledPackagePath(manifest.Id!, manifest.Version!);
@@ -117,14 +117,14 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths, I
             var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(packagePath, stagingPath, cancellationToken);
             if (validation.Errors.Count > 0 || validation.Manifest is null)
             {
-                return new PackageOperationResult(false, "Package validation failed.", false, validation.Warnings, validation.Errors);
+                return new PackageOperationResult(false, "Package validation failed.", RuntimeSessionApplied: false, RequiresAppRestart: false, validation.Warnings, validation.Errors);
             }
 
             var manifest = validation.Manifest;
             var compatibilityErrors = SunderSdkCompatibilityProfile.Validate(manifest);
             if (compatibilityErrors.Count > 0)
             {
-                return new PackageOperationResult(false, "Package SDK compatibility validation failed.", false, validation.Warnings, compatibilityErrors);
+                return new PackageOperationResult(false, "Package SDK compatibility validation failed.", RuntimeSessionApplied: false, RequiresAppRestart: false, validation.Warnings, compatibilityErrors);
             }
 
             if (!string.Equals(manifest.Id, packageId, StringComparison.OrdinalIgnoreCase))

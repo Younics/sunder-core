@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageManifest
+internal sealed class RuntimePackageManifest
 {
     [JsonPropertyName("manifestVersion")]
     public int? ManifestVersion { get; init; }
@@ -26,7 +26,7 @@ internal sealed class DevPackageManifest
     public string? Icon { get; init; }
 
     [JsonPropertyName("dependsOn")]
-    public IReadOnlyList<DevPackageDependencyManifest>? DependsOn { get; init; }
+    public IReadOnlyList<RuntimePackageDependencyManifest>? DependsOn { get; init; }
 
     [JsonPropertyName("sdkApiVersion")]
     public int? SdkApiVersion { get; init; }
@@ -44,7 +44,7 @@ internal sealed class DevPackageManifest
     public string? TargetFramework { get; init; }
 }
 
-internal sealed class DevPackageDependencyManifest
+internal sealed class RuntimePackageDependencyManifest
 {
     [JsonPropertyName("packageId")]
     public string? PackageId { get; init; }

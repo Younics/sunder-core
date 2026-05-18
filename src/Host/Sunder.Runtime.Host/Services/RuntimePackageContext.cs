@@ -5,9 +5,9 @@ using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageContext : IPackageContext
+internal sealed class RuntimePackageContext : IPackageContext
 {
-    public DevPackageContext(string packageId, string version, string installPath)
+    public RuntimePackageContext(string packageId, string version, string installPath)
     {
         PackageId = packageId;
         Version = Version.TryParse(version, out var parsedVersion) ? parsedVersion : new Version(0, 0);

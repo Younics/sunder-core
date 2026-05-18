@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Runtime.Loader;
-using System.Security.Cryptography;
 using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -24,7 +23,6 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
     private readonly Dictionary<string, Assembly> _packageSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _sharedAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AssemblyName> _sharedAssemblyNames = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _sharedAssemblyHashes = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _optionalHostAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _missingOptionalHostAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private SharedPackageAssemblyLoadContext _sharedAssemblyLoadContext;
@@ -82,7 +80,6 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
             {
                 _sharedAssemblyPaths.Remove(assemblyName);
                 _sharedAssemblyNames.Remove(assemblyName);
-                _sharedAssemblyHashes.Remove(assemblyName);
             }
         }
     }
@@ -93,7 +90,6 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
         {
             _sharedAssemblyPaths.Clear();
             _sharedAssemblyNames.Clear();
-            _sharedAssemblyHashes.Clear();
             _packageSharedAssemblies.Clear();
             var previousLoadContext = _sharedAssemblyLoadContext;
             _sharedAssemblyLoadContext = CreateSharedAssemblyLoadContext();
@@ -285,20 +281,11 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
                     $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use a single version per session.");
             }
 
-            var existingHash = _sharedAssemblyHashes[candidate.Name.Name];
-            var candidateHash = ComputeSha256(candidate.Path);
-            if (!string.Equals(existingHash, candidateHash, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(
-                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use identical assembly content per session.");
-            }
-
             return;
         }
 
         _sharedAssemblyPaths[candidate.Name.Name] = candidate.Path;
         _sharedAssemblyNames[candidate.Name.Name] = candidate.Name;
-        _sharedAssemblyHashes[candidate.Name.Name] = ComputeSha256(candidate.Path);
         _sharedAssemblyLoadContext.RegisterPackageSharedAssembly(candidate.Name.Name, candidate.Path);
     }
 
@@ -361,19 +348,12 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
     private SharedPackageAssemblyLoadContext CreateSharedAssemblyLoadContext()
         => new(ResolveHostSharedAssembly);
 
-    private static string ComputeSha256(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-    }
-
     public void Dispose()
     {
         lock (_syncRoot)
         {
             _sharedAssemblyPaths.Clear();
             _sharedAssemblyNames.Clear();
-            _sharedAssemblyHashes.Clear();
             _packageSharedAssemblies.Clear();
             _sharedAssemblyLoadContext.Unload();
         }

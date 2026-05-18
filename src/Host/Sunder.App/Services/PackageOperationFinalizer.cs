@@ -25,6 +25,7 @@ internal sealed class PackageOperationFinalizer(
         await FinishSuccessfulOperationAsync(
             context,
             result.ImpactedPackageIds,
+            result.RuntimeSessionApplied,
             result.Message,
             successTitle,
             BuildRegistryPackageOperationToastMessage(result, successFallbackMessage),
@@ -47,6 +48,7 @@ internal sealed class PackageOperationFinalizer(
         await FinishSuccessfulOperationAsync(
             context,
             result.ImpactedPackageIds,
+            result.RuntimeSessionApplied,
             result.Message,
             successTitle,
             string.IsNullOrWhiteSpace(result.Message) ? successFallbackMessage : result.Message.Trim(),
@@ -56,12 +58,13 @@ internal sealed class PackageOperationFinalizer(
     private async Task FinishSuccessfulOperationAsync(
         BackgroundProcessContext context,
         IReadOnlyList<string> impactedPackageIds,
+        bool runtimeSessionApplied,
         string? resultMessage,
         string successTitle,
         string successToastMessage,
         string successFallbackMessage)
     {
-        if (impactedPackageIds.Count > 0)
+        if (impactedPackageIds.Count > 0 && runtimeSessionApplied)
         {
             context.ReportProgress(92, "Applying package changes to the running shell...");
             var lifecycleWarning = await ApplyPackageLifecycleChangesAsync(impactedPackageIds, context.CancellationToken).ConfigureAwait(false);
@@ -70,6 +73,15 @@ internal sealed class PackageOperationFinalizer(
                 context.ReportProgress(100, lifecycleWarning);
                 return;
             }
+        }
+
+        if (impactedPackageIds.Count > 0 && !runtimeSessionApplied)
+        {
+            var warning = "Package store updated, but Sunder could not load the package changes into the running package session.";
+            context.ReportProgress(100, warning);
+            await PublishWarningAsync("Package changes were not loaded", warning).ConfigureAwait(false);
+
+            return;
         }
 
         context.ReportProgress(100, resultMessage ?? successFallbackMessage);

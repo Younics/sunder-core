@@ -1,3 +1,4 @@
+using System.Reflection;
 using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
@@ -177,9 +178,26 @@ public sealed class PackageViewHostServiceTests
         Assert.Throws<ObjectDisposedException>(() => hostService.TryHandleUnhandledException(new InvalidOperationException("boom")));
         Assert.Throws<ObjectDisposedException>(() => hostService.GetOrCreateView("agent.chat"));
         Assert.Throws<ObjectDisposedException>(() => hostService.ReloadView("agent.chat"));
+        Assert.Throws<ObjectDisposedException>(() => hostService.InvalidateView("agent.chat"));
         Assert.Throws<ObjectDisposedException>(() => hostService.HasSettingsView("agent"));
         Assert.Throws<ObjectDisposedException>(() => hostService.ListSettingsViewPackages());
         Assert.Throws<ObjectDisposedException>(() => hostService.GetOrCreateSettingsView("agent"));
+    }
+
+    [Fact]
+    public void AppSharedAssemblyRegistry_WhenSameIdentityContractExistsAtDifferentPaths_DoesNotThrow()
+    {
+        using var registry = new AppSharedAssemblyRegistry([]);
+        var registerMethod = typeof(AppSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
+        var candidateType = typeof(AppSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
+        Assert.NotNull(registerMethod);
+        Assert.NotNull(candidateType);
+        var assemblyName = new AssemblyName("Example.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null");
+        var firstCandidate = Activator.CreateInstance(candidateType, typeof(PackageViewHostServiceTests).Assembly.Location, assemblyName);
+        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderPackageModule).Assembly.Location, assemblyName);
+
+        registerMethod.Invoke(registry, [firstCandidate, null]);
+        registerMethod.Invoke(registry, [secondCandidate, null]);
     }
 
     [Fact]
@@ -243,6 +261,51 @@ public sealed class PackageViewHostServiceTests
             await hostService.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);
         }
+    }
+
+    [Fact]
+    public async Task AppPackageDeltaCoordinator_WhenMultiplePackagesReload_UnloadsAllBeforeLoadingReplacements()
+    {
+        var packageA = CreateActivePackage("package.a");
+        var packageB = CreateActivePackage("package.b");
+        var sourceA = new PackageSourceDescriptor("package.a", PackageSourceKind.Dev, "/tmp/package-a");
+        var sourceB = new PackageSourceDescriptor("package.b", PackageSourceKind.Dev, "/tmp/package-b");
+        var loadedPackages = new Dictionary<string, AppLoadedPackageHandle>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["package.a"] = new(packageA, sourceA, string.Empty, null!, null!),
+            ["package.b"] = new(packageB, sourceB, string.Empty, null!, null!),
+        };
+        var operations = new List<string>();
+        var coordinator = new AppPackageDeltaCoordinator(
+            _ => [],
+            packageId => loadedPackages.TryGetValue(packageId, out var handle) ? handle : null,
+            _ => false,
+            (packageId, _, _) =>
+            {
+                operations.Add($"unload:{packageId}");
+                loadedPackages.Remove(packageId);
+                return Task.FromResult(true);
+            },
+            (package, source, _) =>
+            {
+                operations.Add($"load:{package.PackageId}");
+                loadedPackages[package.PackageId] = new AppLoadedPackageHandle(package, source, string.Empty, null!, null!);
+                return Task.CompletedTask;
+            },
+            (_, _, _, _, _) => Task.CompletedTask);
+
+        await coordinator.ApplyPackageDeltaAsync(
+            [packageA, packageB],
+            [sourceA, sourceB],
+            ["package.a", "package.b"],
+            CancellationToken.None);
+
+        Assert.Equal([
+            "unload:package.a",
+            "unload:package.b",
+            "load:package.a",
+            "load:package.b",
+        ], operations);
     }
 
     [Fact]
@@ -404,6 +467,82 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task PreflightPackageDeltaAsync_WhenActivationFails_DoesNotMutateLivePackageState()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            var liveView = hostService.GetOrCreateView("agent.chat");
+            Assert.NotNull(liveView);
+
+            File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowAfterViewMarkerFileName), string.Empty);
+
+            var preflight = await hostService.PreflightPackageDeltaAsync([package], [source], ["agent"]);
+
+            Assert.False(preflight.Success);
+            Assert.Contains(preflight.Errors, error => error.Contains("preflight failed", StringComparison.OrdinalIgnoreCase));
+            Assert.Same(liveView, hostService.GetOrCreateView("agent.chat"));
+            Assert.NotEmpty(hostService.FilterEnabledPackages([package]));
+            Assert.Equal(1, hostService.LoadedPackageCount);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task PreflightPackageDeltaAsync_DoesNotStartBackgroundServices()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RegisterBackgroundServiceMarkerFileName), string.Empty);
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowOnBackgroundStartMarkerFileName), string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            var preflight = await hostService.PreflightPackageDeltaAsync([package], [source], ["agent"]);
+
+            Assert.True(preflight.Success, string.Join(Environment.NewLine, preflight.Errors));
+            Assert.Empty(Directory.EnumerateFiles(packageSourceFolder, ShellLifecycleTestPackageModule.BackgroundServiceStartedFileName, SearchOption.AllDirectories));
+            Assert.Equal(0, hostService.LoadedPackageCount);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task ApplyPackageDeltaAsync_ProvidesPackageSessionServiceToPackageModules()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -464,6 +603,16 @@ public sealed class PackageViewHostServiceTests
             true,
             PackageReadinessState.Ready,
             [new PackageViewDescriptor("agent.chat", "agent", "Chat", null, "middle")]);
+
+    private static ActivePackageDescriptor CreateActivePackage(string packageId)
+        => new(
+            packageId,
+            packageId,
+            "1.0.0",
+            null,
+            true,
+            PackageReadinessState.Ready,
+            [new PackageViewDescriptor($"{packageId}.view", packageId, packageId, null, "middle")]);
 
     private static string CreateAppPackageSource(string rootPath, string packageId)
     {

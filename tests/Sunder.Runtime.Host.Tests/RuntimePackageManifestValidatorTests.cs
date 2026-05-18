@@ -3,12 +3,12 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class DevPackageManifestValidatorTests
+public sealed class RuntimePackageManifestValidatorTests
 {
     [Fact]
     public void Validate_WhenRequiredFieldsAreMissing_ReturnsExpectedErrors()
     {
-        var errors = DevPackageManifestValidator.Validate(new DevPackageManifest(), CreateTempDirectory());
+        var errors = RuntimePackageManifestValidator.Validate(new RuntimePackageManifest(), CreateTempDirectory());
 
         Assert.Contains(errors, error => error.Contains("'manifestVersion' 1", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("missing 'id'", StringComparison.Ordinal));
@@ -23,7 +23,7 @@ public sealed class DevPackageManifestValidatorTests
         var shadowFolder = CreateTempDirectory();
         var manifest = CreateManifest(entryAssembly: "Missing.Package.dll");
 
-        var errors = DevPackageManifestValidator.Validate(manifest, shadowFolder);
+        var errors = RuntimePackageManifestValidator.Validate(manifest, shadowFolder);
 
         Assert.Contains(errors, error => error.Contains("missing entry assembly 'Missing.Package.dll'", StringComparison.Ordinal));
     }
@@ -35,7 +35,7 @@ public sealed class DevPackageManifestValidatorTests
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
         File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
 
-        var errors = DevPackageManifestValidator.Validate(CreateManifest(), shadowFolder);
+        var errors = RuntimePackageManifestValidator.Validate(CreateManifest(), shadowFolder);
 
         Assert.Empty(errors);
     }
@@ -47,7 +47,7 @@ public sealed class DevPackageManifestValidatorTests
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
         File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
 
-        var errors = DevPackageManifestValidator.Validate(CreateManifest(sdkApiVersion: 2), shadowFolder);
+        var errors = RuntimePackageManifestValidator.Validate(CreateManifest(sdkApiVersion: 2), shadowFolder);
 
         Assert.Contains(errors, error => error.Contains("requires SDK API version 2", StringComparison.Ordinal));
     }
@@ -59,14 +59,14 @@ public sealed class DevPackageManifestValidatorTests
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
         File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
 
-        var errors = DevPackageManifestValidator.Validate(
+        var errors = RuntimePackageManifestValidator.Validate(
             CreateManifest(requiredSdkCapabilities: ["callbacks.v2"]),
             shadowFolder);
 
         Assert.Contains(errors, error => error.Contains("requires SDK capability 'callbacks.v2'", StringComparison.Ordinal));
     }
 
-    private static DevPackageManifest CreateManifest(
+    private static RuntimePackageManifest CreateManifest(
         string entryAssembly = "Test.Package.dll",
         int? sdkApiVersion = null,
         IReadOnlyList<string>? requiredSdkCapabilities = null)

@@ -42,7 +42,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly NotificationCenterService? _notificationCenter;
     private readonly BackgroundProcessQueueService? _backgroundProcessQueue;
     private string? _sessionFolder;
-    private bool _generationTransferred;
     private event EventHandler<PackageViewHostFaultEventArgs>? PackageFaultedHandlers;
 
     internal PackageViewHostService(
@@ -143,67 +142,15 @@ public sealed class PackageViewHostService : IAsyncDisposable
         await _composition.ApplyPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
     }
 
-    internal async Task<AppPackageHostStage> StageForPackagesAsync(
+    internal async Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyCollection<string>? forceReloadPackageIds = null,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        cancellationToken.ThrowIfCancellationRequested();
-        AppPackageSessionDirectories.CleanupStaleSessions();
-        var stagedSessionFolder = activePackages.Count > 0 ? AppPackageSessionDirectories.CreateSessionFolder() : null;
-        var stagedHost = new PackageViewHostService(
-            new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
-            [],
-            [],
-            [],
-            _faultReporter,
-            stagedSessionFolder,
-            new AppSharedAssemblyRegistry([]),
-            new AppPackageExtensionCatalog(),
-            _shellViewService,
-            _settingsNavigationService,
-            _packageSessionService,
-            _notificationCenter,
-            _backgroundProcessQueue);
-
-        try
-        {
-            await stagedHost.ApplyPackageDeltaAsync(activePackages, packageSources, cancellationToken: cancellationToken);
-            return new AppPackageHostStage(stagedHost, activePackages);
-        }
-        catch
-        {
-            await stagedHost.DisposeAsync();
-            throw;
-        }
-    }
-
-    internal async Task CommitStageAsync(AppPackageHostStage stage, CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
         using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken);
-        var oldBackgroundServices = _backgroundServices;
-        var oldComposition = _composition;
-        var oldState = _state;
-
-        DetachFaultForwarder(oldComposition);
-        _backgroundServices = stage.Host._backgroundServices;
-        _composition = stage.Host._composition;
-        _state = stage.Host._state;
-        _sessionFolder = stage.Host._sessionFolder;
-        AttachFaultForwarder(_composition);
-        stage.Host._generationTransferred = true;
-
-        try
-        {
-            await DisposeGenerationAsync(oldBackgroundServices, oldComposition, oldState);
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError("Failed to dispose the previous app package host generation after package reload.", ex);
-        }
+        return await _composition.PreflightPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
     }
 
     public IReadOnlyList<ActivePackageDescriptor> FilterEnabledPackages(IReadOnlyList<ActivePackageDescriptor> activePackages)
@@ -239,6 +186,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
     {
         ThrowIfDisposed();
         return _composition.ViewFacade.ReloadView(viewId);
+    }
+
+    public bool InvalidateView(string viewId)
+    {
+        ThrowIfDisposed();
+        return _composition.ViewFacade.InvalidateView(viewId);
     }
 
     public async ValueTask NotifyViewNavigatedAsync(
@@ -277,11 +230,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             return;
         }
 
-        if (!_generationTransferred)
-        {
-            DetachFaultForwarder(_composition);
-            await DisposeGenerationAsync(_backgroundServices, _composition, _state);
-        }
+        DetachFaultForwarder(_composition);
+        await DisposeGenerationAsync(_backgroundServices, _composition, _state);
 
         // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
         GC.SuppressFinalize(this);
@@ -341,7 +291,3 @@ public sealed class PackageViewHostService : IAsyncDisposable
         composition.DisposeSharedAssemblies();
     }
 }
-
-internal sealed record AppPackageHostStage(
-    PackageViewHostService Host,
-    IReadOnlyList<ActivePackageDescriptor> ActivePackages);

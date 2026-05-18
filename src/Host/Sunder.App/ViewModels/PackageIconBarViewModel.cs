@@ -61,6 +61,23 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowEmptyDropHint));
     }
 
+    public void SetItemsPreservingExisting(IEnumerable<ShellItemViewModel> items)
+    {
+        var nextItems = items.ToArray();
+        var nextItemSet = nextItems.ToHashSet();
+        foreach (var item in Items)
+        {
+            if (!nextItemSet.Contains(item))
+            {
+                item.Dispose();
+            }
+        }
+
+        ReplaceCollection(Items, nextItems);
+        RefreshVisibleItems();
+        OnPropertyChanged(nameof(ShowEmptyDropHint));
+    }
+
     public void UpdateVisibleCapacity(int visibleCapacity)
     {
         var normalizedCapacity = Math.Max(0, visibleCapacity);

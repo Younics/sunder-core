@@ -117,6 +117,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             GetOrderedViewIds,
             OpenPackageViewPanelAsync,
             RebuildRailCollections,
+            UpdateRailCollections,
             PersistShellState);
         _packagePanelCoordinator = new ShellPackagePanelCoordinator(
             _viewsById,
@@ -145,6 +146,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             _startupErrors,
             status => SyncStatusText = status,
             RebuildRailCollections,
+            UpdateRailCollections,
             PersistShellState);
         _packageLifecycleRefreshCoordinator = new ShellPackageLifecycleRefreshCoordinator(
             effectivePackageLifecycleCoordinator,
@@ -296,30 +298,6 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         bool deferHostedViewCreation = false)
         => await _packageLifecycleRefreshCoordinator.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation);
 
-    internal async Task ApplyPackageLifecycleSnapshotAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        CancellationToken cancellationToken = default,
-        bool deferHostedViewCreation = false)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
-        {
-            _packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, deferHostedViewCreation);
-        }
-        else
-        {
-            await Dispatcher.UIThread.InvokeAsync(
-                () => _packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, deferHostedViewCreation),
-                DispatcherPriority.Normal,
-                cancellationToken);
-        }
-
-        if (deferHostedViewCreation)
-        {
-            _ = _deferredHostedViewActivator.ActivateAfterLifecycleAsync(cancellationToken);
-        }
-    }
-
     public async Task ActivateDeferredInitialHostedViewsAsync(CancellationToken cancellationToken = default)
         => await _deferredHostedViewActivator.ActivateInitialHostedViewsAsync(cancellationToken);
 
@@ -369,6 +347,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         NotifyLayoutStateChanged();
     }
 
+    private void UpdateRailCollections(
+        IReadOnlySet<RailPlacement> placements,
+        IReadOnlySet<string> impactedPackageIds,
+        bool createHostedViews)
+    {
+        _railCollectionPresenter.Update(_shellLayout.GetSlots(), placements, impactedPackageIds, createHostedViews);
+        NotifyLayoutStateChanged();
+    }
+
     private IEnumerable<ShellPackageView> GetOrderedViewsForPlacement(RailPlacement placement)
         => ShellViewOrdering.GetOrderedViewsForPlacement(_viewsById.Values, _shellState, placement);
 
@@ -404,12 +391,16 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        var affectedPlacements = _viewsById.Values
+            .Where(view => string.Equals(view.PackageId, e.PackageId, StringComparison.OrdinalIgnoreCase))
+            .Select(view => view.Placement)
+            .ToHashSet();
         if (!_packageLifecyclePresenter.RemovePackageViewsFromShell(e.PackageId))
         {
             return;
         }
 
-        RebuildRailCollections();
+        UpdateRailCollections(affectedPlacements, new HashSet<string>([e.PackageId], StringComparer.OrdinalIgnoreCase), createHostedViews: true);
         PersistShellState();
     }
 

@@ -9,14 +9,23 @@ internal sealed class SettingsPackageSectionRefreshCoordinator(
     Action<bool> setIsBusy,
     Action<string> setStatusText)
 {
+    private readonly object _gate = new();
     private int _loadVersion;
 
     public Task CurrentLoadTask { get; private set; } = Task.CompletedTask;
 
     public Task RefreshAsync(bool preserveSelection, CancellationToken cancellationToken)
     {
-        CurrentLoadTask = LoadAsync(preserveSelection, cancellationToken);
-        return CurrentLoadTask;
+        lock (_gate)
+        {
+            if (!CurrentLoadTask.IsCompleted)
+            {
+                return CurrentLoadTask;
+            }
+
+            CurrentLoadTask = LoadAsync(preserveSelection, cancellationToken);
+            return CurrentLoadTask;
+        }
     }
 
     public void Invalidate()

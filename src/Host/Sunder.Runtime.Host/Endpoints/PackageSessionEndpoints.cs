@@ -33,6 +33,31 @@ internal static class PackageSessionEndpoints
                 Results.Ok(await packageSessionService.LoadPackageSessionAsync(request, cancellationToken)));
 
         group.MapPost(
+            "session/load-batch",
+            async (PackageLifecycleLoadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+                Results.Ok(await packageSessionService.LoadPackageLifecycleAsync(request, cancellationToken)));
+
+        group.MapPost(
+            "session/reload-installed",
+            async (InstalledPackageSessionReloadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+                Results.Ok(await packageSessionService.ReloadInstalledPackageSessionAsync(request, cancellationToken)));
+
+        group.MapPost(
+            "session/stage",
+            async (PackageLifecycleStageRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+                Results.Ok(await packageSessionService.StagePackageLifecycleAsync(request, cancellationToken)));
+
+        group.MapPost(
+            "session/stage/{stageId}/commit",
+            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+                Results.Ok(await packageSessionService.CommitPackageLifecycleStageAsync(stageId, cancellationToken)));
+
+        group.MapDelete(
+            "session/stage/{stageId}",
+            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+                await packageSessionService.DiscardPackageLifecycleStageAsync(stageId, cancellationToken) ? Results.NoContent() : Results.NotFound());
+
+        group.MapPost(
             "session/{packageId}/unload",
             async (string packageId, PackageSessionUnloadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
                 Results.Ok(await packageSessionService.UnloadPackageSessionAsync(packageId, request.SourceKind, cancellationToken)));

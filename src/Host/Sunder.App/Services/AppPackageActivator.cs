@@ -18,7 +18,8 @@ internal sealed class AppPackageActivator(
         Action<string, Assembly> registerPackageAssembly,
         Action<AppPackageLoadContext> trackLoadContext,
         Action<object> trackOwnedDisposable,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool startBackgroundServices = true)
     {
         var manifest = AppPackageManifest.Load(Path.Combine(preparedSource.Folder, "sunder-package.json"));
         if (manifest?.EntryAssembly is null)
@@ -46,7 +47,10 @@ internal sealed class AppPackageActivator(
             $"Configure {package.DisplayName}."));
         var registry = new AppPackageContributionRegistry(serviceProvider, viewRegistry, backgroundServices, extensionCatalog, package.PackageId);
         module.RegisterContributions(registry, serviceProvider);
-        await backgroundServices.StartAsync(package.PackageId, cancellationToken);
+        if (startBackgroundServices)
+        {
+            await backgroundServices.StartAsync(package.PackageId, cancellationToken);
+        }
     }
 
     private static ISunderPackageModule CreatePackageModule(Assembly entryAssembly)

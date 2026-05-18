@@ -3,11 +3,11 @@ using System.Runtime.Loader;
 using System.Runtime.InteropServices;
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class ActiveDevPackageLoadContext(
+internal sealed class RuntimePackageLoadContext(
     string packageId,
     string entryAssemblyPath,
     RuntimeSharedAssemblyRegistry sharedAssemblyRegistry)
-    : AssemblyLoadContext($"Sunder.DevPackage.{packageId}.{Guid.NewGuid():N}", isCollectible: true)
+    : AssemblyLoadContext($"Sunder.RuntimePackage.{packageId}.{Guid.NewGuid():N}", isCollectible: true)
 {
     private readonly string[] _probeDirectories = [Path.GetDirectoryName(entryAssemblyPath)!];
     private readonly AssemblyDependencyResolver _dependencyResolver = new(entryAssemblyPath);

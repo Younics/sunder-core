@@ -9,6 +9,7 @@ internal sealed class AppPackageHostComposition
     private readonly AppPackageDeltaCoordinator _deltaCoordinator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
+    private readonly AppPackagePreflightCoordinator _preflightCoordinator;
     private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
     private readonly AppPackageHostState _state;
     private readonly AppPackageUnloadCoordinator _unloadCoordinator;
@@ -87,6 +88,9 @@ internal sealed class AppPackageHostComposition
             UnloadPackageAsync,
             loadCoordinator.LoadPackageAsync,
             DisablePackageAsync);
+        _preflightCoordinator = new AppPackagePreflightCoordinator(
+            _state.GetLoadedPackage,
+            _state.IsPackageDisabled);
     }
 
     public AppPackageAssemblyTracker AssemblyTracker { get; }
@@ -101,6 +105,13 @@ internal sealed class AppPackageHostComposition
         IReadOnlyCollection<string>? forceReloadPackageIds,
         CancellationToken cancellationToken)
         => _deltaCoordinator.ApplyPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
+
+    public Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyCollection<string>? forceReloadPackageIds,
+        CancellationToken cancellationToken)
+        => _preflightCoordinator.PreflightPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
 
     public void DisablePackage(
         string packageId,

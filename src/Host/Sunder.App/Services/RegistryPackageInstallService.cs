@@ -6,20 +6,24 @@ namespace Sunder.App.Services;
 public sealed record RegistryPackageInstallExecutionResult(
     bool Success,
     string Message,
+    bool RuntimeSessionApplied,
+    bool RequiresAppRestart,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds,
     IReadOnlyList<RegistryPackageInstallPlanItem> PlanItems)
 {
+    public bool AppShellApplied { get; init; }
+
     public static RegistryPackageInstallExecutionResult Empty(string message)
-        => new(true, message, [], [], [], []);
+        => new(true, message, RuntimeSessionApplied: true, RequiresAppRestart: false, [], [], [], []);
 
     public static RegistryPackageInstallExecutionResult Failed(
         string message,
         IReadOnlyList<string>? errors = null,
         IReadOnlyList<string>? warnings = null,
         IReadOnlyList<RegistryPackageInstallPlanItem>? planItems = null)
-        => new(false, message, warnings ?? [], errors ?? [message], [], planItems ?? []);
+        => new(false, message, RuntimeSessionApplied: false, RequiresAppRestart: false, warnings ?? [], errors ?? [message], [], planItems ?? []);
 }
 
 public sealed record RegistryPackageInstallProgress(string StatusText, double? ProgressPercent);
@@ -82,6 +86,8 @@ public sealed class RegistryPackageInstallService
         var errors = new List<string>();
         var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var planItems = new List<RegistryPackageInstallPlanItem>();
+        var runtimeSessionApplied = true;
+        var requiresAppRestart = false;
 
         foreach (var update in updates.Updates)
         {
@@ -96,7 +102,11 @@ public sealed class RegistryPackageInstallService
             progress,
             cancellationToken);
 
-            warnings.AddRange(result.Warnings);
+            warnings.AddRange(result.RuntimeSessionApplied
+                ? result.Warnings
+                : result.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning)));
+            runtimeSessionApplied = result.RuntimeSessionApplied;
+            requiresAppRestart = result.RequiresAppRestart;
             planItems.AddRange(result.PlanItems);
             foreach (var impactedPackageId in result.ImpactedPackageIds)
             {
@@ -115,6 +125,8 @@ public sealed class RegistryPackageInstallService
             return new RegistryPackageInstallExecutionResult(
                 false,
                 errors[0],
+                runtimeSessionApplied,
+                requiresAppRestart,
                 warnings,
                 errors,
                 impactedPackageIds.ToArray(),
@@ -124,6 +136,8 @@ public sealed class RegistryPackageInstallService
         return new RegistryPackageInstallExecutionResult(
             true,
             $"Updated {planItems.Select(item => item.PackageId).Distinct(StringComparer.OrdinalIgnoreCase).Count()} package(s).",
+            runtimeSessionApplied,
+            requiresAppRestart,
             warnings,
             [],
             impactedPackageIds.ToArray(),
@@ -147,6 +161,8 @@ public sealed class RegistryPackageInstallService
         var tempDirectory = Path.Combine(Path.GetTempPath(), "sunder-app-registry", Guid.NewGuid().ToString("N"));
         var warnings = plan.Warnings.ToList();
         var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var runtimeSessionApplied = true;
+        var requiresAppRestart = false;
 
         try
         {
@@ -177,13 +193,19 @@ public sealed class RegistryPackageInstallService
                     return new RegistryPackageInstallExecutionResult(
                         false,
                         errors[0],
-                        warnings.Concat(operationResult.Warnings).ToArray(),
-                        errors,
+                        runtimeSessionApplied,
+                        requiresAppRestart,
+                warnings.Concat(operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning))).ToArray(),
+                errors,
                         impactedPackageIds.ToArray(),
                         plan.Items);
                 }
 
-                warnings.AddRange(operationResult.Warnings);
+                warnings.AddRange(operationResult.RuntimeSessionApplied
+                    ? operationResult.Warnings
+                    : operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning)));
+                runtimeSessionApplied = operationResult.RuntimeSessionApplied;
+                requiresAppRestart = operationResult.RequiresAppRestart;
                 foreach (var impactedPackageId in operationResult.ImpactedPackageIds)
                 {
                     impactedPackageIds.Add(impactedPackageId);
@@ -195,9 +217,21 @@ public sealed class RegistryPackageInstallService
             TryDeleteDirectory(tempDirectory);
         }
 
+        progress?.Invoke(new RegistryPackageInstallProgress("Loading installed packages...", 92));
+        var finalReload = await runtimeApiClient.ReloadInstalledPackageSessionAsync(impactedPackageIds.ToArray(), cancellationToken);
+        warnings.AddRange(finalReload.Warnings);
+        runtimeSessionApplied = finalReload.RuntimeSessionApplied;
+        requiresAppRestart = finalReload.RequiresAppRestart;
+        foreach (var impactedPackageId in finalReload.ImpactedPackageIds)
+        {
+            impactedPackageIds.Add(impactedPackageId);
+        }
+
         return new RegistryPackageInstallExecutionResult(
             true,
             $"Installed {plan.Items.Count} package change(s).",
+            runtimeSessionApplied,
+            requiresAppRestart,
             warnings,
             [],
             impactedPackageIds.ToArray(),
@@ -212,6 +246,9 @@ public sealed class RegistryPackageInstallService
             .ToArray();
         return RegistryPackageInstallExecutionResult.Failed(errors[0], errors, plan.Warnings);
     }
+
+    private static bool IsRuntimeSessionReloadWarning(string warning)
+        => warning.StartsWith("Installed package changes are saved, but the running package session ", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<RegistryInstalledPackageState> ToInstalledPackageStates(IReadOnlyList<InstalledPackageDescriptor> packages)
         => packages

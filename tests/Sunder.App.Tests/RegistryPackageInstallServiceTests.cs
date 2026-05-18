@@ -38,6 +38,7 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.Equal(["dependency", "root"], runtimeClient.InstalledPackageIds);
         Assert.Equal(["dependency", "root"], result.ImpactedPackageIds);
         Assert.Equal(["dependency", "root"], registryClient.DownloadedPackageIds);
+        Assert.Collection(runtimeClient.ReloadedPackageIds, packageIds => Assert.Equal(["dependency", "root"], packageIds));
     }
 
     [Fact]
@@ -68,6 +69,42 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.True(result.Success);
         Assert.Empty(runtimeClient.InstalledPackageIds);
         Assert.Equal(["agent"], runtimeClient.UpgradedPackageIds);
+        Assert.Collection(runtimeClient.ReloadedPackageIds, packageIds => Assert.Equal(["agent"], packageIds));
+    }
+
+    [Fact]
+    public async Task InstallPackageAsync_WhenPerPackageRuntimeReloadFails_UsesFinalReloadResult()
+    {
+        var service = new RegistryPackageInstallService();
+        var registryClient = new FakeRegistryApiClient
+        {
+            InstallPlan = new RegistryResolveInstallPlanResponse(
+                true,
+                [CreatePlanItem("agent", null, "1.0.0")],
+                [],
+                [],
+                []),
+        };
+        var runtimeClient = new FakeRuntimeApiClient
+        {
+            OperationRuntimeSessionApplied = false,
+            FinalReloadRuntimeSessionApplied = true,
+        };
+
+        var result = await service.InstallPackageAsync(
+            "agent",
+            version: null,
+            tag: "latest",
+            allowDowngrade: false,
+            reinstall: false,
+            registryClient,
+            runtimeClient);
+
+        Assert.True(result.Success);
+        Assert.True(result.RuntimeSessionApplied);
+        Assert.False(result.RequiresAppRestart);
+        Assert.DoesNotContain(result.Warnings, warning => warning.Contains("kept the previous loaded packages", StringComparison.OrdinalIgnoreCase));
+        Assert.Collection(runtimeClient.ReloadedPackageIds, packageIds => Assert.Equal(["agent"], packageIds));
     }
 
     [Fact]
@@ -176,6 +213,12 @@ public sealed class RegistryPackageInstallServiceTests
 
         public List<string> UpgradedPackageIds { get; } = [];
 
+        public List<IReadOnlyList<string>> ReloadedPackageIds { get; } = [];
+
+        public bool OperationRuntimeSessionApplied { get; init; } = true;
+
+        public bool FinalReloadRuntimeSessionApplied { get; init; } = true;
+
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<SystemStatusResponse?>(null);
 
@@ -201,7 +244,13 @@ public sealed class RegistryPackageInstallServiceTests
         {
             var packageId = Path.GetFileName(packagePath).Split('.')[0];
             InstalledPackageIds.Add(packageId);
-            return Task.FromResult(new PackageOperationResult(true, "installed", false, [], [])
+            return Task.FromResult(new PackageOperationResult(
+                true,
+                "installed",
+                OperationRuntimeSessionApplied,
+                false,
+                OperationRuntimeSessionApplied ? [] : ["Installed package changes are saved, but the running package session kept the previous loaded packages: test failure"],
+                [])
             {
                 ImpactedPackageIds = [packageId],
             });
@@ -210,9 +259,30 @@ public sealed class RegistryPackageInstallServiceTests
         public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default)
         {
             UpgradedPackageIds.Add(packageId);
-            return Task.FromResult(new PackageOperationResult(true, "upgraded", false, [], [])
+            return Task.FromResult(new PackageOperationResult(
+                true,
+                "upgraded",
+                OperationRuntimeSessionApplied,
+                false,
+                OperationRuntimeSessionApplied ? [] : ["Installed package changes are saved, but the running package session kept the previous loaded packages: test failure"],
+                [])
             {
                 ImpactedPackageIds = [packageId],
+            });
+        }
+
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
+        {
+            ReloadedPackageIds.Add(impactedPackageIds.ToArray());
+            return Task.FromResult(new PackageOperationResult(
+                true,
+                "reloaded",
+                FinalReloadRuntimeSessionApplied,
+                false,
+                FinalReloadRuntimeSessionApplied ? [] : ["Installed package changes are saved, but the running package session kept the previous loaded packages: final failure"],
+                [])
+            {
+                ImpactedPackageIds = impactedPackageIds.ToArray(),
             });
         }
 
@@ -225,7 +295,7 @@ public sealed class RegistryPackageInstallServiceTests
         public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<DevPackageLoadResult> LoadDevPackagesAsync(IReadOnlyList<string> folders, CancellationToken cancellationToken = default)
+        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)

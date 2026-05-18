@@ -33,7 +33,7 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ThemingV1,
     };
 
-    public static IReadOnlyList<string> Validate(DevPackageManifest manifest)
+    public static IReadOnlyList<string> Validate(RuntimePackageManifest manifest)
     {
         return Validate(
             manifest.Id,

@@ -100,6 +100,40 @@ public sealed class PackageOperationServiceTests
     }
 
     [Fact]
+    public async Task EnqueueLocalInstall_WhenRuntimeSessionNotApplied_DoesNotApplyShellLifecycleChanges()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient
+        {
+            RuntimeSessionApplied = false,
+            RequiresAppRestart = true,
+        };
+        var lifecycleApplications = new List<IReadOnlyList<string>>();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (packageIds, _) =>
+            {
+                lifecycleApplications.Add(packageIds.ToArray());
+                return Task.CompletedTask;
+            },
+            notificationCenter);
+
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        var completed = queue.GetProcess(operation.ProcessId);
+        Assert.Equal(["agent"], runtimeClient.InstalledPackageIds);
+        Assert.Empty(lifecycleApplications);
+        Assert.Contains("could not load the package changes", completed?.StatusText);
+        var notification = Assert.Single(notificationCenter.ListNotifications());
+        Assert.Equal("Package changes were not loaded", notification.Title);
+        Assert.Equal(PackageNotificationSeverity.Warning, notification.Severity);
+    }
+
+    [Fact]
     public async Task EnqueueEnable_RunsInBackgroundAndAppliesLifecycleChanges()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -399,6 +433,10 @@ public sealed class PackageOperationServiceTests
 
         public TimeSpan EnableDelay { get; init; }
 
+        public bool RuntimeSessionApplied { get; init; } = true;
+
+        public bool RequiresAppRestart { get; init; }
+
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
@@ -430,7 +468,7 @@ public sealed class PackageOperationServiceTests
             var fileName = Path.GetFileNameWithoutExtension(packagePath);
             var packageId = fileName.Split('.')[0];
             InstalledPackageIds.Add(packageId);
-            return new PackageOperationResult(true, $"Installed {packageId}.", RequiresAppRestart: false, [], [])
+            return new PackageOperationResult(true, $"Installed {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
             {
                 ImpactedPackageIds = [packageId],
             };
@@ -448,7 +486,7 @@ public sealed class PackageOperationServiceTests
 
             cancellationToken.ThrowIfCancellationRequested();
             EnabledPackageIds.Add(packageId);
-            return new PackageOperationResult(true, $"Enabled {packageId}.", RequiresAppRestart: false, [], [])
+            return new PackageOperationResult(true, $"Enabled {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
             {
                 ImpactedPackageIds = [packageId],
             };
@@ -458,7 +496,7 @@ public sealed class PackageOperationServiceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             DisabledPackageIds.Add(packageId);
-            return Task.FromResult(new PackageOperationResult(true, $"Disabled {packageId}.", RequiresAppRestart: false, [], [])
+            return Task.FromResult(new PackageOperationResult(true, $"Disabled {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
             {
                 ImpactedPackageIds = [packageId],
             });
@@ -467,8 +505,14 @@ public sealed class PackageOperationServiceTests
         public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<DevPackageLoadResult> LoadDevPackagesAsync(IReadOnlyList<string> folders, CancellationToken cancellationToken = default)
+        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
+            => Task.FromResult(new PackageOperationResult(true, "reloaded", RuntimeSessionApplied, RequiresAppRestart, [], [])
+            {
+                ImpactedPackageIds = impactedPackageIds.ToArray(),
+            });
 
         public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();

@@ -15,7 +15,8 @@ internal sealed class RuntimePackageSessionService
     private readonly PackageSessionState _sessionState;
     private readonly PackageSessionSourceState _sourceState = new();
     private readonly PackageSessionReconciler _reconciler;
-    private readonly Dictionary<string, PendingDevPackageStage> _pendingDevStages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PendingPackageLifecycleStage> _pendingLifecycleStages = new(StringComparer.OrdinalIgnoreCase);
+    private long _sessionGeneration;
 
     public RuntimePackageSessionService(
         ILogger<RuntimePackageSessionService> logger,
@@ -60,6 +61,251 @@ internal sealed class RuntimePackageSessionService
             PackageSourceKind.Dev => await LoadDevPackageOverlayAsync(request, cancellationToken),
             _ => PackageSessionOperationResult.Failed($"Unsupported package session source kind '{request.SourceKind}'."),
         };
+    }
+
+    public async Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
+        PackageLifecycleLoadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            var warnings = new List<string>();
+            var errors = new List<string>();
+            var currentActivePackages = _sessionState.GetActivePackages();
+            var currentPackageSources = _sessionState.GetActivePackageSources();
+            var sources = _sourceState.Snapshot();
+            ReplaceLiveReloadOverlays(sources);
+            var owner = ToSessionOverlayOwner(request.OverlayOwner);
+            var forceReloadDevFolders = AddLifecyclePackageSources(sources, request.Packages, owner, errors);
+            if (errors.Count > 0)
+            {
+                return PackageLifecycleOperationResult.Failed(
+                    errors[0],
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    errors);
+            }
+
+            var loadResult = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
+            warnings.AddRange(loadResult.Warnings);
+            errors.AddRange(loadResult.Errors);
+            if (loadResult.Session is null || errors.Count > 0)
+            {
+                if (loadResult.Session is not null)
+                {
+                    await loadResult.Session.DisposeAsync();
+                }
+
+                return PackageLifecycleOperationResult.Failed(
+                    errors.FirstOrDefault() ?? "Package lifecycle load failed.",
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    errors);
+            }
+
+            var stagedActivePackages = loadResult.Session.GetActivePackages();
+            var stagedPackageSources = loadResult.Session.GetActivePackageSources();
+            var impactedPackageIds = BuildImpactedPackageIds(
+                currentActivePackages,
+                currentPackageSources,
+                stagedActivePackages,
+                stagedPackageSources,
+                forceReloadDevFolders);
+            try
+            {
+                await loadResult.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await loadResult.Session.DisposeAsync();
+                var message = $"Package lifecycle load failed while starting background services: {ex.Message}";
+                _logger.LogError(ex, "Failed to start background services for package lifecycle load");
+                return PackageLifecycleOperationResult.Failed(
+                    message,
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    [message],
+                    impactedPackageIds);
+            }
+
+            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+            _sourceState.Replace(sources);
+            _sessionState.PublishSession(loadResult.Session);
+            _sessionGeneration++;
+            return new PackageLifecycleOperationResult(
+                true,
+                "Package lifecycle loaded.",
+                stagedActivePackages,
+                stagedPackageSources,
+                warnings,
+                [],
+                impactedPackageIds);
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(
+        PackageLifecycleStageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            var warnings = new List<string>();
+            var errors = new List<string>();
+            var currentActivePackages = _sessionState.GetActivePackages();
+            var currentPackageSources = _sessionState.GetActivePackageSources();
+            var sources = _sourceState.Snapshot();
+            ReplaceLiveReloadOverlays(sources);
+            var owner = ToSessionOverlayOwner(request.OverlayOwner);
+            var forceReloadDevFolders = AddLifecyclePackageSources(sources, request.Packages, owner, errors);
+            if (errors.Count > 0)
+            {
+                return PackageLifecycleStageResult.Failed(errors[0], currentActivePackages, currentPackageSources, warnings, errors);
+            }
+
+            var loadResult = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
+            warnings.AddRange(loadResult.Warnings);
+            errors.AddRange(loadResult.Errors);
+            if (loadResult.Session is null || errors.Count > 0)
+            {
+                if (loadResult.Session is not null)
+                {
+                    await loadResult.Session.DisposeAsync();
+                }
+
+                return PackageLifecycleStageResult.Failed(
+                    errors.FirstOrDefault() ?? "Package lifecycle stage failed.",
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    errors);
+            }
+
+            var stagedActivePackages = loadResult.Session.GetActivePackages();
+            var stagedPackageSources = loadResult.Session.GetActivePackageSources();
+            var impactedPackageIds = BuildImpactedPackageIds(
+                currentActivePackages,
+                currentPackageSources,
+                stagedActivePackages,
+                stagedPackageSources,
+                forceReloadDevFolders);
+            var stageId = Guid.NewGuid().ToString("N");
+            var stage = new PendingPackageLifecycleStage(stageId, loadResult.Session, sources, impactedPackageIds, _sessionGeneration);
+            _pendingLifecycleStages[stageId] = stage;
+            return new PackageLifecycleStageResult(
+                stageId,
+                stagedActivePackages,
+                stagedPackageSources,
+                warnings,
+                errors,
+                impactedPackageIds);
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_pendingLifecycleStages.Remove(stageId, out var stage))
+            {
+                return PackageLifecycleOperationResult.Failed(
+                    $"Package lifecycle stage '{stageId}' was not found.",
+                    _sessionState.GetActivePackages(),
+                    _sessionState.GetActivePackageSources());
+            }
+
+            var warnings = new List<string>();
+            var errors = new List<string>();
+            if (stage.BaseSessionGeneration != _sessionGeneration)
+            {
+                await stage.Session.DisposeAsync();
+                var message = $"Package lifecycle stage '{stageId}' is stale because the active package session changed before commit.";
+                return PackageLifecycleOperationResult.Failed(
+                    message,
+                    _sessionState.GetActivePackages(),
+                    _sessionState.GetActivePackageSources(),
+                    warnings,
+                    [message],
+                    stage.ImpactedPackageIds);
+            }
+
+            try
+            {
+                await stage.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
+                var activePackages = stage.Session.GetActivePackages();
+                var packageSources = stage.Session.GetActivePackageSources();
+                warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+                _sourceState.Replace(stage.Sources);
+                _sessionState.PublishSession(stage.Session);
+                _sessionGeneration++;
+                return new PackageLifecycleOperationResult(
+                    true,
+                    "Package lifecycle stage committed.",
+                    activePackages,
+                    packageSources,
+                    warnings,
+                    errors,
+                    stage.ImpactedPackageIds);
+            }
+            catch (Exception ex)
+            {
+                await stage.Session.DisposeAsync();
+                if (ex is OperationCanceledException)
+                {
+                    throw;
+                }
+
+                errors.Add($"Failed to commit package lifecycle stage '{stageId}': {ex.Message}");
+                _logger.LogError(ex, "Failed to commit package lifecycle stage {StageId}", stageId);
+                return PackageLifecycleOperationResult.Failed(
+                    errors[0],
+                    _sessionState.GetActivePackages(),
+                    _sessionState.GetActivePackageSources(),
+                    warnings,
+                    errors,
+                    stage.ImpactedPackageIds);
+            }
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<bool> DiscardPackageLifecycleStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_pendingLifecycleStages.Remove(stageId, out var stage))
+            {
+                return false;
+            }
+
+            await stage.Session.DisposeAsync();
+            return true;
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
     }
 
     public async Task<PackageSessionOperationResult> UnloadPackageSessionAsync(
@@ -176,172 +422,74 @@ internal sealed class RuntimePackageSessionService
         CancellationToken cancellationToken = default)
         => await _authCoordinator.DisconnectPackageAsync(packageId, cancellationToken);
 
-    public async Task<DevPackageLoadResult> LoadAsync(DevPackageLoadRequest request)
-    {
-        await _reloadGate.WaitAsync();
-        try
-        {
-            var warnings = new List<string>();
-            var errors = new List<string>();
-
-            var folders = NormalizeDevPackageFolders(request);
-
-            var sources = _sourceState.Snapshot();
-            sources.RemoveDevOverlaysOwnedBy(PackageSessionOverlayOwner.Startup, PackageSessionOverlayOwner.HotReload);
-            foreach (var folder in folders)
-            {
-                AddDevPackageOverlay(sources, folder, watch: false, PackageSessionOverlayOwner.Startup, errors);
-            }
-
-            if (errors.Count > 0)
-            {
-                return new DevPackageLoadResult(_sessionState.GetActivePackages(), warnings, errors);
-            }
-
-            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
-
-            var loadResult = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: true);
-            warnings.AddRange(loadResult.Warnings);
-            errors.AddRange(loadResult.Errors);
-            if (loadResult.Session is null)
-            {
-                return new DevPackageLoadResult([], warnings, errors);
-            }
-
-            _sourceState.Replace(sources);
-            _sessionState.PublishSession(loadResult.Session);
-
-            return new DevPackageLoadResult(loadResult.Session.GetActivePackages(), warnings, errors);
-        }
-        finally
-        {
-            _reloadGate.Release();
-        }
-    }
-
-    public async Task<DevPackageLoadResult> LoadInstalledPackagesAsync()
-    {
-        await _reloadGate.WaitAsync();
-        try
-        {
-            _sourceState.ClearDevOverlays();
-            var warnings = new List<string>();
-            var errors = new List<string>();
-            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
-            return await LoadInstalledPackagesCoreAsync(warnings, errors);
-        }
-        finally
-        {
-            _reloadGate.Release();
-        }
-    }
-
-    public async Task<DevPackageStageResult> StageDevPackagesAsync(DevPackageLoadRequest request)
-    {
-        await _reloadGate.WaitAsync();
-        try
-        {
-            var warnings = new List<string>();
-            var errors = new List<string>();
-            var folders = NormalizeDevPackageFolders(request);
-            if (folders.Count == 0)
-            {
-                errors.Add("At least one dev package folder is required for staging.");
-                return new DevPackageStageResult(null, [], [], warnings, errors);
-            }
-
-            var sources = _sourceState.Snapshot();
-            sources.RemoveDevOverlaysOwnedBy(PackageSessionOverlayOwner.Startup, PackageSessionOverlayOwner.HotReload);
-            foreach (var folder in folders)
-            {
-                AddDevPackageOverlay(sources, folder, watch: false, PackageSessionOverlayOwner.HotReload, errors);
-            }
-
-            if (errors.Count > 0)
-            {
-                return new DevPackageStageResult(null, [], [], warnings, errors);
-            }
-
-            var loadResult = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: false);
-            warnings.AddRange(loadResult.Warnings);
-            errors.AddRange(loadResult.Errors);
-            if (loadResult.Session is null || errors.Count > 0)
-            {
-                if (loadResult.Session is not null)
-                {
-                    await loadResult.Session.DisposeAsync();
-                }
-
-                return new DevPackageStageResult(null, [], [], warnings, errors);
-            }
-
-            var stageId = Guid.NewGuid().ToString("N");
-            var stage = new PendingDevPackageStage(stageId, loadResult.Session, sources);
-            _pendingDevStages[stageId] = stage;
-            return new DevPackageStageResult(
-                stageId,
-                loadResult.Session.GetActivePackages(),
-                loadResult.Session.GetActivePackageSources(),
-                warnings,
-                errors);
-        }
-        finally
-        {
-            _reloadGate.Release();
-        }
-    }
-
-    public async Task<DevPackageLoadResult> CommitDevPackageStageAsync(string stageId, CancellationToken cancellationToken = default)
+    public async Task<PackageLifecycleOperationResult> LoadInstalledPackagesAsync(CancellationToken cancellationToken = default)
     {
         await _reloadGate.WaitAsync(cancellationToken);
         try
         {
-            if (!_pendingDevStages.Remove(stageId, out var stage))
-            {
-                return new DevPackageLoadResult([], [], [$"Dev package stage '{stageId}' was not found."]);
-            }
-
             var warnings = new List<string>();
             var errors = new List<string>();
+            var currentActivePackages = _sessionState.GetActivePackages();
+            var currentPackageSources = _sessionState.GetActivePackageSources();
+            var sources = _sourceState.Snapshot();
+            sources.RemoveDevOverlaysOwnedBy(
+                PackageSessionOverlayOwner.Startup,
+                PackageSessionOverlayOwner.HotReload,
+                PackageSessionOverlayOwner.Sdk);
+
+            var loadResult = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
+            warnings.AddRange(loadResult.Warnings);
+            errors.AddRange(loadResult.Errors);
+            if (loadResult.Session is null)
+            {
+                return PackageLifecycleOperationResult.Failed(
+                    errors.FirstOrDefault() ?? "Installed package lifecycle load failed.",
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    errors);
+            }
+
+            warnings.AddRange(errors.Select(error => $"Installed package session loaded with package errors: {error}"));
+
+            var activePackages = loadResult.Session.GetActivePackages();
+            var packageSources = loadResult.Session.GetActivePackageSources();
+            var impactedPackageIds = BuildImpactedPackageIds(
+                currentActivePackages,
+                currentPackageSources,
+                activePackages,
+                packageSources,
+                []);
             try
             {
-                await stage.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
-                warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
-                _sourceState.Replace(stage.Sources);
-                _sessionState.PublishSession(stage.Session);
-                return new DevPackageLoadResult(stage.Session.GetActivePackages(), warnings, errors);
+                await loadResult.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                await stage.Session.DisposeAsync();
-                if (ex is OperationCanceledException)
-                {
-                    throw;
-                }
-
-                errors.Add($"Failed to commit dev package stage '{stageId}': {ex.Message}");
-                _logger.LogError(ex, "Failed to commit dev package stage {StageId}", stageId);
-                return new DevPackageLoadResult(_sessionState.GetActivePackages(), warnings, errors);
-            }
-        }
-        finally
-        {
-            _reloadGate.Release();
-        }
-    }
-
-    public async Task<bool> DiscardDevPackageStageAsync(string stageId)
-    {
-        await _reloadGate.WaitAsync();
-        try
-        {
-            if (!_pendingDevStages.Remove(stageId, out var stage))
-            {
-                return false;
+                await loadResult.Session.DisposeAsync();
+                var message = $"Installed package lifecycle load failed while starting background services: {ex.Message}";
+                _logger.LogError(ex, "Failed to start background services for installed package lifecycle load");
+                return PackageLifecycleOperationResult.Failed(
+                    message,
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    [message],
+                    impactedPackageIds);
             }
 
-            await stage.Session.DisposeAsync();
-            return true;
+            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+            _sourceState.Replace(sources);
+            _sessionState.PublishSession(loadResult.Session);
+            _sessionGeneration++;
+            return new PackageLifecycleOperationResult(
+                true,
+                "Installed packages loaded.",
+                activePackages,
+                packageSources,
+                warnings,
+                [],
+                impactedPackageIds);
         }
         finally
         {
@@ -352,6 +500,21 @@ internal sealed class RuntimePackageSessionService
     public async Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
     {
         var result = await _packageArchiveInstaller.InstallFromPathAsync(packagePath, cancellationToken);
+        return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
+    }
+
+    public async Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
+        InstalledPackageSessionReloadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var impactedPackageIds = request.ImpactedPackageIds
+            .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var result = PackageOperationResults.Success(
+            "Installed package session reloaded.",
+            impactedPackageIds: impactedPackageIds);
         return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
     }
 
@@ -372,54 +535,13 @@ internal sealed class RuntimePackageSessionService
     public async Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken cancellationToken = default)
     {
         var result = await _installedPackageStore.SetEnabledAsync(packageId, isEnabled, cancellationToken);
-        if (result.Success && !isEnabled)
-        {
-            if (_sourceState.HasDevOverlays())
-            {
-                return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
-            }
-
-            _sessionState.DisableInstalledPackage(packageId);
-            return result with { RequiresAppRestart = false };
-        }
-
         return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
     }
 
     public async Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
     {
         var result = await _installedPackageStore.UninstallAsync(packageId, cancellationToken);
-        if (result.Success)
-        {
-            if (_sourceState.HasDevOverlays())
-            {
-                return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
-            }
-
-            IReadOnlyList<string> removedPackageIds = result.ImpactedPackageIds.Count > 0 ? result.ImpactedPackageIds : [packageId];
-            foreach (var removedPackageId in removedPackageIds)
-            {
-                _sessionState.RemovePackage(removedPackageId);
-            }
-
-            return result with { RequiresAppRestart = false };
-        }
-
         return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
-    }
-
-    private async Task<DevPackageLoadResult> LoadInstalledPackagesCoreAsync(List<string> warnings, List<string> errors)
-    {
-        var loadResult = await _reconciler.LoadMergedSessionAsync(_sourceState.Snapshot().ActiveDevOverlays, startBackgroundServices: true);
-        warnings.AddRange(loadResult.Warnings);
-        errors.AddRange(loadResult.Errors);
-        if (loadResult.Session is null)
-        {
-            return new DevPackageLoadResult([], warnings, errors);
-        }
-
-        _sessionState.PublishSession(loadResult.Session);
-        return new DevPackageLoadResult(loadResult.Session.GetActivePackages(), warnings, errors);
     }
 
     private async Task<PackageOperationResult> ReloadInstalledPackagesAfterMutationAsync(PackageOperationResult result, CancellationToken cancellationToken)
@@ -427,6 +549,15 @@ internal sealed class RuntimePackageSessionService
         if (!result.Success)
         {
             return result;
+        }
+
+        if (result.ImpactedPackageIds.Count == 0)
+        {
+            return result with
+            {
+                RuntimeSessionApplied = true,
+                RequiresAppRestart = false,
+            };
         }
 
         await _reloadGate.WaitAsync(cancellationToken);
@@ -437,20 +568,18 @@ internal sealed class RuntimePackageSessionService
             var loadResult = await _reconciler.LoadMergedSessionAsync(_sourceState.Snapshot().ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
             warnings.AddRange(loadResult.Warnings);
             errors.AddRange(loadResult.Errors);
-            if (loadResult.Session is null || errors.Count > 0)
+            if (loadResult.Session is null)
             {
-                if (loadResult.Session is not null)
-                {
-                    await loadResult.Session.DisposeAsync();
-                }
-
                 warnings.AddRange(errors.Select(error => $"Installed package changes are saved, but the running package session kept the previous loaded packages: {error}"));
                 return result with
                 {
-                    RequiresAppRestart = true,
+                    RuntimeSessionApplied = false,
+                    RequiresAppRestart = false,
                     Warnings = warnings,
                 };
             }
+
+            warnings.AddRange(errors.Select(error => $"Installed package session loaded with package errors: {error}"));
 
             try
             {
@@ -462,15 +591,22 @@ internal sealed class RuntimePackageSessionService
                 warnings.Add($"Installed package changes are saved, but the running package session kept the previous loaded packages: {ex.Message}");
                 return result with
                 {
-                    RequiresAppRestart = true,
+                    RuntimeSessionApplied = false,
+                    RequiresAppRestart = false,
                     Warnings = warnings,
                 };
             }
 
             warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
             _sessionState.PublishSession(loadResult.Session);
+            _sessionGeneration++;
 
-            return result with { RequiresAppRestart = true, Warnings = warnings };
+            return result with
+            {
+                RuntimeSessionApplied = true,
+                RequiresAppRestart = false,
+                Warnings = warnings,
+            };
         }
         finally
         {
@@ -513,10 +649,13 @@ internal sealed class RuntimePackageSessionService
             return PackageSessionOperationResult.Failed(errorMessage ?? $"'{folder}' is not a loadable Sunder dev package folder.");
         }
 
-        var sources = _sourceState.Snapshot();
-        sources.SetDevOverlay(new PackageSessionDevOverlay(packageId, folder, request.Watch, PackageSessionOverlayOwner.Sdk));
         return await CommitMergedPackageSessionAsync(
-            sources,
+            sources =>
+            {
+                sources.SetDevOverlay(new PackageSessionDevOverlay(packageId, folder, request.Watch, PackageSessionOverlayOwner.Sdk));
+                return true;
+            },
+            failureMessage: null,
             $"Loaded dev package '{packageId}'.",
             [packageId],
             packageId,
@@ -527,14 +666,9 @@ internal sealed class RuntimePackageSessionService
         string packageId,
         CancellationToken cancellationToken)
     {
-        var sources = _sourceState.Snapshot();
-        if (!sources.RemoveDevOverlay(packageId, PackageSessionOverlayOwner.Sdk))
-        {
-            return PackageSessionOperationResult.Failed($"Dev package overlay '{packageId}' is not loaded.");
-        }
-
         return await CommitMergedPackageSessionAsync(
-            sources,
+            sources => sources.RemoveDevOverlay(packageId, PackageSessionOverlayOwner.Sdk),
+            $"Dev package overlay '{packageId}' is not loaded.",
             $"Unloaded dev package '{packageId}'.",
             [packageId],
             packageId,
@@ -542,7 +676,8 @@ internal sealed class RuntimePackageSessionService
     }
 
     private async Task<PackageSessionOperationResult> CommitMergedPackageSessionAsync(
-        PackageSessionSourceSnapshot sources,
+        Func<PackageSessionSourceSnapshot, bool> updateSources,
+        string? failureMessage,
         string successMessage,
         IReadOnlyList<string> impactedPackageIds,
         string statusPackageId,
@@ -553,6 +688,12 @@ internal sealed class RuntimePackageSessionService
         {
             var warnings = new List<string>();
             var errors = new List<string>();
+            var sources = _sourceState.Snapshot();
+            if (!updateSources(sources))
+            {
+                return PackageSessionOperationResult.Failed(failureMessage ?? "Package session source update failed.");
+            }
+
             var loadResult = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
             warnings.AddRange(loadResult.Warnings);
             errors.AddRange(loadResult.Errors);
@@ -581,6 +722,7 @@ internal sealed class RuntimePackageSessionService
             warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
             _sourceState.Replace(sources);
             _sessionState.PublishSession(loadResult.Session);
+            _sessionGeneration++;
 
             return new PackageSessionOperationResult(
                 true,
@@ -654,6 +796,124 @@ internal sealed class RuntimePackageSessionService
         sources.SetDevOverlay(new PackageSessionDevOverlay(packageId, Path.GetFullPath(folder), watch, owner));
     }
 
+    private static IReadOnlyList<string> AddLifecyclePackageSources(
+        PackageSessionSourceSnapshot sources,
+        IReadOnlyList<PackageSessionLoadRequest>? packages,
+        PackageSessionOverlayOwner owner,
+        ICollection<string> errors)
+    {
+        var forceReloadDevFolders = new List<string>();
+        foreach (var package in packages ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(package.Source))
+            {
+                errors.Add("A package lifecycle source cannot be empty.");
+                continue;
+            }
+
+            if (package.SourceKind != PackageSourceKind.Dev)
+            {
+                errors.Add($"Package lifecycle batch loading currently supports dev package sources only, not '{package.SourceKind}'.");
+                continue;
+            }
+
+            var folder = Path.GetFullPath(package.Source.Trim());
+            AddDevPackageOverlay(sources, folder, package.Watch, owner, errors);
+            forceReloadDevFolders.Add(folder);
+        }
+
+        return forceReloadDevFolders;
+    }
+
+    private static void ReplaceLiveReloadOverlays(PackageSessionSourceSnapshot sources)
+        => sources.RemoveDevOverlaysOwnedBy(PackageSessionOverlayOwner.Startup, PackageSessionOverlayOwner.HotReload);
+
+    private static PackageSessionOverlayOwner ToSessionOverlayOwner(PackageLifecycleOverlayOwner overlayOwner)
+        => overlayOwner switch
+        {
+            PackageLifecycleOverlayOwner.Startup => PackageSessionOverlayOwner.Startup,
+            PackageLifecycleOverlayOwner.HotReload => PackageSessionOverlayOwner.HotReload,
+            _ => throw new ArgumentOutOfRangeException(nameof(overlayOwner), overlayOwner, null),
+        };
+
+    private static IReadOnlyList<string> BuildImpactedPackageIds(
+        IReadOnlyList<ActivePackageDescriptor> currentActivePackages,
+        IReadOnlyList<PackageSourceDescriptor> currentPackageSources,
+        IReadOnlyList<ActivePackageDescriptor> stagedActivePackages,
+        IReadOnlyList<PackageSourceDescriptor> stagedPackageSources,
+        IReadOnlyCollection<string> forceReloadDevFolders)
+    {
+        var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var currentActivePackagesById = currentActivePackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
+        var stagedActivePackagesById = stagedActivePackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
+        foreach (var packageId in currentActivePackagesById.Keys.Concat(stagedActivePackagesById.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            currentActivePackagesById.TryGetValue(packageId, out var currentPackage);
+            stagedActivePackagesById.TryGetValue(packageId, out var stagedPackage);
+            if (!ActivePackageDescriptorsEqual(currentPackage, stagedPackage))
+            {
+                impactedPackageIds.Add(packageId);
+            }
+        }
+
+        var currentSourcesById = currentPackageSources
+            .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var stagedSourcesById = stagedPackageSources
+            .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (var packageId in currentSourcesById.Keys.Concat(stagedSourcesById.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            currentSourcesById.TryGetValue(packageId, out var currentSource);
+            stagedSourcesById.TryGetValue(packageId, out var stagedSource);
+            if (!PackageSourceDescriptorsEqual(currentSource, stagedSource))
+            {
+                impactedPackageIds.Add(packageId);
+            }
+        }
+
+        var forcedDevFolders = forceReloadDevFolders
+            .Select(Path.GetFullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in stagedPackageSources)
+        {
+            if (source.Kind == PackageSourceKind.Dev && forcedDevFolders.Contains(Path.GetFullPath(source.Folder)))
+            {
+                impactedPackageIds.Add(source.PackageId);
+            }
+        }
+
+        return impactedPackageIds.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool ActivePackageDescriptorsEqual(ActivePackageDescriptor? current, ActivePackageDescriptor? staged)
+    {
+        if (current is null || staged is null)
+        {
+            return current is null && staged is null;
+        }
+
+        return string.Equals(current.PackageId, staged.PackageId, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(current.DisplayName, staged.DisplayName, StringComparison.Ordinal)
+               && string.Equals(current.Version, staged.Version, StringComparison.OrdinalIgnoreCase)
+               && current.Icon == staged.Icon
+               && current.IsEnabled == staged.IsEnabled
+               && current.Readiness == staged.Readiness
+               && current.Views.SequenceEqual(staged.Views);
+    }
+
+    private static bool PackageSourceDescriptorsEqual(PackageSourceDescriptor? current, PackageSourceDescriptor? staged)
+    {
+        if (current is null || staged is null)
+        {
+            return current is null && staged is null;
+        }
+
+        return string.Equals(current.PackageId, staged.PackageId, StringComparison.OrdinalIgnoreCase)
+               && current.Kind == staged.Kind
+               && string.Equals(Path.GetFullPath(current.Folder), Path.GetFullPath(staged.Folder), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool TryReadDevPackageId(string folder, out string packageId, out string? errorMessage)
     {
         packageId = string.Empty;
@@ -673,7 +933,7 @@ internal sealed class RuntimePackageSessionService
 
         try
         {
-            var manifest = JsonSerializer.Deserialize<DevPackageManifest>(File.ReadAllText(manifestPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var manifest = JsonSerializer.Deserialize<RuntimePackageManifest>(File.ReadAllText(manifestPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (string.IsNullOrWhiteSpace(manifest?.Id))
             {
                 errorMessage = $"Dev package manifest '{manifestPath}' is missing id.";
@@ -693,16 +953,11 @@ internal sealed class RuntimePackageSessionService
     private ActiveLoadedPackage? GetLoadedPackage(string packageId)
         => _sessionState.GetLoadedPackage(packageId);
 
-    private static List<string> NormalizeDevPackageFolders(DevPackageLoadRequest request)
-        => (request.Folders ?? [])
-            .Where(folder => !string.IsNullOrWhiteSpace(folder))
-            .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-    private sealed record PendingDevPackageStage(
+    private sealed record PendingPackageLifecycleStage(
         string StageId,
         ActivePackageSession Session,
-        PackageSessionSourceSnapshot Sources);
+        PackageSessionSourceSnapshot Sources,
+        IReadOnlyList<string> ImpactedPackageIds,
+        long BaseSessionGeneration);
 
 }

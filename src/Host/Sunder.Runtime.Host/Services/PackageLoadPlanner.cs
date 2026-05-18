@@ -1,21 +1,21 @@
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageLoadPlanner
+internal sealed class PackageLoadPlanner
 {
-    public IReadOnlyList<PreparedDevPackage> ResolveLoadOrder(
-        IReadOnlyList<PreparedDevPackage> preparedPackages,
+    public IReadOnlyList<PreparedRuntimePackage> ResolveLoadOrder(
+        IReadOnlyList<PreparedRuntimePackage> preparedPackages,
         ICollection<string> errors)
     {
-        var packagesById = new Dictionary<string, PreparedDevPackage>(StringComparer.OrdinalIgnoreCase);
+        var packagesById = new Dictionary<string, PreparedRuntimePackage>(StringComparer.OrdinalIgnoreCase);
         foreach (var preparedPackage in preparedPackages)
         {
             if (!packagesById.TryAdd(preparedPackage.PackageId, preparedPackage))
             {
-                errors.Add($"Duplicate dev package id '{preparedPackage.PackageId}' was supplied more than once.");
+                errors.Add($"Duplicate package id '{preparedPackage.PackageId}' was supplied more than once.");
             }
         }
 
-        var orderedPackages = new List<PreparedDevPackage>();
+        var orderedPackages = new List<PreparedRuntimePackage>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var invalid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -27,7 +27,7 @@ internal sealed class DevPackageLoadPlanner
 
         return orderedPackages;
 
-        void Visit(PreparedDevPackage preparedPackage)
+        void Visit(PreparedRuntimePackage preparedPackage)
         {
             if (visited.Contains(preparedPackage.PackageId) || invalid.Contains(preparedPackage.PackageId))
             {
@@ -45,7 +45,7 @@ internal sealed class DevPackageLoadPlanner
             {
                 if (!packagesById.TryGetValue(dependencyId, out var dependencyPackage))
                 {
-                    errors.Add($"Dev package '{preparedPackage.PackageId}' depends on '{dependencyId}', but that package was not supplied.");
+                    errors.Add($"Package '{preparedPackage.PackageId}' depends on '{dependencyId}', but that package was not supplied.");
                     invalid.Add(preparedPackage.PackageId);
                     continue;
                 }

@@ -920,9 +920,14 @@ internal static class Program
             ConsoleOutput.WriteInfo($"Impacted packages: {string.Join(", ", result.ImpactedPackageIds)}");
         }
 
+        if (result.Success && result.ImpactedPackageIds.Count > 0 && !result.RuntimeSessionApplied)
+        {
+            ConsoleOutput.WriteWarning("The running package session did not apply this package change.");
+        }
+
         if (result.RequiresAppRestart)
         {
-            ConsoleOutput.WriteWarning("The app may need to refresh or restart to apply this package change.");
+            ConsoleOutput.WriteWarning("Restart Sunder to apply this package change.");
         }
 
         return result.Success ? Success : Failure;

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
-using static Sunder.Runtime.Host.Services.DevPackageProtocolMapper;
+using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -21,8 +21,8 @@ internal sealed class PackageSessionLoadService(ILogger logger)
         var sessionFolder = RuntimePackageSessionDirectories.CreateInstalledSessionFolder();
 
         Directory.CreateDirectory(sessionFolder);
-        var fileMaterializer = new DevSessionFileMaterializer();
-        var preparedCandidates = new List<PreparedDevPackage>();
+        var fileMaterializer = new PackageSessionFileMaterializer();
+        var preparedCandidates = new List<PreparedRuntimePackage>();
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase);
         var enabledPackages = packages.Where(static package => package.IsEnabled).ToArray();
 
@@ -39,11 +39,21 @@ internal sealed class PackageSessionLoadService(ILogger logger)
                 continue;
             }
 
+            var errorCount = errors.Count;
             var preparedPackage = PrepareInstalledPackage(index, package, sessionFolder, fileMaterializer, errors);
             if (preparedPackage is not null)
             {
                 preparedCandidates.Add(preparedPackage);
+                continue;
             }
+
+            sessionPackages[package.PackageId] = BuildSessionDescriptor(
+                manifest,
+                isEnabled: false,
+                readiness: PackageReadinessState.Failed,
+                failureOrigin: PackageFailureOrigin.RuntimeActivation,
+                lastError: errors.Skip(errorCount).LastOrDefault() ?? "Installed package could not be prepared for loading.",
+                failureCount: 1);
         }
 
         if (enabledPackages.Length == 0 && sessionPackages.Count == 0)
@@ -66,8 +76,8 @@ internal sealed class PackageSessionLoadService(ILogger logger)
         var sessionFolder = RuntimePackageSessionDirectories.CreateInstalledSessionFolder();
 
         Directory.CreateDirectory(sessionFolder);
-        var fileMaterializer = new DevSessionFileMaterializer();
-        var preparedCandidates = new List<PreparedDevPackage>();
+        var fileMaterializer = new PackageSessionFileMaterializer();
+        var preparedCandidates = new List<PreparedRuntimePackage>();
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase);
         var devPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var index = 0;
@@ -101,11 +111,21 @@ internal sealed class PackageSessionLoadService(ILogger logger)
                 continue;
             }
 
+            var errorCount = errors.Count;
             var preparedPackage = PrepareInstalledPackage(index++, package, sessionFolder, fileMaterializer, errors);
             if (preparedPackage is not null)
             {
                 preparedCandidates.Add(preparedPackage);
+                continue;
             }
+
+            sessionPackages[package.PackageId] = BuildSessionDescriptor(
+                manifest,
+                isEnabled: false,
+                readiness: PackageReadinessState.Failed,
+                failureOrigin: PackageFailureOrigin.RuntimeActivation,
+                lastError: errors.Skip(errorCount).LastOrDefault() ?? "Installed package could not be prepared for loading.",
+                failureCount: 1);
         }
 
         if (preparedCandidates.Count == 0 && sessionPackages.Count == 0)
@@ -119,7 +139,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
 
     private async Task<PackageSessionLoadResult> LoadPreparedPackagesAsync(
         string sessionFolder,
-        IReadOnlyList<PreparedDevPackage> preparedCandidates,
+        IReadOnlyList<PreparedRuntimePackage> preparedCandidates,
         ICollection<string> warnings,
         ICollection<string> errors,
         IDictionary<string, SessionPackageDescriptor> initialSessionPackages,
@@ -131,7 +151,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings.ToArray(), errors.ToArray());
         }
 
-        var orderedPackages = new DevPackageLoadPlanner().ResolveLoadOrder(preparedCandidates, errors);
+        var orderedPackages = new PackageLoadPlanner().ResolveLoadOrder(preparedCandidates, errors);
         RuntimeSharedAssemblyRegistry sharedAssemblyRegistry;
         try
         {
@@ -187,11 +207,11 @@ internal sealed class PackageSessionLoadService(ILogger logger)
         return new PackageSessionLoadResult(session, warnings.ToArray(), errors.ToArray());
     }
 
-    private static PreparedDevPackage? PreparePackage(
+    private static PreparedRuntimePackage? PreparePackage(
         int index,
         string folder,
         string sessionFolder,
-        DevSessionFileMaterializer fileMaterializer,
+        PackageSessionFileMaterializer fileMaterializer,
         ICollection<string> errors)
     {
         if (!Directory.Exists(folder))
@@ -218,11 +238,11 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             errors);
     }
 
-    private static PreparedDevPackage? PrepareInstalledPackage(
+    private static PreparedRuntimePackage? PrepareInstalledPackage(
         int index,
         InstalledPackageRecord package,
         string sessionFolder,
-        DevSessionFileMaterializer fileMaterializer,
+        PackageSessionFileMaterializer fileMaterializer,
         ICollection<string> errors)
     {
         if (!Directory.Exists(package.InstallPath))
@@ -260,7 +280,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             errors);
     }
 
-    private static PreparedDevPackage? PrepareMaterializedPackage(
+    private static PreparedRuntimePackage? PrepareMaterializedPackage(
         string sourceFolder,
         PackageSourceDescriptor source,
         string shadowFolder,
@@ -268,10 +288,10 @@ internal sealed class PackageSessionLoadService(ILogger logger)
     {
 
         var shadowManifestPath = Path.Combine(shadowFolder, "sunder-package.json");
-        DevPackageManifest? manifest;
+        RuntimePackageManifest? manifest;
         try
         {
-            manifest = JsonSerializer.Deserialize<DevPackageManifest>(File.ReadAllText(shadowManifestPath), JsonOptions);
+            manifest = JsonSerializer.Deserialize<RuntimePackageManifest>(File.ReadAllText(shadowManifestPath), JsonOptions);
         }
         catch (Exception ex)
         {
@@ -279,7 +299,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             return null;
         }
 
-        var validationErrors = DevPackageManifestValidator.Validate(manifest, shadowFolder).ToArray();
+        var validationErrors = RuntimePackageManifestValidator.Validate(manifest, shadowFolder).ToArray();
         if (validationErrors.Length > 0)
         {
             foreach (var validationError in validationErrors)
@@ -299,7 +319,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        return new PreparedDevPackage(
+        return new PreparedRuntimePackage(
             sourceFolder,
             source with { PackageId = manifest.Id! },
             shadowFolder,
@@ -312,7 +332,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
         );
     }
 
-    private static DevPackageManifest ToManifest(InstalledPackageRecord package)
+    private static RuntimePackageManifest ToManifest(InstalledPackageRecord package)
         => new()
         {
             ManifestVersion = 1,
@@ -323,7 +343,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             EntryAssembly = package.EntryAssembly,
             Icon = package.Icon,
             DependsOn = package.DependsOn
-                .Select(dependency => new DevPackageDependencyManifest
+                .Select(dependency => new RuntimePackageDependencyManifest
                 {
                     PackageId = dependency.PackageId,
                     VersionRange = dependency.VersionRange,
@@ -352,7 +372,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
     }
 
     private async Task<PackageActivationResult> TryActivatePackageAsync(
-        PreparedDevPackage preparedPackage,
+        PreparedRuntimePackage preparedPackage,
         RuntimeSharedAssemblyRegistry sharedAssemblyRegistry,
         RuntimePackageExtensionCatalog extensionCatalog,
         ICollection<string> warnings,
@@ -360,18 +380,18 @@ internal sealed class PackageSessionLoadService(ILogger logger)
         bool startBackgroundServices
     )
     {
-        ActiveDevPackageLoadContext? loadContext = null;
+        RuntimePackageLoadContext? loadContext = null;
         ServiceProvider? serviceProvider = null;
         var startedBackgroundServices = new List<IPackageBackgroundService>();
 
         try
         {
-            loadContext = new ActiveDevPackageLoadContext(preparedPackage.PackageId, preparedPackage.EntryAssemblyPath, sharedAssemblyRegistry);
+            loadContext = new RuntimePackageLoadContext(preparedPackage.PackageId, preparedPackage.EntryAssemblyPath, sharedAssemblyRegistry);
             var entryAssembly = loadContext.LoadPackageEntryAssembly();
             var moduleType = ResolvePackageModuleType(entryAssembly, out var moduleResolutionError);
             if (moduleType is null)
             {
-                errors.Add($"Dev package '{preparedPackage.PackageId}' {moduleResolutionError}");
+                errors.Add($"Package '{preparedPackage.PackageId}' {moduleResolutionError}");
                 loadContext.Unload();
                 return new PackageActivationResult(false, null, BuildSessionDescriptor(
                     preparedPackage.Manifest,
@@ -384,7 +404,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
 
             if (Activator.CreateInstance(moduleType) is not ISunderPackageModule module)
             {
-                errors.Add($"Dev package '{preparedPackage.PackageId}' module '{moduleType.FullName}' does not implement ISunderPackageModule.");
+                errors.Add($"Package '{preparedPackage.PackageId}' module '{moduleType.FullName}' does not implement ISunderPackageModule.");
                 loadContext.Unload();
                 return new PackageActivationResult(false, null, BuildSessionDescriptor(
                     preparedPackage.Manifest,
@@ -395,7 +415,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
                     failureCount: 1));
             }
 
-            var packageContext = new DevPackageContext(preparedPackage.PackageId, preparedPackage.Version, preparedPackage.ShadowFolder);
+            var packageContext = new RuntimePackageContext(preparedPackage.PackageId, preparedPackage.Version, preparedPackage.ShadowFolder);
             var services = new ServiceCollection();
             services.AddSingleton<IPackageContext>(packageContext);
             services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
@@ -444,7 +464,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
                 && !contributionRegistry.HasRegisteredBackgroundServices
                 && contributionRegistry.ConfigurationSchema is null)
             {
-                warnings.Add($"Dev package '{preparedPackage.PackageId}' loaded without any package views or extension contributions.");
+                warnings.Add($"Package '{preparedPackage.PackageId}' loaded without any package views or extension contributions.");
             }
 
             return new PackageActivationResult(true, loadedPackage, sessionPackage);

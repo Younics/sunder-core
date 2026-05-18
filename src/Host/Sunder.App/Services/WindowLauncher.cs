@@ -28,6 +28,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private PackagesWindow? _packagesWindow;
     private DeveloperLogWindow? _developerLogWindow;
     private MainWindowViewModel? _mainWindowViewModel;
+    private AppPackageSessionService? _packageSessionService;
     private bool _disposed;
 
     public WindowLauncher(
@@ -66,7 +67,10 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         => _mainWindowViewModel = viewModel;
 
     internal void AttachPackageSessionService(AppPackageSessionService packageSessionService)
-        => packageSessionService.Attach(ApplyPackageLifecycleChangesAsync);
+    {
+        _packageSessionService = packageSessionService;
+        packageSessionService.Attach(ApplyPackageLifecycleChangesAsync);
+    }
 
     public BackgroundProcessQueueService BackgroundProcesses => _backgroundProcessQueue;
 
@@ -154,6 +158,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         }
 
         _disposed = true;
+        _packageSessionService?.Detach(ApplyPackageLifecycleChangesAsync);
+        _packageSessionService = null;
         _packageOperationService.Dispose();
         if (_ownsBackgroundProcessQueue)
         {
@@ -165,28 +171,6 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     public async Task CancelBackgroundProcessesAsync(CancellationToken cancellationToken = default)
         => await _backgroundProcessQueue.CancelAllAsync(cancellationToken);
-
-    internal async Task<AppPackageHostStage> StagePackageLifecycleAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
-        CancellationToken cancellationToken = default)
-        => await _packageViewHostService.StageForPackagesAsync(activePackages, packageSources, cancellationToken).ConfigureAwait(false);
-
-    internal async Task CommitPackageLifecycleStageAsync(
-        AppPackageHostStage stage,
-        CancellationToken cancellationToken = default)
-    {
-        await _packageViewHostService.CommitStageAsync(stage, cancellationToken).ConfigureAwait(false);
-        if (_mainWindowViewModel is not null)
-        {
-            await _mainWindowViewModel.ApplyPackageLifecycleSnapshotAsync(
-                stage.ActivePackages,
-                cancellationToken,
-                deferHostedViewCreation: true).ConfigureAwait(false);
-        }
-
-        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
-    }
 
     private SettingsWindow CreateSettingsWindow()
     {
@@ -284,7 +268,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _shellStateService.Save(_shellState);
     }
 
-    private async Task ApplyPackageLifecycleChangesAsync(
+    internal async Task ApplyPackageLifecycleChangesAsync(
         IReadOnlyList<string> impactedPackageIds,
         CancellationToken cancellationToken)
     {
@@ -295,6 +279,23 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         }
 
         await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task PreflightPackageLifecycleChangesAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<string> impactedPackageIds,
+        CancellationToken cancellationToken)
+    {
+        var preflight = await _packageViewHostService.PreflightPackageDeltaAsync(
+            activePackages,
+            packageSources,
+            impactedPackageIds,
+            cancellationToken).ConfigureAwait(false);
+        if (!preflight.Success)
+        {
+            throw new InvalidOperationException(preflight.Errors.FirstOrDefault() ?? "App-side package preflight failed.");
+        }
     }
 
     private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)

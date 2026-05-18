@@ -12,7 +12,7 @@ public sealed class PackagesWindowFactory(
     ShellStateService shellStateService,
     ShellState shellState)
 {
-    public PackagesWindow Create(
+    internal PackagesWindow Create(
         Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
         PackageOperationService packageOperationService,
         Action<double, double>? persistBackgroundProcessPopoverSize)

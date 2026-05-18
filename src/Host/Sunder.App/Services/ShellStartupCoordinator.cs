@@ -125,9 +125,13 @@ public sealed class ShellStartupCoordinator
                 {
                     await SetProgressAsync(loadingViewModel, "Loading dev packages...", 248).ConfigureAwait(false);
 
-                    var loadResult = await runtimeApiClient.LoadDevPackagesAsync(startupOptions.DevPackageFolders).ConfigureAwait(false);
-                    activePackages = loadResult.LoadedPackages;
-                    packageSources = await runtimeApiClient.GetActivePackageSourcesAsync().ConfigureAwait(false);
+                    var loadResult = await runtimeApiClient.LoadPackageLifecycleAsync(new PackageLifecycleLoadRequest(
+                        startupOptions.DevPackageFolders
+                            .Select(folder => new PackageSessionLoadRequest(PackageSourceKind.Dev, folder))
+                            .ToArray(),
+                        PackageLifecycleOverlayOwner.Startup)).ConfigureAwait(false);
+                    activePackages = loadResult.ActivePackages;
+                    packageSources = loadResult.PackageSources;
                     warnings.AddRange(loadResult.Warnings);
                     errors.AddRange(loadResult.Errors);
                     LogStartupPhase("runtime dev packages", phaseStopwatch);

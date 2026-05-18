@@ -46,7 +46,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         remove => _marketplace.ImageGalleryRequested -= value;
     }
 
-    public PackagesWindowViewModel(
+    internal PackagesWindowViewModel(
         IRuntimeApiClient runtimeApiClient,
         IPackageArchivePicker packageArchivePicker,
         Func<IReadOnlyList<string>, CancellationToken, Task>? applyPackageLifecycleChangesAsync = null,

@@ -24,7 +24,6 @@ var app = builder.Build();
 var startedAtUtc = DateTimeOffset.UtcNow;
 
 app.MapSystemEndpoints(startedAtUtc)
-    .MapDevPackageEndpoints()
     .MapPackageSessionEndpoints()
     .MapPackageConfigurationEndpoints()
     .MapPackageAuthEndpoints()

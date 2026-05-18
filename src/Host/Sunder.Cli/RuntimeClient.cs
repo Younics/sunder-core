@@ -45,8 +45,8 @@ internal sealed class RuntimeClient : IDisposable
         }
 
         return response.IsSuccessStatusCode
-            ? new PackageOperationResult(true, null, RequiresAppRestart: true, [], [])
-            : new PackageOperationResult(false, response.ReasonPhrase, RequiresAppRestart: false, [], [response.ReasonPhrase ?? "Package operation failed."]);
+            ? new PackageOperationResult(true, null, RuntimeSessionApplied: true, RequiresAppRestart: false, [], [])
+            : new PackageOperationResult(false, response.ReasonPhrase, RuntimeSessionApplied: false, RequiresAppRestart: false, [], [response.ReasonPhrase ?? "Package operation failed."]);
     }
 
     public void Dispose()

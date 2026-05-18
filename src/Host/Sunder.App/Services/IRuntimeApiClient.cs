@@ -57,24 +57,29 @@ public interface IRuntimeApiClient : IDisposable
         string packageId,
         CancellationToken cancellationToken = default);
 
-    Task<DevPackageLoadResult> LoadDevPackagesAsync(
-        IReadOnlyList<string> folders,
+    Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
+        PackageLifecycleLoadRequest request,
         CancellationToken cancellationToken = default);
 
-    Task<DevPackageStageResult> StageDevPackagesAsync(
-        IReadOnlyList<string> folders,
+    Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
+        IReadOnlyList<string> impactedPackageIds,
         CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Runtime client does not support dev package staging.");
+        => throw new NotSupportedException("Runtime client does not support installed package session reloading.");
 
-    Task<DevPackageLoadResult> CommitDevPackageStageAsync(
+    Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(
+        PackageLifecycleStageRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package lifecycle staging.");
+
+    Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(
         string stageId,
         CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Runtime client does not support dev package staging.");
+        => throw new NotSupportedException("Runtime client does not support package lifecycle staging.");
 
-    Task DiscardDevPackageStageAsync(
+    Task DiscardPackageLifecycleStageAsync(
         string stageId,
         CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Runtime client does not support dev package staging.");
+        => throw new NotSupportedException("Runtime client does not support package lifecycle staging.");
 
     Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(
         CancellationToken cancellationToken = default);

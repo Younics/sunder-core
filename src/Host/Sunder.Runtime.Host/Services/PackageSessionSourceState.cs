@@ -34,22 +34,6 @@ internal sealed class PackageSessionSourceState
         }
     }
 
-    public void ClearDevOverlays()
-    {
-        lock (_gate)
-        {
-            _devOverlays.Clear();
-        }
-    }
-
-    public bool HasDevOverlays()
-    {
-        lock (_gate)
-        {
-            return _devOverlays.Count > 0;
-        }
-    }
-
     public PackageSessionDevOverlay? TryGetActiveDevOverlay(string packageId)
     {
         lock (_gate)

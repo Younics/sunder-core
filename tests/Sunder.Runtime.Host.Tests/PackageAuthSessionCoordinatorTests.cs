@@ -78,7 +78,7 @@ public sealed class PackageAuthSessionCoordinatorTests
             },
             BackgroundServices: [],
             new ServiceCollection().BuildServiceProvider(),
-            new ActiveDevPackageLoadContext(
+            new RuntimePackageLoadContext(
                 "test.package",
                 assemblyPath,
                 new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])));

@@ -131,7 +131,7 @@ public sealed class SunderPackageArchiveInstallerTests
         Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "lib"));
 
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new DevPackageManifest
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new RuntimePackageManifest
         {
             ManifestVersion = 1,
             Id = packageId,

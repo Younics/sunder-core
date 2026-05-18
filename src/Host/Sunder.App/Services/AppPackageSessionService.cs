@@ -20,7 +20,7 @@ public sealed class AppPackageSessionService(
 
     public void Detach(Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync)
     {
-        if (ReferenceEquals(_applyPackageLifecycleChangesAsync, applyPackageLifecycleChangesAsync))
+        if (Equals(_applyPackageLifecycleChangesAsync, applyPackageLifecycleChangesAsync))
         {
             _applyPackageLifecycleChangesAsync = null;
         }

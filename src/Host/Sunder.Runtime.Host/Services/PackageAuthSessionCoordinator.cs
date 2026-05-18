@@ -2,7 +2,7 @@ using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Callbacks;
-using static Sunder.Runtime.Host.Services.DevPackageProtocolMapper;
+using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
 
 namespace Sunder.Runtime.Host.Services;
 

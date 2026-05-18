@@ -34,6 +34,11 @@ internal sealed class ShellPackagePanelCoordinator(
         {
             panel.HostedView = null;
         }
+        else
+        {
+            packageViewHostService.InvalidateView(viewId);
+            return true;
+        }
 
         var reloadedView = packageViewHostService.ReloadView(viewId);
         if (isOpen)

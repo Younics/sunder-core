@@ -84,7 +84,7 @@ public sealed class PackageConfigurationServiceTests
             CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             BackgroundServices: [],
             new ServiceCollection().BuildServiceProvider(),
-            new ActiveDevPackageLoadContext(
+            new RuntimePackageLoadContext(
                 "test.package",
                 assemblyPath,
                 new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])));

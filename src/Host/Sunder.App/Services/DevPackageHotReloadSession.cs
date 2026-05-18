@@ -248,7 +248,11 @@ public sealed class DevPackageHotReloadSession : IDisposable
 
         _developerLog.Info("dev.hot_reload", "Staging dev package reload.");
         using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
-        var runtimeStage = await runtimeApiClient.StageDevPackagesAsync(_folders, cancellationToken).ConfigureAwait(false);
+        var runtimeStage = await runtimeApiClient.StagePackageLifecycleAsync(new PackageLifecycleStageRequest(
+            _folders
+                .Select(folder => new PackageSessionLoadRequest(PackageSourceKind.Dev, folder))
+                .ToArray(),
+            PackageLifecycleOverlayOwner.HotReload), cancellationToken).ConfigureAwait(false);
         LogMessages(runtimeStage.Warnings, PackageLogLevel.Warning);
         LogMessages(runtimeStage.Errors, PackageLogLevel.Error);
         if (runtimeStage.StageId is null || runtimeStage.Errors.Count > 0)
@@ -257,35 +261,35 @@ public sealed class DevPackageHotReloadSession : IDisposable
             return;
         }
 
-        AppPackageHostStage? appStage = null;
+        var committed = false;
         try
         {
-            appStage = await _windowLauncher.StagePackageLifecycleAsync(
-                runtimeStage.LoadedPackages,
+            await _windowLauncher.PreflightPackageLifecycleChangesAsync(
+                runtimeStage.ActivePackages,
                 runtimeStage.PackageSources,
+                runtimeStage.ImpactedPackageIds,
                 cancellationToken).ConfigureAwait(false);
 
-            var commitResult = await runtimeApiClient.CommitDevPackageStageAsync(runtimeStage.StageId, cancellationToken).ConfigureAwait(false);
+            var commitResult = await runtimeApiClient.CommitPackageLifecycleStageAsync(runtimeStage.StageId, cancellationToken).ConfigureAwait(false);
+            committed = commitResult.Errors.Count == 0;
             LogMessages(commitResult.Warnings, PackageLogLevel.Warning);
             LogMessages(commitResult.Errors, PackageLogLevel.Error);
             if (commitResult.Errors.Count > 0)
             {
-                await appStage.Host.DisposeAsync();
                 await ReportFailureAsync("Runtime failed to commit the dev package reload.").ConfigureAwait(false);
                 return;
             }
 
-            await _windowLauncher.CommitPackageLifecycleStageAsync(appStage, cancellationToken).ConfigureAwait(false);
+            await _windowLauncher.ApplyPackageLifecycleChangesAsync(runtimeStage.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
             _developerLog.Info("dev.hot_reload", $"Dev packages reloaded at {DateTimeOffset.Now:T}.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            if (appStage is not null)
+            if (!committed)
             {
-                await appStage.Host.DisposeAsync();
+                await runtimeApiClient.DiscardPackageLifecycleStageAsync(runtimeStage.StageId, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await runtimeApiClient.DiscardDevPackageStageAsync(runtimeStage.StageId, CancellationToken.None).ConfigureAwait(false);
             _developerLog.Error("dev.hot_reload", ex.Message);
             await ReportFailureAsync("App rejected the dev package reload.").ConfigureAwait(false);
         }

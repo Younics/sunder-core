@@ -27,7 +27,7 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
         }
 
         var activePackages = await packageLifecycleCoordinator.ApplyPackageDeltaFromRuntimeAsync(impactedPackageIds, cancellationToken).ConfigureAwait(false);
-        await ApplyPackageLifecycleChangesToShellAsync(activePackages, deferHostedViewCreation).ConfigureAwait(false);
+        await ApplyPackageLifecycleChangesToShellAsync(activePackages, impactedPackageIds, deferHostedViewCreation).ConfigureAwait(false);
         if (deferHostedViewCreation)
         {
             _ = deferredHostedViewActivator.ActivateAfterLifecycleAsync(cancellationToken);
@@ -36,16 +36,17 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
 
     private async Task ApplyPackageLifecycleChangesToShellAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyCollection<string>? impactedPackageIds,
         bool deferHostedViewCreation)
     {
         if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
         {
-            packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, deferHostedViewCreation);
+            packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation);
             return;
         }
 
         await Dispatcher.UIThread.InvokeAsync(
-            () => packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, deferHostedViewCreation),
+            () => packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation),
             DispatcherPriority.Normal);
     }
 }

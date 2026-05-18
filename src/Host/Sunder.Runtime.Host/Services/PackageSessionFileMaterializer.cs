@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevSessionFileMaterializer
+internal sealed class PackageSessionFileMaterializer
 {
     private readonly Dictionary<FileFingerprint, string> _materializedFiles = new();
 

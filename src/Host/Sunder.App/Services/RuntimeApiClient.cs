@@ -206,80 +206,76 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
             cancellationToken
         );
 
-    public async Task<DevPackageLoadResult> LoadDevPackagesAsync(
-        IReadOnlyList<string> folders,
+    public async Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
+        PackageLifecycleLoadRequest request,
         CancellationToken cancellationToken = default
     )
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/dev/packages/load"),
-            new DevPackageLoadRequest(folders),
+            CreateRequestUri("api/packages/session/load-batch"),
+            request,
             cancellationToken
         );
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<DevPackageLoadResult>(
+        return await response.Content.ReadFromJsonAsync<PackageLifecycleOperationResult>(
                 cancellationToken: cancellationToken
             )
-            ?? new DevPackageLoadResult(
-                [],
-                [],
-                ["Runtime returned an empty dev-package load response."]
-            );
+            ?? PackageLifecycleOperationResult.Failed("Runtime returned an empty package lifecycle load response.");
     }
 
-    public async Task<DevPackageStageResult> StageDevPackagesAsync(
-        IReadOnlyList<string> folders,
+    public async Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
+        IReadOnlyList<string> impactedPackageIds,
+        CancellationToken cancellationToken = default)
+        => await SendPackageOperationAsync(
+            () => _httpClient.PostAsJsonAsync(
+                CreateRequestUri("api/packages/session/reload-installed"),
+                new InstalledPackageSessionReloadRequest(impactedPackageIds),
+                cancellationToken),
+            cancellationToken);
+
+    public async Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(
+        PackageLifecycleStageRequest request,
         CancellationToken cancellationToken = default
     )
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/dev/packages/stage"),
-            new DevPackageLoadRequest(folders),
+            CreateRequestUri("api/packages/session/stage"),
+            request,
             cancellationToken
         );
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<DevPackageStageResult>(
+        return await response.Content.ReadFromJsonAsync<PackageLifecycleStageResult>(
                 cancellationToken: cancellationToken
             )
-            ?? new DevPackageStageResult(
-                null,
-                [],
-                [],
-                [],
-                ["Runtime returned an empty dev-package stage response."]
-            );
+            ?? PackageLifecycleStageResult.Failed("Runtime returned an empty package lifecycle stage response.");
     }
 
-    public async Task<DevPackageLoadResult> CommitDevPackageStageAsync(
+    public async Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(
         string stageId,
         CancellationToken cancellationToken = default
     )
     {
         using var response = await _httpClient.PostAsync(
-            CreateRequestUri($"api/dev/packages/stage/{Uri.EscapeDataString(stageId)}/commit"),
+            CreateRequestUri($"api/packages/session/stage/{Uri.EscapeDataString(stageId)}/commit"),
             content: null,
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<DevPackageLoadResult>(
+        return await response.Content.ReadFromJsonAsync<PackageLifecycleOperationResult>(
                 cancellationToken: cancellationToken
             )
-            ?? new DevPackageLoadResult(
-                [],
-                [],
-                ["Runtime returned an empty dev-package stage commit response."]
-            );
+            ?? PackageLifecycleOperationResult.Failed("Runtime returned an empty package lifecycle stage commit response.");
     }
 
-    public async Task DiscardDevPackageStageAsync(
+    public async Task DiscardPackageLifecycleStageAsync(
         string stageId,
         CancellationToken cancellationToken = default
     )
     {
         using var response = await _httpClient.DeleteAsync(
-            CreateRequestUri($"api/dev/packages/stage/{Uri.EscapeDataString(stageId)}"),
+            CreateRequestUri($"api/packages/session/stage/{Uri.EscapeDataString(stageId)}"),
             cancellationToken);
 
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -472,7 +468,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     }
 
     private static PackageOperationResult CreatePackageOperationSuccessResult()
-        => new(true, null, RequiresAppRestart: true, [], []);
+        => new(true, null, RuntimeSessionApplied: true, RequiresAppRestart: false, [], []);
 
     private static PackageOperationResult CreatePackageOperationFailureResult(HttpResponseMessage response, string? responseBody = null)
     {
@@ -495,7 +491,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
                 ? [normalizedMessage]
                 : [normalizedMessage, normalizedDetail];
 
-        return new PackageOperationResult(false, normalizedMessage, RequiresAppRestart: false, [], errors);
+        return new PackageOperationResult(false, normalizedMessage, RuntimeSessionApplied: false, RequiresAppRestart: false, [], errors);
     }
 
     private static string? NormalizeResponseBody(string? responseBody)

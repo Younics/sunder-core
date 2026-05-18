@@ -35,6 +35,54 @@ internal sealed class ShellRailCollectionPresenter(
         }
     }
 
+    public void Update(
+        IReadOnlyList<ShellPlacementSlot> slots,
+        IReadOnlySet<RailPlacement> placements,
+        IReadOnlySet<string> impactedPackageIds,
+        bool createHostedViews)
+    {
+        var affectedSlots = slots
+            .Where(slot => placements.Contains(slot.Placement))
+            .ToArray();
+        if (affectedSlots.Length == 0)
+        {
+            return;
+        }
+
+        var selectedViewIdsBeforeUpdate = affectedSlots.ToDictionary(
+            slot => slot.Placement,
+            slot => ShellSelectionState.GetSelectedViewId(shellState, slot.Placement));
+
+        foreach (var slot in affectedSlots)
+        {
+            slot.Bar.SetItemsPreservingExisting(CreateItemsForPlacement(slot.Placement, slot.OnSelect, slot.Bar, impactedPackageIds));
+            ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, slot.Placement, slot.Bar.Items.Select(item => item.Id).ToArray());
+        }
+
+        var middleBarItemCount = slots.FirstOrDefault(slot => slot.Placement == RailPlacement.Middle)?.Bar.Items.Count ?? 0;
+        foreach (var slot in affectedSlots)
+        {
+            var selectedViewIdBeforeUpdate = selectedViewIdsBeforeUpdate[slot.Placement];
+            var selectedItem = RestoreSelection(slot, selectedViewIdBeforeUpdate);
+            var selectedViewIdAfterUpdate = selectedItem?.Id;
+            var selectedPackageChanged = !string.Equals(selectedViewIdBeforeUpdate, selectedViewIdAfterUpdate, StringComparison.OrdinalIgnoreCase);
+            if (!selectedPackageChanged
+                && !IsViewImpacted(selectedViewIdAfterUpdate, impactedPackageIds)
+                && !IsViewImpacted(selectedViewIdBeforeUpdate, impactedPackageIds))
+            {
+                continue;
+            }
+
+            panelContentPresenter.Apply(
+                slot.Panel,
+                slot.Placement,
+                selectedViewIdAfterUpdate,
+                viewsById,
+                middleBarItemCount,
+                createHostedViews);
+        }
+    }
+
     private IReadOnlyList<ShellItemViewModel> CreateItemsForPlacement(RailPlacement placement, Action<ShellItemViewModel> onSelect)
     {
         return ShellViewOrdering.GetOrderedViewsForPlacement(viewsById.Values, shellState, placement)
@@ -42,7 +90,22 @@ internal sealed class ShellRailCollectionPresenter(
             .ToArray();
     }
 
-    private void RestoreSelection(ShellPlacementSlot slot, string? selectedId)
+    private IReadOnlyList<ShellItemViewModel> CreateItemsForPlacement(
+        RailPlacement placement,
+        Action<ShellItemViewModel> onSelect,
+        PackageIconBarViewModel bar,
+        IReadOnlySet<string> impactedPackageIds)
+    {
+        var existingItemsById = bar.Items.ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+        return ShellViewOrdering.GetOrderedViewsForPlacement(viewsById.Values, shellState, placement)
+            .Select(packageView => !impactedPackageIds.Contains(packageView.PackageId)
+                                   && existingItemsById.TryGetValue(packageView.ViewId, out var existingItem)
+                ? existingItem
+                : createShellItem(packageView, onSelect))
+            .ToArray();
+    }
+
+    private ShellItemViewModel? RestoreSelection(ShellPlacementSlot slot, string? selectedId)
     {
         var items = slot.Bar.Items;
         var selected = string.IsNullOrWhiteSpace(selectedId)
@@ -58,9 +121,23 @@ internal sealed class ShellRailCollectionPresenter(
         if (selected is null)
         {
             selectionPresenter.Clear(slot.Bar, slot.Placement);
-            return;
+            ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, null);
+            return null;
         }
 
         selectionPresenter.Select(slot.Bar, slot.Placement, selected);
+        ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, selected.Id);
+        return selected;
+    }
+
+    private bool IsViewImpacted(string? viewId, IReadOnlySet<string> impactedPackageIds)
+    {
+        if (string.IsNullOrWhiteSpace(viewId))
+        {
+            return false;
+        }
+
+        return !viewsById.TryGetValue(viewId, out var packageView)
+               || impactedPackageIds.Contains(packageView.PackageId);
     }
 }

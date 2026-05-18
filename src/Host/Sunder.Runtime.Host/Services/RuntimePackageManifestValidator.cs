@@ -1,42 +1,42 @@
 namespace Sunder.Runtime.Host.Services;
 
-internal static class DevPackageManifestValidator
+internal static class RuntimePackageManifestValidator
 {
-    public static IReadOnlyList<string> Validate(DevPackageManifest? manifest, string shadowFolder)
+    public static IReadOnlyList<string> Validate(RuntimePackageManifest? manifest, string shadowFolder)
     {
         var errors = new List<string>();
 
         if (manifest is null)
         {
-            errors.Add($"Dev package manifest at '{shadowFolder}' is empty or invalid.");
+            errors.Add($"Package manifest at '{shadowFolder}' is empty or invalid.");
             return errors;
         }
 
         if (manifest.ManifestVersion != 1)
         {
-            errors.Add($"Dev package manifest for '{manifest.Id ?? shadowFolder}' must declare 'manifestVersion' 1.");
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' must declare 'manifestVersion' 1.");
         }
 
         errors.AddRange(SunderSdkCompatibilityProfile.Validate(manifest));
 
         if (string.IsNullOrWhiteSpace(manifest.Id))
         {
-            errors.Add($"Dev package manifest at '{shadowFolder}' is missing 'id'.");
+            errors.Add($"Package manifest at '{shadowFolder}' is missing 'id'.");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.Name))
         {
-            errors.Add($"Dev package manifest for '{manifest.Id ?? shadowFolder}' is missing 'name'.");
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' is missing 'name'.");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.Version))
         {
-            errors.Add($"Dev package manifest for '{manifest.Id ?? shadowFolder}' is missing 'version'.");
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' is missing 'version'.");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.EntryAssembly))
         {
-            errors.Add($"Dev package manifest for '{manifest.Id ?? shadowFolder}' is missing 'entryAssembly'.");
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' is missing 'entryAssembly'.");
         }
 
         if (!string.IsNullOrWhiteSpace(manifest.EntryAssembly))
@@ -44,7 +44,7 @@ internal static class DevPackageManifestValidator
             var entryAssemblyPath = Path.Combine(shadowFolder, "lib", manifest.EntryAssembly);
             if (!File.Exists(entryAssemblyPath))
             {
-                errors.Add($"Dev package '{manifest.Id ?? shadowFolder}' is missing entry assembly '{manifest.EntryAssembly}' under lib/.");
+                errors.Add($"Package '{manifest.Id ?? shadowFolder}' is missing entry assembly '{manifest.EntryAssembly}' under lib/.");
             }
         }
 
@@ -52,12 +52,12 @@ internal static class DevPackageManifestValidator
         {
             if (string.IsNullOrWhiteSpace(dependency.PackageId))
             {
-                errors.Add($"Dev package '{manifest.Id ?? shadowFolder}' has a dependency without a 'packageId'.");
+                errors.Add($"Package '{manifest.Id ?? shadowFolder}' has a dependency without a 'packageId'.");
             }
 
             if (string.IsNullOrWhiteSpace(dependency.VersionRange))
             {
-                errors.Add($"Dev package '{manifest.Id ?? shadowFolder}' dependency '{dependency.PackageId ?? "unknown"}' is missing 'versionRange'.");
+                errors.Add($"Package '{manifest.Id ?? shadowFolder}' dependency '{dependency.PackageId ?? "unknown"}' is missing 'versionRange'.");
             }
         }
 

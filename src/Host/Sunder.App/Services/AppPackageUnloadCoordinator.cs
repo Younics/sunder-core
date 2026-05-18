@@ -16,11 +16,16 @@ internal sealed class AppPackageUnloadCoordinator(
         string packageId,
         AppLoadedPackageInfo? packageInfo,
         ServiceProvider? serviceProvider,
-        AppPackageLoadContext? loadContext)
+        AppPackageLoadContext? loadContext,
+        bool stopRuntimeWork = true)
     {
         await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
         extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
-        await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
+        if (stopRuntimeWork)
+        {
+            await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
+        }
+
         assemblyTracker.RemovePackage(packageId);
 
         if (packageInfo is not null)
@@ -54,6 +59,7 @@ internal sealed class AppPackageUnloadCoordinator(
 
         removeLoadContext(handle.LoadContext);
         assemblyTracker.RemovePackage(packageId);
+        sharedAssemblyRegistry.RemoveProbeDirectories([Path.Combine(handle.Folder, "lib")]);
         AppPackageResourceDisposer.TryUnloadLoadContext(handle.LoadContext, packageId);
     }
 

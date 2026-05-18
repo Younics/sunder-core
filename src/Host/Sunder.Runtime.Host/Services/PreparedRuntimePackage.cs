@@ -1,12 +1,12 @@
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed record PreparedDevPackage(
+internal sealed record PreparedRuntimePackage(
     string SourceFolder,
     Sunder.Protocol.PackageSourceDescriptor Source,
     string ShadowFolder,
     string LibraryFolder,
     string PackageId,
     string Version,
-    DevPackageManifest Manifest,
+    RuntimePackageManifest Manifest,
     string EntryAssemblyPath,
     IReadOnlyList<string> Dependencies);

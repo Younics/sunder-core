@@ -352,8 +352,8 @@ public sealed class SettingsWindowViewModelTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<DevPackageLoadResult> LoadDevPackagesAsync(
-            IReadOnlyList<string> folders,
+        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
+            PackageLifecycleLoadRequest request,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

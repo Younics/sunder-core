@@ -4,13 +4,13 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class DevPackageLoadPlannerTests
+public sealed class PackageLoadPlannerTests
 {
     [Fact]
     public void ResolveLoadOrder_LoadsDependenciesBeforeDependents()
     {
         var errors = new List<string>();
-        var planner = new DevPackageLoadPlanner();
+        var planner = new PackageLoadPlanner();
 
         var ordered = planner.ResolveLoadOrder(
             [CreatePackage("package.app", ["package.core"]), CreatePackage("package.core")],
@@ -24,7 +24,7 @@ public sealed class DevPackageLoadPlannerTests
     public void ResolveLoadOrder_ExcludesPackageWithMissingDependency()
     {
         var errors = new List<string>();
-        var planner = new DevPackageLoadPlanner();
+        var planner = new PackageLoadPlanner();
 
         var ordered = planner.ResolveLoadOrder(
             [CreatePackage("package.app", ["package.missing"]), CreatePackage("package.tools")],
@@ -38,21 +38,21 @@ public sealed class DevPackageLoadPlannerTests
     public void ResolveLoadOrder_ReportsDuplicatePackageIds()
     {
         var errors = new List<string>();
-        var planner = new DevPackageLoadPlanner();
+        var planner = new PackageLoadPlanner();
 
         var ordered = planner.ResolveLoadOrder(
             [CreatePackage("package.app"), CreatePackage("package.app")],
             errors);
 
         Assert.Single(ordered);
-        Assert.Contains(errors, error => error.Contains("Duplicate dev package id 'package.app'", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("Duplicate package id 'package.app'", StringComparison.Ordinal));
     }
 
     [Fact]
     public void ResolveLoadOrder_ExcludesDependencyCycles()
     {
         var errors = new List<string>();
-        var planner = new DevPackageLoadPlanner();
+        var planner = new PackageLoadPlanner();
 
         var ordered = planner.ResolveLoadOrder(
             [CreatePackage("package.a", ["package.b"]), CreatePackage("package.b", ["package.a"])],
@@ -62,7 +62,7 @@ public sealed class DevPackageLoadPlannerTests
         Assert.Contains(errors, error => error.Contains("Dependency cycle detected", StringComparison.Ordinal));
     }
 
-    private static PreparedDevPackage CreatePackage(string packageId, IReadOnlyList<string>? dependencies = null)
+    private static PreparedRuntimePackage CreatePackage(string packageId, IReadOnlyList<string>? dependencies = null)
         => new(
             SourceFolder: "/source/" + packageId,
             Source: new PackageSourceDescriptor(packageId, PackageSourceKind.Dev, "/source/" + packageId),
@@ -70,7 +70,7 @@ public sealed class DevPackageLoadPlannerTests
             LibraryFolder: "/shadow/" + packageId + "/lib",
             packageId,
             Version: "1.0.0",
-            Manifest: new DevPackageManifest
+            Manifest: new RuntimePackageManifest
             {
                 ManifestVersion = 1,
                 Id = packageId,

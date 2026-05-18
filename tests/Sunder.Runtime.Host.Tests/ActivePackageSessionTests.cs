@@ -171,7 +171,7 @@ public sealed class ActivePackageSessionTests
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDirectory);
-        var assemblyPath = typeof(DevPackageLoadPlanner).Assembly.Location;
+        var assemblyPath = typeof(PackageLoadPlanner).Assembly.Location;
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
 
         return new ActiveLoadedPackage(
@@ -184,7 +184,7 @@ public sealed class ActivePackageSessionTests
             CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             BackgroundServices: [new TestBackgroundService()],
             serviceProvider,
-            new ActiveDevPackageLoadContext(
+            new RuntimePackageLoadContext(
                 packageId,
                 assemblyPath,
                 new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])));

@@ -1,5 +1,9 @@
 using Avalonia.Controls;
+using Avalonia.Layout;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Features.Shell.Layout;
+using Sunder.App.Features.Shell.Lifecycle;
+using Sunder.App.Features.Shell.Panels;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
@@ -106,6 +110,24 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.NotSame(originalView, reloadedView);
         Assert.True(harness.ViewModel.HasMiddleSelection);
         Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.chat" && view.IsOpen);
+    }
+
+    [Fact]
+    public async Task ReloadPackageViewAsync_WhenViewIsClosed_InvalidatesWithoutCreatingHostedView()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.chat"),
+            ("agent", "agent.workspaces"));
+        DisposablePackageView.ResetCreatedCount();
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        var createdCountAfterInitialSelection = DisposablePackageView.CreatedCount;
+
+        var reloaded = await harness.ViewModel.ReloadPackageViewAsync("agent.workspaces");
+
+        Assert.True(reloaded);
+        Assert.Equal(createdCountAfterInitialSelection, DisposablePackageView.CreatedCount);
+        Assert.False(harness.ViewModel.RightTopPanel.HasHostedView);
     }
 
     [Fact]
@@ -235,6 +257,79 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.DoesNotContain(hotbarViews, view => view.ViewId == "agent.subsessions");
         Assert.Contains(harness.ViewModel.GetPackageViewGroups(), group => group.PackageId == "agent");
         Assert.Equal("1 package(s) active", harness.ViewModel.SyncStatusText);
+    }
+
+    [Fact]
+    public async Task ShellPackageLifecyclePresenter_WhenOnlyPackageOnSameRailIsImpacted_PreservesUnimpactedHostedViewAndHotbarItem()
+    {
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.chat"),
+            ("tools", "tools.dashboard"));
+        try
+        {
+            var shellState = new ShellState
+            {
+                HasInitializedLayout = true,
+                ViewPlacements = new Dictionary<string, RailPlacement>
+                {
+                    ["agent.chat"] = RailPlacement.Middle,
+                    ["tools.dashboard"] = RailPlacement.Middle,
+                },
+                SelectedMiddleViewId = "tools.dashboard",
+            };
+            var viewsById = new Dictionary<string, ShellPackageView>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["agent.chat"] = new("agent.chat", "agent", "Agent", "1.0.0", "Chat", "A", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "A"),
+                ["tools.dashboard"] = new("tools.dashboard", "tools", "Tools", "1.0.0", "Dashboard", "T", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "T"),
+            };
+            var middleBar = new PackageIconBarViewModel(
+                RailPlacement.Middle,
+                Orientation.Horizontal,
+                (_, _, _) => { },
+                _ => ValueTask.FromResult(false),
+                _ => false);
+            var middlePanel = new ShellPanelViewModel();
+            var selectionPresenter = new ShellSelectionPresenter();
+            var panelContentPresenter = new ShellPanelContentPresenter(packageViewHostService, [], []);
+            var railCollectionPresenter = new ShellRailCollectionPresenter(
+                viewsById,
+                shellState,
+                selectionPresenter,
+                panelContentPresenter,
+                CreateShellItem);
+            var slots = new[]
+            {
+                new ShellPlacementSlot(RailPlacement.Middle, middleBar, middlePanel, _ => { }),
+            };
+            var lifecyclePresenter = new ShellPackageLifecyclePresenter(
+                new ShellCompositionService(),
+                viewsById,
+                shellState,
+                [],
+                [],
+                _ => { },
+                createHostedViews => railCollectionPresenter.Rebuild(slots, createHostedViews),
+                (placements, impactedPackageIds, createHostedViews) => railCollectionPresenter.Update(slots, placements, impactedPackageIds, createHostedViews),
+                () => { });
+            railCollectionPresenter.Rebuild(slots, createHostedViews: true);
+            var originalHostedView = Assert.IsType<DisposablePackageView>(middlePanel.HostedView);
+            var originalToolsItem = Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard");
+            var originalAgentItem = Assert.Single(middleBar.Items, item => item.Id == "agent.chat");
+
+            lifecyclePresenter.ApplyLifecycleChanges(
+                [CreateActiveAgentPackage() with { Version = "1.0.1" }, CreateActiveToolsPackage()],
+                ["agent"],
+                deferHostedViewCreation: true);
+
+            Assert.Same(originalHostedView, middlePanel.HostedView);
+            Assert.Same(originalToolsItem, Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard"));
+            Assert.NotSame(originalAgentItem, Assert.Single(middleBar.Items, item => item.Id == "agent.chat"));
+            Assert.True(selectionPresenter.HasMiddleSelection);
+        }
+        finally
+        {
+            await packageViewHostService.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -567,6 +662,29 @@ public sealed class MainWindowViewModelShellViewTests
                 new PackageViewDescriptor("agent.subsessions", "agent", "Subsessions", new PackageIconDescriptor("S", AssetPath: null), "right-top", ShowInHotbarByDefault: false),
             ]);
 
+    private static ActivePackageDescriptor CreateActiveToolsPackage()
+        => new(
+            "tools",
+            "Tools",
+            "1.0.0",
+            null,
+            true,
+            PackageReadinessState.Ready,
+            [
+                new PackageViewDescriptor("tools.dashboard", "tools", "Dashboard", new PackageIconDescriptor("T", AssetPath: null), "middle"),
+            ]);
+
+    private static ShellItemViewModel CreateShellItem(ShellPackageView packageView, Action<ShellItemViewModel> onSelect)
+        => new(
+            packageView.ViewId,
+            packageView.Glyph,
+            iconUri: null,
+            packageView.Title,
+            packageView.PackageDisplayName,
+            packageView.Title,
+            packageView.Placement,
+            onSelect);
+
     private static PackageViewHostService CreatePackageViewHostService()
         => new(
             new AppPackageViewRegistry(),
@@ -577,11 +695,20 @@ public sealed class MainWindowViewModelShellViewTests
             faultReporter: null,
             sessionFolder: null);
 
-    private static PackageViewHostService CreateRegisteredPackageViewHostService()
+    private static PackageViewHostService CreateRegisteredPackageViewHostService(params (string PackageId, string ViewId)[] registrations)
     {
         var registry = new AppPackageViewRegistry();
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
-        registry.RegisterPackageView<DisposablePackageView>("agent", "agent.chat", serviceProvider);
+        if (registrations.Length == 0)
+        {
+            registrations = [("agent", "agent.chat")];
+        }
+
+        foreach (var registration in registrations)
+        {
+            registry.RegisterPackageView<DisposablePackageView>(registration.PackageId, registration.ViewId, serviceProvider);
+        }
+
         return new PackageViewHostService(
             registry,
             new AppPackageBackgroundServiceCoordinator(),
@@ -766,7 +893,7 @@ public sealed class MainWindowViewModelShellViewTests
         public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<DevPackageLoadResult> LoadDevPackagesAsync(IReadOnlyList<string> folders, CancellationToken cancellationToken = default)
+        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)
@@ -851,7 +978,16 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class DisposablePackageView : Control, IDisposable
     {
+        public DisposablePackageView()
+        {
+            CreatedCount++;
+        }
+
+        public static int CreatedCount { get; private set; }
+
         public bool IsDisposed { get; private set; }
+
+        public static void ResetCreatedCount() => CreatedCount = 0;
 
         public void Dispose()
         {

@@ -15,7 +15,7 @@ internal sealed record ActiveLoadedPackage(
     IReadOnlyDictionary<string, IPackageCallbackHandler> CallbackHandlers,
     IReadOnlyList<IPackageBackgroundService> BackgroundServices,
     IServiceProvider ServiceProvider,
-    ActiveDevPackageLoadContext LoadContext)
+    RuntimePackageLoadContext LoadContext)
 {
     public IReadOnlyList<string> SecretKeys => SecretsStore.ListKeys();
 
@@ -98,7 +98,6 @@ internal sealed class ActivePackageSession
     {
         return _sessionPackageMap.Values
             .Where(package => package.IsEnabled)
-            .OrderBy(package => package.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Select(ToActiveDescriptor)
             .ToArray();
     }
@@ -106,7 +105,6 @@ internal sealed class ActivePackageSession
     public IReadOnlyList<PackageSourceDescriptor> GetActivePackageSources()
         => _loadedPackageMap.Values
             .Where(package => IsPackageEnabled(package.Descriptor.PackageId))
-            .OrderBy(package => package.Descriptor.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Select(package => package.Source)
             .ToArray();
 

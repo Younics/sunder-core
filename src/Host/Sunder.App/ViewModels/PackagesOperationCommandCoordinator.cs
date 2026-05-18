@@ -272,7 +272,7 @@ internal sealed class PackagesOperationCommandCoordinator(
         try
         {
             operationResult = await operation();
-            if (operationResult.Success)
+            if (operationResult.Success && operationResult.RuntimeSessionApplied && operationResult.ImpactedPackageIds.Count > 0)
             {
                 setStatusText("Applying package changes to the running shell...");
                 operationResult = await ApplyShellPackageChangesAsync(operationResult);
@@ -280,7 +280,7 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
         catch (Exception ex)
         {
-            operationResult = new PackageOperationResult(false, ex.Message, RequiresAppRestart: false, [], [ex.Message]);
+            operationResult = new PackageOperationResult(false, ex.Message, RuntimeSessionApplied: false, RequiresAppRestart: false, [], [ex.Message]);
         }
         finally
         {
@@ -288,7 +288,8 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         await refreshInstalledAsync(selectedPackageId, operationResult, true);
-        if (operationResult is { Success: true } && operationResult.ImpactedPackageIds.Count > 0)
+        if (operationResult is { Success: true, RuntimeSessionApplied: true, RequiresAppRestart: false }
+            && operationResult.ImpactedPackageIds.Count > 0)
         {
             await PublishPackageOperationSuccessToastAsync(
                 successTitle,
@@ -301,7 +302,7 @@ internal sealed class PackagesOperationCommandCoordinator(
         try
         {
             await applyPackageLifecycleChangesAsync(operationResult.ImpactedPackageIds, CancellationToken.None);
-            return operationResult with { RequiresAppRestart = false };
+            return operationResult with { AppShellApplied = true, RequiresAppRestart = false };
         }
         catch (Exception ex)
         {

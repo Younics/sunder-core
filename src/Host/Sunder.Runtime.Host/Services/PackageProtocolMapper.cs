@@ -5,10 +5,10 @@ using Sunder.Sdk.Configuration;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal static class DevPackageProtocolMapper
+internal static class PackageProtocolMapper
 {
     public static ActivePackageDescriptor BuildDescriptor(
-        DevPackageManifest manifest,
+        RuntimePackageManifest manifest,
         bool isEnabled,
         PackageReadinessState readiness,
         IReadOnlyList<PackageViewRegistration>? packageViews = null)
@@ -42,7 +42,7 @@ internal static class DevPackageProtocolMapper
     }
 
     public static SessionPackageDescriptor BuildSessionDescriptor(
-        DevPackageManifest manifest,
+        RuntimePackageManifest manifest,
         bool isEnabled,
         PackageReadinessState readiness,
         PackageFailureOrigin? failureOrigin = null,
@@ -65,7 +65,7 @@ internal static class DevPackageProtocolMapper
     }
 
     public static SessionPackageDescriptor BuildSessionDescriptor(
-        DevPackageManifest manifest,
+        RuntimePackageManifest manifest,
         bool isEnabled,
         PackageReadinessState readiness,
         IReadOnlyList<PackageViewRegistration> packageViews,
