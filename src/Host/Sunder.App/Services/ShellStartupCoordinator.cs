@@ -29,6 +29,7 @@ public sealed class ShellStartupCoordinator
     private readonly SunderUpdateService _updateService;
     private readonly IThemeManager _themeManager;
     private readonly AppPackageSettingsNavigationService _settingsNavigationService;
+    private readonly AppPackageSessionService _packageSessionService;
     private readonly IShellCompositionService _shellCompositionService;
     private readonly PackageViewHostServiceFactory _packageViewHostServiceFactory;
     private readonly WindowLauncherFactory _windowLauncherFactory;
@@ -46,6 +47,7 @@ public sealed class ShellStartupCoordinator
         SunderUpdateService updateService,
         IThemeManager themeManager,
         AppPackageSettingsNavigationService settingsNavigationService,
+        AppPackageSessionService packageSessionService,
         IShellCompositionService shellCompositionService,
         PackageViewHostServiceFactory packageViewHostServiceFactory,
         WindowLauncherFactory windowLauncherFactory,
@@ -62,6 +64,7 @@ public sealed class ShellStartupCoordinator
         _updateService = updateService;
         _themeManager = themeManager;
         _settingsNavigationService = settingsNavigationService;
+        _packageSessionService = packageSessionService;
         _shellCompositionService = shellCompositionService;
         _packageViewHostServiceFactory = packageViewHostServiceFactory;
         _windowLauncherFactory = windowLauncherFactory;
@@ -147,6 +150,7 @@ public sealed class ShellStartupCoordinator
 
         PackageViewHostService packageViewHostService;
         var settingsNavigationService = _settingsNavigationService;
+        var packageSessionService = _packageSessionService;
         try
         {
             packageViewHostService = await _packageViewHostServiceFactory.CreateForPackagesAsync(
@@ -182,6 +186,7 @@ public sealed class ShellStartupCoordinator
 
             var windowLauncher = _windowLauncherFactory.Create(packageViewHostService);
             settingsNavigationService.Attach(windowLauncher);
+            windowLauncher.AttachPackageSessionService(packageSessionService);
             var (mainWindow, mainWindowViewModel) = _mainWindowFactory.Create(
                 windowLauncher,
                 shellSnapshot,

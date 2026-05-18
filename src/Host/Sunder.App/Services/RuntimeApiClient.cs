@@ -81,6 +81,52 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
             cancellationToken
         ) ?? [];
 
+    public async Task<PackageSessionStatus?> GetPackageSessionStatusAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(
+            CreateRequestUri($"api/packages/session/{Uri.EscapeDataString(packageId)}/status"),
+            cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<PackageSessionStatus>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<PackageSessionOperationResult> LoadPackageSessionAsync(
+        PackageSessionLoadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("api/packages/session/load"),
+            request,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<PackageSessionOperationResult>(cancellationToken: cancellationToken)
+               ?? PackageSessionOperationResult.Failed("Runtime returned an empty package-session load response.");
+    }
+
+    public async Task<PackageSessionOperationResult> UnloadPackageSessionAsync(
+        string packageId,
+        PackageSourceKind sourceKind,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri($"api/packages/session/{Uri.EscapeDataString(packageId)}/unload"),
+            new PackageSessionUnloadRequest(sourceKind),
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<PackageSessionOperationResult>(cancellationToken: cancellationToken)
+               ?? PackageSessionOperationResult.Failed("Runtime returned an empty package-session unload response.");
+    }
+
     public Uri CreatePackageAssetUri(string packageId, string assetPath) =>
         CreateRequestUri(
             $"api/packages/{Uri.EscapeDataString(packageId)}/assets/{EscapeRelativePath(assetPath)}"

@@ -6,10 +6,6 @@ namespace Sunder.App.Services;
 
 public sealed class DevPackageHotReloadSession : IDisposable
 {
-    private static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(750);
-    private static readonly TimeSpan StabilityProbeDelay = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan MaxStabilityWait = TimeSpan.FromSeconds(5);
-
     private readonly IReadOnlyList<string> _folders;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
     private readonly WindowLauncher _windowLauncher;
@@ -140,7 +136,7 @@ public sealed class DevPackageHotReloadSession : IDisposable
 
     private void Watcher_OnChanged(object sender, FileSystemEventArgs e)
     {
-        if (ShouldIgnorePath(e.FullPath))
+        if (DevPackageWatchSupport.ShouldIgnorePath(e.FullPath))
         {
             return;
         }
@@ -150,7 +146,7 @@ public sealed class DevPackageHotReloadSession : IDisposable
 
     private void Watcher_OnRenamed(object sender, RenamedEventArgs e)
     {
-        if (ShouldIgnorePath(e.FullPath) && ShouldIgnorePath(e.OldFullPath))
+        if (DevPackageWatchSupport.ShouldIgnorePath(e.FullPath) && DevPackageWatchSupport.ShouldIgnorePath(e.OldFullPath))
         {
             return;
         }
@@ -185,7 +181,7 @@ public sealed class DevPackageHotReloadSession : IDisposable
     {
         try
         {
-            await _delayAsync(DebounceDelay, cancellationToken).ConfigureAwait(false);
+            await _delayAsync(DevPackageWatchSupport.DebounceDelay, cancellationToken).ConfigureAwait(false);
             await RunReloadLoopAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -240,7 +236,11 @@ public sealed class DevPackageHotReloadSession : IDisposable
     private async Task ReloadOnceAsync(CancellationToken cancellationToken)
     {
         RefreshFolderWatchers();
-        if (!await WaitForStableFoldersAsync(cancellationToken).ConfigureAwait(false))
+        if (!await DevPackageWatchSupport.WaitForStableFoldersAsync(
+                _folders,
+                _delayAsync,
+                cancellationToken,
+                onLoadabilityRetry: RefreshFolderWatchers).ConfigureAwait(false))
         {
             _developerLog.Warning("dev.hot_reload", "Dev package output was not stable yet; waiting for another file change.");
             return;
@@ -291,99 +291,6 @@ public sealed class DevPackageHotReloadSession : IDisposable
         }
     }
 
-    private async Task<bool> WaitForStableFoldersAsync(CancellationToken cancellationToken)
-    {
-        var deadline = DateTimeOffset.UtcNow + MaxStabilityWait;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!_folders.All(IsLoadableDevPackageFolder))
-            {
-                await _delayAsync(StabilityProbeDelay, cancellationToken).ConfigureAwait(false);
-                RefreshFolderWatchers();
-                continue;
-            }
-
-            if (!TrySnapshotFiles(out var before))
-            {
-                await _delayAsync(StabilityProbeDelay, cancellationToken).ConfigureAwait(false);
-                continue;
-            }
-
-            await _delayAsync(StabilityProbeDelay, cancellationToken).ConfigureAwait(false);
-            if (TrySnapshotFiles(out var after) && AreSnapshotsEqual(before, after))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private bool TrySnapshotFiles(out Dictionary<string, FileSnapshot> snapshot)
-    {
-        snapshot = new Dictionary<string, FileSnapshot>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            foreach (var folder in _folders)
-            {
-                foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
-                {
-                    if (ShouldIgnorePath(file))
-                    {
-                        continue;
-                    }
-
-                    var info = new FileInfo(file);
-                    snapshot[file] = new FileSnapshot(info.Length, info.LastWriteTimeUtc);
-                }
-            }
-
-            return true;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static bool AreSnapshotsEqual(
-        IReadOnlyDictionary<string, FileSnapshot> left,
-        IReadOnlyDictionary<string, FileSnapshot> right)
-    {
-        if (left.Count != right.Count)
-        {
-            return false;
-        }
-
-        foreach (var entry in left)
-        {
-            if (!right.TryGetValue(entry.Key, out var rightSnapshot) || !entry.Value.Equals(rightSnapshot))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsLoadableDevPackageFolder(string folder)
-        => Directory.Exists(folder) && File.Exists(Path.Combine(folder, "sunder-package.json"));
-
-    private static bool ShouldIgnorePath(string path)
-    {
-        var fileName = Path.GetFileName(path);
-        return string.IsNullOrWhiteSpace(fileName)
-               || string.Equals(fileName, ".DS_Store", StringComparison.OrdinalIgnoreCase)
-               || fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
-               || fileName.EndsWith(".swp", StringComparison.OrdinalIgnoreCase)
-               || fileName.EndsWith(".lock", StringComparison.OrdinalIgnoreCase);
-    }
-
     private void LogMessages(IEnumerable<string> messages, PackageLogLevel level)
     {
         foreach (var message in messages)
@@ -405,6 +312,4 @@ public sealed class DevPackageHotReloadSession : IDisposable
                 PackageNotificationSeverity.Error)).ConfigureAwait(false);
         _windowLauncher.ShowDeveloperLogs();
     }
-
-    private readonly record struct FileSnapshot(long Length, DateTime LastWriteTimeUtc);
 }

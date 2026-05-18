@@ -2,10 +2,10 @@ using Sunder.Protocol;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageConfigurationService
+internal sealed class PackageConfigurationService
 {
     public IReadOnlyList<PackageConfigurationSchemaDescriptor> GetConfigurationSchemas(
-        IReadOnlyList<ActiveLoadedDevPackage> loadedPackages)
+        IReadOnlyList<ActiveLoadedPackage> loadedPackages)
     {
         return loadedPackages
             .Where(package => package.ConfigurationSchema is not null)
@@ -15,7 +15,7 @@ internal sealed class DevPackageConfigurationService
     }
 
     public async Task<PackageConfigurationValuesResponse> GetConfigurationValuesAsync(
-        ActiveLoadedDevPackage loadedPackage,
+        ActiveLoadedPackage loadedPackage,
         CancellationToken cancellationToken = default)
     {
         var keys = await loadedPackage.StateStore.ListKeysAsync(cancellationToken: cancellationToken);
@@ -41,7 +41,7 @@ internal sealed class DevPackageConfigurationService
     }
 
     public async Task<bool> SaveConfigurationValuesAsync(
-        ActiveLoadedDevPackage loadedPackage,
+        ActiveLoadedPackage loadedPackage,
         UpdatePackageConfigurationValuesRequest request,
         CancellationToken cancellationToken = default)
     {

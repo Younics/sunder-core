@@ -3,7 +3,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal static class DevPackageLifecycle
+internal static class PackageSessionLifecycle
 {
     public static async Task StopBackgroundServicesAsync(
         IReadOnlyList<IPackageBackgroundService> backgroundServices,

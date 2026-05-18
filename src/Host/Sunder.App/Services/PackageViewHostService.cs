@@ -38,6 +38,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly PackageRuntimeFaultReporter? _faultReporter;
     private readonly IPackageShellViewService? _shellViewService;
     private readonly IPackageSettingsNavigationService? _settingsNavigationService;
+    private readonly IPackageSessionService? _packageSessionService;
     private readonly NotificationCenterService? _notificationCenter;
     private readonly BackgroundProcessQueueService? _backgroundProcessQueue;
     private string? _sessionFolder;
@@ -56,6 +57,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppPackageExtensionCatalog? extensionCatalog = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
+        IPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null)
     {
@@ -63,6 +65,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _sessionFolder = sessionFolder;
         _shellViewService = shellViewService;
         _settingsNavigationService = settingsNavigationService;
+        _packageSessionService = packageSessionService;
         _notificationCenter = notificationCenter;
         _backgroundProcessQueue = backgroundProcessQueue;
         _backgroundServices = backgroundServices;
@@ -78,6 +81,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             extensionCatalog,
             shellViewService,
             settingsNavigationService,
+            packageSessionService,
             notificationCenter,
             backgroundProcessQueue);
         AttachFaultForwarder(_composition);
@@ -101,6 +105,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         PackageRuntimeFaultReporter? faultReporter = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
+        IPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         CancellationToken cancellationToken = default)
@@ -119,6 +124,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             new AppPackageExtensionCatalog(),
             shellViewService,
             settingsNavigationService,
+            packageSessionService,
             notificationCenter,
             backgroundProcessQueue);
 
@@ -158,6 +164,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             new AppPackageExtensionCatalog(),
             _shellViewService,
             _settingsNavigationService,
+            _packageSessionService,
             _notificationCenter,
             _backgroundProcessQueue);
 

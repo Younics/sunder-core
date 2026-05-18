@@ -32,6 +32,12 @@ Create a standard package with a default shell view:
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
 ```
 
+Create package files directly in the specified output folder:
+
+```powershell
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --createInPlace --output .\MyPackage
+```
+
 Create a package with no default view:
 
 ```powershell
@@ -63,6 +69,7 @@ Template options:
 | `--packageId <id>` | Required runtime package id written into generated metadata |
 | `--packageName <name>` | Required display name written into generated metadata and starter view |
 | `--withContracts` | Adds a sibling `*.Contracts` project for public extension points |
+| `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder |
 | `--noDefaultView` | Omits the default shell-visible package view |
 | `--withHostDependency` | Adds runtime dependency metadata for another package |
 | `--hostPackageId <id>` | Required with `--withHostDependency`; runtime package id that this package depends on |

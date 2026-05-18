@@ -3,13 +3,13 @@ using Sunder.Protocol;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageSessionState(
+internal sealed class PackageSessionState(
     ILogger logger,
     Action clearAuthSessions,
     Action<string> removePackageAuthSessions)
 {
     private readonly object _syncRoot = new();
-    private ActiveDevPackageSession _activeSession = ActiveDevPackageSession.Empty;
+    private ActivePackageSession _activeSession = ActivePackageSession.Empty;
 
     public IReadOnlyList<ActivePackageDescriptor> GetActivePackages()
     {
@@ -27,6 +27,14 @@ internal sealed class DevPackageSessionState(
         }
     }
 
+    public SessionPackageDescriptor? GetSessionPackage(string packageId)
+    {
+        lock (_syncRoot)
+        {
+            return _activeSession.TryGetSessionPackage(packageId, out var package) ? package : null;
+        }
+    }
+
     public IReadOnlyList<PackageSourceDescriptor> GetActivePackageSources()
     {
         lock (_syncRoot)
@@ -35,7 +43,7 @@ internal sealed class DevPackageSessionState(
         }
     }
 
-    public IReadOnlyList<ActiveLoadedDevPackage> ListEnabledLoadedPackages()
+    public IReadOnlyList<ActiveLoadedPackage> ListEnabledLoadedPackages()
     {
         lock (_syncRoot)
         {
@@ -47,7 +55,7 @@ internal sealed class DevPackageSessionState(
 
     public bool ReportPackageFault(string packageId, ReportPackageFaultRequest request)
     {
-        ActiveLoadedDevPackage? packageToDeactivate;
+        ActiveLoadedPackage? packageToDeactivate;
         lock (_syncRoot)
         {
             var disabled = _activeSession.MarkPackageFailed(packageId, request.Origin, request.Message, out packageToDeactivate);
@@ -71,15 +79,15 @@ internal sealed class DevPackageSessionState(
 
     public async Task<IReadOnlyList<string>> ClearActiveSessionAsync()
     {
-        ActiveDevPackageSession previousSession;
+        ActivePackageSession previousSession;
         lock (_syncRoot)
         {
             previousSession = _activeSession;
-            _activeSession = ActiveDevPackageSession.Empty;
+            _activeSession = ActivePackageSession.Empty;
             clearAuthSessions();
         }
 
-        if (ReferenceEquals(previousSession, ActiveDevPackageSession.Empty))
+        if (ReferenceEquals(previousSession, ActivePackageSession.Empty))
         {
             return [];
         }
@@ -109,7 +117,7 @@ internal sealed class DevPackageSessionState(
         return warnings;
     }
 
-    public void PublishSession(ActiveDevPackageSession session)
+    public void PublishSession(ActivePackageSession session)
     {
         lock (_syncRoot)
         {
@@ -120,7 +128,7 @@ internal sealed class DevPackageSessionState(
 
     public void HandlePackageFault(string packageId, PackageFailureOrigin origin, Exception exception, string action)
     {
-        ActiveLoadedDevPackage? packageToDeactivate;
+        ActiveLoadedPackage? packageToDeactivate;
         lock (_syncRoot)
         {
             _activeSession.MarkPackageFailed(packageId, origin, exception.Message, out packageToDeactivate);
@@ -134,7 +142,7 @@ internal sealed class DevPackageSessionState(
 
     public bool DisableInstalledPackage(string packageId)
     {
-        ActiveLoadedDevPackage? packageToDeactivate;
+        ActiveLoadedPackage? packageToDeactivate;
         lock (_syncRoot)
         {
             if (!_activeSession.DisableInstalledPackage(packageId, out packageToDeactivate))
@@ -151,7 +159,7 @@ internal sealed class DevPackageSessionState(
 
     public bool RemovePackage(string packageId)
     {
-        ActiveLoadedDevPackage? packageToDeactivate;
+        ActiveLoadedPackage? packageToDeactivate;
         lock (_syncRoot)
         {
             if (!_activeSession.RemovePackage(packageId, out packageToDeactivate))
@@ -166,7 +174,7 @@ internal sealed class DevPackageSessionState(
         return true;
     }
 
-    public ActiveLoadedDevPackage? GetLoadedPackage(string packageId)
+    public ActiveLoadedPackage? GetLoadedPackage(string packageId)
     {
         lock (_syncRoot)
         {
@@ -182,7 +190,7 @@ internal sealed class DevPackageSessionState(
         }
     }
 
-    private void QueuePackageDeactivation(string packageId, ActiveLoadedDevPackage? loadedPackage)
+    private void QueuePackageDeactivation(string packageId, ActiveLoadedPackage? loadedPackage)
     {
         if (loadedPackage is null)
         {
@@ -202,10 +210,10 @@ internal sealed class DevPackageSessionState(
         });
     }
 
-    private async Task DeactivateLoadedPackageAsync(string packageId, ActiveLoadedDevPackage loadedPackage)
+    private async Task DeactivateLoadedPackageAsync(string packageId, ActiveLoadedPackage loadedPackage)
     {
-        await DevPackageLifecycle.StopBackgroundServicesAsync(loadedPackage.BackgroundServices, packageId, logger);
-        await DevPackageLifecycle.DisposeOwnedServiceProviderAsync(loadedPackage.ServiceProvider);
+        await PackageSessionLifecycle.StopBackgroundServicesAsync(loadedPackage.BackgroundServices, packageId, logger);
+        await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(loadedPackage.ServiceProvider);
         loadedPackage.LoadContext.Unload();
         GC.Collect();
         GC.WaitForPendingFinalizers();

@@ -6,6 +6,7 @@ Creates a Sunder runtime package project that can be built into a `sunder-dev` f
 
 ```bash
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --createInPlace --output ./MyPackage
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --noDefaultView
 dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent
@@ -30,5 +31,7 @@ Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder
 Use `--withHostDependency` when the generated package should declare a dependency on another package and scaffold integration notes.
 
 Use `--withHostContracts` together with `--hostContractsPackageId` and `--hostContractsVersion` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately.
+
+Use `--createInPlace` when the specified output folder should be the package project folder itself.
 
 `--packageId` and `--packageName` are required so generated packages do not keep template runtime identity metadata.

@@ -7,6 +7,7 @@ public sealed class PackageViewHostServiceFactory(
     PackageRuntimeFaultReporter packageFaultReporter,
     AppPackageShellViewService shellViewService,
     AppPackageSettingsNavigationService settingsNavigationService,
+    AppPackageSessionService packageSessionService,
     NotificationCenterService notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue)
 {
@@ -20,6 +21,7 @@ public sealed class PackageViewHostServiceFactory(
             packageFaultReporter,
             shellViewService,
             settingsNavigationService,
+            packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
             cancellationToken).ConfigureAwait(false);

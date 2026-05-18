@@ -16,6 +16,22 @@ public interface IRuntimeApiClient : IDisposable
 
     Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default);
 
+    Task<PackageSessionStatus?> GetPackageSessionStatusAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-session status.");
+
+    Task<PackageSessionOperationResult> LoadPackageSessionAsync(
+        PackageSessionLoadRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-session loading.");
+
+    Task<PackageSessionOperationResult> UnloadPackageSessionAsync(
+        string packageId,
+        PackageSourceKind sourceKind,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-session unloading.");
+
     Uri CreatePackageAssetUri(string packageId, string assetPath);
 
     Task<PackageOperationResult> InstallPackageFromPathAsync(

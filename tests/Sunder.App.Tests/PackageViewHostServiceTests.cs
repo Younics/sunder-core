@@ -403,6 +403,38 @@ public sealed class PackageViewHostServiceTests
         }
     }
 
+    [Fact]
+    public async Task ApplyPackageDeltaAsync_ProvidesPackageSessionServiceToPackageModules()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RequirePackageSessionServiceMarkerFileName), string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+
+            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.PackageSessionServiceResolvedFileName, SearchOption.AllDirectories));
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
     private static void TryDeleteDirectory(string path)
     {
         if (Directory.Exists(path))

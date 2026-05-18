@@ -10,6 +10,7 @@ internal sealed class AppPackageServiceProviderFactory(
     AppPackageExtensionCatalog extensionCatalog,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
+    IPackageSessionService? packageSessionService,
     NotificationCenterService? notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue)
 {
@@ -25,6 +26,7 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
         services.AddSingleton<IPackageSettingsNavigationService>(settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
+        services.AddSingleton<IPackageSessionService>(packageSessionService ?? NullPackageSessionService.Instance);
         services.AddSingleton<IBackgroundProcessQueue>(_ =>
         {
             var packageBackgroundProcessQueue = new PackageScopedBackgroundProcessQueue(package.PackageId, package.DisplayName, backgroundProcessQueue);

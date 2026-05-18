@@ -17,6 +17,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj"
                       Condition="Exists('..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
+    <ProjectReference Include="Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj"
+                      Condition="Exists('Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
   </ItemGroup>
 
   <Import Project="HostContracts.PackageReferences.props" />

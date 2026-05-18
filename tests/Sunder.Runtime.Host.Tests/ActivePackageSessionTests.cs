@@ -7,15 +7,15 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class ActiveDevPackageSessionTests
+public sealed class ActivePackageSessionTests
 {
     [Fact]
     public void MarkPackageFailed_DisablesSessionPackageAndReturnsLoadedPackageForDeactivation()
     {
         var loadedPackage = CreateLoadedPackage("test.package");
-        var session = new ActiveDevPackageSession(
+        var session = new ActivePackageSession(
             sessionFolder: null,
-            new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase)
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
             {
                 ["test.package"] = loadedPackage,
             },
@@ -51,9 +51,9 @@ public sealed class ActiveDevPackageSessionTests
         var extensionCatalog = new RuntimePackageExtensionCatalog();
         extensionCatalog.Add("test.package", extensionPoint, new TestContribution("test"));
         extensionCatalog.Add("other.package", extensionPoint, new TestContribution("other"));
-        var session = new ActiveDevPackageSession(
+        var session = new ActivePackageSession(
             sessionFolder: null,
-            new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase)
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
             {
                 ["test.package"] = CreateLoadedPackage("test.package"),
             },
@@ -77,9 +77,9 @@ public sealed class ActiveDevPackageSessionTests
     public void DisableInstalledPackage_DisablesPackageAndReturnsLoadedPackageForDeactivation()
     {
         var loadedPackage = CreateLoadedPackage("test.package");
-        var session = new ActiveDevPackageSession(
+        var session = new ActivePackageSession(
             sessionFolder: null,
-            new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase)
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
             {
                 ["test.package"] = loadedPackage,
             },
@@ -102,9 +102,9 @@ public sealed class ActiveDevPackageSessionTests
     public void RemovePackage_RemovesSessionAndLoadedPackage()
     {
         var loadedPackage = CreateLoadedPackage("test.package");
-        var session = new ActiveDevPackageSession(
+        var session = new ActivePackageSession(
             sessionFolder: null,
-            new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase)
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
             {
                 ["test.package"] = loadedPackage,
             },
@@ -128,9 +128,9 @@ public sealed class ActiveDevPackageSessionTests
         Directory.CreateDirectory(sessionFolder);
         try
         {
-            var session = new ActiveDevPackageSession(
+            var session = new ActivePackageSession(
                 sessionFolder,
-                new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase),
+                new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
                 new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase));
 
             await session.DisposeAsync();
@@ -167,14 +167,14 @@ public sealed class ActiveDevPackageSessionTests
         }
     }
 
-    private static ActiveLoadedDevPackage CreateLoadedPackage(string packageId)
+    private static ActiveLoadedPackage CreateLoadedPackage(string packageId)
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDirectory);
         var assemblyPath = typeof(DevPackageLoadPlanner).Assembly.Location;
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
 
-        return new ActiveLoadedDevPackage(
+        return new ActiveLoadedPackage(
             CreateActivePackage(packageId, isEnabled: true, PackageReadinessState.Ready),
             new PackageSourceDescriptor(packageId, PackageSourceKind.Dev, tempDirectory),
             ConfigurationSchema: null,

@@ -16,7 +16,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<RuntimePackagePaths>();
 builder.Services.AddSingleton<InstalledPackageStore>();
 builder.Services.AddSingleton<SunderPackageArchiveInstaller>();
-builder.Services.AddSingleton<DevPackageSessionService>();
+builder.Services.AddSingleton<RuntimePackageSessionService>();
 builder.Services.AddSingleton<PackageAuthCallbackServer>();
 
 var app = builder.Build();
@@ -31,6 +31,6 @@ app.MapSystemEndpoints(startedAtUtc)
     .MapPackageFaultEndpoints()
     .MapInstalledPackageEndpoints();
 
-await app.Services.GetRequiredService<DevPackageSessionService>().LoadInstalledPackagesAsync();
+await app.Services.GetRequiredService<RuntimePackageSessionService>().LoadInstalledPackagesAsync();
 
 app.Run();

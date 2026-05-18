@@ -9,40 +9,11 @@ using static Sunder.Runtime.Host.Services.DevPackageProtocolMapper;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageLoadService(ILogger logger)
+internal sealed class PackageSessionLoadService(ILogger logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public async Task<DevPackageLoadSessionResult> LoadAsync(IReadOnlyList<string> folders, bool startBackgroundServices = true)
-    {
-        var warnings = new List<string>();
-        var errors = new List<string>();
-        RuntimePackageSessionDirectories.CleanupStaleSessions();
-        var sessionFolder = RuntimePackageSessionDirectories.CreateDevSessionFolder();
-
-        Directory.CreateDirectory(sessionFolder);
-        var fileMaterializer = new DevSessionFileMaterializer();
-
-        var preparedCandidates = new List<PreparedDevPackage>();
-        for (var index = 0; index < folders.Count; index++)
-        {
-            var preparedPackage = PreparePackage(index, folders[index], sessionFolder, fileMaterializer, errors);
-            if (preparedPackage is not null)
-            {
-                preparedCandidates.Add(preparedPackage);
-            }
-        }
-
-        return await LoadPreparedPackagesAsync(
-            sessionFolder,
-            preparedCandidates,
-            warnings,
-            errors,
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase),
-            startBackgroundServices);
-    }
-
-    public async Task<DevPackageLoadSessionResult> LoadInstalledAsync(IReadOnlyList<InstalledPackageRecord> packages, bool startBackgroundServices = true)
+    public async Task<PackageSessionLoadResult> LoadInstalledAsync(IReadOnlyList<InstalledPackageRecord> packages, bool startBackgroundServices = true)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -78,13 +49,75 @@ internal sealed class DevPackageLoadService(ILogger logger)
         if (enabledPackages.Length == 0 && sessionPackages.Count == 0)
         {
             TryDeleteDirectory(sessionFolder);
-            return new DevPackageLoadSessionResult(ActiveDevPackageSession.Empty, warnings, errors);
+            return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings, errors);
         }
 
         return await LoadPreparedPackagesAsync(sessionFolder, preparedCandidates, warnings, errors, sessionPackages, startBackgroundServices);
     }
 
-    private async Task<DevPackageLoadSessionResult> LoadPreparedPackagesAsync(
+    public async Task<PackageSessionLoadResult> LoadInstalledWithDevOverlaysAsync(
+        IReadOnlyList<InstalledPackageRecord> packages,
+        IReadOnlyList<string> devFolders,
+        bool startBackgroundServices = true)
+    {
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        RuntimePackageSessionDirectories.CleanupStaleSessions();
+        var sessionFolder = RuntimePackageSessionDirectories.CreateInstalledSessionFolder();
+
+        Directory.CreateDirectory(sessionFolder);
+        var fileMaterializer = new DevSessionFileMaterializer();
+        var preparedCandidates = new List<PreparedDevPackage>();
+        var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase);
+        var devPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+
+        foreach (var devFolder in devFolders)
+        {
+            var preparedPackage = PreparePackage(index++, devFolder, sessionFolder, fileMaterializer, errors);
+            if (preparedPackage is null)
+            {
+                continue;
+            }
+
+            preparedCandidates.Add(preparedPackage);
+            devPackageIds.Add(preparedPackage.PackageId);
+        }
+
+        foreach (var package in packages)
+        {
+            if (devPackageIds.Contains(package.PackageId))
+            {
+                continue;
+            }
+
+            var manifest = ToManifest(package);
+            if (!package.IsEnabled)
+            {
+                sessionPackages[package.PackageId] = BuildSessionDescriptor(
+                    manifest,
+                    isEnabled: false,
+                    readiness: PackageReadinessState.Disabled);
+                continue;
+            }
+
+            var preparedPackage = PrepareInstalledPackage(index++, package, sessionFolder, fileMaterializer, errors);
+            if (preparedPackage is not null)
+            {
+                preparedCandidates.Add(preparedPackage);
+            }
+        }
+
+        if (preparedCandidates.Count == 0 && sessionPackages.Count == 0)
+        {
+            TryDeleteDirectory(sessionFolder);
+            return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings, errors);
+        }
+
+        return await LoadPreparedPackagesAsync(sessionFolder, preparedCandidates, warnings, errors, sessionPackages, startBackgroundServices);
+    }
+
+    private async Task<PackageSessionLoadResult> LoadPreparedPackagesAsync(
         string sessionFolder,
         IReadOnlyList<PreparedDevPackage> preparedCandidates,
         ICollection<string> warnings,
@@ -95,7 +128,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
         if (preparedCandidates.Count == 0 && initialSessionPackages.Count == 0)
         {
             TryDeleteDirectory(sessionFolder);
-            return new DevPackageLoadSessionResult(ActiveDevPackageSession.Empty, warnings.ToArray(), errors.ToArray());
+            return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings.ToArray(), errors.ToArray());
         }
 
         var orderedPackages = new DevPackageLoadPlanner().ResolveLoadOrder(preparedCandidates, errors);
@@ -108,10 +141,10 @@ internal sealed class DevPackageLoadService(ILogger logger)
         {
             errors.Add(ex.Message);
             TryDeleteDirectory(sessionFolder);
-            return new DevPackageLoadSessionResult(null, warnings.ToArray(), errors.ToArray());
+            return new PackageSessionLoadResult(null, warnings.ToArray(), errors.ToArray());
         }
 
-        var loadedPackages = new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase);
+        var loadedPackages = new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase);
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(initialSessionPackages, StringComparer.OrdinalIgnoreCase);
         var loadedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var extensionCatalog = new RuntimePackageExtensionCatalog();
@@ -144,14 +177,14 @@ internal sealed class DevPackageLoadService(ILogger logger)
             sessionPackages[preparedPackage.PackageId] = activation.SessionPackage;
         }
 
-        var session = new ActiveDevPackageSession(
+        var session = new ActivePackageSession(
             sessionFolder,
             loadedPackages,
             sessionPackages,
             extensionCatalog,
             sharedAssemblyRegistry,
             backgroundServicesStarted: startBackgroundServices);
-        return new DevPackageLoadSessionResult(session, warnings.ToArray(), errors.ToArray());
+        return new PackageSessionLoadResult(session, warnings.ToArray(), errors.ToArray());
     }
 
     private static PreparedDevPackage? PreparePackage(
@@ -370,6 +403,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
             services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(EmptyPackageShellViewService.Instance);
             services.AddSingleton<IPackageSettingsNavigationService>(NullPackageSettingsNavigationService.Instance);
+            services.AddSingleton<IPackageSessionService>(NullPackageSessionService.Instance);
             services.AddSingleton<IPackageNotificationService>(NullPackageNotificationService.Instance);
 
             module.ConfigureServices(services, packageContext);
@@ -387,7 +421,7 @@ internal sealed class DevPackageLoadService(ILogger logger)
                 }
             }
 
-            var loadedPackage = new ActiveLoadedDevPackage(
+            var loadedPackage = new ActiveLoadedPackage(
                 BuildDescriptor(preparedPackage.Manifest, isEnabled: true, readiness: PackageReadinessState.Ready, contributionRegistry.PackageViews),
                 preparedPackage.Source,
                 ToProtocolConfigurationSchema(contributionRegistry.ConfigurationSchema),
@@ -417,10 +451,10 @@ internal sealed class DevPackageLoadService(ILogger logger)
         }
         catch (Exception ex)
         {
-            await DevPackageLifecycle.StopBackgroundServicesAsync(startedBackgroundServices, preparedPackage.PackageId, logger);
+            await PackageSessionLifecycle.StopBackgroundServicesAsync(startedBackgroundServices, preparedPackage.PackageId, logger);
             if (serviceProvider is not null)
             {
-                await DevPackageLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
+                await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
             }
             loadContext?.Unload();
             extensionCatalog.RemovePackage(preparedPackage.PackageId, PackageExtensionCatalogChangeReason.PackageFaulted);

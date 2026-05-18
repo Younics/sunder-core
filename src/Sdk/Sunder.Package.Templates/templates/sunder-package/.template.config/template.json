@@ -64,6 +64,12 @@
       "description": "The version of the host package's published contracts package.",
       "replaces": "1.0.0-HOST-CONTRACTS"
     },
+    "createInPlace": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": false,
+      "description": "Create the package project directly in the specified output folder instead of a child project folder."
+    },
     "noDefaultView": {
       "type": "parameter",
       "datatype": "bool",
@@ -73,11 +79,17 @@
   },
   "primaryOutputs": [
     {
+      "condition": "(!createInPlace)",
       "path": "Sunder.Package.Template/Sunder.Package.Template.csproj"
+    },
+    {
+      "condition": "(createInPlace)",
+      "path": "Sunder.Package.Template.csproj"
     }
   ],
   "sources": [
     {
+      "condition": "(!createInPlace)",
       "modifiers": [
         {
           "condition": "(!withContracts)",
@@ -159,6 +171,99 @@
             "Sunder.Package.Template/PackageModule.with-view.cs": "Sunder.Package.Template/PackageModule.cs"
           }
         }
+      ]
+    },
+    {
+      "condition": "(createInPlace)",
+      "source": "Sunder.Package.Template/",
+      "target": "./",
+      "modifiers": [
+        {
+          "condition": "(!withHostDependency && withHostContracts != true)",
+          "exclude": [
+            "Extensions/**/*",
+            "PackageMetadata.host.cs"
+          ],
+          "rename": {
+            "PackageMetadata.no-host.cs": "PackageMetadata.cs"
+          }
+        },
+        {
+          "condition": "(withHostDependency || withHostContracts == true)",
+          "exclude": [
+            "PackageMetadata.no-host.cs"
+          ],
+          "rename": {
+            "PackageMetadata.host.cs": "PackageMetadata.cs"
+          }
+        },
+        {
+          "condition": "(withHostContracts != true)",
+          "exclude": [
+            "Sunder.Package.Template.with-host-contracts.csproj",
+            "HostContracts.PackageReferences.props",
+            "Extensions/HostContractContributionStub.cs"
+          ]
+        },
+        {
+          "condition": "(withHostContracts == true)",
+          "exclude": [
+            "Sunder.Package.Template.csproj"
+          ],
+          "rename": {
+            "Sunder.Package.Template.with-host-contracts.csproj": "Sunder.Package.Template.csproj"
+          }
+        },
+        {
+          "condition": "(noDefaultView && !withHostDependency && withHostContracts != true)",
+          "exclude": [
+            "PackageViews/**/*",
+            "PackageModule.with-view.cs"
+          ],
+          "rename": {
+            "PackageModule.no-view.cs": "PackageModule.cs"
+          }
+        },
+        {
+          "condition": "(!noDefaultView && !withHostDependency && withHostContracts != true)",
+          "exclude": [
+            "PackageModule.no-view.cs"
+          ],
+          "rename": {
+            "PackageModule.with-view.cs": "PackageModule.cs"
+          }
+        },
+        {
+          "condition": "(noDefaultView && (withHostDependency || withHostContracts == true))",
+          "exclude": [
+            "PackageViews/**/*",
+            "PackageModule.with-view.cs"
+          ],
+          "rename": {
+            "PackageModule.no-view.cs": "PackageModule.cs"
+          }
+        },
+        {
+          "condition": "(!noDefaultView && (withHostDependency || withHostContracts == true))",
+          "exclude": [
+            "PackageModule.no-view.cs"
+          ],
+          "rename": {
+            "PackageModule.with-view.cs": "PackageModule.cs"
+          }
+        }
+      ]
+    },
+    {
+      "condition": "(createInPlace && withContracts)",
+      "include": [
+        "Sunder.Package.Template.Contracts/**/*"
+      ]
+    },
+    {
+      "condition": "(createInPlace)",
+      "include": [
+        "README.md"
       ]
     }
   ]

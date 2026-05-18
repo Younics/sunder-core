@@ -20,6 +20,7 @@ public static class SunderSdkCapabilities
     public const string LoggingV1 = "logging.v1";
     public const string NotificationsV1 = "notifications.v1";
     public const string ShellViewV1 = "shell-view.v1";
+    public const string PackageSessionsV1 = "package-sessions.v1";
     public const string CallbacksV1 = "callbacks.v1";
     public const string AuthV1 = "auth.v1";
     public const string ThemingV1 = "theming.v1";

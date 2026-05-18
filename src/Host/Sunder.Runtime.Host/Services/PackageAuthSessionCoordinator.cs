@@ -7,7 +7,7 @@ using static Sunder.Runtime.Host.Services.DevPackageProtocolMapper;
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageAuthSessionCoordinator(
-    Func<string, ActiveLoadedDevPackage?> getLoadedPackage,
+    Func<string, ActiveLoadedPackage?> getLoadedPackage,
     Action<string, PackageFailureOrigin, Exception, string> handlePackageFault)
 {
     private readonly object _syncRoot = new();
@@ -271,7 +271,7 @@ internal sealed class PackageAuthSessionCoordinator(
         IPackageCallbackHandler CallbackHandler,
         PackageAuthSessionStatus Status);
 
-    private static IPackageCallbackHandler? ResolveAuthCallbackHandler(ActiveLoadedDevPackage loadedPackage)
+    private static IPackageCallbackHandler? ResolveAuthCallbackHandler(ActiveLoadedPackage loadedPackage)
         => loadedPackage.GetCallbackHandler(PackageCallbackHandlerIds.Authentication)
            ?? (loadedPackage.AuthHandler as IPackageCallbackHandler);
 }

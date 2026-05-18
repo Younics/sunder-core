@@ -8,9 +8,6 @@ internal static class RuntimePackageSessionDirectories
         Path.GetTempPath(),
         "Sunder.Runtime.Host");
 
-    public static string CreateDevSessionFolder()
-        => CreateSessionFolder("dev-sessions");
-
     public static string CreateInstalledSessionFolder()
         => CreateSessionFolder("installed-sessions");
 

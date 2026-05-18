@@ -10,8 +10,8 @@ internal static class PackageFaultEndpoints
         var group = endpoints.MapGroup("/api/packages");
         group.MapPost(
             "{packageId}/fault",
-            (string packageId, ReportPackageFaultRequest request, DevPackageSessionService devPackageSessionService) =>
-                devPackageSessionService.ReportPackageFault(packageId, request)
+            (string packageId, ReportPackageFaultRequest request, RuntimePackageSessionService packageSessionService) =>
+                packageSessionService.ReportPackageFault(packageId, request)
                     ? Results.NoContent()
                     : Results.NotFound());
 

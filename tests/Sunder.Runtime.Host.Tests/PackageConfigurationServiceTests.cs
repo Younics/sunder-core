@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class DevPackageConfigurationServiceTests
+public sealed class PackageConfigurationServiceTests
 {
     [Fact]
     public async Task GetConfigurationValuesAsync_ExcludesSecretValuesAndReportsStoredSecretKeys()
@@ -16,7 +16,7 @@ public sealed class DevPackageConfigurationServiceTests
         await loadedPackage.StateStore.SetValueAsync("endpoint", "https://example.test");
         await loadedPackage.StateStore.SetValueAsync("apiKey", "state-secret");
         loadedPackage.SecretsStore.SetSecret("apiKey", "secret-value");
-        var service = new DevPackageConfigurationService();
+        var service = new PackageConfigurationService();
 
         var response = await service.GetConfigurationValuesAsync(loadedPackage);
 
@@ -33,7 +33,7 @@ public sealed class DevPackageConfigurationServiceTests
         await loadedPackage.StateStore.SetValueAsync("endpoint", "https://old.example.test");
         await loadedPackage.StateStore.SetValueAsync("apiKey", "state-secret");
         loadedPackage.SecretsStore.SetSecret("apiKey", "old-secret");
-        var service = new DevPackageConfigurationService();
+        var service = new PackageConfigurationService();
 
         var saved = await service.SaveConfigurationValuesAsync(
             loadedPackage,
@@ -56,7 +56,7 @@ public sealed class DevPackageConfigurationServiceTests
     public async Task SaveConfigurationValuesAsync_ReturnsFalseWithoutSchema()
     {
         var loadedPackage = CreateLoadedPackage(configurationSchema: null);
-        var service = new DevPackageConfigurationService();
+        var service = new PackageConfigurationService();
 
         var saved = await service.SaveConfigurationValuesAsync(
             loadedPackage,
@@ -69,12 +69,12 @@ public sealed class DevPackageConfigurationServiceTests
         Assert.Empty(await loadedPackage.StateStore.ListKeysAsync());
     }
 
-    private static ActiveLoadedDevPackage CreateLoadedPackage(PackageConfigurationSchemaDescriptor? configurationSchema)
+    private static ActiveLoadedPackage CreateLoadedPackage(PackageConfigurationSchemaDescriptor? configurationSchema)
     {
         var tempDirectory = CreateTempDirectory();
-        var assemblyPath = typeof(DevPackageConfigurationService).Assembly.Location;
+        var assemblyPath = typeof(PackageConfigurationService).Assembly.Location;
 
-        return new ActiveLoadedDevPackage(
+        return new ActiveLoadedPackage(
             new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
             new PackageSourceDescriptor("test.package", PackageSourceKind.Dev, tempDirectory),
             configurationSchema,

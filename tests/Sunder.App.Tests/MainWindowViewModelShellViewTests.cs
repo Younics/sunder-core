@@ -870,9 +870,13 @@ public sealed class ShellLifecycleTestPackageModule : ISunderPackageModule
 
     public const string ThrowOnBackgroundStartMarkerFileName = "throw-background-start";
 
+    public const string RequirePackageSessionServiceMarkerFileName = "require-package-session-service";
+
     public const string BackgroundServiceStartedFileName = "background-service-started";
 
     public const string BackgroundServiceStoppedFileName = "background-service-stopped";
+
+    public const string PackageSessionServiceResolvedFileName = "package-session-service-resolved";
 
     private string? _packageFolder;
 
@@ -900,6 +904,12 @@ public sealed class ShellLifecycleTestPackageModule : ISunderPackageModule
         if (HasMarker(ThrowAfterViewMarkerFileName))
         {
             throw new InvalidOperationException("Test package requested activation failure after registering contributions.");
+        }
+
+        if (HasMarker(RequirePackageSessionServiceMarkerFileName))
+        {
+            _ = services.GetRequiredService<IPackageSessionService>();
+            File.WriteAllText(Path.Combine(_packageFolder!, PackageSessionServiceResolvedFileName), string.Empty);
         }
     }
 

@@ -65,6 +65,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     public void AttachShell(MainWindowViewModel viewModel)
         => _mainWindowViewModel = viewModel;
 
+    internal void AttachPackageSessionService(AppPackageSessionService packageSessionService)
+        => packageSessionService.Attach(ApplyPackageLifecycleChangesAsync);
+
     public BackgroundProcessQueueService BackgroundProcesses => _backgroundProcessQueue;
 
     public void DetachShell(MainWindowViewModel viewModel)

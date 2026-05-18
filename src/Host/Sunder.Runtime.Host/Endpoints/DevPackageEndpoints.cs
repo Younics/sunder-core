@@ -10,20 +10,20 @@ internal static class DevPackageEndpoints
         var group = endpoints.MapGroup("/api/dev/packages");
         group.MapPost(
             "load",
-            async (DevPackageLoadRequest request, DevPackageSessionService devPackageSessionService) =>
-                Results.Ok(await devPackageSessionService.LoadAsync(request)));
+            async (DevPackageLoadRequest request, RuntimePackageSessionService packageSessionService) =>
+                Results.Ok(await packageSessionService.LoadAsync(request)));
         group.MapPost(
             "stage",
-            async (DevPackageLoadRequest request, DevPackageSessionService devPackageSessionService) =>
-                Results.Ok(await devPackageSessionService.StageDevPackagesAsync(request)));
+            async (DevPackageLoadRequest request, RuntimePackageSessionService packageSessionService) =>
+                Results.Ok(await packageSessionService.StageDevPackagesAsync(request)));
         group.MapPost(
             "stage/{stageId}/commit",
-            async (string stageId, DevPackageSessionService devPackageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await devPackageSessionService.CommitDevPackageStageAsync(stageId, cancellationToken)));
+            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+                Results.Ok(await packageSessionService.CommitDevPackageStageAsync(stageId, cancellationToken)));
         group.MapDelete(
             "stage/{stageId}",
-            async (string stageId, DevPackageSessionService devPackageSessionService) =>
-                await devPackageSessionService.DiscardDevPackageStageAsync(stageId) ? Results.NoContent() : Results.NotFound());
+            async (string stageId, RuntimePackageSessionService packageSessionService) =>
+                await packageSessionService.DiscardDevPackageStageAsync(stageId) ? Results.NoContent() : Results.NotFound());
 
         return endpoints;
     }

@@ -10,13 +10,13 @@ internal static class PackageConfigurationEndpoints
         var group = endpoints.MapGroup("/api/packages");
         group.MapGet(
             "configuration/schemas",
-            (DevPackageSessionService devPackageSessionService) => Results.Ok(devPackageSessionService.GetConfigurationSchemas()));
+            (RuntimePackageSessionService packageSessionService) => Results.Ok(packageSessionService.GetConfigurationSchemas()));
 
         group.MapGet(
             "{packageId}/config/values",
-            async (string packageId, DevPackageSessionService devPackageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
             {
-                var values = await devPackageSessionService.GetConfigurationValuesAsync(packageId, cancellationToken);
+                var values = await packageSessionService.GetConfigurationValuesAsync(packageId, cancellationToken);
                 return values is null ? Results.NotFound() : Results.Ok(values);
             });
 
@@ -25,10 +25,10 @@ internal static class PackageConfigurationEndpoints
             async (
                 string packageId,
                 UpdatePackageConfigurationValuesRequest request,
-                DevPackageSessionService devPackageSessionService,
+                RuntimePackageSessionService packageSessionService,
                 CancellationToken cancellationToken) =>
             {
-                var saved = await devPackageSessionService.SaveConfigurationValuesAsync(packageId, request, cancellationToken);
+                var saved = await packageSessionService.SaveConfigurationValuesAsync(packageId, request, cancellationToken);
                 return saved ? Results.NoContent() : Results.NotFound();
             });
 

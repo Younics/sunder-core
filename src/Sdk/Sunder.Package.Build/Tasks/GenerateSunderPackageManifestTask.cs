@@ -376,6 +376,13 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
                 capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
                 break;
+            case ("Sunder.Sdk.Abstractions", "IPackageSessionService"):
+            case ("Sunder.Sdk.Abstractions", "PackageSessionLoadRequest"):
+            case ("Sunder.Sdk.Abstractions", "PackageSessionStatus"):
+            case ("Sunder.Sdk.Abstractions", "PackageSessionSourceKind"):
+            case ("Sunder.Sdk.Abstractions", "NullPackageSessionService"):
+                capabilities.Add(SunderSdkCapabilities.PackageSessionsV1);
+                break;
             case ("Sunder.Sdk.Abstractions", "IPackageCallbackHandler"):
             case ("Sunder.Sdk.Callbacks", _):
                 capabilities.Add(SunderSdkCapabilities.CallbacksV1);

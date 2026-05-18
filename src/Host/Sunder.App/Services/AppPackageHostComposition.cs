@@ -24,6 +24,7 @@ internal sealed class AppPackageHostComposition
         AppPackageExtensionCatalog? extensionCatalog,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
+        IPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue)
     {
@@ -46,6 +47,7 @@ internal sealed class AppPackageHostComposition
             resolvedExtensionCatalog,
             shellViewService,
             settingsNavigationService,
+            packageSessionService,
             notificationCenter,
             resolvedBackgroundProcessQueue);
         var packageActivator = new AppPackageActivator(

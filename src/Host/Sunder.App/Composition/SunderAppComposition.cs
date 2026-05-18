@@ -36,6 +36,8 @@ internal static class SunderAppComposition
         services.AddSingleton<IPackageShellViewService>(provider => provider.GetRequiredService<AppPackageShellViewService>());
         services.AddSingleton<AppPackageSettingsNavigationService>();
         services.AddSingleton<IPackageSettingsNavigationService>(provider => provider.GetRequiredService<AppPackageSettingsNavigationService>());
+        services.AddSingleton<AppPackageSessionService>();
+        services.AddSingleton<IPackageSessionService>(provider => provider.GetRequiredService<AppPackageSessionService>());
 
         services.AddSingleton<ThemeManager>();
         services.AddSingleton<IThemeManager>(provider => provider.GetRequiredService<ThemeManager>());

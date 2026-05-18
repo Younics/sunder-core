@@ -9,33 +9,33 @@ internal static class PackageAuthEndpoints
         var group = endpoints.MapGroup("/api/packages");
         group.MapGet(
             "{packageId}/auth/status",
-            async (string packageId, DevPackageSessionService devPackageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
             {
-                var status = await devPackageSessionService.GetPackageAuthStatusAsync(packageId, cancellationToken);
+                var status = await packageSessionService.GetPackageAuthStatusAsync(packageId, cancellationToken);
                 return status is null ? Results.NotFound() : Results.Ok(status);
             });
 
         group.MapPost(
             "{packageId}/auth/start",
-            async (string packageId, DevPackageSessionService devPackageSessionService, PackageAuthCallbackServer packageAuthCallbackServer, CancellationToken cancellationToken) =>
+            async (string packageId, RuntimePackageSessionService packageSessionService, PackageAuthCallbackServer packageAuthCallbackServer, CancellationToken cancellationToken) =>
             {
-                var session = await devPackageSessionService.StartPackageAuthAsync(packageId, packageAuthCallbackServer, cancellationToken);
+                var session = await packageSessionService.StartPackageAuthAsync(packageId, packageAuthCallbackServer, cancellationToken);
                 return session is null ? Results.NotFound() : Results.Ok(session);
             });
 
         group.MapGet(
             "{packageId}/auth/sessions/{authSessionId}",
-            (string packageId, string authSessionId, DevPackageSessionService devPackageSessionService) =>
+            (string packageId, string authSessionId, RuntimePackageSessionService packageSessionService) =>
             {
-                var status = devPackageSessionService.GetPackageAuthSessionStatus(packageId, authSessionId);
+                var status = packageSessionService.GetPackageAuthSessionStatus(packageId, authSessionId);
                 return status is null ? Results.NotFound() : Results.Ok(status);
             });
 
         group.MapPost(
             "{packageId}/auth/disconnect",
-            async (string packageId, DevPackageSessionService devPackageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
             {
-                var status = await devPackageSessionService.DisconnectPackageAsync(packageId, cancellationToken);
+                var status = await packageSessionService.DisconnectPackageAsync(packageId, cancellationToken);
                 return status is null ? Results.NotFound() : Results.Ok(status);
             });
 

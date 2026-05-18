@@ -60,12 +60,12 @@ public sealed class PackageAuthSessionCoordinatorTests
         Assert.Equal("abc", authHandler.CompletedCode);
     }
 
-    private static ActiveLoadedDevPackage CreateLoadedPackage(IPackageAuthHandler authHandler)
+    private static ActiveLoadedPackage CreateLoadedPackage(IPackageAuthHandler authHandler)
     {
         var tempDirectory = CreateTempDirectory();
         var assemblyPath = typeof(PackageAuthSessionCoordinator).Assembly.Location;
 
-        return new ActiveLoadedDevPackage(
+        return new ActiveLoadedPackage(
             new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
             new PackageSourceDescriptor("test.package", PackageSourceKind.Dev, tempDirectory),
             ConfigurationSchema: null,

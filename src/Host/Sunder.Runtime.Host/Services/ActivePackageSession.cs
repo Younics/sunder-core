@@ -5,7 +5,7 @@ using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed record ActiveLoadedDevPackage(
+internal sealed record ActiveLoadedPackage(
     ActivePackageDescriptor Descriptor,
     PackageSourceDescriptor Source,
     PackageConfigurationSchemaDescriptor? ConfigurationSchema,
@@ -23,22 +23,22 @@ internal sealed record ActiveLoadedDevPackage(
         => CallbackHandlers.TryGetValue(callbackHandlerId, out var handler) ? handler : null;
 }
 
-internal sealed class ActiveDevPackageSession
+internal sealed class ActivePackageSession
 {
-    private readonly Dictionary<string, ActiveLoadedDevPackage> _loadedPackageMap;
+    private readonly Dictionary<string, ActiveLoadedPackage> _loadedPackageMap;
     private readonly Dictionary<string, SessionPackageDescriptor> _sessionPackageMap;
     private readonly RuntimePackageExtensionCatalog _extensionCatalog;
 
-    public ActiveDevPackageSession(
+    public ActivePackageSession(
         string? sessionFolder,
-        IDictionary<string, ActiveLoadedDevPackage> loadedPackages,
+        IDictionary<string, ActiveLoadedPackage> loadedPackages,
         IDictionary<string, SessionPackageDescriptor> sessionPackages,
         RuntimePackageExtensionCatalog? extensionCatalog = null,
         RuntimeSharedAssemblyRegistry? sharedAssemblyRegistry = null,
         bool backgroundServicesStarted = true)
     {
         SessionFolder = sessionFolder;
-        _loadedPackageMap = new Dictionary<string, ActiveLoadedDevPackage>(loadedPackages, StringComparer.OrdinalIgnoreCase);
+        _loadedPackageMap = new Dictionary<string, ActiveLoadedPackage>(loadedPackages, StringComparer.OrdinalIgnoreCase);
         _sessionPackageMap = new Dictionary<string, SessionPackageDescriptor>(sessionPackages, StringComparer.OrdinalIgnoreCase);
         _extensionCatalog = extensionCatalog ?? new RuntimePackageExtensionCatalog();
         SharedAssemblyRegistry = sharedAssemblyRegistry;
@@ -47,9 +47,9 @@ internal sealed class ActiveDevPackageSession
 
     private bool _backgroundServicesStarted;
 
-    public static ActiveDevPackageSession Empty { get; } = new(
+    public static ActivePackageSession Empty { get; } = new(
         null,
-        new Dictionary<string, ActiveLoadedDevPackage>(StringComparer.OrdinalIgnoreCase),
+        new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
         new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
     );
 
@@ -83,14 +83,14 @@ internal sealed class ActiveDevPackageSession
         {
             foreach (var group in startedServices.GroupBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase))
             {
-                await DevPackageLifecycle.StopBackgroundServicesAsync(group.Select(x => x.BackgroundService).ToArray(), group.Key, logger);
+                await PackageSessionLifecycle.StopBackgroundServicesAsync(group.Select(x => x.BackgroundService).ToArray(), group.Key, logger);
             }
 
             throw;
         }
     }
 
-    public IReadOnlyDictionary<string, ActiveLoadedDevPackage> LoadedPackageMap => _loadedPackageMap;
+    public IReadOnlyDictionary<string, ActiveLoadedPackage> LoadedPackageMap => _loadedPackageMap;
 
     public IReadOnlyDictionary<string, SessionPackageDescriptor> SessionPackageMap => _sessionPackageMap;
 
@@ -118,13 +118,16 @@ internal sealed class ActiveDevPackageSession
             .ToArray();
     }
 
+    public bool TryGetSessionPackage(string packageId, out SessionPackageDescriptor? package)
+        => _sessionPackageMap.TryGetValue(packageId, out package);
+
     public bool IsPackageEnabled(string packageId)
     {
         return _sessionPackageMap.TryGetValue(packageId, out var package)
             && package.IsEnabled;
     }
 
-    public bool TryGetLoadedPackage(string packageId, out ActiveLoadedDevPackage? loadedPackage)
+    public bool TryGetLoadedPackage(string packageId, out ActiveLoadedPackage? loadedPackage)
     {
         if (_loadedPackageMap.TryGetValue(packageId, out var package)
             && IsPackageEnabled(packageId))
@@ -157,7 +160,7 @@ internal sealed class ActiveDevPackageSession
         string packageId,
         PackageFailureOrigin origin,
         string message,
-        out ActiveLoadedDevPackage? packageToDeactivate)
+        out ActiveLoadedPackage? packageToDeactivate)
     {
         packageToDeactivate = null;
         if (!_sessionPackageMap.TryGetValue(packageId, out var package))
@@ -182,7 +185,7 @@ internal sealed class ActiveDevPackageSession
         return true;
     }
 
-    public bool DisableInstalledPackage(string packageId, out ActiveLoadedDevPackage? packageToDeactivate)
+    public bool DisableInstalledPackage(string packageId, out ActiveLoadedPackage? packageToDeactivate)
     {
         packageToDeactivate = null;
         if (!_sessionPackageMap.TryGetValue(packageId, out var package))
@@ -203,7 +206,7 @@ internal sealed class ActiveDevPackageSession
         return true;
     }
 
-    public bool RemovePackage(string packageId, out ActiveLoadedDevPackage? packageToDeactivate)
+    public bool RemovePackage(string packageId, out ActiveLoadedPackage? packageToDeactivate)
     {
         var removedSessionPackage = _sessionPackageMap.Remove(packageId);
         var removedLoadedPackage = _loadedPackageMap.Remove(packageId, out packageToDeactivate);
