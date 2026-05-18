@@ -9,11 +9,14 @@ namespace Sunder.App.Views;
 public partial class MainWindow : Window
 {
     private MainWindowViewModel? ViewModel => DataContext as MainWindowViewModel;
+    private readonly MacNativeMenuController _macNativeMenuController;
 
     public MainWindow()
     {
         InitializeComponent();
+        _macNativeMenuController = new MacNativeMenuController(this, () => ViewModel);
         Closing += OnClosing;
+        Closed += OnClosed;
         KeyDown += MainWindow_OnKeyDown;
         AddHandler(InputElement.PointerPressedEvent, MainWindow_OnPointerPressed, RoutingStrategies.Tunnel, true);
     }
@@ -41,6 +44,11 @@ public partial class MainWindow : Window
     private void OnClosing(object? sender, WindowClosingEventArgs e)
     {
         ViewModel?.Dispose();
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _macNativeMenuController.Dispose();
     }
 
     private void MainWindow_OnPointerPressed(object? sender, PointerPressedEventArgs e)

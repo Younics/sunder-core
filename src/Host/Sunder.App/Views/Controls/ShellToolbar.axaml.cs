@@ -14,6 +14,7 @@ public partial class ShellToolbar : UserControl
     public ShellToolbar()
     {
         InitializeComponent();
+        MoreActionsButton.IsVisible = !OperatingSystem.IsMacOS();
         _toolbarMainMenuController = new ToolbarMainMenuController(
             ToolbarMainMenu,
             ToolbarDefaultActions,
