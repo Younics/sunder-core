@@ -32,7 +32,7 @@ internal sealed class ShellPackagePanelCoordinator(
         var isOpen = string.Equals(ShellSelectionState.GetSelectedViewId(shellState, placement), viewId, StringComparison.OrdinalIgnoreCase);
         if (isOpen)
         {
-            panel.HostedView = null;
+            panel.SetActiveView(viewId, hostedView: null);
         }
         else
         {
@@ -43,7 +43,7 @@ internal sealed class ShellPackagePanelCoordinator(
         var reloadedView = packageViewHostService.ReloadView(viewId);
         if (isOpen)
         {
-            panel.HostedView = reloadedView;
+            panel.SetActiveView(viewId, reloadedView);
         }
 
         if (reloadedView is not null)

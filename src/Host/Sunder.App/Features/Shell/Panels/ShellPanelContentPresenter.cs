@@ -34,12 +34,12 @@ internal sealed class ShellPanelContentPresenter(
         AddCommonViewLines(panel.Lines, packageView);
         if (!createHostedView)
         {
-            panel.HostedView = null;
+            panel.SetActiveView(viewId, hostedView: null);
             panel.Lines.Add("Package view will open after the shell finishes rendering.");
             return;
         }
 
-        panel.HostedView = packageViewHostService.GetOrCreateView(viewId);
+        panel.SetActiveView(viewId, packageViewHostService.GetOrCreateView(viewId));
 
         if (placement != RailPlacement.Middle)
         {
@@ -51,7 +51,7 @@ internal sealed class ShellPanelContentPresenter(
 
     private void ApplyEmptyPanelState(RailPlacement placement, ShellPanelViewModel panel, int middleBarItemCount)
     {
-        panel.HostedView = null;
+        panel.ClearActiveView();
 
         if (placement == RailPlacement.Middle)
         {

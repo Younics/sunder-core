@@ -414,6 +414,32 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task MovePackageView_WhenSelectedHostedViewMovesBetweenSideRails_ClearsPreviousPanelBeforeReusingCachedView()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.chat"),
+            ("agent", "agent.workspaces"));
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var hostedView = Assert.IsType<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+
+        harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.LeftTop, 0);
+
+        Assert.Equal("agent.workspaces", harness.ViewModel.LeftTopPanel.ActiveViewId);
+        Assert.Same(hostedView, harness.ViewModel.LeftTopPanel.HostedView);
+        Assert.Null(harness.ViewModel.RightTopPanel.ActiveViewId);
+        Assert.False(harness.ViewModel.RightTopPanel.HasHostedView);
+
+        harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.RightTop, 0);
+
+        Assert.Equal("agent.workspaces", harness.ViewModel.RightTopPanel.ActiveViewId);
+        Assert.Same(hostedView, harness.ViewModel.RightTopPanel.HostedView);
+        Assert.Null(harness.ViewModel.LeftTopPanel.ActiveViewId);
+        Assert.False(harness.ViewModel.LeftTopPanel.HasHostedView);
+    }
+
+    [Fact]
     public async Task MovePackageView_WhenMovedForwardWithinSameBar_UsesTargetIndexAfterRemoval()
     {
         using var harness = CreateHarness();

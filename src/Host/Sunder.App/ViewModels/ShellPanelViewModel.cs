@@ -11,6 +11,14 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
 
     public bool ShowFallbackLines => HostedView is null;
 
+    private string? _activeViewId;
+
+    public string? ActiveViewId
+    {
+        get => _activeViewId;
+        private set => SetProperty(ref _activeViewId, value);
+    }
+
     [ObservableProperty]
     private string _title = string.Empty;
 
@@ -27,5 +35,17 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(HasHostedView));
         OnPropertyChanged(nameof(ShowFallbackLines));
+    }
+
+    public void SetActiveView(string viewId, object? hostedView)
+    {
+        ActiveViewId = viewId;
+        HostedView = hostedView;
+    }
+
+    public void ClearActiveView()
+    {
+        ActiveViewId = null;
+        HostedView = null;
     }
 }

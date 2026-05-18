@@ -17,7 +17,7 @@ internal sealed class ShellRailCollectionPresenter(
         foreach (var slot in slots)
         {
             selectionPresenter.SetSelectedItem(slot.Placement, null);
-            slot.Panel.HostedView = null;
+            slot.Panel.ClearActiveView();
         }
 
         foreach (var slot in slots)
@@ -49,6 +49,9 @@ internal sealed class ShellRailCollectionPresenter(
             return;
         }
 
+        var activeViewIdsBeforeUpdate = affectedSlots.ToDictionary(
+            slot => slot.Placement,
+            slot => slot.Panel.ActiveViewId);
         var selectedViewIdsBeforeUpdate = affectedSlots.ToDictionary(
             slot => slot.Placement,
             slot => ShellSelectionState.GetSelectedViewId(shellState, slot.Placement));
@@ -60,15 +63,32 @@ internal sealed class ShellRailCollectionPresenter(
         }
 
         var middleBarItemCount = slots.FirstOrDefault(slot => slot.Placement == RailPlacement.Middle)?.Bar.Items.Count ?? 0;
+        var selectedViewIdsAfterUpdate = new Dictionary<RailPlacement, string?>();
         foreach (var slot in affectedSlots)
         {
             var selectedViewIdBeforeUpdate = selectedViewIdsBeforeUpdate[slot.Placement];
             var selectedItem = RestoreSelection(slot, selectedViewIdBeforeUpdate);
-            var selectedViewIdAfterUpdate = selectedItem?.Id;
-            var selectedPackageChanged = !string.Equals(selectedViewIdBeforeUpdate, selectedViewIdAfterUpdate, StringComparison.OrdinalIgnoreCase);
-            if (!selectedPackageChanged
-                && !IsViewImpacted(selectedViewIdAfterUpdate, impactedPackageIds)
-                && !IsViewImpacted(selectedViewIdBeforeUpdate, impactedPackageIds))
+            selectedViewIdsAfterUpdate[slot.Placement] = selectedItem?.Id;
+        }
+
+        foreach (var slot in affectedSlots)
+        {
+            if (ShouldApplyPanelContent(
+                activeViewIdsBeforeUpdate[slot.Placement],
+                selectedViewIdsAfterUpdate[slot.Placement],
+                impactedPackageIds))
+            {
+                slot.Panel.ClearActiveView();
+            }
+        }
+
+        foreach (var slot in affectedSlots)
+        {
+            var selectedViewIdAfterUpdate = selectedViewIdsAfterUpdate[slot.Placement];
+            if (!ShouldApplyPanelContent(
+                activeViewIdsBeforeUpdate[slot.Placement],
+                selectedViewIdAfterUpdate,
+                impactedPackageIds))
             {
                 continue;
             }
@@ -139,5 +159,15 @@ internal sealed class ShellRailCollectionPresenter(
 
         return !viewsById.TryGetValue(viewId, out var packageView)
                || impactedPackageIds.Contains(packageView.PackageId);
+    }
+
+    private bool ShouldApplyPanelContent(
+        string? activeViewIdBeforeUpdate,
+        string? selectedViewIdAfterUpdate,
+        IReadOnlySet<string> impactedPackageIds)
+    {
+        return !string.Equals(activeViewIdBeforeUpdate, selectedViewIdAfterUpdate, StringComparison.OrdinalIgnoreCase)
+               || IsViewImpacted(selectedViewIdAfterUpdate, impactedPackageIds)
+               || IsViewImpacted(activeViewIdBeforeUpdate, impactedPackageIds);
     }
 }
