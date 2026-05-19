@@ -141,9 +141,31 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 - `LoggerFactory`
 - `Logging`
 
-Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work and `IPackageNotificationService` for user-visible notifications.
+Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, `IPackageSettingsNavigationService` for opening settings, and `IPackageSessionService` for loading/unloading package sessions. Some hosts provide null or disabled implementations for app-only services; check boolean/null results and documented exceptions.
 
 Use package storage, configuration, and secrets abstractions for mutable package data. Do not write mutable state into the installed package folder.
+
+## Settings And Package Sessions
+
+Use `IPackageSettingsNavigationService` when a package needs to open global Sunder settings or another package's settings page:
+
+```csharp
+var opened = await settingsNavigation.OpenPackageSettingsAsync(
+    "my.company.package",
+    cancellationToken: cancellationToken);
+```
+
+Use `IPackageSessionService` when app-hosted package code needs to load, unload, or query installed/dev package sessions:
+
+```csharp
+var status = await packageSessions.LoadPackageAsync(new PackageSessionLoadRequest(
+    PackageSessionSourceKind.Dev,
+    @"C:\Path\To\MyPackage\bin\Debug\net10.0\sunder-dev",
+    Watch: true),
+    cancellationToken);
+```
+
+These services are app-shell integrations. Runtime-only activation supplies null implementations.
 
 ## Background Processes
 

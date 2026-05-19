@@ -39,8 +39,7 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         RegisterOptionalHostAssembly("MicroCom.Runtime");
 
         var candidateAssemblies = IndexCandidateAssemblies(probeDirectories);
-        foreach (var candidate in candidateAssemblies.Values.SelectMany(static candidate => candidate)
-                     .Where(static candidate => candidate.Name.Name?.EndsWith(".Contracts", StringComparison.OrdinalIgnoreCase) == true))
+        foreach (var candidate in SelectPreferredSharedContractCandidates(candidateAssemblies))
         {
             TryRegisterSharedAssemblyPath(candidate);
         }
@@ -137,6 +136,43 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         return candidates;
     }
 
+    private static IEnumerable<AssemblyCandidate> SelectPreferredSharedContractCandidates(
+        IReadOnlyDictionary<string, List<AssemblyCandidate>> candidateAssemblies)
+    {
+        foreach (var candidates in candidateAssemblies.Values)
+        {
+            var contractCandidates = candidates
+                .Where(candidate => IsSharedContractAssemblyName(candidate.Name.Name))
+                .ToArray();
+            if (contractCandidates.Length == 0)
+            {
+                continue;
+            }
+
+            yield return SelectPreferredSharedAssemblyCandidate(contractCandidates);
+        }
+    }
+
+    private static AssemblyCandidate SelectPreferredSharedAssemblyCandidate(IReadOnlyList<AssemblyCandidate> candidates)
+    {
+        var selected = candidates[0];
+        foreach (var candidate in candidates.Skip(1))
+        {
+            if (!SharedAssemblyFamiliesMatch(selected.Name, candidate.Name))
+            {
+                throw new InvalidOperationException(
+                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{selected.Path}' and '{candidate.Path}'. Shared contract dependencies must use a single public key and culture per session.");
+            }
+
+            if (CompareAssemblyVersions(candidate.Name.Version, selected.Name.Version) > 0)
+            {
+                selected = candidate;
+            }
+        }
+
+        return selected;
+    }
+
     private void RegisterSharedDependencyClosure(IReadOnlyDictionary<string, List<AssemblyCandidate>> candidateAssemblies)
     {
         var pending = new Queue<string>(_sharedAssemblyPaths.Keys);
@@ -200,22 +236,35 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
             return;
         }
 
-        if (requestedAssemblyName is not null && !AssemblyName.ReferenceMatchesDefinition(requestedAssemblyName, candidate.Name))
+        if (requestedAssemblyName is not null && !SharedAssemblyIdentitiesMatch(requestedAssemblyName, candidate.Name))
         {
-            throw new InvalidOperationException(
-                $"Shared assembly '{candidate.Name.Name}' requested identity '{requestedAssemblyName.FullName}', but candidate '{candidate.Path}' has identity '{candidate.Name.FullName}'.");
+            if (!IsSharedAssemblyReferenceSatisfiedBy(requestedAssemblyName, candidate.Name))
+            {
+                throw new InvalidOperationException(
+                    $"Shared assembly '{candidate.Name.Name}' requested identity '{requestedAssemblyName.FullName}', but candidate '{candidate.Path}' has identity '{candidate.Name.FullName}'.");
+            }
         }
 
         if (_sharedAssemblyPaths.TryGetValue(candidate.Name.Name, out var existingPath))
         {
             var existingName = _sharedAssemblyNames[candidate.Name.Name];
-            if (!AssemblyName.ReferenceMatchesDefinition(existingName, candidate.Name))
+            if (!SharedAssemblyFamiliesMatch(existingName, candidate.Name))
             {
                 throw new InvalidOperationException(
-                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use a single version per session.");
+                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use a single public key and culture per session.");
             }
 
-            return;
+            if (CompareAssemblyVersions(candidate.Name.Version, existingName.Version) <= 0)
+            {
+                return;
+            }
+
+            if (_packageSharedAssemblies.TryGetValue(candidate.Name.Name, out var loadedAssembly)
+                && !SharedAssemblyIdentitiesMatch(loadedAssembly.GetName(), candidate.Name))
+            {
+                throw new InvalidOperationException(
+                    $"Shared assembly '{candidate.Name.Name}' cannot be upgraded from '{loadedAssembly.GetName().FullName}' to '{candidate.Name.FullName}' after it has been loaded for this session.");
+            }
         }
 
         _sharedAssemblyPaths[candidate.Name.Name] = candidate.Path;
@@ -232,26 +281,55 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
             return null;
         }
 
-        foreach (var candidate in candidates)
+        AssemblyCandidate? selected = null;
+        foreach (var candidate in candidates.Where(candidate => IsSharedAssemblyReferenceSatisfiedBy(requestedAssemblyName, candidate.Name)))
         {
-            if (AssemblyName.ReferenceMatchesDefinition(requestedAssemblyName, candidate.Name))
+            if (selected is null || CompareAssemblyVersions(candidate.Name.Version, selected.Value.Name.Version) > 0)
             {
-                return candidate;
+                selected = candidate;
             }
         }
 
-        return null;
+        return selected;
     }
 
     private static void ValidateSharedContractCompatibility(AssemblyName requestedAssemblyName, Assembly loadedAssembly)
     {
         var loadedAssemblyName = loadedAssembly.GetName();
-        if (!AssemblyName.ReferenceMatchesDefinition(requestedAssemblyName, loadedAssemblyName))
+        if (!IsSharedAssemblyReferenceSatisfiedBy(requestedAssemblyName, loadedAssemblyName))
         {
             throw new InvalidOperationException(
                 $"Shared contract assembly '{requestedAssemblyName.Name}' requested identity '{requestedAssemblyName.FullName}', but '{loadedAssemblyName.FullName}' is already loaded for this session.");
         }
     }
+
+    internal static bool IsSharedAssemblyReferenceSatisfiedBy(AssemblyName requestedAssemblyName, AssemblyName loadedAssemblyName)
+        => SharedAssemblyFamiliesMatch(requestedAssemblyName, loadedAssemblyName)
+           && CompareAssemblyVersions(loadedAssemblyName.Version, requestedAssemblyName.Version) >= 0;
+
+    private static bool SharedAssemblyFamiliesMatch(AssemblyName left, AssemblyName right)
+        => string.Equals(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(left.CultureName ?? string.Empty, right.CultureName ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+           && (left.GetPublicKeyToken() ?? []).SequenceEqual(right.GetPublicKeyToken() ?? []);
+
+    private static bool SharedAssemblyIdentitiesMatch(AssemblyName left, AssemblyName right)
+        => SharedAssemblyFamiliesMatch(left, right)
+           && CompareAssemblyVersions(left.Version, right.Version) == 0;
+
+    private static int CompareAssemblyVersions(Version? left, Version? right)
+        => NormalizeVersion(left).CompareTo(NormalizeVersion(right));
+
+    private static Version NormalizeVersion(Version? version)
+        => version is null
+            ? new Version(0, 0, 0, 0)
+            : new Version(
+                Math.Max(version.Major, 0),
+                Math.Max(version.Minor, 0),
+                Math.Max(version.Build, 0),
+                Math.Max(version.Revision, 0));
+
+    private static bool IsSharedContractAssemblyName(string? assemblyName)
+        => assemblyName?.EndsWith(".Contracts", StringComparison.OrdinalIgnoreCase) == true;
 
     private Assembly? ResolveHostSharedAssembly(AssemblyName assemblyName)
     {

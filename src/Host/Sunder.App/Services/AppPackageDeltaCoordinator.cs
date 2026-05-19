@@ -8,7 +8,9 @@ internal sealed class AppPackageDeltaCoordinator(
     Func<string, bool> isPackageDisabled,
     Func<string, CancellationToken, bool, Task<bool>> unloadPackageAsync,
     Func<ActivePackageDescriptor, PackageSourceDescriptor, CancellationToken, Task> loadPackageAsync,
-    Func<string, string, PackageFailureOrigin, Exception?, CancellationToken, Task> disablePackageAsync)
+    Func<string, string, PackageFailureOrigin, Exception?, CancellationToken, Task> disablePackageAsync,
+    Func<IReadOnlyList<PackageSourceDescriptor>, bool>? requiresSharedAssemblyReset = null,
+    Action? resetSharedAssemblies = null)
 {
     public async Task ApplyPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -16,12 +18,23 @@ internal sealed class AppPackageDeltaCoordinator(
         IReadOnlyCollection<string>? forceReloadPackageIds,
         CancellationToken cancellationToken)
     {
-        var deltaPlan = new AppPackageDeltaPlan(activePackages, packageSources, forceReloadPackageIds);
-        var loadedPackageIds = snapshotLoadedPackageIds(deltaPlan.IsPackageInactive);
+        var sharedAssemblyResetRequired = requiresSharedAssemblyReset?.Invoke(packageSources) == true;
+        var effectiveForceReloadPackageIds = sharedAssemblyResetRequired
+            ? activePackages.Select(package => package.PackageId).ToArray()
+            : forceReloadPackageIds;
+        var deltaPlan = new AppPackageDeltaPlan(activePackages, packageSources, effectiveForceReloadPackageIds);
+        var loadedPackageIds = sharedAssemblyResetRequired
+            ? snapshotLoadedPackageIds(_ => true)
+            : snapshotLoadedPackageIds(deltaPlan.IsPackageInactive);
 
         foreach (var loadedPackageId in loadedPackageIds)
         {
             await unloadPackageAsync(loadedPackageId, cancellationToken, false);
+        }
+
+        if (sharedAssemblyResetRequired)
+        {
+            resetSharedAssemblies?.Invoke();
         }
 
         var plannedActions = new List<AppPackageDeltaPlanAction>();

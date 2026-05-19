@@ -12,6 +12,7 @@ The compatibility boundary is the generated package manifest, `Sunder.Sdk` publi
 - `sdkApiVersion`: broad SDK activation generation. Current value is `1`.
 - `sdkPackageVersion`: informational `Sunder.Sdk` package/build version used by `Sunder.Package.Build`.
 - `requiredSdkCapabilities`: granular Host-required SDK features inferred from SDK contract usage.
+- `sdkVersion`: optional SDK version metadata when supplied by build properties. Compatibility decisions use `sdkApiVersion` and `requiredSdkCapabilities`.
 
 Missing SDK compatibility metadata is treated as legacy SDK API `1` so older generated packages can still load on compatible Hosts.
 
@@ -35,6 +36,7 @@ Current SDK capabilities are:
 | `contributions.v1` | `IPackageContributionRegistry` |
 | `views.v1` | package view registration and placement |
 | `settings-views.v1` | settings view registration |
+| `settings-navigation.v1` | package settings navigation service |
 | `workspaces.v1` | package view/workspace factories |
 | `background-services.v1` | package background services |
 | `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
@@ -47,6 +49,7 @@ Current SDK capabilities are:
 | `logging.v1` | package logging abstractions |
 | `notifications.v1` | package notifications |
 | `shell-view.v1` | shell view/hotbar/navigation services |
+| `package-sessions.v1` | package session load/unload/status service |
 | `callbacks.v1` | generic callback sessions |
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |

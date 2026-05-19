@@ -10,7 +10,7 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --noDefaultView
 dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
 ```
 
 Generated package projects reference:
@@ -24,13 +24,13 @@ You can build the generated package with:
 dotnet build MyPackage/MyPackage.csproj
 ```
 
-Then run it inside installed Sunder with the included scripts.
+Then load `MyPackage/bin/Debug/net10.0/sunder-dev` into an installed Sunder app with `--dev-package`.
 
 Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder.Package.Build` generates `sunder-package.json` during build.
 
 Use `--withHostDependency` when the generated package should declare a dependency on another package and scaffold integration notes.
 
-Use `--withHostContracts` together with `--hostContractsPackageId` and `--hostContractsVersion` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately.
+Use `--withHostContracts` together with `--hostPackageId`, `--hostContractsPackageId`, and `--hostContractsVersion` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately. This also adds runtime host dependency metadata.
 
 Use `--createInPlace` when the specified output folder should be the package project folder itself.
 

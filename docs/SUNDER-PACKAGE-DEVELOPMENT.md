@@ -59,7 +59,7 @@ dotnet new sunder-package --name MyExtension --packageId my.company.extension --
 Create an extension package that also references a host contracts NuGet package:
 
 ```powershell
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
 ```
 
 Template options:
@@ -68,11 +68,11 @@ Template options:
 | --- | --- |
 | `--packageId <id>` | Required runtime package id written into generated metadata |
 | `--packageName <name>` | Required display name written into generated metadata and starter view |
-| `--withContracts` | Adds a sibling `*.Contracts` project for public extension points |
+| `--withContracts` | Adds a `*.Contracts` project for public extension points |
 | `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder |
 | `--noDefaultView` | Omits the default shell-visible package view |
 | `--withHostDependency` | Adds runtime dependency metadata for another package |
-| `--hostPackageId <id>` | Required with `--withHostDependency`; runtime package id that this package depends on |
+| `--hostPackageId <id>` | Required with `--withHostDependency` or `--withHostContracts`; runtime package id that this package depends on |
 | `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub |
 | `--hostContractsPackageId <id>` | Required with `--withHostContracts`; NuGet package id for host contracts |
 | `--hostContractsVersion <version>` | Required with `--withHostContracts`; NuGet package version for host contracts |
@@ -134,6 +134,8 @@ SDK areas:
 | Notifications | `IPackageNotificationService` | User-visible package notifications |
 | Background processes | `IBackgroundProcessQueue`, `BackgroundProcessRequest` | Host-visible queued work with progress, cancellation, and indicator placement |
 | Shell integration | `IPackageShellViewService`, `IPackageViewNavigationTarget` | Shell navigation and hotbar/workspace integration |
+| Settings navigation | `IPackageSettingsNavigationService` | Open global settings or another package's settings when the host supports it |
+| Package sessions | `IPackageSessionService` | Load, unload, and query installed or dev package sessions when the host supports it |
 | Callbacks | `IPackageCallbackHandler` | Generic browser/local callback sessions |
 | Auth | `IPackageAuthHandler` | Auth status and disconnect integration |
 | Theme resources | `SunderThemeKeys` | Semantic resource keys for package UI |
@@ -294,6 +296,7 @@ Generated compatibility fields:
 | `sdkApiVersion` | Broad SDK activation generation, currently `1` |
 | `sdkPackageVersion` | Informational `Sunder.Sdk` package/build version used at build time |
 | `requiredSdkCapabilities` | Granular Host-required SDK capabilities inferred from SDK usage |
+| `sdkVersion` | Optional SDK version metadata when supplied by build properties |
 
 Example generated manifest fragment:
 
@@ -307,7 +310,8 @@ Example generated manifest fragment:
     "contributions.v1",
     "views.v1",
     "extensions.v1"
-  ]
+  ],
+  "targetFramework": "net10.0"
 }
 ```
 
@@ -411,6 +415,8 @@ Available context members:
 
 Use package storage/configuration/secrets abstractions for mutable package data. Do not write mutable state into the installed package folder.
 
+Host-provided services can also be injected into package services and views. App-hosted packages can use `IBackgroundProcessQueue`, `IPackageNotificationService`, `IPackageShellViewService`, `IPackageSettingsNavigationService`, and `IPackageSessionService`. Runtime-only activation provides null or disabled implementations for UI/app services, so packages should handle `false`, `null`, no-op results, or `NotSupportedException` where documented by the service contract.
+
 ## Views
 
 Package views are Avalonia controls registered by code.
@@ -512,13 +518,6 @@ Load multiple dev packages:
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\HostPackage\bin\Debug\net10.0\sunder-dev" --dev-package ".\ExtensionPackage\bin\Debug\net10.0\sunder-dev"
 ```
 
-Use the template helper script when generated from the package template:
-
-```powershell
-$env:SUNDER_APP_PATH = "C:\Path\To\Sunder.App.exe"
-.\run-sunder-dev.ps1
-```
-
 The app sends dev-package folders to the runtime host through the local protocol. The runtime validates and activates the runtime side, then the app activates package UI contributions from the original dev-package folders.
 
 ## Debug Runtime Package Code
@@ -533,14 +532,6 @@ Start the app against that runtime and load the dev package:
 
 ```powershell
 & "C:\Path\To\Sunder.App.exe" --runtime-url http://127.0.0.1:5276 --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev"
-```
-
-Use the generated debug helper script:
-
-```powershell
-$env:SUNDER_APP_PATH = "C:\Path\To\Sunder.App.exe"
-$env:SUNDER_RUNTIME_HOST_PATH = "C:\Path\To\Sunder.Runtime.Host.exe"
-.\debug-sunder-runtime.ps1 -RuntimeUrl http://127.0.0.1:5276
 ```
 
 The runtime also supports `SUNDER_WAIT_FOR_DEBUGGER=1`.

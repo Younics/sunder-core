@@ -87,10 +87,23 @@ internal sealed class AppPackageHostComposition
             _state.IsPackageDisabled,
             UnloadPackageAsync,
             loadCoordinator.LoadPackageAsync,
-            DisablePackageAsync);
+            DisablePackageAsync,
+            RequiresSharedAssemblyReset,
+            resolvedSharedAssemblyRegistry.ResetPackageAssemblies);
         _preflightCoordinator = new AppPackagePreflightCoordinator(
             _state.GetLoadedPackage,
             _state.IsPackageDisabled);
+
+        bool RequiresSharedAssemblyReset(IReadOnlyList<PackageSourceDescriptor> packageSources)
+        {
+            var libraryFolders = packageSources
+                .Select(AppPackageSourcePreparer.TryResolveLibraryFolder)
+                .Where(static libraryFolder => !string.IsNullOrWhiteSpace(libraryFolder))
+                .Select(static libraryFolder => libraryFolder!)
+                .ToArray();
+
+            return resolvedSharedAssemblyRegistry.RequiresResetForProbeDirectories(libraryFolders);
+        }
     }
 
     public AppPackageAssemblyTracker AssemblyTracker { get; }

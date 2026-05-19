@@ -105,6 +105,7 @@ Current manifest shape:
   "requiredSdkCapabilities": [
     "core.v1",
     "packaging.v1",
+    "contributions.v1",
     "views.v1"
   ],
   "targetFramework": "net10.0"
@@ -119,15 +120,16 @@ Required fields:
 - `version`: SemVer-compatible package version.
 - `entryAssembly`: package entry assembly file name.
 
-Optional fields:
+Additional generated fields:
 
-- `summary`: package description.
-- `icon`: package icon asset path.
-- `dependsOn`: runtime package dependency list.
-- `sdkApiVersion`: SDK activation generation, currently `1`.
-- `sdkPackageVersion`: referenced Sunder SDK package/build version when available.
-- `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`.
-- `targetFramework`: package target framework.
+- `summary`: package description, omitted when not declared.
+- `icon`: package icon asset path, omitted when not declared.
+- `dependsOn`: runtime package dependency list, omitted when no dependencies are declared.
+- `sdkApiVersion`: SDK activation generation, currently `1`. Current build tooling emits this; runtime treats missing metadata as legacy API `1`.
+- `sdkPackageVersion`: referenced Sunder SDK package/build version, emitted when available.
+- `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`. Current build tooling always seeds `core.v1`, `packaging.v1`, and `contributions.v1`.
+- `sdkVersion`: SDK version metadata when supplied by build properties.
+- `targetFramework`: package target framework, emitted when available.
 
 Fields not used by the current generated manifest:
 
@@ -228,6 +230,7 @@ bin/Debug/net10.0/sunder-dev/
     MyPackage.dll
     MyPackage.pdb
     MyPackage.deps.json
+    MyPackage.runtimeconfig.json
   assets/
     icon.png
 ```
@@ -236,6 +239,7 @@ Build behavior:
 
 - `Sunder.Package.Build` removes the previous dev output before emitting a new one.
 - Package assemblies and private dependencies are copied to `lib`.
+- Package `.deps.json`, `.runtimeconfig.json`, and `.pdb` files are copied to `lib` when present.
 - Native runtime assets under build output `runtimes` are copied under `lib/runtimes`.
 - Source files under `Assets` are copied to `assets`.
 - Host boundary assemblies such as `Sunder.Sdk` and core Avalonia assemblies are excluded from private package output.

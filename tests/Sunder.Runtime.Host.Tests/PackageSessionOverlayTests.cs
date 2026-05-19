@@ -87,6 +87,48 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
+    public void RuntimeSharedAssemblyRegistry_WhenHigherVersionContractExists_SelectsHigherVersion()
+    {
+        using var registry = new RuntimeSharedAssemblyRegistry([]);
+        var registerMethod = typeof(RuntimeSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
+        var candidateType = typeof(RuntimeSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
+        var namesField = typeof(RuntimeSharedAssemblyRegistry).GetField("_sharedAssemblyNames", BindingFlags.Instance | BindingFlags.NonPublic);
+        var pathsField = typeof(RuntimeSharedAssemblyRegistry).GetField("_sharedAssemblyPaths", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(registerMethod);
+        Assert.NotNull(candidateType);
+        Assert.NotNull(namesField);
+        Assert.NotNull(pathsField);
+
+        var lowerCandidate = Activator.CreateInstance(
+            candidateType,
+            "/tmp/old/Sunder.Package.Agent.Contracts.dll",
+            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null"));
+        var higherCandidate = Activator.CreateInstance(
+            candidateType,
+            "/tmp/new/Sunder.Package.Agent.Contracts.dll",
+            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null"));
+
+        registerMethod.Invoke(registry, [lowerCandidate, null]);
+        registerMethod.Invoke(registry, [higherCandidate, null]);
+        registerMethod.Invoke(registry, [lowerCandidate, null]);
+
+        var names = Assert.IsType<Dictionary<string, AssemblyName>>(namesField.GetValue(registry));
+        var paths = Assert.IsType<Dictionary<string, string>>(pathsField.GetValue(registry));
+        Assert.Equal(new Version(1, 0, 3, 0), names["Sunder.Package.Agent.Contracts"].Version);
+        Assert.Equal("/tmp/new/Sunder.Package.Agent.Contracts.dll", paths["Sunder.Package.Agent.Contracts"]);
+    }
+
+    [Fact]
+    public void RuntimeSharedAssemblyRegistry_WhenRequestedVersionIsOlderThanLoadedVersion_AllowsBinding()
+    {
+        var requested = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null");
+        var loaded = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null");
+
+        Assert.True(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, loaded));
+        Assert.False(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(loaded, requested));
+    }
+
+    [Fact]
     public async Task DevPackageOverlayUnload_RestoresInstalledPackageWithSameId()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());

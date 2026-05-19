@@ -201,6 +201,48 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public void AppSharedAssemblyRegistry_WhenHigherVersionContractExists_SelectsHigherVersion()
+    {
+        using var registry = new AppSharedAssemblyRegistry([]);
+        var registerMethod = typeof(AppSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
+        var candidateType = typeof(AppSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
+        var namesField = typeof(AppSharedAssemblyRegistry).GetField("_sharedAssemblyNames", BindingFlags.Instance | BindingFlags.NonPublic);
+        var pathsField = typeof(AppSharedAssemblyRegistry).GetField("_sharedAssemblyPaths", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(registerMethod);
+        Assert.NotNull(candidateType);
+        Assert.NotNull(namesField);
+        Assert.NotNull(pathsField);
+
+        var lowerCandidate = Activator.CreateInstance(
+            candidateType,
+            "/tmp/old/Sunder.Package.Agent.Contracts.dll",
+            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null"));
+        var higherCandidate = Activator.CreateInstance(
+            candidateType,
+            "/tmp/new/Sunder.Package.Agent.Contracts.dll",
+            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null"));
+
+        registerMethod.Invoke(registry, [lowerCandidate, null]);
+        registerMethod.Invoke(registry, [higherCandidate, null]);
+        registerMethod.Invoke(registry, [lowerCandidate, null]);
+
+        var names = Assert.IsType<Dictionary<string, AssemblyName>>(namesField.GetValue(registry));
+        var paths = Assert.IsType<Dictionary<string, string>>(pathsField.GetValue(registry));
+        Assert.Equal(new Version(1, 0, 3, 0), names["Sunder.Package.Agent.Contracts"].Version);
+        Assert.Equal("/tmp/new/Sunder.Package.Agent.Contracts.dll", paths["Sunder.Package.Agent.Contracts"]);
+    }
+
+    [Fact]
+    public void AppSharedAssemblyRegistry_WhenRequestedVersionIsOlderThanLoadedVersion_AllowsBinding()
+    {
+        var requested = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null");
+        var loaded = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null");
+
+        Assert.True(AppSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, loaded));
+        Assert.False(AppSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(loaded, requested));
+    }
+
+    [Fact]
     public void AppPackageAssemblyTracker_ResolvesPackageFromExceptionStackFrame()
     {
         var tracker = new AppPackageAssemblyTracker();
@@ -314,6 +356,54 @@ public sealed class PackageViewHostServiceTests
         Assert.Equal([
             "unload:package.a",
             "unload:package.b",
+            "load:package.a",
+            "load:package.b",
+        ], operations);
+    }
+
+    [Fact]
+    public async Task AppPackageDeltaCoordinator_WhenSharedAssemblyResetRequired_UnloadsAllThenResetsAndReloadsAllPackages()
+    {
+        var packageA = CreateActivePackage("package.a");
+        var packageB = CreateActivePackage("package.b");
+        var sourceA = new PackageSourceDescriptor("package.a", PackageSourceKind.Dev, "/tmp/package-a");
+        var sourceB = new PackageSourceDescriptor("package.b", PackageSourceKind.Dev, "/tmp/package-b");
+        var loadedPackages = new Dictionary<string, AppLoadedPackageHandle>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["package.a"] = new(packageA, sourceA, string.Empty, null!, null!),
+            ["package.b"] = new(packageB, sourceB, string.Empty, null!, null!),
+        };
+        var operations = new List<string>();
+        var coordinator = new AppPackageDeltaCoordinator(
+            _ => loadedPackages.Keys.ToArray(),
+            packageId => loadedPackages.TryGetValue(packageId, out var handle) ? handle : null,
+            _ => false,
+            (packageId, _, _) =>
+            {
+                operations.Add($"unload:{packageId}");
+                loadedPackages.Remove(packageId);
+                return Task.FromResult(true);
+            },
+            (package, source, _) =>
+            {
+                operations.Add($"load:{package.PackageId}");
+                loadedPackages[package.PackageId] = new AppLoadedPackageHandle(package, source, string.Empty, null!, null!);
+                return Task.CompletedTask;
+            },
+            (_, _, _, _, _) => Task.CompletedTask,
+            _ => true,
+            () => operations.Add("reset-shared-assemblies"));
+
+        await coordinator.ApplyPackageDeltaAsync(
+            [packageA, packageB],
+            [sourceA, sourceB],
+            forceReloadPackageIds: null,
+            cancellationToken: CancellationToken.None);
+
+        Assert.Equal([
+            "unload:package.a",
+            "unload:package.b",
+            "reset-shared-assemblies",
             "load:package.a",
             "load:package.b",
         ], operations);

@@ -72,6 +72,25 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
         }
     }
 
+    public static string? TryResolveLibraryFolder(PackageSourceDescriptor source)
+    {
+        if (string.IsNullOrWhiteSpace(source.Folder) || !Directory.Exists(source.Folder))
+        {
+            return null;
+        }
+
+        var libraryFolder = source.Kind switch
+        {
+            PackageSourceKind.Dev => Path.Combine(source.Folder, "lib"),
+            PackageSourceKind.Installed => ResolveInstalledPackageFolder(source.Folder, "lib"),
+            _ => null,
+        };
+
+        return !string.IsNullOrWhiteSpace(libraryFolder) && Directory.Exists(libraryFolder)
+            ? libraryFolder
+            : null;
+    }
+
     private static void PrepareInstalledPackageSource(string sourceFolder, string shadowFolder)
     {
         var manifestPath = ResolveInstalledPackageManifestPath(sourceFolder);

@@ -84,6 +84,9 @@ bin/Debug/net10.0/sunder-dev/
     MyPackage.dll
     MyPackage.pdb
     MyPackage.deps.json
+    MyPackage.runtimeconfig.json
+    runtimes/
+      ...
   assets/
     icon.png
 ```
@@ -162,6 +165,16 @@ Common MSBuild properties used by the package targets:
 | `SunderPackageFileName` | Overrides the default archive file name |
 | `SunderPackageOutputPath` | Overrides output path for the explicit `PackSunderPackage` target |
 | `SunderPublishPackageOutputPath` | Overrides archive output path during `dotnet publish` |
+
+Compatibility metadata is inferred automatically. For unusual reflection or dynamic scenarios where inference cannot see an SDK feature, add an explicit capability item:
+
+```xml
+<ItemGroup>
+  <SunderSdkCapability Include="callbacks.v1" />
+</ItemGroup>
+```
+
+Advanced compatibility metadata properties are also supported: `SunderSdkApiVersion`, `SunderSdkPackageVersion`, and `SunderSdkVersion`.
 
 ## Validate Before Publishing
 
