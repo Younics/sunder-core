@@ -28,15 +28,15 @@
 
   <Style Selector="Border.package-bar-host.horizontal.drag-over">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-    <Setter Property="BorderThickness" Value="1" />
   </Style>
 
   <Style Selector="controls|PackageIconBar.side-top-lane StackPanel.package-bar-vertical-content">
+    <Setter Property="VerticalAlignment" Value="Top" />
     <Setter Property="Margin" Value="0,10,0,0" />
   </Style>
 
   <Style Selector="controls|PackageIconBar.side-bottom-lane StackPanel.package-bar-vertical-content">
+    <Setter Property="VerticalAlignment" Value="Bottom" />
     <Setter Property="Margin" Value="0,0,0,10" />
   </Style>
 

@@ -10,7 +10,7 @@
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Workspace}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
-    <Setter Property="Padding" Value="16,7" />
+    <Setter Property="Padding" Value="16,0" />
   </Style>
 
   <Style Selector="Border.toolbar-separator">

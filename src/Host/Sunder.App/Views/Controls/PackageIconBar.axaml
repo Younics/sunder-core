@@ -35,12 +35,13 @@
           Classes="package-bar-host"
           Classes.horizontal="{Binding IsHorizontal}"
           Classes.vertical="{Binding IsVertical}"
+          HorizontalAlignment="Stretch"
+          VerticalAlignment="Stretch"
           ClipToBounds="False">
     <Grid>
       <StackPanel IsVisible="{Binding IsVertical}"
                   Classes="package-bar-vertical-content"
                   HorizontalAlignment="Center"
-                  VerticalAlignment="Stretch"
                   Spacing="10">
         <ItemsControl ItemsSource="{Binding VisibleItems}">
           <ItemsControl.ItemsPanel>

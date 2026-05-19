@@ -85,9 +85,8 @@
 
     <controls:WindowTitleBar.CenterContent>
       <controls:PackageIconBar x:Name="MiddlePackageIconBar"
-                               Width="548"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
+                               HorizontalAlignment="Stretch"
+                               VerticalAlignment="Stretch"
                                DataContext="{Binding MiddleBar}" />
     </controls:WindowTitleBar.CenterContent>
 

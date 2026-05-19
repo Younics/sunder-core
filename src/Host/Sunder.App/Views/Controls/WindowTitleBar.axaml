@@ -11,8 +11,7 @@
           Classes="toolbar-surface">
     <Grid ColumnDefinitions="Auto,*,Auto"
           ColumnSpacing="12"
-          Height="40"
-          VerticalAlignment="Center">
+          VerticalAlignment="Stretch">
       <StackPanel Grid.Column="0"
                   Orientation="Horizontal"
                   Spacing="12"
@@ -38,7 +37,9 @@
       <ContentControl Grid.Column="1"
                       Content="{Binding CenterContent, ElementName=Root}"
                       HorizontalAlignment="Stretch"
-                      VerticalAlignment="Center" />
+                      VerticalAlignment="Stretch"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch" />
 
       <StackPanel Grid.Column="2"
                   Orientation="Horizontal"
