@@ -39,7 +39,11 @@ internal sealed class ShellPanelContentPresenter(
             return;
         }
 
-        panel.SetActiveView(viewId, packageViewHostService.GetOrCreateView(viewId));
+        var hostedView = packageViewHostService.CreateHostedViewBoundary(
+            packageView.PackageId,
+            viewId,
+            packageViewHostService.GetOrCreateView(viewId));
+        panel.SetActiveView(viewId, hostedView);
 
         if (placement != RailPlacement.Middle)
         {

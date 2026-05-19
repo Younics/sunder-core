@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 
@@ -40,23 +41,18 @@ internal sealed class AppPackageAssemblyTracker
 
     public string? ResolvePackageId(Exception exception)
     {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
+        foreach (var current in EnumerateExceptions(exception))
         {
             var assembly = current.TargetSite?.DeclaringType?.Assembly;
-            if (assembly is null)
+            if (assembly is not null && TryResolvePackageId(assembly, out var packageId))
             {
-                continue;
+                return packageId;
             }
 
-            lock (_syncRoot)
+            foreach (var frame in new StackTrace(current, fNeedFileInfo: false).GetFrames() ?? [])
             {
-                if (_assemblyPackageMap.TryGetValue(assembly, out var packageId))
-                {
-                    return packageId;
-                }
-
-                var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
-                if (loadContext is not null && _loadContextPackageMap.TryGetValue(loadContext, out packageId))
+                assembly = frame.GetMethod()?.DeclaringType?.Assembly;
+                if (assembly is not null && TryResolvePackageId(assembly, out packageId))
                 {
                     return packageId;
                 }
@@ -64,5 +60,49 @@ internal sealed class AppPackageAssemblyTracker
         }
 
         return null;
+    }
+
+    private bool TryResolvePackageId(Assembly assembly, out string packageId)
+    {
+        lock (_syncRoot)
+        {
+            if (_assemblyPackageMap.TryGetValue(assembly, out var resolvedPackageId))
+            {
+                packageId = resolvedPackageId;
+                return true;
+            }
+
+            var loadContext = AssemblyLoadContext.GetLoadContext(assembly);
+            if (loadContext is not null && _loadContextPackageMap.TryGetValue(loadContext, out resolvedPackageId))
+            {
+                packageId = resolvedPackageId;
+                return true;
+            }
+        }
+
+        packageId = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<Exception> EnumerateExceptions(Exception exception)
+    {
+        var pending = new Stack<Exception>();
+        pending.Push(exception);
+        while (pending.TryPop(out var current))
+        {
+            yield return current;
+
+            if (current is AggregateException aggregateException)
+            {
+                foreach (var innerException in aggregateException.InnerExceptions)
+                {
+                    pending.Push(innerException);
+                }
+            }
+            else if (current.InnerException is not null)
+            {
+                pending.Push(current.InnerException);
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@ using System.Reflection;
 using Avalonia.Controls;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
+using Sunder.App.Views.Controls;
 
 namespace Sunder.App.Services;
 
@@ -222,6 +223,14 @@ public sealed class PackageViewHostService : IAsyncDisposable
         return _composition.ViewFacade.GetOrCreateSettingsView(packageId);
     }
 
+    internal Control? CreateHostedViewBoundary(string packageId, string viewId, Control? hostedView)
+    {
+        ThrowIfDisposed();
+        return hostedView is null
+            ? null
+            : new HostedPackageViewBoundary(packageId, viewId, hostedView, ReportHostedViewFailure);
+    }
+
     public async ValueTask DisposeAsync()
     {
         using var lifecycle = await _lifecycleGate.TryEnterDisposeAsync();
@@ -261,6 +270,13 @@ public sealed class PackageViewHostService : IAsyncDisposable
         using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken);
         await _composition.DisablePackageAsync(packageId, message, origin, exception, cancellationToken);
     }
+
+    private void ReportHostedViewFailure(string packageId, string viewId, Exception exception)
+        => DisablePackage(
+            packageId,
+            $"Hosted package view '{viewId}' failed: {exception.Message}",
+            PackageFailureOrigin.AppHostedView,
+            exception);
 
     private void ThrowIfDisposed()
         => _lifecycleGate.ThrowIfDisposed();

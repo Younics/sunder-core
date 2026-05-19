@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Sunder.App.Views.Controls;
 
 namespace Sunder.App.ViewModels;
 
@@ -28,24 +29,36 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
     [ObservableProperty]
     private string _summary = string.Empty;
 
-    [ObservableProperty]
     private object? _hostedView;
 
-    partial void OnHostedViewChanged(object? value)
-    {
-        OnPropertyChanged(nameof(HasHostedView));
-        OnPropertyChanged(nameof(ShowFallbackLines));
-    }
+    public object? HostedView => _hostedView;
 
     public void SetActiveView(string viewId, object? hostedView)
     {
         ActiveViewId = viewId;
-        HostedView = hostedView;
+        SetHostedView(hostedView);
     }
 
     public void ClearActiveView()
     {
         ActiveViewId = null;
-        HostedView = null;
+        SetHostedView(null);
+    }
+
+    private void SetHostedView(object? hostedView)
+    {
+        if (ReferenceEquals(_hostedView, hostedView))
+        {
+            return;
+        }
+
+        HostedPackageViewBoundary.ReleaseHostedView(_hostedView);
+        if (!SetProperty(ref _hostedView, hostedView, nameof(HostedView)))
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(HasHostedView));
+        OnPropertyChanged(nameof(ShowFallbackLines));
     }
 }

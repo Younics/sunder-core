@@ -3,6 +3,7 @@ using System.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Models;
 using Sunder.App.Services;
+using Sunder.App.Views.Controls;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 
@@ -167,8 +168,30 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _statusText = string.Empty;
 
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private object? _hostedSettingsView;
+
+    public object? HostedSettingsView
+    {
+        get => _hostedSettingsView;
+        private set
+        {
+            if (ReferenceEquals(_hostedSettingsView, value))
+            {
+                return;
+            }
+
+            HostedPackageViewBoundary.ReleaseHostedView(_hostedSettingsView);
+            if (!SetProperty(ref _hostedSettingsView, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(HasHostedSettingsView));
+            OnPropertyChanged(nameof(ShowScrollableSelectionContent));
+            OnPropertyChanged(nameof(ShowGenericPackageSettings));
+            OnPropertyChanged(nameof(ShowApplySaveButtons));
+        }
+    }
 
     partial void OnIsPackageSelectionChanged(bool value)
     {
@@ -189,14 +212,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     {
         OnPropertyChanged(nameof(ShowPlainCoreSelection));
         OnPropertyChanged(nameof(ShowUpdateSettings));
-    }
-
-    partial void OnHostedSettingsViewChanged(object? value)
-    {
-        OnPropertyChanged(nameof(HasHostedSettingsView));
-        OnPropertyChanged(nameof(ShowScrollableSelectionContent));
-        OnPropertyChanged(nameof(ShowGenericPackageSettings));
-        OnPropertyChanged(nameof(ShowApplySaveButtons));
     }
 
     public async Task SelectSectionAsync(SettingsSectionItemViewModel item)
@@ -425,6 +440,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _selection.Dispose();
         _packageSectionRefresh.Invalidate();
         _disposeCts.Cancel();
+        HostedSettingsView = null;
         _cli.PropertyChanged -= Cli_OnPropertyChanged;
         _updates.PropertyChanged -= Updates_OnPropertyChanged;
         if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))

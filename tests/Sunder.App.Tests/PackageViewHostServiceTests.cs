@@ -201,6 +201,17 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public void AppPackageAssemblyTracker_ResolvesPackageFromExceptionStackFrame()
+    {
+        var tracker = new AppPackageAssemblyTracker();
+        tracker.RegisterPackageAssembly("agent", typeof(PackageStackFrame).Assembly);
+
+        var exception = Assert.Throws<FormatException>(PackageStackFrame.ThrowFrameworkException);
+
+        Assert.Equal("agent", tracker.ResolvePackageId(exception));
+    }
+
+    [Fact]
     public void CleanupStaleSessions_RemovesFoldersWithoutRunningOwner()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -659,5 +670,11 @@ public sealed class PackageViewHostServiceTests
             StopStarted.TrySetResult();
             await AllowStop.Task.WaitAsync(cancellationToken);
         }
+    }
+
+    private static class PackageStackFrame
+    {
+        public static void ThrowFrameworkException()
+            => int.Parse("not an integer");
     }
 }

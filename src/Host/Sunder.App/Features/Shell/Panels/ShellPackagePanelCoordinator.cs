@@ -40,7 +40,10 @@ internal sealed class ShellPackagePanelCoordinator(
             return true;
         }
 
-        var reloadedView = packageViewHostService.ReloadView(viewId);
+        var reloadedView = packageViewHostService.CreateHostedViewBoundary(
+            packageView.PackageId,
+            viewId,
+            packageViewHostService.ReloadView(viewId));
         if (isOpen)
         {
             panel.SetActiveView(viewId, reloadedView);

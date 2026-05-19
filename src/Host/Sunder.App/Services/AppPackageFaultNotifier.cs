@@ -15,7 +15,11 @@ internal sealed class AppPackageFaultNotifier(PackageRuntimeFaultReporter? fault
         PackageFailureOrigin origin,
         Exception? exception)
     {
-        AppSessionLog.WriteError($"Disabled package '{packageId}' for the current app session. {message}", exception);
+        AppSessionLog.WriteError(
+            $"Disabled package '{packageId}' for the current app session. {message}",
+            exception,
+            developerLogScope: DeveloperLogEntryScope.Package,
+            developerLogSource: packageId);
         faultReporter?.ReportPackageFault(packageId, origin, message);
 
         var args = new PackageViewHostFaultEventArgs(packageId, message, origin);

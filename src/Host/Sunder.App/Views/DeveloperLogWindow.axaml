@@ -33,27 +33,58 @@
             Padding="0">
       <Border Classes="secondary-panel-content-clip"
               Padding="14">
-        <Grid RowDefinitions="Auto,*" RowSpacing="8">
-          <Grid ColumnDefinitions="130,110,180,*" ColumnSpacing="10">
+        <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
+          <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="10">
+            <ComboBox ItemsSource="{Binding FilterOptions}"
+                      SelectedItem="{Binding SelectedFilter}"
+                      HorizontalAlignment="Stretch">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:DeveloperLogFilterOptionViewModel">
+                  <TextBlock Text="{Binding Label}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBox Grid.Column="1"
+                     PlaceholderText="Search logs"
+                     Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Grid.Column="2"
+                       Classes="caption"
+                       VerticalAlignment="Center"
+                       Text="{Binding StatusText}" />
+          </Grid>
+
+          <Grid Grid.Row="1" ColumnDefinitions="110,95,90,190,*" ColumnSpacing="10">
             <TextBlock Classes="caption" Text="Time" />
             <TextBlock Grid.Column="1" Classes="caption" Text="Level" />
-            <TextBlock Grid.Column="2" Classes="caption" Text="Source" />
-            <TextBlock Grid.Column="3" Classes="caption" Text="Message" />
+            <TextBlock Grid.Column="2" Classes="caption" Text="Scope" />
+            <TextBlock Grid.Column="3" Classes="caption" Text="Source" />
+            <TextBlock Grid.Column="4" Classes="caption" Text="Message" />
           </Grid>
-          <ScrollViewer Grid.Row="1">
-            <ItemsControl ItemsSource="{Binding Entries}">
-              <ItemsControl.ItemTemplate>
+
+          <ListBox Grid.Row="2"
+                   ItemsSource="{Binding FilteredEntries}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate>
+                <VirtualizingStackPanel />
+              </ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:DeveloperLogEntryViewModel">
-                  <Grid ColumnDefinitions="130,110,180,*" ColumnSpacing="10" Margin="0,0,0,6">
+                  <Grid ColumnDefinitions="110,95,90,190,*" ColumnSpacing="10" Margin="0,0,0,4">
                     <TextBlock Classes="caption" Text="{Binding TimestampText}" />
                     <TextBlock Grid.Column="1" Classes="caption" Text="{Binding LevelText}" />
-                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding Source}" />
-                    <TextBlock Grid.Column="3" Text="{Binding Message}" TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding ScopeText}" />
+                    <TextBlock Grid.Column="3" Classes="caption" Text="{Binding Source}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="4"
+                               FontFamily="Menlo,Consolas,monospace"
+                               Text="{Binding Message}"
+                               TextTrimming="CharacterEllipsis" />
                   </Grid>
                 </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </ScrollViewer>
+            </ListBox.ItemTemplate>
+          </ListBox>
         </Grid>
       </Border>
     </Border>

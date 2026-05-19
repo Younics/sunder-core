@@ -8,6 +8,7 @@ using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.App.Views.Controls;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
@@ -100,10 +101,10 @@ public sealed class MainWindowViewModelShellViewTests
         var packageViewHostService = CreateRegisteredPackageViewHostService();
         using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
-        var originalView = Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+        var originalView = AssertHostedView<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
 
         var reloaded = await harness.ViewModel.ReloadPackageViewAsync("agent.chat");
-        var reloadedView = Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+        var reloadedView = AssertHostedView<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
 
         Assert.True(reloaded);
         Assert.True(originalView.IsDisposed);
@@ -224,8 +225,8 @@ public sealed class MainWindowViewModelShellViewTests
             [new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder)]);
         using var harness = CreateHarness(rootPath, new EmptyRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
-        var hostedView = harness.ViewModel.MiddlePanel.HostedView;
-        Assert.NotNull(hostedView);
+        var hostedBoundary = Assert.IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView);
+        var hostedView = hostedBoundary.HostedView;
         var ownerThreadId = Assert.IsType<int>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.OwnerThreadId))?.GetValue(hostedView));
 
         await harness.ViewModel.ApplyPackageLifecycleChangesAsync();
@@ -312,7 +313,8 @@ public sealed class MainWindowViewModelShellViewTests
                 (placements, impactedPackageIds, createHostedViews) => railCollectionPresenter.Update(slots, placements, impactedPackageIds, createHostedViews),
                 () => { });
             railCollectionPresenter.Rebuild(slots, createHostedViews: true);
-            var originalHostedView = Assert.IsType<DisposablePackageView>(middlePanel.HostedView);
+            var originalHostedBoundary = Assert.IsType<HostedPackageViewBoundary>(middlePanel.HostedView);
+            var originalHostedView = Assert.IsType<DisposablePackageView>(originalHostedBoundary.HostedView);
             var originalToolsItem = Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard");
             var originalAgentItem = Assert.Single(middleBar.Items, item => item.Id == "agent.chat");
 
@@ -321,7 +323,8 @@ public sealed class MainWindowViewModelShellViewTests
                 ["agent"],
                 deferHostedViewCreation: true);
 
-            Assert.Same(originalHostedView, middlePanel.HostedView);
+            Assert.Same(originalHostedBoundary, middlePanel.HostedView);
+            Assert.Same(originalHostedView, originalHostedBoundary.HostedView);
             Assert.Same(originalToolsItem, Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard"));
             Assert.NotSame(originalAgentItem, Assert.Single(middleBar.Items, item => item.Id == "agent.chat"));
             Assert.True(selectionPresenter.HasMiddleSelection);
@@ -410,7 +413,7 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.DoesNotContain(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle);
         Assert.True(harness.ViewModel.MiddlePanel.HasHostedView);
         Assert.False(harness.ViewModel.MiddlePanel.ShowFallbackLines);
-        Assert.IsType<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+        AssertHostedView<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
     }
 
     [Fact]
@@ -422,21 +425,37 @@ public sealed class MainWindowViewModelShellViewTests
             ("agent", "agent.workspaces"));
         using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
-        var hostedView = Assert.IsType<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+        var hostedView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.LeftTop, 0);
 
         Assert.Equal("agent.workspaces", harness.ViewModel.LeftTopPanel.ActiveViewId);
-        Assert.Same(hostedView, harness.ViewModel.LeftTopPanel.HostedView);
+        Assert.Same(hostedView, AssertHostedView<DisposablePackageView>(harness.ViewModel.LeftTopPanel.HostedView));
         Assert.Null(harness.ViewModel.RightTopPanel.ActiveViewId);
         Assert.False(harness.ViewModel.RightTopPanel.HasHostedView);
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.RightTop, 0);
 
         Assert.Equal("agent.workspaces", harness.ViewModel.RightTopPanel.ActiveViewId);
-        Assert.Same(hostedView, harness.ViewModel.RightTopPanel.HostedView);
+        Assert.Same(hostedView, AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView));
         Assert.Null(harness.ViewModel.LeftTopPanel.ActiveViewId);
         Assert.False(harness.ViewModel.LeftTopPanel.HasHostedView);
+    }
+
+    [Fact]
+    public async Task PackageFaulted_RemovesPackageViewsFromShell()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.chat"),
+            ("agent", "agent.workspaces"));
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+
+        await packageViewHostService.DisablePackageAsync("agent", "Hosted view failed.", PackageFailureOrigin.AppHostedView);
+
+        Assert.Empty(harness.ViewModel.GetPackageViewGroups());
+        Assert.Empty(harness.ViewModel.ListHotbarViews());
+        Assert.False(harness.ViewModel.HasMiddleSelection);
     }
 
     [Fact]
@@ -787,6 +806,13 @@ public sealed class MainWindowViewModelShellViewTests
             .OrderBy(view => view.Order)
             .Select(view => view.ViewId)
             .ToArray();
+
+    private static TView AssertHostedView<TView>(object? hostedView)
+        where TView : Control
+    {
+        var boundary = Assert.IsType<HostedPackageViewBoundary>(hostedView);
+        return Assert.IsType<TView>(boundary.HostedView);
+    }
 
     private sealed class MainWindowViewModelHarness(
         MainWindowViewModel viewModel,

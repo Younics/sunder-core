@@ -253,6 +253,7 @@ public sealed class AppPackageSessionService(
 
         public void Dispose()
         {
+            CancellationTokenSource? pendingReload;
             lock (_gate)
             {
                 if (_disposed)
@@ -261,11 +262,13 @@ public sealed class AppPackageSessionService(
                 }
 
                 _disposed = true;
-                _pendingReload?.Cancel();
-                _pendingReload?.Dispose();
+                pendingReload = _pendingReload;
+                _pendingReload = null;
                 _folderWatcher?.Dispose();
                 _parentWatcher?.Dispose();
             }
+
+            pendingReload?.Cancel();
         }
 
         private FileSystemWatcher? CreateFolderWatcher(string path)
@@ -350,21 +353,21 @@ public sealed class AppPackageSessionService(
                 }
 
                 _pendingReload?.Cancel();
-                _pendingReload?.Dispose();
                 _pendingReload = new CancellationTokenSource();
                 reload = _pendingReload;
             }
 
             _ = Task.Run(async () =>
             {
+                var reloadToken = reload.Token;
                 try
                 {
-                    await Task.Delay(DevPackageWatchSupport.DebounceDelay, reload.Token).ConfigureAwait(false);
+                    await Task.Delay(DevPackageWatchSupport.DebounceDelay, reloadToken).ConfigureAwait(false);
                     RefreshFolderWatcher();
                     if (!await DevPackageWatchSupport.WaitForStableFoldersAsync(
                             [folder],
                             Task.Delay,
-                            reload.Token,
+                            reloadToken,
                             requireLibraryFolder: true,
                             onLoadabilityRetry: RefreshFolderWatcher).ConfigureAwait(false))
                     {
@@ -373,10 +376,22 @@ public sealed class AppPackageSessionService(
                     }
 
                     RefreshFolderWatcher();
-                    await reloadAsync(packageId, folder, reload.Token).ConfigureAwait(false);
+                    await reloadAsync(packageId, folder, reloadToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (reload.IsCancellationRequested)
+                catch (OperationCanceledException) when (reloadToken.IsCancellationRequested)
                 {
+                }
+                finally
+                {
+                    lock (_gate)
+                    {
+                        if (ReferenceEquals(_pendingReload, reload))
+                        {
+                            _pendingReload = null;
+                        }
+                    }
+
+                    reload.Dispose();
                 }
             });
         }

@@ -15,7 +15,10 @@ internal sealed class SettingsPackageSelectionCoordinator(
     {
         if (packageViewHostService.HasSettingsView(packageId))
         {
-            var hostedSettingsView = packageViewHostService.GetOrCreateSettingsView(packageId);
+            var hostedSettingsView = packageViewHostService.CreateHostedViewBoundary(
+                packageId,
+                $"settings:{packageId}",
+                packageViewHostService.GetOrCreateSettingsView(packageId));
             return new SettingsPackageSelectionResult(
                 hostedSettingsView,
                 [],
