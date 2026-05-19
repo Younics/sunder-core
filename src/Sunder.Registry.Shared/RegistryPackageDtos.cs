@@ -25,7 +25,9 @@ public sealed record RegistryPackageDetails(
     IReadOnlyList<RegistryPackageVersionSummary> Versions,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    RegistryPackageProfile? Profile = null);
+    RegistryPackageProfile? Profile = null,
+    RegistryPackageStats? Stats = null,
+    IReadOnlyList<RegistryPackageDependent>? Dependents = null);
 
 public sealed record RegistryPackageVersionSummary(
     string Version,
@@ -56,6 +58,26 @@ public sealed record RegistryPackageArtifact(
     string Sha256,
     long Size,
     string DownloadUrl);
+
+/// <summary>A package that declares a dependency on the package being viewed (a reverse dependency).</summary>
+public sealed record RegistryPackageDependent(
+    string PackageId,
+    string Name,
+    string VersionRange);
+
+/// <summary>Download count for a single calendar day, used to plot the downloads chart.</summary>
+public sealed record RegistryPackageDownloadPoint(
+    DateOnly Date,
+    long Count);
+
+/// <summary>Aggregate usage statistics shown on the public package detail page.</summary>
+public sealed record RegistryPackageStats(
+    long TotalDownloads,
+    long WeeklyDownloads,
+    long TotalViews,
+    IReadOnlyList<RegistryPackageDownloadPoint> DailyDownloads);
+
+public sealed record RegistryPackageViewResponse(long Views);
 
 public sealed record RegistryPackageProfile(
     string PackageId,
