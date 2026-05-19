@@ -60,9 +60,6 @@ public partial class PackagesWindow : Window
         _stateController?.PersistSidebarWidth();
     }
 
-    private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-        => WindowDragHost.BeginWindowDragOrToggleMaximize(this, e);
-
     private void OnLifecycleClosed()
     {
         SubscribeToViewModel(null);

@@ -95,9 +95,6 @@ public partial class SettingsWindow : Window
         _stateController?.ApplySidebarWidth();
     }
 
-    private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-        => WindowDragHost.BeginWindowDragOrToggleMaximize(this, e);
-
     private void OnLifecycleClosed()
     {
         ViewModel?.Dispose();

@@ -34,16 +34,15 @@
 
     <StackPanel x:Name="MacControls"
                 Orientation="Horizontal"
-                Margin="0, 0, 10, 0"
                 Spacing="8"
                 IsVisible="False"
                 VerticalAlignment="Center">
       <Button Classes="mac-window-action-button"
-              ToolTip.Tip="Full screen"
-              Click="ToggleFullScreenButton_OnClick">
-          <Grid Width="14" Height="14">
-              <Ellipse Fill="#28C840" Stroke="#1EAD35" StrokeThickness="1" />
-          </Grid>
+              ToolTip.Tip="Close"
+              Click="CloseButton_OnClick">
+        <Grid Width="14" Height="14">
+          <Ellipse Fill="#FF5F57" Stroke="#E0443E" StrokeThickness="1" />
+        </Grid>
       </Button>
       <Button Classes="mac-window-action-button"
               ToolTip.Tip="Minimize"
@@ -53,11 +52,11 @@
         </Grid>
       </Button>
       <Button Classes="mac-window-action-button"
-              ToolTip.Tip="Close"
-              Click="CloseButton_OnClick">
-          <Grid Width="14" Height="14">
-              <Ellipse Fill="#FF5F57" Stroke="#E0443E" StrokeThickness="1" />
-          </Grid>
+              ToolTip.Tip="Full screen"
+              Click="ToggleFullScreenButton_OnClick">
+        <Grid Width="14" Height="14">
+          <Ellipse Fill="#28C840" Stroke="#1EAD35" StrokeThickness="1" />
+        </Grid>
       </Button>
     </StackPanel>
   </Grid>

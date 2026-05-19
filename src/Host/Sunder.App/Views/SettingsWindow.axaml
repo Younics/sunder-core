@@ -72,28 +72,13 @@
 
   <Grid RowDefinitions="52,*,Auto"
         Background="{DynamicResource Sunder.Brush.Background.App}">
-    <Border Grid.Row="0"
-            x:Name="ToolbarDragHost"
-            PointerPressed="ToolbarDragHost_OnPointerPressed"
-            Classes="toolbar-surface">
-      <Grid ColumnDefinitions="Auto,*,Auto"
-            VerticalAlignment="Center">
-        <StackPanel Orientation="Horizontal"
-                    Spacing="10"
-                    VerticalAlignment="Center">
-          <Border Classes="toolbar-logo-badge">
-            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
-                   RenderOptions.BitmapInterpolationMode="HighQuality"
-                   Stretch="Uniform" />
-          </Border>
-          <TextBlock Classes="section-title"
-                     VerticalAlignment="Center"
-                     Text="Settings" />
-        </StackPanel>
-
-        <controls:WindowChromeControls Grid.Column="2" />
-      </Grid>
-    </Border>
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="Settings" />
+      </controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
 
     <Border Grid.Row="1"
             Margin="20,12,20,0"

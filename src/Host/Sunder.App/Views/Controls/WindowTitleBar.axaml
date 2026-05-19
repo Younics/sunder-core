@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.WindowTitleBar"
+             x:Name="Root"
+             mc:Ignorable="d">
+  <Border x:Name="ToolbarDragHost"
+          PointerPressed="ToolbarDragHost_OnPointerPressed"
+          Classes="toolbar-surface">
+    <Grid ColumnDefinitions="Auto,*,Auto"
+          ColumnSpacing="12"
+          Height="40"
+          VerticalAlignment="Center">
+      <StackPanel Grid.Column="0"
+                  Orientation="Horizontal"
+                  Spacing="12"
+                  Height="40"
+                  VerticalAlignment="Center">
+        <controls:WindowChromeControls x:Name="LeftChromeControls" />
+
+        <Border x:Name="LeftChromeSeparator"
+                Classes="toolbar-separator" />
+
+        <Border x:Name="LeftLogo"
+                Classes="toolbar-logo-badge"
+                Classes.large="{Binding IsLogoLarge, ElementName=Root}">
+          <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+                 RenderOptions.BitmapInterpolationMode="HighQuality"
+                 Stretch="Uniform" />
+        </Border>
+
+        <ContentControl Content="{Binding LeadingContent, ElementName=Root}"
+                        VerticalAlignment="Center" />
+      </StackPanel>
+
+      <ContentControl Grid.Column="1"
+                      Content="{Binding CenterContent, ElementName=Root}"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Center" />
+
+      <StackPanel Grid.Column="2"
+                  Orientation="Horizontal"
+                  Spacing="12"
+                  Height="40"
+                  VerticalAlignment="Center">
+        <ContentControl Content="{Binding TrailingContent, ElementName=Root}"
+                        VerticalAlignment="Center" />
+
+        <Border x:Name="RightSeparator"
+                Classes="toolbar-separator" />
+
+        <Border x:Name="RightLogo"
+                Classes="toolbar-logo-badge"
+                Classes.large="{Binding IsLogoLarge, ElementName=Root}">
+          <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+                 RenderOptions.BitmapInterpolationMode="HighQuality"
+                 Stretch="Uniform" />
+        </Border>
+
+        <controls:WindowChromeControls x:Name="RightChromeControls" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

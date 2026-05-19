@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Input;
 using Sunder.App.ViewModels;
 
 namespace Sunder.App.Views;
@@ -16,14 +15,6 @@ public partial class DeveloperLogWindow : Window
 
     public void CloseForShutdown()
         => _lifecycleController.CloseForShutdown();
-
-    private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            BeginMoveDrag(e);
-        }
-    }
 
     private void OnLifecycleClosed()
     {

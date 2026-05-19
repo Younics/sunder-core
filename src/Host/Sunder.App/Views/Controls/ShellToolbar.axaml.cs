@@ -29,14 +29,6 @@ public partial class ShellToolbar : UserControl
     public bool HideMenuOnEscape(Key key)
         => _toolbarMainMenuController.HideOnEscape(key);
 
-    private void ToolbarDragHost_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (TopLevel.GetTopLevel(this) is Window window)
-        {
-            WindowDragHost.BeginWindowDragOrToggleMaximize(window, e);
-        }
-    }
-
     private void MoreActionsButton_OnClick(object? sender, RoutedEventArgs e)
     {
         if (_toolbarMainMenuController.Show())

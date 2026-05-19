@@ -32,26 +32,15 @@
 
   <Grid RowDefinitions="52,*,Auto"
         Background="{DynamicResource Sunder.Brush.Background.App}">
-    <Border Grid.Row="0"
-            x:Name="ToolbarDragHost"
-            PointerPressed="ToolbarDragHost_OnPointerPressed"
-            Classes="toolbar-surface">
-      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto"
-            ColumnSpacing="12"
-            VerticalAlignment="Center">
-        <StackPanel Orientation="Horizontal" Spacing="10">
-          <Border Classes="toolbar-logo-badge">
-            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
-                   RenderOptions.BitmapInterpolationMode="HighQuality"
-                   Stretch="Uniform" />
-          </Border>
-          <TextBlock Classes="section-title"
-                     VerticalAlignment="Center"
-                     Text="Packages" />
-        </StackPanel>
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="Packages" />
+      </controls:WindowTitleBar.LeadingContent>
 
-        <Border Grid.Column="1"
-                Classes="search-host"
+      <controls:WindowTitleBar.CenterContent>
+        <Border Classes="search-host"
                 MaxWidth="480"
                 HorizontalAlignment="Stretch"
                 IsVisible="{Binding IsMarketplaceMode}">
@@ -67,28 +56,25 @@
                      PlaceholderText="https://hub.sunderapp.io/" />
           </Grid>
         </Border>
+      </controls:WindowTitleBar.CenterContent>
 
-        <Button Grid.Column="2"
-                Classes="toolbar-icon"
-                Command="{Binding RefreshCommand}"
-                VerticalAlignment="Center"
-                ToolTip.Tip="Refresh packages"
-                IsEnabled="{Binding CanRefresh}">
-          <Path Width="15"
-                Height="15"
-                Classes="icon-stroke"
-                Data="{StaticResource Sunder.Icon.Refresh}" />
-        </Button>
-
-        <Border Grid.Column="3"
-                Width="1"
-                Height="24"
-                Margin="4,0"
-                Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
-
-        <controls:WindowChromeControls Grid.Column="4" />
-      </Grid>
-    </Border>
+      <controls:WindowTitleBar.TrailingContent>
+        <StackPanel Orientation="Horizontal"
+                    Spacing="12"
+                    VerticalAlignment="Center">
+          <Button Classes="toolbar-icon"
+                  Command="{Binding RefreshCommand}"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="Refresh packages"
+                  IsEnabled="{Binding CanRefresh}">
+            <Path Width="15"
+                  Height="15"
+                  Classes="icon-stroke"
+                  Data="{StaticResource Sunder.Icon.Refresh}" />
+          </Button>
+        </StackPanel>
+      </controls:WindowTitleBar.TrailingContent>
+    </controls:WindowTitleBar>
 
     <Border Grid.Row="1"
             Margin="20,12,20,0"
