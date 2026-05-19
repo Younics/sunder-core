@@ -64,13 +64,12 @@
               <TextBlock Classes="section-title"
                          Text="Processes"
                          HorizontalAlignment="Center" />
-              <Button Grid.Column="1"
-                      Classes="window-action-button process-monitor-close-button"
-                      Click="ClosePopupButton_OnClick">
-                <Path Width="12"
-                      Height="12"
-                      Classes="icon-stroke"
-                      Data="{StaticResource Sunder.Icon.Minimize}" />
+               <Button Grid.Column="1"
+                       Classes="window-action-button process-monitor-close-button"
+                       Click="ClosePopupButton_OnClick">
+                <Border Classes="process-monitor-minimize-glyph"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
               </Button>
             </Grid>
 

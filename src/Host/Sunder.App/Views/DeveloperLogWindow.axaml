@@ -63,8 +63,13 @@
 
           <ListBox Grid.Row="2"
                    ItemsSource="{Binding FilteredEntries}"
-                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                    ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+              </Style>
+            </ListBox.Styles>
             <ListBox.ItemsPanel>
               <ItemsPanelTemplate>
                 <VirtualizingStackPanel />
@@ -72,7 +77,7 @@
             </ListBox.ItemsPanel>
             <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:DeveloperLogEntryViewModel">
-                  <Grid ColumnDefinitions="110,95,90,190,*" ColumnSpacing="10" Margin="0,0,0,4">
+                  <Grid ColumnDefinitions="110,95,90,190,*" ColumnSpacing="10" Margin="0,0,0,4" HorizontalAlignment="Stretch">
                     <TextBlock Classes="caption" Text="{Binding TimestampText}" />
                     <TextBlock Grid.Column="1" Classes="caption" Text="{Binding LevelText}" />
                     <TextBlock Grid.Column="2" Classes="caption" Text="{Binding ScopeText}" />
@@ -80,7 +85,7 @@
                     <TextBlock Grid.Column="4"
                                FontFamily="Menlo,Consolas,monospace"
                                Text="{Binding Message}"
-                               TextTrimming="CharacterEllipsis" />
+                               TextWrapping="Wrap" />
                   </Grid>
                 </DataTemplate>
             </ListBox.ItemTemplate>
