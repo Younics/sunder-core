@@ -18,6 +18,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        SunderWindowSizing.ApplySecondaryWindowSize(this);
         _lifecycleController = new SecondaryWindowLifecycleController(
             this,
             () => _stateController?.PersistWindowState(),

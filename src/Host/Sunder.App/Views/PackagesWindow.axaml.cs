@@ -18,6 +18,7 @@ public partial class PackagesWindow : Window
     public PackagesWindow()
     {
         InitializeComponent();
+        SunderWindowSizing.ApplySecondaryWindowSize(this);
         _lifecycleController = new SecondaryWindowLifecycleController(
             this,
             () => _stateController?.PersistWindowState(),

@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Platform;
 using Sunder.App.Models;
+using Sunder.App.Views;
 
 namespace Sunder.App.Services;
 
@@ -16,19 +18,28 @@ public static class ShellWindowPlacementService
             return;
         }
 
-        var width = Math.Max(window.MinWidth, placement.Width);
-        var height = Math.Max(window.MinHeight, placement.Height);
-        window.Width = width;
-        window.Height = height;
+        var screen = ResolveScreen(window, placement);
+        var size = screen is null
+            ? new Size(Math.Max(window.MinWidth, placement.Width), Math.Max(window.MinHeight, placement.Height))
+            : SunderWindowSizing.ClampSizeToWorkingArea(
+                Math.Max(window.MinWidth, placement.Width),
+                Math.Max(window.MinHeight, placement.Height),
+                window.MinWidth,
+                window.MinHeight,
+                screen.WorkingArea.Width,
+                screen.WorkingArea.Height,
+                screen.Scaling);
+        window.Width = size.Width;
+        window.Height = size.Height;
 
-        if (IsValidPosition(placement.X, placement.Y))
+        if (screen is not null && IsValidPosition(placement.X, placement.Y))
         {
-            var bounds = ClampToVisibleScreen(window, new PixelRect(
+            window.Position = ClampPositionToVisibleScreen(
+                screen,
                 (int)Math.Round(placement.X),
                 (int)Math.Round(placement.Y),
-                (int)Math.Round(width),
-                (int)Math.Round(height)));
-            window.Position = new PixelPoint(bounds.X, bounds.Y);
+                size.Width,
+                size.Height);
         }
 
         if (placement.IsMaximized)
@@ -56,20 +67,25 @@ public static class ShellWindowPlacementService
         };
     }
 
-    private static PixelRect ClampToVisibleScreen(Window window, PixelRect bounds)
+    private static Screen? ResolveScreen(Window window, ShellWindowPlacement placement)
     {
-        var screen = window.Screens.ScreenFromBounds(bounds) ?? window.Screens.All.FirstOrDefault();
-        if (screen is null)
+        if (IsValidPosition(placement.X, placement.Y))
         {
-            return bounds;
+            var bounds = new PixelRect((int)Math.Round(placement.X), (int)Math.Round(placement.Y), 1, 1);
+            return window.Screens.ScreenFromBounds(bounds) ?? window.Screens.All.FirstOrDefault();
         }
 
+        return window.Screens.ScreenFromWindow(window) ?? window.Screens.All.FirstOrDefault();
+    }
+
+    private static PixelPoint ClampPositionToVisibleScreen(Screen screen, int x, int y, double width, double height)
+    {
         var area = screen.WorkingArea;
-        var width = Math.Min(bounds.Width, area.Width);
-        var height = Math.Min(bounds.Height, area.Height);
-        var x = Math.Clamp(bounds.X, area.X, Math.Max(area.X, area.Right - width));
-        var y = Math.Clamp(bounds.Y, area.Y, Math.Max(area.Y, area.Bottom - height));
-        return new PixelRect(x, y, width, height);
+        var pixelWidth = Math.Min((int)Math.Ceiling(width * screen.Scaling), area.Width);
+        var pixelHeight = Math.Min((int)Math.Ceiling(height * screen.Scaling), area.Height);
+        return new PixelPoint(
+            Math.Clamp(x, area.X, Math.Max(area.X, area.Right - pixelWidth)),
+            Math.Clamp(y, area.Y, Math.Max(area.Y, area.Bottom - pixelHeight)));
     }
 
     private static bool IsValidSize(double width, double height)

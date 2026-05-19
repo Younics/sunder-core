@@ -10,6 +10,7 @@ public partial class DeveloperLogWindow : Window
     public DeveloperLogWindow()
     {
         InitializeComponent();
+        SunderWindowSizing.ApplySecondaryWindowSize(this);
         _lifecycleController = new SecondaryWindowLifecycleController(this, () => { }, OnLifecycleClosed);
     }
 

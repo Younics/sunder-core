@@ -14,6 +14,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SunderWindowSizing.ApplyMainWindowSize(this);
         _macNativeMenuController = new MacNativeMenuController(this, () => ViewModel);
         Closing += OnClosing;
         Closed += OnClosed;
