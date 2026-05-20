@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest an improvement for Sunder Core
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you want.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop app
+        - Runtime host
+        - CLI
+        - SDK
+        - Package build tooling
+        - Package templates
+        - Package management/archive validation
+        - Registry contracts
+        - Documentation
+        - Other
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider?
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility notes
+      description: Mention SDK, package archive, Registry contract, or app/runtime compatibility implications if known.
