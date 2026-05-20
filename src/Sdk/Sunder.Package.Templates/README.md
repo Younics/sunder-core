@@ -83,7 +83,8 @@ MyPackage/
   Assets/
     icon.png
   PackageViews/
-    DefaultPackageView.cs
+    DefaultPackageView.axaml
+    DefaultPackageView.axaml.cs
     DefaultPackageViewModel.cs
 ```
 
