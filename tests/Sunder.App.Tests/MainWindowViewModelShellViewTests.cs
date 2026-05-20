@@ -182,6 +182,52 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task SwitchingPackageViews_RetainsOpenedHostedViews()
+    {
+        DisposablePackageView.ResetCreatedCount();
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"),
+            ("agent", "agent.subsessions"));
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var workspaceView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
+        var subsessionsView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var reopenedWorkspaceView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+
+        Assert.Same(workspaceView, reopenedWorkspaceView);
+        Assert.NotSame(workspaceView, subsessionsView);
+        Assert.Equal(2, DisposablePackageView.CreatedCount);
+        Assert.Contains(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.workspaces");
+        Assert.Contains(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.subsessions");
+    }
+
+    [Fact]
+    public async Task RemovePackageViewFromHotbar_EvictsRetainedHostedView()
+    {
+        DisposablePackageView.ResetCreatedCount();
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"),
+            ("agent", "agent.subsessions"));
+        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
+
+        var removed = harness.ViewModel.RemovePackageViewFromHotbar("agent.workspaces");
+
+        Assert.True(removed);
+        Assert.DoesNotContain(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.workspaces");
+        Assert.Contains(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.subsessions");
+        AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+    }
+
+    [Fact]
     public async Task OpeningAndClosingPackageView_DoesNotChangePanelWidths()
     {
         using var harness = CreateHarness();

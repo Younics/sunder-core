@@ -14,7 +14,8 @@ internal sealed class ShellPackageLifecyclePresenter(
     Action<string> setSyncStatusText,
     Action<bool> rebuildRailCollections,
     Action<IReadOnlySet<RailPlacement>, IReadOnlySet<string>, bool> updateRailCollections,
-    Action persistShellState)
+    Action persistShellState,
+    Action<IReadOnlySet<string>>? removeRetainedPackageViews = null)
 {
     public void ApplyLifecycleChanges(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -37,6 +38,7 @@ internal sealed class ShellPackageLifecyclePresenter(
             .ToArray();
         foreach (var packageId in removedPackageIds)
         {
+            removeRetainedPackageViews?.Invoke(new HashSet<string>([packageId], StringComparer.OrdinalIgnoreCase));
             RemovePackageViewsFromShell(packageId);
         }
 
@@ -59,6 +61,8 @@ internal sealed class ShellPackageLifecyclePresenter(
             systemStatus: null,
             startupWarnings,
             startupErrors);
+
+        removeRetainedPackageViews?.Invoke(FindChangedPackageIds(shellSnapshot.PackageViews));
 
         viewsById.Clear();
         foreach (var view in shellSnapshot.PackageViews)
@@ -90,6 +94,8 @@ internal sealed class ShellPackageLifecyclePresenter(
             persistShellState();
             return;
         }
+
+        removeRetainedPackageViews?.Invoke(impactedPackages);
 
         var oldViews = viewsById.Values
             .Where(view => impactedPackages.Contains(view.PackageId))
@@ -142,5 +148,28 @@ internal sealed class ShellPackageLifecyclePresenter(
         }
 
         return impactedPackages;
+    }
+
+    private HashSet<string> FindChangedPackageIds(IReadOnlyList<ShellPackageView> updatedViews)
+    {
+        var updatedViewsById = updatedViews.ToDictionary(view => view.ViewId, StringComparer.OrdinalIgnoreCase);
+        var changedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var existingView in viewsById.Values)
+        {
+            if (!updatedViewsById.TryGetValue(existingView.ViewId, out var updatedView))
+            {
+                changedPackageIds.Add(existingView.PackageId);
+                continue;
+            }
+
+            if (!string.Equals(existingView.PackageId, updatedView.PackageId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(existingView.PackageVersion, updatedView.PackageVersion, StringComparison.OrdinalIgnoreCase)
+                || existingView.Readiness != updatedView.Readiness)
+            {
+                changedPackageIds.Add(existingView.PackageId);
+            }
+        }
+
+        return changedPackageIds;
     }
 }

@@ -36,12 +36,26 @@
         </ScrollViewer>
       </Grid>
 
-      <ContentControl HorizontalAlignment="Stretch"
-                      VerticalAlignment="Stretch"
-                      HorizontalContentAlignment="Stretch"
-                      VerticalContentAlignment="Stretch"
-                      IsVisible="{Binding HasHostedView}"
-                      Content="{Binding HostedView}" />
+      <ItemsControl HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    IsVisible="{Binding HasHostedView}"
+                    ItemsSource="{Binding HostedViews}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <Grid />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:ShellHostedViewViewModel">
+            <ContentControl HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch"
+                            IsVisible="{Binding IsActive}"
+                            Content="{Binding View}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
     </Grid>
   </Border>
 </UserControl>

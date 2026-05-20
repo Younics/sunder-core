@@ -93,6 +93,14 @@ internal sealed class AppPackageViewRegistry
             return null;
         }
 
+        lock (_syncRoot)
+        {
+            if (_viewCache.TryGetValue(viewId, out var cachedView))
+            {
+                return cachedView;
+            }
+        }
+
         Control control;
         try
         {
@@ -189,6 +197,14 @@ internal sealed class AppPackageViewRegistry
         if (isPackageDisabled(registration.PackageId))
         {
             return null;
+        }
+
+        lock (_syncRoot)
+        {
+            if (_settingsViewCache.TryGetValue(packageId, out var cachedView))
+            {
+                return cachedView;
+            }
         }
 
         Control control;

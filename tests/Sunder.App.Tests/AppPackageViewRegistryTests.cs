@@ -25,7 +25,7 @@ public sealed class AppPackageViewRegistryTests
     }
 
     [Fact]
-    public void GetOrCreateView_WhenCachedViewExists_DisposesUnusedReplacement()
+    public void GetOrCreateView_WhenCachedViewExists_DoesNotCreateReplacement()
     {
         TrackedDataContext.Created.Clear();
         var registry = new AppPackageViewRegistry();
@@ -38,8 +38,7 @@ public sealed class AppPackageViewRegistryTests
         Assert.Same(first, second);
         Assert.Collection(
             TrackedDataContext.Created,
-            dataContext => Assert.False(dataContext.IsDisposed),
-            dataContext => Assert.True(dataContext.IsDisposed));
+            dataContext => Assert.False(dataContext.IsDisposed));
     }
 
     [Fact]

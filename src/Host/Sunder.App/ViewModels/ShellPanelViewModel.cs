@@ -8,6 +8,8 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
 {
     public ObservableCollection<string> Lines { get; } = [];
 
+    public ObservableCollection<ShellHostedViewViewModel> HostedViews { get; } = [];
+
     public bool HasHostedView => HostedView is not null;
 
     public bool ShowFallbackLines => HostedView is null;
@@ -36,12 +38,84 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
     public void SetActiveView(string viewId, object? hostedView)
     {
         ActiveViewId = viewId;
-        SetHostedView(hostedView);
+        if (hostedView is null)
+        {
+            DeactivateHostedViews();
+            return;
+        }
+
+        var retainedView = HostedViews.FirstOrDefault(view => string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase));
+        if (retainedView is null)
+        {
+            retainedView = new ShellHostedViewViewModel(viewId, hostedView);
+            HostedViews.Add(retainedView);
+        }
+        else if (!ReferenceEquals(retainedView.View, hostedView))
+        {
+            HostedPackageViewBoundary.ReleaseHostedView(retainedView.View);
+            retainedView.View = hostedView;
+        }
+
+        foreach (var view in HostedViews)
+        {
+            view.IsActive = ReferenceEquals(view, retainedView);
+        }
+
+        SetHostedView(retainedView.View);
     }
 
     public void ClearActiveView()
     {
         ActiveViewId = null;
+        DeactivateHostedViews();
+    }
+
+    public object? GetRetainedView(string viewId)
+        => HostedViews.FirstOrDefault(view => string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase))?.View;
+
+    public void RemoveHostedView(string viewId)
+    {
+        var retainedView = HostedViews.FirstOrDefault(view => string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase));
+        if (retainedView is null)
+        {
+            return;
+        }
+
+        var wasActive = retainedView.IsActive || ReferenceEquals(_hostedView, retainedView.View);
+        HostedViews.Remove(retainedView);
+        HostedPackageViewBoundary.ReleaseHostedView(retainedView.View);
+        if (wasActive)
+        {
+            ActiveViewId = null;
+            SetHostedView(null);
+        }
+    }
+
+    public void ClearRetainedViews()
+    {
+        foreach (var retainedView in HostedViews.ToArray())
+        {
+            RemoveHostedView(retainedView.ViewId);
+        }
+    }
+
+    public void PruneHostedViews(ISet<string> retainedViewIds)
+    {
+        foreach (var retainedView in HostedViews
+            .Where(view => !retainedViewIds.Contains(view.ViewId))
+            .ToArray())
+        {
+            RemoveHostedView(retainedView.ViewId);
+        }
+    }
+
+    private void DeactivateHostedViews()
+    {
+        foreach (var view in HostedViews)
+        {
+            view.IsActive = false;
+        }
+
         SetHostedView(null);
     }
 
@@ -52,7 +126,6 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
             return;
         }
 
-        HostedPackageViewBoundary.ReleaseHostedView(_hostedView);
         if (!SetProperty(ref _hostedView, hostedView, nameof(HostedView)))
         {
             return;

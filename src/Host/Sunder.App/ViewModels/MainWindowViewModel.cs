@@ -147,7 +147,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             status => SyncStatusText = status,
             RebuildRailCollections,
             UpdateRailCollections,
-            PersistShellState);
+            PersistShellState,
+            RemoveRetainedPackageViews);
         _packageLifecycleRefreshCoordinator = new ShellPackageLifecycleRefreshCoordinator(
             effectivePackageLifecycleCoordinator,
             _packageLifecyclePresenter,
@@ -395,6 +396,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             .Where(view => string.Equals(view.PackageId, e.PackageId, StringComparison.OrdinalIgnoreCase))
             .Select(view => view.Placement)
             .ToHashSet();
+        RemoveRetainedPackageViews(new HashSet<string>([e.PackageId], StringComparer.OrdinalIgnoreCase));
         if (!_packageLifecyclePresenter.RemovePackageViewsFromShell(e.PackageId))
         {
             return;
@@ -412,6 +414,26 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private ShellPanelViewModel GetPanel(RailPlacement placement)
         => _shellLayout.GetPanel(placement);
+
+    private void RemoveRetainedPackageViews(IReadOnlySet<string> packageIds)
+    {
+        if (packageIds.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var slot in _shellLayout.GetSlots())
+        {
+            foreach (var retainedView in slot.Panel.HostedViews.ToArray())
+            {
+                if (_viewsById.TryGetValue(retainedView.ViewId, out var packageView)
+                    && packageIds.Contains(packageView.PackageId))
+                {
+                    slot.Panel.RemoveHostedView(retainedView.ViewId);
+                }
+            }
+        }
+    }
 
     private void NotifyLayoutStateChanged()
     {

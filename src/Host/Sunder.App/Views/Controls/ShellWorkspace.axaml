@@ -48,12 +48,26 @@
           <Border Classes="shell-panel-content-clip">
             <Grid>
               <controls:ShellWelcomePanel IsVisible="{Binding MiddlePanel.ShowFallbackLines}" />
-              <ContentControl HorizontalAlignment="Stretch"
-                              VerticalAlignment="Stretch"
-                              HorizontalContentAlignment="Stretch"
-                              VerticalContentAlignment="Stretch"
-                              IsVisible="{Binding MiddlePanel.HasHostedView}"
-                              Content="{Binding MiddlePanel.HostedView}" />
+              <ItemsControl HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch"
+                            IsVisible="{Binding MiddlePanel.HasHostedView}"
+                            ItemsSource="{Binding MiddlePanel.HostedViews}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <Grid />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ShellHostedViewViewModel">
+                    <ContentControl HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Stretch"
+                                    HorizontalContentAlignment="Stretch"
+                                    VerticalContentAlignment="Stretch"
+                                    IsVisible="{Binding IsActive}"
+                                    Content="{Binding View}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
             </Grid>
           </Border>
         </Border>

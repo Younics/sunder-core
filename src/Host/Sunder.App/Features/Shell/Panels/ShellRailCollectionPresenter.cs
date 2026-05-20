@@ -24,6 +24,7 @@ internal sealed class ShellRailCollectionPresenter(
         {
             slot.Bar.SetItems(CreateItemsForPlacement(slot.Placement, slot.OnSelect));
             ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, slot.Placement, slot.Bar.Items.Select(item => item.Id).ToArray());
+            PruneRetainedHostedViews(slot);
         }
 
         var middleBarItemCount = slots.FirstOrDefault(slot => slot.Placement == RailPlacement.Middle)?.Bar.Items.Count ?? 0;
@@ -60,6 +61,7 @@ internal sealed class ShellRailCollectionPresenter(
         {
             slot.Bar.SetItemsPreservingExisting(CreateItemsForPlacement(slot.Placement, slot.OnSelect, slot.Bar, impactedPackageIds));
             ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, slot.Placement, slot.Bar.Items.Select(item => item.Id).ToArray());
+            PruneRetainedHostedViews(slot);
         }
 
         var middleBarItemCount = slots.FirstOrDefault(slot => slot.Placement == RailPlacement.Middle)?.Bar.Items.Count ?? 0;
@@ -148,6 +150,14 @@ internal sealed class ShellRailCollectionPresenter(
         selectionPresenter.Select(slot.Bar, slot.Placement, selected);
         ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, selected.Id);
         return selected;
+    }
+
+    private static void PruneRetainedHostedViews(ShellPlacementSlot slot)
+    {
+        var retainedViewIds = slot.Bar.Items
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        slot.Panel.PruneHostedViews(retainedViewIds);
     }
 
     private bool IsViewImpacted(string? viewId, IReadOnlySet<string> impactedPackageIds)

@@ -11,10 +11,10 @@
                 VerticalAlignment="Center">
       <Button Classes="window-action-button"
               Click="MinimizeButton_OnClick">
-        <Path Width="12"
-              Height="12"
-              Classes="icon-stroke"
-              Data="{StaticResource Sunder.Icon.Minimize}" />
+        <Grid Width="14"
+              Height="14">
+          <Border Classes="window-minimize-glyph" />
+        </Grid>
       </Button>
       <Button Classes="window-action-button"
               Click="ToggleFullScreenButton_OnClick">

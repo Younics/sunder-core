@@ -30,11 +30,8 @@ internal sealed class ShellPackagePanelCoordinator(
         var placement = packageView.Placement;
         var panel = getPanel(placement);
         var isOpen = string.Equals(ShellSelectionState.GetSelectedViewId(shellState, placement), viewId, StringComparison.OrdinalIgnoreCase);
-        if (isOpen)
-        {
-            panel.SetActiveView(viewId, hostedView: null);
-        }
-        else
+        panel.RemoveHostedView(viewId);
+        if (!isOpen)
         {
             packageViewHostService.InvalidateView(viewId);
             return true;
