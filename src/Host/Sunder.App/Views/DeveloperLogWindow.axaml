@@ -35,15 +35,15 @@
               Padding="14">
         <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
           <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="10">
-            <ComboBox ItemsSource="{Binding FilterOptions}"
-                      SelectedItem="{Binding SelectedFilter}"
-                      HorizontalAlignment="Stretch">
-              <ComboBox.ItemTemplate>
+            <controls:SunderComboBox ItemsSource="{Binding FilterOptions}"
+                                     SelectedItem="{Binding SelectedFilter}"
+                                     HorizontalAlignment="Stretch">
+              <controls:SunderComboBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:DeveloperLogFilterOptionViewModel">
                   <TextBlock Text="{Binding Label}" />
                 </DataTemplate>
-              </ComboBox.ItemTemplate>
-            </ComboBox>
+              </controls:SunderComboBox.ItemTemplate>
+            </controls:SunderComboBox>
             <TextBox Grid.Column="1"
                      PlaceholderText="Search logs"
                      Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />

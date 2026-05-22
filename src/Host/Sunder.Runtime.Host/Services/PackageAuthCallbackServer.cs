@@ -6,25 +6,32 @@ namespace Sunder.Runtime.Host.Services;
 public sealed class PackageAuthCallbackServer : IDisposable
 {
     private readonly ILogger<PackageAuthCallbackServer> _logger;
-    private readonly int _port;
+    private readonly int? _fallbackPort;
+    private int _port;
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, Func<IReadOnlyDictionary<string, string?>, CancellationToken, Task<bool>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
     private HttpListener? _listener;
     private Task? _listenTask;
 
     public PackageAuthCallbackServer(ILogger<PackageAuthCallbackServer> logger)
-        : this(logger, port: 1455)
+        : this(logger, port: 1455, fallbackPort: 1457)
     {
     }
 
     internal PackageAuthCallbackServer(ILogger<PackageAuthCallbackServer> logger, int port)
+        : this(logger, port, fallbackPort: null)
+    {
+    }
+
+    private PackageAuthCallbackServer(ILogger<PackageAuthCallbackServer> logger, int port, int? fallbackPort)
     {
         _logger = logger;
         _port = port;
-        CallbackUri = new Uri($"http://localhost:{_port}/auth/callback/");
+        _fallbackPort = fallbackPort;
+        CallbackUri = CreateCallbackUri(_port);
     }
 
-    public Uri CallbackUri { get; }
+    public Uri CallbackUri { get; private set; }
 
     public void EnsureStarted()
     {
@@ -35,23 +42,56 @@ public sealed class PackageAuthCallbackServer : IDisposable
                 return;
             }
 
-            var listener = new HttpListener();
-            listener.Prefixes.Add($"http://localhost:{_port}/auth/callback/");
-            try
+            var listener = TryStartListener(_port, out var startException);
+            var actualPort = _port;
+            if (listener is null && _fallbackPort is { } fallbackPort && fallbackPort != _port)
             {
-                listener.Start();
+                _logger.LogWarning(
+                    startException,
+                    "Package auth callback listener could not start on {CallbackUri}; trying fallback port {FallbackPort}",
+                    CallbackUri,
+                    fallbackPort);
+                listener = TryStartListener(fallbackPort, out startException);
+                actualPort = fallbackPort;
             }
-            catch (HttpListenerException ex)
+
+            if (listener is null)
             {
-                listener.Close();
                 throw new InvalidOperationException(
-                    $"Sunder could not start the local browser callback listener on {CallbackUri} because that address is already in use. Close other Codex/Sunder auth listeners or applications using port {_port} and retry.",
-                    ex);
+                    _fallbackPort is { } configuredFallbackPort && configuredFallbackPort != _port
+                        ? $"Sunder could not start the local browser callback listener on {CreateCallbackUri(_port)} or {CreateCallbackUri(configuredFallbackPort)}. Close other Codex/Sunder auth listeners or applications using ports {_port} and {configuredFallbackPort} and retry."
+                        : $"Sunder could not start the local browser callback listener on {CallbackUri} because that address is already in use. Close other Codex/Sunder auth listeners or applications using port {_port} and retry.",
+                    startException);
             }
+
+            _port = actualPort;
+            CallbackUri = CreateCallbackUri(actualPort);
             _listener = listener;
             _listenTask = Task.Run(ListenLoopAsync);
+            _logger.LogInformation("Package auth callback listener started on {CallbackUri}", CallbackUri);
         }
     }
+
+    private static HttpListener? TryStartListener(int port, out Exception? exception)
+    {
+        var listener = new HttpListener();
+        listener.Prefixes.Add($"{CreateCallbackUri(port)}/");
+        try
+        {
+            listener.Start();
+            exception = null;
+            return listener;
+        }
+        catch (Exception ex)
+        {
+            listener.Close();
+            exception = ex;
+            return null;
+        }
+    }
+
+    private static Uri CreateCallbackUri(int port)
+        => new($"http://localhost:{port}/auth/callback");
 
     public void RegisterHandler(string authSessionId, Func<IReadOnlyDictionary<string, string?>, CancellationToken, Task<bool>> handler)
     {
@@ -59,6 +99,8 @@ public sealed class PackageAuthCallbackServer : IDisposable
         {
             _handlers[authSessionId] = handler;
         }
+
+        _logger.LogInformation("Package auth callback handler registered.");
     }
 
     public void Dispose()
@@ -104,8 +146,14 @@ public sealed class PackageAuthCallbackServer : IDisposable
     private async Task HandleRequestAsync(HttpListenerContext context)
     {
         var authSessionId = context.Request.QueryString["state"];
+        _logger.LogInformation(
+            "Package auth callback request received. HasState={HasState} HasCode={HasCode} HasError={HasError}",
+            !string.IsNullOrWhiteSpace(authSessionId),
+            !string.IsNullOrWhiteSpace(context.Request.QueryString["code"]),
+            !string.IsNullOrWhiteSpace(context.Request.QueryString["error"]));
         if (string.IsNullOrWhiteSpace(authSessionId))
         {
+            _logger.LogWarning("Package auth callback request was missing state.");
             await WriteResponseAsync(context.Response, false, "Missing state.");
             return;
         }
@@ -118,6 +166,7 @@ public sealed class PackageAuthCallbackServer : IDisposable
 
         if (handler is null)
         {
+            _logger.LogWarning("Package auth callback request did not match a registered handler.");
             await WriteResponseAsync(context.Response, false, "No matching authorization session was found.");
             return;
         }
@@ -143,6 +192,8 @@ public sealed class PackageAuthCallbackServer : IDisposable
                 _handlers.Remove(authSessionId);
             }
         }
+
+        _logger.LogInformation("Package auth callback handling completed. Completed={Completed}", completed);
 
         await WriteResponseAsync(context.Response, completed, completed
             ? "You can close this browser window and return to Sunder."

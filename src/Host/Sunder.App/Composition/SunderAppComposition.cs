@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Composition;
 
@@ -24,12 +25,21 @@ internal static class SunderAppComposition
         services.AddSingleton<IRuntimeApiClientFactory>(provider => provider.GetRequiredService<RuntimeApiClientFactory>());
         services.AddSingleton<RuntimeHostProcessManager>();
         services.AddSingleton<NotificationCenterService>();
+        services.AddSingleton<IPackageNotificationService>(provider => new AppPackageNotificationService(
+            provider.GetRequiredService<NotificationCenterService>(),
+            "sunder.app",
+            "Sunder"));
         services.AddSingleton<DeveloperLogService>();
         services.AddSingleton<CliInstallationService>();
         services.AddSingleton<AppUpdateSettingsService>();
         services.AddSingleton<SunderUpdateService>();
         services.AddSingleton<BackgroundProcessQueueService>();
+        services.AddSingleton<IBackgroundProcessQueue>(provider => provider.GetRequiredService<BackgroundProcessQueueService>());
         services.AddSingleton<RegistryPackageInstallService>();
+        services.AddSingleton(provider => new PackageUpdateStartupCheckService(
+            provider.GetRequiredService<IBackgroundProcessQueue>(),
+            provider.GetRequiredService<IRuntimeApiClientFactory>(),
+            provider.GetRequiredService<IPackageNotificationService>()));
         services.AddSingleton<PackageRuntimeFaultReporter>();
 
         services.AddSingleton<AppPackageShellViewService>();

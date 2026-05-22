@@ -27,6 +27,7 @@ public sealed class ShellStartupCoordinator
     private readonly DeveloperLogService _developerLog;
     private readonly CliInstallationService _cliInstallationService;
     private readonly SunderUpdateService _updateService;
+    private readonly PackageUpdateStartupCheckService _packageUpdateStartupCheckService;
     private readonly IThemeManager _themeManager;
     private readonly AppPackageSettingsNavigationService _settingsNavigationService;
     private readonly AppPackageSessionService _packageSessionService;
@@ -45,6 +46,7 @@ public sealed class ShellStartupCoordinator
         DeveloperLogService developerLog,
         CliInstallationService cliInstallationService,
         SunderUpdateService updateService,
+        PackageUpdateStartupCheckService packageUpdateStartupCheckService,
         IThemeManager themeManager,
         AppPackageSettingsNavigationService settingsNavigationService,
         AppPackageSessionService packageSessionService,
@@ -62,6 +64,7 @@ public sealed class ShellStartupCoordinator
         _developerLog = developerLog;
         _cliInstallationService = cliInstallationService;
         _updateService = updateService;
+        _packageUpdateStartupCheckService = packageUpdateStartupCheckService;
         _themeManager = themeManager;
         _settingsNavigationService = settingsNavigationService;
         _packageSessionService = packageSessionService;
@@ -219,6 +222,7 @@ public sealed class ShellStartupCoordinator
 
         AppSessionLog.WriteInfo($"Sunder startup composition completed in {startupStopwatch.ElapsedMilliseconds} ms.");
         _ = result.MainWindowViewModel.CheckForAppUpdatesOnStartupAsync();
+        _packageUpdateStartupCheckService.EnqueueStartupCheck();
 
         return result with { DevPackageHotReloadSession = devPackageHotReloadSession };
     }

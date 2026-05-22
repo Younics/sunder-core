@@ -58,14 +58,14 @@
         <TextBlock Classes="caption"
                    Text="{Binding Description}"
                    TextWrapping="Wrap" />
-        <ComboBox ItemsSource="{Binding Options}"
-                  SelectedItem="{Binding SelectedOption}">
-          <ComboBox.ItemTemplate>
+        <controls:SunderComboBox ItemsSource="{Binding Options}"
+                                 SelectedItem="{Binding SelectedOption}">
+          <controls:SunderComboBox.ItemTemplate>
             <DataTemplate x:DataType="vm:SettingsOptionItem">
               <TextBlock Text="{Binding Label}" />
             </DataTemplate>
-          </ComboBox.ItemTemplate>
-        </ComboBox>
+          </controls:SunderComboBox.ItemTemplate>
+        </controls:SunderComboBox>
       </StackPanel>
     </DataTemplate>
   </Window.DataTemplates>
