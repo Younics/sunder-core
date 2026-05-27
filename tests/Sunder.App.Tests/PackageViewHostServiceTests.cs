@@ -2,6 +2,7 @@ using System.Reflection;
 using Sunder.App.Services;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Notifications;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -57,6 +58,42 @@ public sealed class PackageViewHostServiceTests
         await hostService.DisablePackageAsync("test.package", "Second failure.", PackageFailureOrigin.AppActivation);
 
         Assert.Equal(1, backgroundService.StopCount);
+    }
+
+    [Fact]
+    public async Task DisablePackageAsync_PublishesPackageDisabledNotification()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(rootPath);
+        var notificationCenter = new NotificationCenterService(Path.Combine(rootPath, "notifications.json"));
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            new AppPackageBackgroundServiceCoordinator(),
+            [],
+            [],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            notificationCenter: notificationCenter);
+
+        try
+        {
+            await hostService.DisablePackageAsync("agent", "Hosted view failed.", PackageFailureOrigin.AppHostedView);
+
+            var notification = Assert.Single(notificationCenter.ListNotifications());
+            Assert.Equal("sunder.app", notification.SourcePackageId);
+            Assert.Equal("Sunder", notification.SourceDisplayName);
+            Assert.Equal("Package disabled", notification.Title);
+            Assert.Contains("agent", notification.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Hosted view failed.", notification.Message, StringComparison.Ordinal);
+            Assert.Equal(PackageNotificationSeverity.Error, notification.Severity);
+            Assert.True(notificationCenter.HasUnreadTrayNotifications());
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
     }
 
     [Fact]

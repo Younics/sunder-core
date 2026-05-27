@@ -32,7 +32,10 @@ internal sealed class AppPackageHostComposition
         _eventSender = eventSender;
         _state = state;
         AssemblyTracker = new AppPackageAssemblyTracker();
-        FaultNotifier = new AppPackageFaultNotifier(faultReporter);
+        var faultNotificationService = notificationCenter is null
+            ? null
+            : new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder");
+        FaultNotifier = new AppPackageFaultNotifier(faultReporter, faultNotificationService);
         ViewFacade = new AppPackageHostedViewFacade(
             viewRegistry,
             _state.IsPackageDisabled,
