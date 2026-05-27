@@ -16,6 +16,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         SunderWindowSizing.ApplyMainWindowSize(this);
         _macNativeMenuController = new MacNativeMenuController(this, () => ViewModel);
+        Activated += OnActivated;
+        Deactivated += OnDeactivated;
         Closing += OnClosing;
         Closed += OnClosed;
         KeyDown += MainWindow_OnKeyDown;
@@ -49,8 +51,16 @@ public partial class MainWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        Activated -= OnActivated;
+        Deactivated -= OnDeactivated;
         _macNativeMenuController.Dispose();
     }
+
+    private void OnActivated(object? sender, EventArgs e)
+        => Classes.Set("inactive", false);
+
+    private void OnDeactivated(object? sender, EventArgs e)
+        => Classes.Set("inactive", true);
 
     private void MainWindow_OnPointerPressed(object? sender, PointerPressedEventArgs e)
         => ShellToolbar.HideMenuIfPointerOutside(e);

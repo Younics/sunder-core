@@ -8,17 +8,20 @@
              x:DataType="vm:MainWindowViewModel"
              mc:Ignorable="d">
   <Grid Margin="0,4,0,4"
-        Background="{DynamicResource Sunder.Brush.Background.App}"
+        Background="{DynamicResource Sunder.Brush.Transparent}"
         ColumnDefinitions="58,0,*,0,58">
-    <Grid Grid.Column="0"
-          RowDefinitions="*,8,*">
-      <controls:PackageIconBar Grid.Row="0"
-                               Classes="side-top-lane"
-                               DataContext="{Binding LeftTopBar}" />
-      <controls:PackageIconBar Grid.Row="2"
-                               Classes="side-bottom-lane"
-                               DataContext="{Binding LeftBottomBar}" />
-    </Grid>
+    <Border Grid.Column="0"
+            Classes="side-rail-surface"
+            Margin="8,0,4,0">
+      <Grid RowDefinitions="*,8,*">
+        <controls:PackageIconBar Grid.Row="0"
+                                 Classes="side-top-lane"
+                                 DataContext="{Binding LeftTopBar}" />
+        <controls:PackageIconBar Grid.Row="2"
+                                 Classes="side-bottom-lane"
+                                 DataContext="{Binding LeftBottomBar}" />
+      </Grid>
+    </Border>
 
     <Grid Grid.Column="2"
           x:Name="ShellContentGrid"
@@ -126,14 +129,17 @@
       </Grid>
     </Grid>
 
-    <Grid Grid.Column="4"
-          RowDefinitions="*,8,*">
-      <controls:PackageIconBar Grid.Row="0"
-                               Classes="side-top-lane"
-                               DataContext="{Binding RightTopBar}" />
-      <controls:PackageIconBar Grid.Row="2"
-                               Classes="side-bottom-lane"
-                               DataContext="{Binding RightBottomBar}" />
-    </Grid>
+    <Border Grid.Column="4"
+            Classes="side-rail-surface"
+            Margin="4,0,8,0">
+      <Grid RowDefinitions="*,8,*">
+        <controls:PackageIconBar Grid.Row="0"
+                                 Classes="side-top-lane"
+                                 DataContext="{Binding RightTopBar}" />
+        <controls:PackageIconBar Grid.Row="2"
+                                 Classes="side-bottom-lane"
+                                 DataContext="{Binding RightBottomBar}" />
+      </Grid>
+    </Border>
   </Grid>
 </UserControl>

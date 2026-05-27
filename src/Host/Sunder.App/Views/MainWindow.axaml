@@ -14,39 +14,56 @@
         CanResize="True"
         Title="Sunder"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
+        Background="Transparent"
+        TransparencyBackgroundFallback="{DynamicResource Sunder.Brush.Background.App}"
+        TransparencyLevelHint="AcrylicBlur, Blur, Transparent"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
         UseLayoutRounding="True"
         Classes="shell-window">
-  <Grid RowDefinitions="52,*,22">
-    <Grid.Background>
-      <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-        <GradientStop Offset="0" Color="{DynamicResource Sunder.Color.AppGradient.Start}" />
-        <GradientStop Offset="0.5" Color="{DynamicResource Sunder.Color.AppGradient.Middle}" />
-        <GradientStop Offset="1" Color="{DynamicResource Sunder.Color.AppGradient.End}" />
-      </LinearGradientBrush>
-    </Grid.Background>
-    <controls:ShellToolbar x:Name="ShellToolbar"
-                           Grid.Row="0" />
+  <Window.Resources>
+    <ExperimentalAcrylicMaterial x:Key="Sunder.Shell.AcrylicMaterial"
+                                  TintColor="#14171A"
+                                  TintOpacity="0.44"
+                                  MaterialOpacity="0.48"
+                                  PlatformTransparencyCompensationLevel="0.18" />
+  </Window.Resources>
 
-    <controls:ShellWorkspace Grid.Row="1" />
+  <Border ClipToBounds="True">
+    <Grid>
+      <ExperimentalAcrylicBorder Material="{StaticResource Sunder.Shell.AcrylicMaterial}"
+                                  IsHitTestVisible="False" />
+      <Border IsHitTestVisible="False"
+              Classes="shell-glass-tint" />
 
-    <controls:ShellStatusBar Grid.Row="2" />
+      <Grid RowDefinitions="52,*,22">
+        <controls:ShellToolbar x:Name="ShellToolbar"
+                               Grid.Row="0" />
 
-    <controls:PackageDragOverlay x:Name="PackageDragOverlay"
-                                 Grid.RowSpan="3"
-                                 ZIndex="1000" />
+        <controls:ShellWorkspace Grid.Row="1" />
 
-    <controls:ToastHost Grid.RowSpan="3"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Top"
-                        Margin="0,64,18,0"
-                        ZIndex="900" />
+        <controls:ShellStatusBar Grid.Row="2" />
 
-    <controls:AppUpdatePromptCard Grid.RowSpan="3"
-                                  HorizontalAlignment="Right"
-                                  VerticalAlignment="Bottom"
-                                  Margin="0,0,28,42"
-                                  ZIndex="920" />
-  </Grid>
+        <controls:PackageDragOverlay x:Name="PackageDragOverlay"
+                                      Grid.RowSpan="3"
+                                      ZIndex="1000" />
+
+        <controls:ToastHost Grid.RowSpan="3"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Margin="0,64,18,0"
+                            ZIndex="900" />
+
+        <controls:AppUpdatePromptCard Grid.RowSpan="3"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Bottom"
+                                       Margin="0,0,28,42"
+                                       ZIndex="920" />
+      </Grid>
+
+      <Border IsHitTestVisible="False"
+              Classes="shell-glass-rim"
+              BorderThickness="1" />
+    </Grid>
+  </Border>
 </Window>
