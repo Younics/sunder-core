@@ -107,10 +107,27 @@
     <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
+  <Style Selector="TextBox:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+  </Style>
+
   <Style Selector="TextBox:focus, TextBox:focus-within, TextBox:focus-visible">
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Focus}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
     <Setter Property="FocusAdorner" Value="{x:Null}" />
+  </Style>
+
+  <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="TextBox:focus /template/ Border#PART_BorderElement, TextBox:focus-within /template/ Border#PART_BorderElement, TextBox:focus-visible /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+    <Setter Property="BorderThickness" Value="1" />
   </Style>
 
   <Style Selector="TextBox /template/ TextBlock#PART_Watermark">
@@ -130,14 +147,33 @@
 
   <Style Selector="ComboBox:pointerover">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
   <Style Selector="ComboBox:focus, ComboBox:focus-within, ComboBox:focus-visible">
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Focus}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
     <Setter Property="FocusAdorner" Value="{x:Null}" />
+  </Style>
+
+  <Style Selector="ComboBox:pointerover /template/ Border#Background">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="ComboBox:focus /template/ Border#Background, ComboBox:focus-within /template/ Border#Background, ComboBox:focus-visible /template/ Border#Background">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="ComboBox:focus /template/ Border#HighlightBackground, ComboBox:focus-within /template/ Border#HighlightBackground, ComboBox:focus-visible /template/ Border#HighlightBackground">
+    <Setter Property="IsVisible" Value="True" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+    <Setter Property="BorderThickness" Value="1" />
   </Style>
 
   <Style Selector="ComboBoxItem">
