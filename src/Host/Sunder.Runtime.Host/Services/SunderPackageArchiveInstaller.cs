@@ -5,6 +5,58 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths, InstalledPackageStore store)
 {
+    public async Task<PackageArchiveMutationPreparationResult> PrepareInstallStageAsync(
+        string packagePath,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await PrepareArchiveMutationAsync(packagePath, isEnabled: true, cancellationToken);
+        if (!result.Success || result.Mutation is null)
+        {
+            return result;
+        }
+
+        if (Directory.Exists(result.Mutation.InstalledPath))
+        {
+            TryDeleteDirectory(result.Mutation.StagingPath);
+            return PreparationFailure($"Package '{result.Mutation.InstalledRecord.PackageId}' version '{result.Mutation.InstalledRecord.Version}' is already installed.");
+        }
+
+        return result;
+    }
+
+    public async Task<PackageArchiveMutationPreparationResult> PrepareUpgradeStageAsync(
+        string packageId,
+        string packagePath,
+        InstalledPackageRecord installedPackage,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packageId))
+        {
+            return PreparationFailure("Package id is required.");
+        }
+
+        var result = await PrepareArchiveMutationAsync(packagePath, installedPackage.IsEnabled, cancellationToken);
+        if (!result.Success || result.Mutation is null)
+        {
+            return result;
+        }
+
+        if (!string.Equals(result.Mutation.InstalledRecord.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+        {
+            TryDeleteDirectory(result.Mutation.StagingPath);
+            return PreparationFailure($"Package archive '{result.Mutation.InstalledRecord.PackageId}' does not match selected package '{packageId}'.");
+        }
+
+        if (Directory.Exists(result.Mutation.InstalledPath)
+            && !string.Equals(result.Mutation.InstalledPath, installedPackage.InstallPath, StringComparison.OrdinalIgnoreCase))
+        {
+            TryDeleteDirectory(result.Mutation.StagingPath);
+            return PreparationFailure($"Package '{result.Mutation.InstalledRecord.PackageId}' version '{result.Mutation.InstalledRecord.Version}' is already installed on disk.");
+        }
+
+        return result;
+    }
+
     public async Task<PackageOperationResult> InstallFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(packagePath))
@@ -235,6 +287,69 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths, I
             installedPath,
             isEnabled,
             DateTimeOffset.UtcNow);
+
+    private async Task<PackageArchiveMutationPreparationResult> PrepareArchiveMutationAsync(
+        string packagePath,
+        bool isEnabled,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(packagePath))
+        {
+            return PreparationFailure("Package path is required.");
+        }
+
+        packagePath = Path.GetFullPath(packagePath);
+        if (!File.Exists(packagePath))
+        {
+            return PreparationFailure($"Package file '{packagePath}' does not exist.");
+        }
+
+        if (!string.Equals(Path.GetExtension(packagePath), ".sunderpkg", StringComparison.OrdinalIgnoreCase))
+        {
+            return PreparationFailure($"Package file '{packagePath}' must use the .sunderpkg extension.");
+        }
+
+        Directory.CreateDirectory(paths.StagingRootPath);
+        var stagingPath = paths.CreateStagingPath();
+        try
+        {
+            var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(packagePath, stagingPath, cancellationToken);
+            if (validation.Errors.Count > 0 || validation.Manifest is null)
+            {
+                TryDeleteDirectory(stagingPath);
+                return new PackageArchiveMutationPreparationResult(
+                    null,
+                    new PackageOperationResult(false, "Package validation failed.", RuntimeSessionApplied: false, RequiresAppRestart: false, validation.Warnings, validation.Errors));
+            }
+
+            var manifest = validation.Manifest;
+            var compatibilityErrors = SunderSdkCompatibilityProfile.Validate(manifest);
+            if (compatibilityErrors.Count > 0)
+            {
+                TryDeleteDirectory(stagingPath);
+                return new PackageArchiveMutationPreparationResult(
+                    null,
+                    new PackageOperationResult(false, "Package SDK compatibility validation failed.", RuntimeSessionApplied: false, RequiresAppRestart: false, validation.Warnings, compatibilityErrors));
+            }
+
+            var installedPath = paths.GetInstalledPackagePath(manifest.Id!, manifest.Version!);
+            return new PackageArchiveMutationPreparationResult(
+                new PreparedPackageArchiveMutation(
+                    stagingPath,
+                    installedPath,
+                    CreateInstalledPackageRecord(manifest, stagingPath, isEnabled),
+                    CreateInstalledPackageRecord(manifest, installedPath, isEnabled)),
+                null);
+        }
+        catch (Exception ex)
+        {
+            TryDeleteDirectory(stagingPath);
+            return PreparationFailure($"Failed to prepare package '{packagePath}': {ex.Message}");
+        }
+    }
+
+    private static PackageArchiveMutationPreparationResult PreparationFailure(string message)
+        => new(null, PackageOperationResults.Failure(message));
 
     private static void TryDeleteDirectory(string path)
     {

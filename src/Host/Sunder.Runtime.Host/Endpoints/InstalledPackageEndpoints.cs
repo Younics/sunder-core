@@ -29,7 +29,7 @@ internal static class InstalledPackageEndpoints
             "install/local",
             async (PackageInstallFromPathRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.InstallPackageFromPathAsync(request.PackagePath, cancellationToken);
+                var result = await packageSessionService.InstallPackageFromPathAsync(request.PackagePath, request.ApplyRuntimeSession, cancellationToken);
                 return result.Success ? Results.Ok(result) : Results.BadRequest(result);
             });
 
@@ -63,6 +63,30 @@ internal static class InstalledPackageEndpoints
             {
                 var result = await packageSessionService.UninstallPackageAsync(packageId, cancellationToken);
                 return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+            });
+
+        group.MapPost(
+            "store/stage",
+            async (PackageStoreStageRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            {
+                var result = await packageSessionService.StagePackageStoreChangesAsync(request, cancellationToken);
+                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+            });
+
+        group.MapPost(
+            "store/stage/{stageId}/commit",
+            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            {
+                var result = await packageSessionService.CommitPackageStoreStageAsync(stageId, cancellationToken);
+                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+            });
+
+        group.MapDelete(
+            "store/stage/{stageId}",
+            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            {
+                var discarded = await packageSessionService.DiscardPackageStoreStageAsync(stageId, cancellationToken);
+                return discarded ? Results.NoContent() : Results.NotFound();
             });
 
         return endpoints;

@@ -11,4 +11,6 @@ public sealed record PackageOperationResult(
     public bool AppShellApplied { get; init; }
 
     public IReadOnlyList<string> ImpactedPackageIds { get; init; } = [];
+
+    public PackageLifecycleChangeSet ChangeSet { get; init; } = PackageLifecycleChangeSet.Empty;
 }

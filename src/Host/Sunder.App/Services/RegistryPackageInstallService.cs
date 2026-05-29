@@ -39,7 +39,8 @@ public sealed class RegistryPackageInstallService
         IRegistryApiClient registryClient,
         IRuntimeApiClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync = null)
     {
         progress?.Invoke(new RegistryPackageInstallProgress("Reading installed package state...", 5));
         var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken);
@@ -53,7 +54,7 @@ public sealed class RegistryPackageInstallService
             Reinstall: reinstall);
         var plan = await registryClient.ResolveInstallPlanAsync(request, cancellationToken);
         return plan.Success
-            ? await ExecutePlanAsync(plan, allowDowngrade, reinstall, registryClient, runtimeApiClient, progress, cancellationToken)
+            ? await ExecutePlanAsync(plan, allowDowngrade, reinstall, registryClient, runtimeApiClient, progress, cancellationToken, preflightPackageStoreStageAsync)
             : ToPlanFailure(plan);
     }
 
@@ -61,7 +62,8 @@ public sealed class RegistryPackageInstallService
         IRegistryApiClient registryClient,
         IRuntimeApiClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync = null)
     {
         progress?.Invoke(new RegistryPackageInstallProgress("Reading installed package state...", 5));
         var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken);
@@ -70,79 +72,110 @@ public sealed class RegistryPackageInstallService
             return RegistryPackageInstallExecutionResult.Empty("No packages are installed.");
         }
 
-        var updates = await registryClient.ResolveUpdatesAsync(
-            new RegistryResolveUpdatesRequest(
+        progress?.Invoke(new RegistryPackageInstallProgress("Resolving registry update plan...", 15));
+        var plan = await registryClient.ResolvePackageChangesAsync(
+            new RegistryResolvePackageChangesRequest(
                 installedPackages
-                    .Select(package => new RegistryInstalledPackage(package.PackageId, package.Version))
-                    .ToArray()),
+                    .Select(package => new RegistryPackageChangeRequest(package.PackageId, Version: null, Tag: "latest"))
+                    .ToArray(),
+                ToInstalledPackageStates(installedPackages)),
             cancellationToken);
+        if (IsBatchPackageChangeResolverUnsupported(plan))
+        {
+            plan = await ResolveCompatibilityUpdateAllPlanAsync(registryClient, installedPackages, cancellationToken);
+        }
 
-        if (updates.Updates.Count == 0)
+        if (!plan.Success)
+        {
+            return ToPlanFailure(plan);
+        }
+
+        if (plan.Items.Count == 0)
         {
             return RegistryPackageInstallExecutionResult.Empty("All installed packages are up to date.");
         }
 
-        var warnings = new List<string>();
-        var errors = new List<string>();
-        var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var planItems = new List<RegistryPackageInstallPlanItem>();
-        var runtimeSessionApplied = true;
-        var requiresAppRestart = false;
+        return await ExecutePlanAsync(plan, allowDowngrade: false, reinstall: false, registryClient, runtimeApiClient, progress, cancellationToken, preflightPackageStoreStageAsync);
+    }
 
+    private static async Task<RegistryResolveInstallPlanResponse> ResolveCompatibilityUpdateAllPlanAsync(
+        IRegistryApiClient registryClient,
+        IReadOnlyList<InstalledPackageDescriptor> installedPackages,
+        CancellationToken cancellationToken)
+    {
+        var warnings = new List<string>
+        {
+            "Registry does not support batch update planning; using compatibility update planning.",
+        };
+        var updates = await registryClient.ResolveUpdatesAsync(
+            new RegistryResolveUpdatesRequest(
+                installedPackages.Select(package => new RegistryInstalledPackage(package.PackageId, package.Version)).ToArray()),
+            cancellationToken);
+        if (updates.Updates.Count == 0)
+        {
+            return new RegistryResolveInstallPlanResponse(true, [], warnings, [], []);
+        }
+
+        var installedPackageStates = ToInstalledPackageStates(installedPackages);
+        var mergedItems = new Dictionary<string, RegistryPackageInstallPlanItem>(StringComparer.OrdinalIgnoreCase);
+        var errors = new List<string>();
+        var conflicts = new List<RegistryPackageInstallPlanConflict>();
         foreach (var update in updates.Updates)
         {
-            var result = await InstallPackageAsync(
-                update.PackageId,
-                update.AvailableVersion,
-                tag: null,
-                allowDowngrade: false,
-                reinstall: false,
-            registryClient,
-            runtimeApiClient,
-            progress,
-            cancellationToken);
-
-            warnings.AddRange(result.RuntimeSessionApplied
-                ? result.Warnings
-                : result.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning)));
-            runtimeSessionApplied = result.RuntimeSessionApplied;
-            requiresAppRestart = result.RequiresAppRestart;
-            planItems.AddRange(result.PlanItems);
-            foreach (var impactedPackageId in result.ImpactedPackageIds)
+            var plan = await registryClient.ResolveInstallPlanAsync(
+                new RegistryResolveInstallPlanRequest(
+                    update.PackageId,
+                    update.AvailableVersion,
+                    Tag: null,
+                    installedPackageStates,
+                    AllowDowngrade: false,
+                    Reinstall: false),
+                cancellationToken);
+            warnings.AddRange(plan.Warnings);
+            errors.AddRange(plan.Errors);
+            conflicts.AddRange(plan.Conflicts);
+            if (!plan.Success)
             {
-                impactedPackageIds.Add(impactedPackageId);
+                continue;
             }
 
-            if (!result.Success)
+            foreach (var item in plan.Items)
             {
-                errors.AddRange(result.Errors.Count == 0 ? [result.Message] : result.Errors);
-                break;
+                if (mergedItems.TryGetValue(item.PackageId, out var existingItem))
+                {
+                    if (!string.Equals(existingItem.Version, item.Version, StringComparison.OrdinalIgnoreCase))
+                    {
+                        errors.Add($"Compatibility update planning produced conflicting versions for '{item.PackageId}': '{existingItem.Version}' and '{item.Version}'.");
+                    }
+
+                    continue;
+                }
+
+                mergedItems[item.PackageId] = item;
             }
         }
 
-        if (errors.Count > 0)
-        {
-            return new RegistryPackageInstallExecutionResult(
-                false,
-                errors[0],
-                runtimeSessionApplied,
-                requiresAppRestart,
-                warnings,
-                errors,
-                impactedPackageIds.ToArray(),
-                planItems);
-        }
-
-        return new RegistryPackageInstallExecutionResult(
-            true,
-            $"Updated {planItems.Select(item => item.PackageId).Distinct(StringComparer.OrdinalIgnoreCase).Count()} package(s).",
-            runtimeSessionApplied,
-            requiresAppRestart,
-            warnings,
-            [],
-            impactedPackageIds.ToArray(),
-            planItems);
+        return errors.Count == 0 && conflicts.Count == 0
+            ? new RegistryResolveInstallPlanResponse(true, mergedItems.Values.ToArray(), warnings, [], [])
+            : new RegistryResolveInstallPlanResponse(false, mergedItems.Values.ToArray(), warnings, errors, conflicts);
     }
+
+    private static bool IsBatchPackageChangeResolverUnsupported(RegistryResolveInstallPlanResponse plan)
+    {
+        if (plan.Success)
+        {
+            return false;
+        }
+
+        return plan.Errors.Any(IsUnsupportedBatchResolverMessage);
+    }
+
+    private static bool IsUnsupportedBatchResolverMessage(string message)
+        => string.Equals(message, "Method Not Allowed", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(message, "Not Found", StringComparison.OrdinalIgnoreCase)
+           || message.Contains("404", StringComparison.OrdinalIgnoreCase)
+           || message.Contains("405", StringComparison.OrdinalIgnoreCase)
+           || message.Contains("does not support batch package change planning", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<RegistryPackageInstallExecutionResult> ExecutePlanAsync(
         RegistryResolveInstallPlanResponse plan,
@@ -151,7 +184,8 @@ public sealed class RegistryPackageInstallService
         IRegistryApiClient registryClient,
         IRuntimeApiClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync)
     {
         if (plan.Items.Count == 0)
         {
@@ -160,9 +194,7 @@ public sealed class RegistryPackageInstallService
 
         var tempDirectory = Path.Combine(Path.GetTempPath(), "sunder-app-registry", Guid.NewGuid().ToString("N"));
         var warnings = plan.Warnings.ToList();
-        var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var runtimeSessionApplied = true;
-        var requiresAppRestart = false;
+        var mutations = new List<PackageStoreMutationRequest>();
 
         try
         {
@@ -181,61 +213,108 @@ public sealed class RegistryPackageInstallService
                 }
 
                 progress?.Invoke(new RegistryPackageInstallProgress($"Installing {item.PackageId} {item.Version}...", Math.Min(progressBase + 20, 90)));
-                var operationResult = item.CurrentVersion is null
-                    ? await runtimeApiClient.InstallPackageFromPathAsync(packagePath, cancellationToken)
-                    : await runtimeApiClient.UpgradePackageFromPathAsync(item.PackageId, packagePath, allowDowngrade, reinstall, cancellationToken);
+                mutations.Add(item.CurrentVersion is null
+                    ? new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: packagePath)
+                    : new PackageStoreMutationRequest(PackageStoreMutationKind.Upgrade, item.PackageId, packagePath, allowDowngrade, reinstall));
+            }
 
-                if (!operationResult.Success)
+            progress?.Invoke(new RegistryPackageInstallProgress("Staging package changes...", 88));
+            var stage = await runtimeApiClient.StagePackageStoreChangesAsync(new PackageStoreStageRequest(mutations), cancellationToken);
+            if (!stage.Success || stage.StageId is null)
+            {
+                var errors = stage.Errors.Count == 0
+                    ? [stage.OperationResult.Message ?? "Package store stage failed."]
+                    : stage.Errors;
+                return new RegistryPackageInstallExecutionResult(
+                    false,
+                    errors[0],
+                    RuntimeSessionApplied: false,
+                    RequiresAppRestart: false,
+                    warnings.Concat(stage.Warnings).ToArray(),
+                    errors,
+                    stage.ImpactedPackageIds,
+                    plan.Items);
+            }
+
+            var committed = false;
+            try
+            {
+                if (preflightPackageStoreStageAsync is not null && stage.ImpactedPackageIds.Count > 0)
                 {
-                    var errors = operationResult.Errors.Count == 0
-                        ? [operationResult.Message ?? $"Package operation failed for {item.PackageId}."]
-                        : operationResult.Errors;
-                    return new RegistryPackageInstallExecutionResult(
-                        false,
-                        errors[0],
-                        runtimeSessionApplied,
-                        requiresAppRestart,
-                warnings.Concat(operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning))).ToArray(),
-                errors,
-                        impactedPackageIds.ToArray(),
-                        plan.Items);
+                    progress?.Invoke(new RegistryPackageInstallProgress("Preflighting package changes...", 90));
+                    await preflightPackageStoreStageAsync(stage, cancellationToken);
                 }
 
-                warnings.AddRange(operationResult.RuntimeSessionApplied
-                    ? operationResult.Warnings
-                    : operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning)));
-                runtimeSessionApplied = operationResult.RuntimeSessionApplied;
-                requiresAppRestart = operationResult.RequiresAppRestart;
-                foreach (var impactedPackageId in operationResult.ImpactedPackageIds)
+                progress?.Invoke(new RegistryPackageInstallProgress("Loading installed packages...", 92));
+                var commit = await runtimeApiClient.CommitPackageStoreStageAsync(stage.StageId, cancellationToken);
+                committed = true;
+                return ToExecutionResult(commit, warnings, plan.Items);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!committed)
                 {
-                    impactedPackageIds.Add(impactedPackageId);
+                    await runtimeApiClient.DiscardPackageStoreStageAsync(stage.StageId, CancellationToken.None);
                 }
+
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (!committed)
+                {
+                    await runtimeApiClient.DiscardPackageStoreStageAsync(stage.StageId, CancellationToken.None);
+                }
+
+                return new RegistryPackageInstallExecutionResult(
+                    false,
+                    ex.Message,
+                    RuntimeSessionApplied: false,
+                    RequiresAppRestart: false,
+                    warnings.Concat(stage.Warnings).ToArray(),
+                    [ex.Message],
+                    stage.ImpactedPackageIds,
+                    plan.Items);
             }
         }
         finally
         {
             TryDeleteDirectory(tempDirectory);
         }
+    }
 
-        progress?.Invoke(new RegistryPackageInstallProgress("Loading installed packages...", 92));
-        var finalReload = await runtimeApiClient.ReloadInstalledPackageSessionAsync(impactedPackageIds.ToArray(), cancellationToken);
-        warnings.AddRange(finalReload.Warnings);
-        runtimeSessionApplied = finalReload.RuntimeSessionApplied;
-        requiresAppRestart = finalReload.RequiresAppRestart;
-        foreach (var impactedPackageId in finalReload.ImpactedPackageIds)
+    private static RegistryPackageInstallExecutionResult ToExecutionResult(
+        PackageOperationResult operationResult,
+        IReadOnlyList<string> planWarnings,
+        IReadOnlyList<RegistryPackageInstallPlanItem> planItems)
+    {
+        if (!operationResult.Success)
         {
-            impactedPackageIds.Add(impactedPackageId);
+            var errors = operationResult.Errors.Count == 0
+                ? [operationResult.Message ?? "Package operation failed."]
+                : operationResult.Errors;
+            return new RegistryPackageInstallExecutionResult(
+                false,
+                errors[0],
+                operationResult.RuntimeSessionApplied,
+                operationResult.RequiresAppRestart,
+                planWarnings.Concat(operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning))).ToArray(),
+                errors,
+                operationResult.ImpactedPackageIds,
+                planItems);
         }
 
         return new RegistryPackageInstallExecutionResult(
             true,
-            $"Installed {plan.Items.Count} package change(s).",
-            runtimeSessionApplied,
-            requiresAppRestart,
-            warnings,
+            string.IsNullOrWhiteSpace(operationResult.Message)
+                ? $"Installed {planItems.Count} package change(s)."
+                : operationResult.Message.Trim(),
+            operationResult.RuntimeSessionApplied,
+            operationResult.RequiresAppRestart,
+            planWarnings.Concat(operationResult.Warnings).ToArray(),
             [],
-            impactedPackageIds.ToArray(),
-            plan.Items);
+            operationResult.ImpactedPackageIds,
+            planItems);
     }
 
     private static RegistryPackageInstallExecutionResult ToPlanFailure(RegistryResolveInstallPlanResponse plan)

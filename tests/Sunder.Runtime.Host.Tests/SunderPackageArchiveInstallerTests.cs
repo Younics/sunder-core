@@ -1,7 +1,9 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.PackageManagement;
+using Sunder.Protocol;
 using Sunder.Runtime.Host.Services;
 using Xunit;
 
@@ -62,6 +64,32 @@ public sealed class SunderPackageArchiveInstallerTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error => error.Contains("SHA-256 mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task StagePackageStoreChangesAsync_WhenDiscarded_DoesNotRecordOrInstallPackage()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
+
+        var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+            new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: archivePath),
+        ]));
+
+        Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
+        Assert.NotNull(stage.StageId);
+        Assert.Empty(await store.ListAsync());
+        Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.package", "1.0.0")));
+
+        var discarded = await service.DiscardPackageStoreStageAsync(stage.StageId!);
+
+        Assert.True(discarded);
+        Assert.Empty(await store.ListAsync());
+        Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.package", "1.0.0")));
     }
 
     [Fact]

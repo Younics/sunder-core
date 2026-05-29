@@ -58,12 +58,14 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         TimeSpan? marketplaceSearchThrottleDelay = null,
         double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
         double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
-        Action<double, double>? persistBackgroundProcessPopoverSize = null)
+        Action<double, double>? persistBackgroundProcessPopoverSize = null,
+        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? preflightPackageLifecycleChangesAsync = null)
     {
         _runtimeApiClient = runtimeApiClient;
         _packageOperationService = packageOperationService;
         var resolvedRegistryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         var resolvedApplyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync ?? ((_, _) => Task.CompletedTask);
+        var resolvedPreflightPackageLifecycleChangesAsync = preflightPackageLifecycleChangesAsync ?? ((_, _, _, _) => Task.CompletedTask);
         _registryClientProvider = new PackageRegistryClientProvider(
             () => RegistryUrlText,
             registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl)));
@@ -80,13 +82,13 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             resolvedRegistryInstallService,
             _packageOperationService,
             resolvedApplyPackageLifecycleChangesAsync,
+            resolvedPreflightPackageLifecycleChangesAsync,
             notificationCenter,
             () => IsBusy,
             value => IsBusy = value,
             value => StatusText = value,
             ClearWarnings,
             ReplaceWarningLines,
-            AddWarningLine,
             () => WarningLines.Count,
             RefreshInstalledAsync,
             RefreshMarketplaceInstalledBadges,

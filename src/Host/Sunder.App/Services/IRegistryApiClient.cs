@@ -29,6 +29,16 @@ public interface IRegistryApiClient : IDisposable
         RegistryResolveInstallPlanRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<RegistryResolveInstallPlanResponse> ResolvePackageChangesAsync(
+        RegistryResolvePackageChangesRequest request,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryResolveInstallPlanResponse(
+            false,
+            [],
+            [],
+            ["Registry client does not support batch package change planning."],
+            []));
+
     Task DownloadArtifactAsync(
         RegistryPackageArtifact artifact,
         string packageId,

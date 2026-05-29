@@ -59,7 +59,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         IPackageSettingsNavigationService? settingsNavigationService = null,
         IPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null)
+        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null)
     {
         _faultReporter = faultReporter;
         _sessionFolder = sessionFolder;
@@ -83,7 +84,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             settingsNavigationService,
             packageSessionService,
             notificationCenter,
-            backgroundProcessQueue);
+            backgroundProcessQueue,
+            resourceAssemblyRegistry);
         AttachFaultForwarder(_composition);
     }
 
@@ -109,6 +111,52 @@ public sealed class PackageViewHostService : IAsyncDisposable
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         CancellationToken cancellationToken = default)
+        => await CreateForPackagesCoreAsync(
+            activePackages,
+            packageSources,
+            faultReporter,
+            shellViewService,
+            settingsNavigationService,
+            packageSessionService,
+            notificationCenter,
+            backgroundProcessQueue,
+            resourceAssemblyRegistry: null,
+            cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<PackageViewHostService> CreateForPackagesWithResourceRegistryAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        PackageRuntimeFaultReporter? faultReporter,
+        IPackageShellViewService? shellViewService,
+        IPackageSettingsNavigationService? settingsNavigationService,
+        IPackageSessionService? packageSessionService,
+        NotificationCenterService? notificationCenter,
+        BackgroundProcessQueueService? backgroundProcessQueue,
+        AppPackageResourceAssemblyRegistry resourceAssemblyRegistry,
+        CancellationToken cancellationToken = default)
+        => await CreateForPackagesCoreAsync(
+            activePackages,
+            packageSources,
+            faultReporter,
+            shellViewService,
+            settingsNavigationService,
+            packageSessionService,
+            notificationCenter,
+            backgroundProcessQueue,
+            resourceAssemblyRegistry,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<PackageViewHostService> CreateForPackagesCoreAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        PackageRuntimeFaultReporter? faultReporter,
+        IPackageShellViewService? shellViewService,
+        IPackageSettingsNavigationService? settingsNavigationService,
+        IPackageSessionService? packageSessionService,
+        NotificationCenterService? notificationCenter,
+        BackgroundProcessQueueService? backgroundProcessQueue,
+        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
+        CancellationToken cancellationToken)
     {
         AppPackageSessionDirectories.CleanupStaleSessions();
         var sessionFolder = activePackages.Count > 0 ? AppPackageSessionDirectories.CreateSessionFolder() : null;
@@ -126,7 +174,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             settingsNavigationService,
             packageSessionService,
             notificationCenter,
-            backgroundProcessQueue);
+            backgroundProcessQueue,
+            resourceAssemblyRegistry);
 
         await hostService.ApplyPackageDeltaAsync(activePackages, packageSources, cancellationToken: cancellationToken);
         return hostService;

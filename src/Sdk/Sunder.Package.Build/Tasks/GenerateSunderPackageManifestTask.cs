@@ -148,7 +148,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
                 .Where(attribute => attribute.AttributeType.FullName == typeof(SunderPackageDependencyAttribute).FullName)
                 .Select(attribute => new GeneratedSunderPackageDependency(
                     PackageId: GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.PackageId)) ?? string.Empty,
-                    VersionRange: GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.VersionRange)) ?? string.Empty))
+                    VersionRange: ExpandPackageVersionProperties(GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.VersionRange)) ?? string.Empty)))
                 .ToArray();
 
             return new SunderPackageMetadata(
@@ -194,6 +194,34 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
         Log.LogError($"Sunder SDK API version '{SdkApiVersion}' must be a positive integer.");
         return SunderSdkApiVersions.Current;
+    }
+
+    private string ExpandPackageVersionProperties(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        var packageVersion = PackageVersion.Trim();
+        return value
+            .Replace("$(PackageVersion)", packageVersion, StringComparison.OrdinalIgnoreCase)
+            .Replace("$(Version)", packageVersion, StringComparison.OrdinalIgnoreCase)
+            .Replace("$(NextPackageMajorVersion)", ResolveNextPackageMajorVersion(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveNextPackageMajorVersion()
+    {
+        var normalized = PackageVersion.Trim();
+        var suffixIndex = normalized.IndexOfAny(['-', '+']);
+        if (suffixIndex >= 0)
+        {
+            normalized = normalized[..suffixIndex];
+        }
+
+        return Version.TryParse(normalized, out var version)
+            ? (version.Major + 1).ToString()
+            : string.Empty;
     }
 
     private string? ResolveSdkPackageVersion()

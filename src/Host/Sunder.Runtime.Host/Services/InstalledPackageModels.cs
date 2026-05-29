@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Sunder.Protocol;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -52,3 +53,20 @@ internal sealed record InstalledPackageRecord(
 internal sealed record InstalledPackageDependencyRecord(
     [property: JsonPropertyName("packageId")] string PackageId,
     [property: JsonPropertyName("versionRange")] string VersionRange);
+
+internal sealed record InstalledPackageMutationPlan(
+    PackageOperationResult Result,
+    IReadOnlyList<InstalledPackageRecord> RemovedPackages);
+
+internal sealed record PreparedPackageArchiveMutation(
+    string StagingPath,
+    string InstalledPath,
+    InstalledPackageRecord StagedRecord,
+    InstalledPackageRecord InstalledRecord);
+
+internal sealed record PackageArchiveMutationPreparationResult(
+    PreparedPackageArchiveMutation? Mutation,
+    PackageOperationResult? Failure)
+{
+    public bool Success => Mutation is not null && Failure is null;
+}

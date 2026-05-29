@@ -434,6 +434,42 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
+    public async Task CommitPackageLifecycleStageAsync_WhenStageOwnerIsSdk_PreservesStartupDevOverlay()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
+        var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
+
+        try
+        {
+            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            Assert.Empty(startupResult.Errors);
+
+            var stageResult = await service.StagePackageLifecycleAsync(CreateSdkStageRequest(builderDevFolder));
+
+            Assert.Empty(stageResult.Errors);
+            Assert.NotNull(stageResult.StageId);
+            Assert.Contains(stageResult.ActivePackages, package => package.PackageId == "startup.package");
+            Assert.Contains(stageResult.ActivePackages, package => package.PackageId == "builder.package");
+            Assert.DoesNotContain("startup.package", stageResult.ImpactedPackageIds);
+            Assert.Contains("builder.package", stageResult.ImpactedPackageIds);
+
+            var commitResult = await service.CommitPackageLifecycleStageAsync(stageResult.StageId!);
+
+            Assert.Empty(commitResult.Errors);
+            Assert.Contains(service.GetActivePackages(), package => package.PackageId == "startup.package");
+            Assert.Contains(service.GetActivePackages(), package => package.PackageId == "builder.package");
+        }
+        finally
+        {
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
     public async Task CommitPackageLifecycleStageAsync_WhenActiveSessionChangedAfterStage_RejectsStaleStage()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
@@ -542,6 +578,11 @@ public sealed class PackageSessionOverlayTests
         => new([
             new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, folder),
         ], PackageLifecycleOverlayOwner.HotReload);
+
+    private static PackageLifecycleStageRequest CreateSdkStageRequest(string folder)
+        => new([
+            new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, folder),
+        ], PackageLifecycleOverlayOwner.Sdk);
 
     private static string CreateTempDirectory()
     {

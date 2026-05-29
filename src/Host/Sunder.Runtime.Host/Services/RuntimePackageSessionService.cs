@@ -16,6 +16,7 @@ internal sealed class RuntimePackageSessionService
     private readonly PackageSessionSourceState _sourceState = new();
     private readonly PackageSessionReconciler _reconciler;
     private readonly Dictionary<string, PendingPackageLifecycleStage> _pendingLifecycleStages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PendingPackageStoreStage> _pendingPackageStoreStages = new(StringComparer.OrdinalIgnoreCase);
     private long _sessionGeneration;
 
     public RuntimePackageSessionService(
@@ -75,8 +76,12 @@ internal sealed class RuntimePackageSessionService
             var currentActivePackages = _sessionState.GetActivePackages();
             var currentPackageSources = _sessionState.GetActivePackageSources();
             var sources = _sourceState.Snapshot();
-            ReplaceLiveReloadOverlays(sources);
             var owner = ToSessionOverlayOwner(request.OverlayOwner);
+            if (owner is PackageSessionOverlayOwner.Startup or PackageSessionOverlayOwner.HotReload)
+            {
+                ReplaceLiveReloadOverlays(sources);
+            }
+
             var forceReloadDevFolders = AddLifecyclePackageSources(sources, request.Packages, owner, errors);
             if (errors.Count > 0)
             {
@@ -163,8 +168,12 @@ internal sealed class RuntimePackageSessionService
             var currentActivePackages = _sessionState.GetActivePackages();
             var currentPackageSources = _sessionState.GetActivePackageSources();
             var sources = _sourceState.Snapshot();
-            ReplaceLiveReloadOverlays(sources);
             var owner = ToSessionOverlayOwner(request.OverlayOwner);
+            if (owner is PackageSessionOverlayOwner.Startup or PackageSessionOverlayOwner.HotReload)
+            {
+                ReplaceLiveReloadOverlays(sources);
+            }
+
             var forceReloadDevFolders = AddLifecyclePackageSources(sources, request.Packages, owner, errors);
             if (errors.Count > 0)
             {
@@ -300,6 +309,200 @@ internal sealed class RuntimePackageSessionService
             }
 
             await stage.Session.DisposeAsync();
+            return true;
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
+        PackageStoreStageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (request.Mutations.Count == 0)
+            {
+                return PackageStoreStageResult.Failed(
+                    "At least one package store mutation is required.",
+                    _sessionState.GetActivePackages(),
+                    _sessionState.GetActivePackageSources());
+            }
+
+            var warnings = new List<string>();
+            var currentActivePackages = _sessionState.GetActivePackages();
+            var currentPackageSources = _sessionState.GetActivePackageSources();
+            var stagedPackages = (await _installedPackageStore.SnapshotAsync(cancellationToken)).ToList();
+            var committedPackages = stagedPackages.ToList();
+            var fileActions = new List<PendingPackageStoreFileAction>();
+            var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var operationMessages = new List<string>();
+
+            foreach (var mutation in request.Mutations)
+            {
+                var mutationPlan = await ApplyPackageStoreMutationStageAsync(
+                    mutation,
+                    stagedPackages,
+                    committedPackages,
+                    fileActions,
+                    cancellationToken);
+                if (!mutationPlan.Result.Success)
+                {
+                    CleanupPackageStoreFileActions(fileActions);
+                    return PackageStoreStageResult.Failed(
+                        mutationPlan.Result.Errors.FirstOrDefault() ?? mutationPlan.Result.Message ?? "Package store stage failed.",
+                        currentActivePackages,
+                        currentPackageSources,
+                        warnings.Concat(mutationPlan.Result.Warnings).ToArray(),
+                        mutationPlan.Result.Errors.Count == 0 ? null : mutationPlan.Result.Errors,
+                        impactedPackageIds.ToArray());
+                }
+
+                warnings.AddRange(mutationPlan.Result.Warnings);
+                if (!string.IsNullOrWhiteSpace(mutationPlan.Result.Message))
+                {
+                    operationMessages.Add(mutationPlan.Result.Message!);
+                }
+
+                foreach (var impactedPackageId in mutationPlan.Result.ImpactedPackageIds)
+                {
+                    impactedPackageIds.Add(impactedPackageId);
+                }
+            }
+
+            var sources = _sourceState.Snapshot();
+            var loadResult = await _reconciler.LoadMergedSessionAsync(stagedPackages, sources.ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
+            warnings.AddRange(loadResult.Warnings);
+            if (loadResult.Session is null)
+            {
+                CleanupPackageStoreFileActions(fileActions);
+                return PackageStoreStageResult.Failed(
+                    loadResult.Errors.FirstOrDefault() ?? "Package store stage failed while loading the prospective package session.",
+                    currentActivePackages,
+                    currentPackageSources,
+                    warnings,
+                    loadResult.Errors,
+                    impactedPackageIds.ToArray());
+            }
+
+            warnings.AddRange(loadResult.Errors.Select(error => $"Staged installed package session loaded with package errors: {error}"));
+            var stagedActivePackages = loadResult.Session.GetActivePackages();
+            var stagedPackageSources = loadResult.Session.GetActivePackageSources();
+            foreach (var impactedPackageId in BuildImpactedPackageIds(
+                         currentActivePackages,
+                         currentPackageSources,
+                         stagedActivePackages,
+                         stagedPackageSources,
+                         []))
+            {
+                impactedPackageIds.Add(impactedPackageId);
+            }
+
+            var result = PackageOperationResults.Success(
+                BuildPackageStoreStageMessage(operationMessages, impactedPackageIds.Count),
+                warnings: warnings,
+                impactedPackageIds: impactedPackageIds.ToArray());
+            var stageId = Guid.NewGuid().ToString("N");
+            _pendingPackageStoreStages[stageId] = new PendingPackageStoreStage(
+                stageId,
+                loadResult.Session,
+                committedPackages.ToArray(),
+                fileActions.ToArray(),
+                result,
+                _sessionGeneration);
+            return new PackageStoreStageResult(stageId, result, stagedActivePackages, stagedPackageSources);
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<PackageOperationResult> CommitPackageStoreStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_pendingPackageStoreStages.Remove(stageId, out var stage))
+            {
+                return PackageOperationResults.Failure($"Package store stage '{stageId}' was not found.");
+            }
+
+            try
+            {
+                await stage.Session.DisposeAsync();
+                if (stage.BaseSessionGeneration != _sessionGeneration)
+                {
+                    CleanupPackageStoreFileActions(stage.FileActions);
+                    return PackageOperationResults.Failure($"Package store stage '{stageId}' is stale because the active package session changed before commit.");
+                }
+
+                var (fileCommitError, fileCommits) = CommitPackageStoreFileAdds(stage.FileActions);
+                if (fileCommitError is not null)
+                {
+                    CleanupPackageStoreFileActions(stage.FileActions);
+                    return PackageOperationResults.Failure(fileCommitError);
+                }
+
+                try
+                {
+                    await _installedPackageStore.CommitSnapshotAsync(stage.CommittedPackages, cancellationToken);
+                }
+                catch
+                {
+                    RollBackPackageStoreFileAdds(fileCommits);
+                    throw;
+                }
+
+                CompletePackageStoreFileAdds(fileCommits);
+                DeletePackageStoreRemovedFiles(stage.FileActions);
+                if (stage.Result.ImpactedPackageIds.Count == 0)
+                {
+                    return stage.Result with
+                    {
+                        RuntimeSessionApplied = true,
+                        RequiresAppRestart = false,
+                    };
+                }
+
+                return await ReloadInstalledPackagesAfterMutationCoreAsync(stage.Result, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                CleanupPackageStoreFileActions(stage.FileActions);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                CleanupPackageStoreFileActions(stage.FileActions);
+                return PackageOperationResults.Failure($"Failed to commit package store stage '{stageId}': {ex.Message}");
+            }
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public async Task<bool> DiscardPackageStoreStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        await _reloadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_pendingPackageStoreStages.Remove(stageId, out var stage))
+            {
+                return false;
+            }
+
+            await stage.Session.DisposeAsync();
+            CleanupPackageStoreFileActions(stage.FileActions);
             return true;
         }
         finally
@@ -497,10 +700,15 @@ internal sealed class RuntimePackageSessionService
         }
     }
 
-    public async Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
+    public async Task<PackageOperationResult> InstallPackageFromPathAsync(
+        string packagePath,
+        bool applyRuntimeSession = true,
+        CancellationToken cancellationToken = default)
     {
         var result = await _packageArchiveInstaller.InstallFromPathAsync(packagePath, cancellationToken);
-        return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
+        return applyRuntimeSession
+            ? await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken)
+            : DeferInstalledPackageSessionReload(result);
     }
 
     public async Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
@@ -529,7 +737,9 @@ internal sealed class RuntimePackageSessionService
             request.AllowDowngrade,
             request.Reinstall,
             cancellationToken);
-        return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
+        return request.ApplyRuntimeSession
+            ? await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken)
+            : DeferInstalledPackageSessionReload(result);
     }
 
     public async Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken cancellationToken = default)
@@ -563,54 +773,348 @@ internal sealed class RuntimePackageSessionService
         await _reloadGate.WaitAsync(cancellationToken);
         try
         {
-            var warnings = result.Warnings.ToList();
-            var errors = result.Errors.ToList();
-            var loadResult = await _reconciler.LoadMergedSessionAsync(_sourceState.Snapshot().ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
-            warnings.AddRange(loadResult.Warnings);
-            errors.AddRange(loadResult.Errors);
-            if (loadResult.Session is null)
-            {
-                warnings.AddRange(errors.Select(error => $"Installed package changes are saved, but the running package session kept the previous loaded packages: {error}"));
-                return result with
-                {
-                    RuntimeSessionApplied = false,
-                    RequiresAppRestart = false,
-                    Warnings = warnings,
-                };
-            }
-
-            warnings.AddRange(errors.Select(error => $"Installed package session loaded with package errors: {error}"));
-
-            try
-            {
-                await loadResult.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                await loadResult.Session.DisposeAsync();
-                warnings.Add($"Installed package changes are saved, but the running package session kept the previous loaded packages: {ex.Message}");
-                return result with
-                {
-                    RuntimeSessionApplied = false,
-                    RequiresAppRestart = false,
-                    Warnings = warnings,
-                };
-            }
-
-            warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
-            _sessionState.PublishSession(loadResult.Session);
-            _sessionGeneration++;
-
-            return result with
-            {
-                RuntimeSessionApplied = true,
-                RequiresAppRestart = false,
-                Warnings = warnings,
-            };
+            return await ReloadInstalledPackagesAfterMutationCoreAsync(result, cancellationToken);
         }
         finally
         {
             _reloadGate.Release();
+        }
+    }
+
+    private async Task<PackageOperationResult> ReloadInstalledPackagesAfterMutationCoreAsync(PackageOperationResult result, CancellationToken cancellationToken)
+    {
+        var warnings = result.Warnings.ToList();
+        var errors = result.Errors.ToList();
+        var loadResult = await _reconciler.LoadMergedSessionAsync(_sourceState.Snapshot().ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
+        warnings.AddRange(loadResult.Warnings);
+        errors.AddRange(loadResult.Errors);
+        if (loadResult.Session is null)
+        {
+            warnings.AddRange(errors.Select(error => $"Installed package changes are saved, but the running package session kept the previous loaded packages: {error}"));
+            return result with
+            {
+                RuntimeSessionApplied = false,
+                RequiresAppRestart = false,
+                Warnings = warnings,
+            };
+        }
+
+        warnings.AddRange(errors.Select(error => $"Installed package session loaded with package errors: {error}"));
+
+        try
+        {
+            await loadResult.Session.StartBackgroundServicesAsync(_logger, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await loadResult.Session.DisposeAsync();
+            warnings.Add($"Installed package changes are saved, but the running package session kept the previous loaded packages: {ex.Message}");
+            return result with
+            {
+                RuntimeSessionApplied = false,
+                RequiresAppRestart = false,
+                Warnings = warnings,
+            };
+        }
+
+        warnings.AddRange(await _sessionState.ClearActiveSessionAsync());
+        _sessionState.PublishSession(loadResult.Session);
+        _sessionGeneration++;
+
+        return result with
+        {
+            RuntimeSessionApplied = true,
+            RequiresAppRestart = false,
+            Warnings = warnings,
+        };
+    }
+
+    private static PackageOperationResult DeferInstalledPackageSessionReload(PackageOperationResult result)
+    {
+        if (!result.Success)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            RuntimeSessionApplied = false,
+            RequiresAppRestart = false,
+        };
+    }
+
+    private async Task<InstalledPackageMutationPlan> ApplyPackageStoreMutationStageAsync(
+        PackageStoreMutationRequest mutation,
+        List<InstalledPackageRecord> stagedPackages,
+        List<InstalledPackageRecord> committedPackages,
+        ICollection<PendingPackageStoreFileAction> fileActions,
+        CancellationToken cancellationToken)
+    {
+        var nextStagedPackages = stagedPackages.ToList();
+        var nextCommittedPackages = committedPackages.ToList();
+        InstalledPackageMutationPlan stagedPlan;
+        InstalledPackageMutationPlan committedPlan;
+
+        switch (mutation.Kind)
+        {
+            case PackageStoreMutationKind.Install:
+            {
+                var preparation = await _packageArchiveInstaller.PrepareInstallStageAsync(mutation.PackagePath ?? string.Empty, cancellationToken);
+                if (!preparation.Success || preparation.Mutation is null)
+                {
+                    return new InstalledPackageMutationPlan(preparation.Failure ?? PackageOperationResults.Failure("Package install stage failed."), []);
+                }
+
+                stagedPlan = _installedPackageStore.ApplyInstall(nextStagedPackages, preparation.Mutation.StagedRecord);
+                committedPlan = _installedPackageStore.ApplyInstall(nextCommittedPackages, preparation.Mutation.InstalledRecord);
+                if (!stagedPlan.Result.Success || !committedPlan.Result.Success)
+                {
+                    TryDeleteDirectory(preparation.Mutation.StagingPath);
+                    return stagedPlan.Result.Success ? committedPlan : stagedPlan;
+                }
+
+                stagedPackages.Clear();
+                stagedPackages.AddRange(nextStagedPackages);
+                committedPackages.Clear();
+                committedPackages.AddRange(nextCommittedPackages);
+                fileActions.Add(PendingPackageStoreFileAction.AddOrReplace(preparation.Mutation.StagingPath, preparation.Mutation.InstalledPath));
+                return committedPlan;
+            }
+            case PackageStoreMutationKind.Upgrade:
+            {
+                if (string.IsNullOrWhiteSpace(mutation.PackageId))
+                {
+                    return new InstalledPackageMutationPlan(PackageOperationResults.Failure("Package id is required."), []);
+                }
+
+                var installedPackage = committedPackages.FirstOrDefault(package => string.Equals(package.PackageId, mutation.PackageId, StringComparison.OrdinalIgnoreCase));
+                if (installedPackage is null)
+                {
+                    return new InstalledPackageMutationPlan(PackageOperationResults.Failure($"Package '{mutation.PackageId}' is not installed."), []);
+                }
+
+                var preparation = await _packageArchiveInstaller.PrepareUpgradeStageAsync(
+                    mutation.PackageId,
+                    mutation.PackagePath ?? string.Empty,
+                    installedPackage,
+                    cancellationToken);
+                if (!preparation.Success || preparation.Mutation is null)
+                {
+                    return new InstalledPackageMutationPlan(preparation.Failure ?? PackageOperationResults.Failure("Package upgrade stage failed."), []);
+                }
+
+                stagedPlan = _installedPackageStore.ApplyUpgrade(nextStagedPackages, mutation.PackageId, preparation.Mutation.StagedRecord, mutation.AllowDowngrade, mutation.Reinstall);
+                committedPlan = _installedPackageStore.ApplyUpgrade(nextCommittedPackages, mutation.PackageId, preparation.Mutation.InstalledRecord, mutation.AllowDowngrade, mutation.Reinstall);
+                if (!stagedPlan.Result.Success || !committedPlan.Result.Success)
+                {
+                    TryDeleteDirectory(preparation.Mutation.StagingPath);
+                    return stagedPlan.Result.Success ? committedPlan : stagedPlan;
+                }
+
+                stagedPackages.Clear();
+                stagedPackages.AddRange(nextStagedPackages);
+                committedPackages.Clear();
+                committedPackages.AddRange(nextCommittedPackages);
+                fileActions.Add(PendingPackageStoreFileAction.AddOrReplace(preparation.Mutation.StagingPath, preparation.Mutation.InstalledPath));
+                foreach (var removedPackage in committedPlan.RemovedPackages)
+                {
+                    if (!string.Equals(removedPackage.InstallPath, preparation.Mutation.InstalledPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        fileActions.Add(PendingPackageStoreFileAction.Delete(removedPackage.InstallPath));
+                    }
+                }
+
+                return committedPlan;
+            }
+            case PackageStoreMutationKind.Enable:
+            case PackageStoreMutationKind.Disable:
+            {
+                if (string.IsNullOrWhiteSpace(mutation.PackageId))
+                {
+                    return new InstalledPackageMutationPlan(PackageOperationResults.Failure("Package id is required."), []);
+                }
+
+                var isEnabled = mutation.Kind == PackageStoreMutationKind.Enable;
+                stagedPlan = _installedPackageStore.ApplySetEnabled(nextStagedPackages, mutation.PackageId, isEnabled);
+                committedPlan = _installedPackageStore.ApplySetEnabled(nextCommittedPackages, mutation.PackageId, isEnabled);
+                if (!stagedPlan.Result.Success || !committedPlan.Result.Success)
+                {
+                    return stagedPlan.Result.Success ? committedPlan : stagedPlan;
+                }
+
+                stagedPackages.Clear();
+                stagedPackages.AddRange(nextStagedPackages);
+                committedPackages.Clear();
+                committedPackages.AddRange(nextCommittedPackages);
+                return committedPlan;
+            }
+            case PackageStoreMutationKind.Uninstall:
+            {
+                if (string.IsNullOrWhiteSpace(mutation.PackageId))
+                {
+                    return new InstalledPackageMutationPlan(PackageOperationResults.Failure("Package id is required."), []);
+                }
+
+                stagedPlan = _installedPackageStore.ApplyUninstall(nextStagedPackages, mutation.PackageId);
+                committedPlan = _installedPackageStore.ApplyUninstall(nextCommittedPackages, mutation.PackageId);
+                if (!stagedPlan.Result.Success || !committedPlan.Result.Success)
+                {
+                    return stagedPlan.Result.Success ? committedPlan : stagedPlan;
+                }
+
+                stagedPackages.Clear();
+                stagedPackages.AddRange(nextStagedPackages);
+                committedPackages.Clear();
+                committedPackages.AddRange(nextCommittedPackages);
+                foreach (var removedPackage in committedPlan.RemovedPackages)
+                {
+                    fileActions.Add(PendingPackageStoreFileAction.Delete(removedPackage.InstallPath));
+                }
+
+                return committedPlan;
+            }
+            default:
+                return new InstalledPackageMutationPlan(PackageOperationResults.Failure($"Unsupported package store mutation kind '{mutation.Kind}'."), []);
+        }
+    }
+
+    private static string BuildPackageStoreStageMessage(IReadOnlyList<string> operationMessages, int impactedPackageCount)
+    {
+        if (operationMessages.Count == 1)
+        {
+            return operationMessages[0];
+        }
+
+        return impactedPackageCount == 0
+            ? "No package changes required."
+            : $"Applied {impactedPackageCount} package store change(s).";
+    }
+
+    private static (string? Error, IReadOnlyList<PendingPackageStoreFileCommit> Commits) CommitPackageStoreFileAdds(IReadOnlyList<PendingPackageStoreFileAction> fileActions)
+    {
+        var commits = new List<PendingPackageStoreFileCommit>();
+        foreach (var action in fileActions.Where(action => action.Kind == PendingPackageStoreFileActionKind.AddOrReplace))
+        {
+            var stagingPath = action.StagingPath!;
+            var installedPath = action.InstalledPath!;
+            var backupPath = string.Empty;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(installedPath)!);
+                if (Directory.Exists(installedPath))
+                {
+                    backupPath = installedPath + ".backup-" + Guid.NewGuid().ToString("N");
+                    Directory.Move(installedPath, backupPath);
+                }
+
+                Directory.Move(stagingPath, installedPath);
+                commits.Add(new PendingPackageStoreFileCommit(stagingPath, installedPath, backupPath));
+            }
+            catch (Exception ex)
+            {
+                if (Directory.Exists(installedPath) && !Directory.Exists(stagingPath))
+                {
+                    TryMoveDirectory(installedPath, stagingPath);
+                }
+
+                if (!string.IsNullOrWhiteSpace(backupPath))
+                {
+                    RestoreBackupDirectory(backupPath, installedPath);
+                }
+
+                RollBackPackageStoreFileAdds(commits);
+                return ($"Failed to commit package files to '{installedPath}': {ex.Message}", commits);
+            }
+        }
+
+        return (null, commits);
+    }
+
+    private static void CompletePackageStoreFileAdds(IReadOnlyList<PendingPackageStoreFileCommit> commits)
+    {
+        foreach (var commit in commits)
+        {
+            TryDeleteDirectory(commit.BackupPath);
+        }
+    }
+
+    private static void RollBackPackageStoreFileAdds(IReadOnlyList<PendingPackageStoreFileCommit> commits)
+    {
+        foreach (var commit in commits.Reverse())
+        {
+            if (Directory.Exists(commit.InstalledPath) && !Directory.Exists(commit.StagingPath))
+            {
+                TryMoveDirectory(commit.InstalledPath, commit.StagingPath);
+            }
+
+            if (!string.IsNullOrWhiteSpace(commit.BackupPath))
+            {
+                RestoreBackupDirectory(commit.BackupPath, commit.InstalledPath);
+            }
+        }
+    }
+
+    private static void DeletePackageStoreRemovedFiles(IReadOnlyList<PendingPackageStoreFileAction> fileActions)
+    {
+        foreach (var action in fileActions.Where(action => action.Kind == PendingPackageStoreFileActionKind.Delete))
+        {
+            TryDeleteDirectory(action.DeletePath);
+        }
+    }
+
+    private static void CleanupPackageStoreFileActions(IReadOnlyList<PendingPackageStoreFileAction> fileActions)
+    {
+        foreach (var action in fileActions.Where(action => action.Kind == PendingPackageStoreFileActionKind.AddOrReplace))
+        {
+            TryDeleteDirectory(action.StagingPath);
+        }
+    }
+
+    private static void TryDeleteDirectory(string? path)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort cleanup for discarded package store stages.
+        }
+    }
+
+    private static void RestoreBackupDirectory(string backupPath, string restorePath)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(backupPath)
+                && !string.IsNullOrWhiteSpace(restorePath)
+                && Directory.Exists(backupPath)
+                && !Directory.Exists(restorePath))
+            {
+                Directory.Move(backupPath, restorePath);
+            }
+        }
+        catch
+        {
+            // Best effort rollback for package file replacement.
+        }
+    }
+
+    private static void TryMoveDirectory(string sourcePath, string destinationPath)
+    {
+        try
+        {
+            if (Directory.Exists(sourcePath) && !Directory.Exists(destinationPath))
+            {
+                Directory.Move(sourcePath, destinationPath);
+            }
+        }
+        catch
+        {
+            // Best effort rollback for package file replacement.
         }
     }
 
@@ -833,6 +1337,7 @@ internal sealed class RuntimePackageSessionService
         {
             PackageLifecycleOverlayOwner.Startup => PackageSessionOverlayOwner.Startup,
             PackageLifecycleOverlayOwner.HotReload => PackageSessionOverlayOwner.HotReload,
+            PackageLifecycleOverlayOwner.Sdk => PackageSessionOverlayOwner.Sdk,
             _ => throw new ArgumentOutOfRangeException(nameof(overlayOwner), overlayOwner, null),
         };
 
@@ -958,6 +1463,38 @@ internal sealed class RuntimePackageSessionService
         ActivePackageSession Session,
         PackageSessionSourceSnapshot Sources,
         IReadOnlyList<string> ImpactedPackageIds,
+        long BaseSessionGeneration);
+
+    private enum PendingPackageStoreFileActionKind
+    {
+        AddOrReplace,
+        Delete,
+    }
+
+    private sealed record PendingPackageStoreFileAction(
+        PendingPackageStoreFileActionKind Kind,
+        string? StagingPath,
+        string? InstalledPath,
+        string? DeletePath)
+    {
+        public static PendingPackageStoreFileAction AddOrReplace(string stagingPath, string installedPath)
+            => new(PendingPackageStoreFileActionKind.AddOrReplace, stagingPath, installedPath, null);
+
+        public static PendingPackageStoreFileAction Delete(string deletePath)
+            => new(PendingPackageStoreFileActionKind.Delete, null, null, deletePath);
+    }
+
+    private sealed record PendingPackageStoreFileCommit(
+        string StagingPath,
+        string InstalledPath,
+        string BackupPath);
+
+    private sealed record PendingPackageStoreStage(
+        string StageId,
+        ActivePackageSession Session,
+        IReadOnlyList<InstalledPackageRecord> CommittedPackages,
+        IReadOnlyList<PendingPackageStoreFileAction> FileActions,
+        PackageOperationResult Result,
         long BaseSessionGeneration);
 
 }

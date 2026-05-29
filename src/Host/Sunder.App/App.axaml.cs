@@ -13,12 +13,14 @@ namespace Sunder.App;
 public partial class App : Application
 {
     private PackageViewHostService _packageViewHostService = PackageViewHostService.Empty;
+    private readonly AppPackageResourceAssemblyRegistry _packageResourceAssemblyRegistry = new();
     private ServiceProvider? _serviceProvider;
     private WindowLauncher? _windowLauncher;
     private DevPackageHotReloadSession? _devPackageHotReloadSession;
 
     public override void Initialize()
     {
+        AppPackageAvaloniaAssetLoader.Install(_packageResourceAssemblyRegistry);
         AvaloniaXamlLoader.Load(this);
 
 #if DEBUG
@@ -29,7 +31,7 @@ public partial class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         RegisterExceptionHandlers();
-        _serviceProvider = SunderAppComposition.CreateServiceProvider(this, Program.StartupOptions);
+        _serviceProvider = SunderAppComposition.CreateServiceProvider(this, Program.StartupOptions, _packageResourceAssemblyRegistry);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

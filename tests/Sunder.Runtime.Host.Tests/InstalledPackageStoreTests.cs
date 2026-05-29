@@ -21,7 +21,7 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
-    public async Task InstallAsync_WhenPackageHasDependency_ReturnsTargetAndDependencyAsImpacted()
+    public async Task InstallAsync_WhenPackageHasDependency_ReturnsOnlyInstalledPackageAsImpacted()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
@@ -36,7 +36,7 @@ public sealed class InstalledPackageStoreTests
         var result = await store.InstallAsync(dependent);
 
         Assert.True(result.Success);
-        Assert.Equal(["test.dependent", "test.dependency"], result.ImpactedPackageIds);
+        Assert.Equal(["test.dependent"], result.ImpactedPackageIds);
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
-    public async Task UpgradeAsync_ReturnsTargetDependenciesAndDependentsAsImpacted()
+    public async Task UpgradeAsync_ReturnsTargetAndDependentsAsImpacted()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
@@ -227,7 +227,7 @@ public sealed class InstalledPackageStoreTests
         var result = await store.UpgradeAsync("test.package", upgradedPackage, allowDowngrade: false, reinstall: false);
 
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-        Assert.Equal(["test.package", "test.shared", "test.dependent"], result.ImpactedPackageIds);
+        Assert.Equal(["test.package", "test.dependent"], result.ImpactedPackageIds);
     }
 
     [Fact]

@@ -13,8 +13,12 @@ internal static class PackageOperationResults
         => new(true, message, runtimeSessionApplied, requiresAppRestart, warnings ?? [], [])
         {
             ImpactedPackageIds = impactedPackageIds ?? [],
+            ChangeSet = CreateChangeSet(impactedPackageIds ?? []),
         };
 
     public static PackageOperationResult Failure(string message, IReadOnlyList<string>? errors = null, IReadOnlyList<string>? warnings = null)
         => new(false, message, RuntimeSessionApplied: false, RequiresAppRestart: false, warnings ?? [], errors ?? [message]);
+
+    public static PackageLifecycleChangeSet CreateChangeSet(IReadOnlyList<string> packageIds)
+        => new(packageIds, packageIds, packageIds, [], SharedAssemblyResetRequired: false);
 }

@@ -18,16 +18,30 @@ internal sealed class AppPackageLoadCoordinator(
         PackageSourceDescriptor source,
         CancellationToken cancellationToken)
     {
-        var sourceLoadResult = await sourceLoader.LoadAsync(package, source, cancellationToken);
-        if (!sourceLoadResult.IsSuccess)
+        var prepareResult = await PreparePackageAsync(package, source, cancellationToken);
+        if (!prepareResult.IsSuccess || prepareResult.Activation is null)
         {
             await disablePackageAsync(
                 package.PackageId,
-                sourceLoadResult.FailureMessage ?? "Failed to prepare app-side package source.",
+                prepareResult.FailureMessage ?? "Failed to prepare app-side package source.",
                 PackageFailureOrigin.AppActivation,
                 null,
                 cancellationToken);
             return;
+        }
+
+        await ActivatePreparedPackageAsync(prepareResult.Activation, cancellationToken);
+    }
+
+    public async Task<AppPackagePrepareResult> PreparePackageAsync(
+        ActivePackageDescriptor package,
+        PackageSourceDescriptor source,
+        CancellationToken cancellationToken)
+    {
+        var sourceLoadResult = await sourceLoader.LoadAsync(package, source, cancellationToken);
+        if (!sourceLoadResult.IsSuccess)
+        {
+            return AppPackagePrepareResult.Failure(sourceLoadResult.FailureMessage ?? "Failed to prepare app-side package source.");
         }
 
         if (sourceLoadResult.PreparedSource is null)
@@ -35,22 +49,21 @@ internal sealed class AppPackageLoadCoordinator(
             throw new InvalidOperationException($"Package '{package.PackageId}' source loader reported success without a prepared source.");
         }
 
-        await ActivatePreparedPackageAsync(package, source, sourceLoadResult.PreparedSource, cancellationToken);
+        return AppPackagePrepareResult.Success(new AppPreparedPackageActivation(package, source, sourceLoadResult.PreparedSource));
     }
 
-    private async Task ActivatePreparedPackageAsync(
-        ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
-        AppPreparedPackageSource preparedSource,
+    public async Task ActivatePreparedPackageAsync(
+        AppPreparedPackageActivation prepared,
         CancellationToken cancellationToken)
     {
+        var package = prepared.Package;
         var activation = new AppPackageActivationState();
         var packageActivated = false;
         try
         {
             await packageActivator.ActivateAsync(
                 package,
-                preparedSource,
+                prepared.PreparedSource,
                 activation,
                 registerPackageAssembly,
                 trackLoadContext,
@@ -66,7 +79,7 @@ internal sealed class AppPackageLoadCoordinator(
                 package.PackageId,
                 new AppLoadedPackageHandle(
                     package,
-                    source,
+                    prepared.Source,
                     activation.PackageInfo.Folder,
                     activation.ServiceProvider,
                     activation.LoadContext));

@@ -136,11 +136,18 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         string packagePath,
         CancellationToken cancellationToken = default
     ) =>
+        await InstallPackageFromPathAsync(packagePath, applyRuntimeSession: true, cancellationToken);
+
+    public async Task<PackageOperationResult> InstallPackageFromPathAsync(
+        string packagePath,
+        bool applyRuntimeSession,
+        CancellationToken cancellationToken = default
+    ) =>
         await SendPackageOperationAsync(
             () =>
                 _httpClient.PostAsJsonAsync(
                     CreateRequestUri("api/packages/install/local"),
-                    new PackageInstallFromPathRequest(packagePath),
+                    new PackageInstallFromPathRequest(packagePath, applyRuntimeSession),
                     cancellationToken
                 ),
             cancellationToken
@@ -153,13 +160,23 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         bool reinstall = false,
         CancellationToken cancellationToken = default
     ) =>
+        await UpgradePackageFromPathAsync(packageId, packagePath, allowDowngrade, reinstall, applyRuntimeSession: true, cancellationToken);
+
+    public async Task<PackageOperationResult> UpgradePackageFromPathAsync(
+        string packageId,
+        string packagePath,
+        bool allowDowngrade,
+        bool reinstall,
+        bool applyRuntimeSession,
+        CancellationToken cancellationToken = default
+    ) =>
         await SendPackageOperationAsync(
             () =>
                 _httpClient.PostAsJsonAsync(
                     CreateRequestUri(
                         $"api/packages/{Uri.EscapeDataString(packageId)}/upgrade/local"
                     ),
-                    new PackageUpgradeFromPathRequest(packagePath, allowDowngrade, reinstall),
+                    new PackageUpgradeFromPathRequest(packagePath, allowDowngrade, reinstall, applyRuntimeSession),
                     cancellationToken
                 ),
             cancellationToken
@@ -205,6 +222,54 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
                 ),
             cancellationToken
         );
+
+    public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
+        PackageStoreStageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("api/packages/store/stage"),
+            request,
+            cancellationToken);
+
+        var result = await ReadPackageStoreStageResultAsync(response, cancellationToken);
+        if (result is not null)
+        {
+            return response.IsSuccessStatusCode || !result.Success
+                ? result
+                : PackageStoreStageResult.Failed(CreatePackageOperationFailureResult(response).Message ?? "Package store stage failed.");
+        }
+
+        return response.IsSuccessStatusCode
+            ? PackageStoreStageResult.Failed("Runtime returned an empty package-store stage response.")
+            : PackageStoreStageResult.Failed(CreatePackageOperationFailureResult(response).Message ?? "Package store stage failed.");
+    }
+
+    public async Task<PackageOperationResult> CommitPackageStoreStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+        => await SendPackageOperationAsync(
+            () => _httpClient.PostAsync(
+                CreateRequestUri($"api/packages/store/stage/{Uri.EscapeDataString(stageId)}/commit"),
+                content: null,
+                cancellationToken),
+            cancellationToken);
+
+    public async Task DiscardPackageStoreStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreateRequestUri($"api/packages/store/stage/{Uri.EscapeDataString(stageId)}"),
+            cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        response.EnsureSuccessStatusCode();
+    }
 
     public async Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
         PackageLifecycleLoadRequest request,
@@ -464,6 +529,29 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
             return response.IsSuccessStatusCode
                 ? CreatePackageOperationFailureResult("Runtime returned an invalid package operation response.", ex.Message)
                 : CreatePackageOperationFailureResult(response, content);
+        }
+    }
+
+    private static async Task<PackageStoreStageResult?> ReadPackageStoreStageResultAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<PackageStoreStageResult>(content, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            AppSessionLog.WriteError("Failed to parse a runtime package-store stage response.", ex);
+            return PackageStoreStageResult.Failed(response.IsSuccessStatusCode
+                ? "Runtime returned an invalid package-store stage response."
+                : CreatePackageOperationFailureResult(response, content).Message ?? "Package store stage failed.");
         }
     }
 

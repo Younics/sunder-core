@@ -92,9 +92,9 @@ public sealed class PackageOperationServiceTests
 
         var completed = queue.GetProcess(operation.ProcessId);
         Assert.Equal(["agent"], runtimeClient.InstalledPackageIds);
-        Assert.Contains("running shell did not apply the change", completed?.StatusText);
+        Assert.Contains("running shell rejected the live change", completed?.StatusText);
         var notification = Assert.Single(notificationCenter.ListNotifications());
-        Assert.Equal("Restart Sunder to apply package changes", notification.Title);
+        Assert.Equal("Package changes were not applied live", notification.Title);
         Assert.Equal(PackageNotificationSeverity.Warning, notification.Severity);
         Assert.Contains("shell refresh failed", notification.Message);
     }
@@ -131,6 +131,31 @@ public sealed class PackageOperationServiceTests
         var notification = Assert.Single(notificationCenter.ListNotifications());
         Assert.Equal("Package changes were not loaded", notification.Title);
         Assert.Equal(PackageNotificationSeverity.Warning, notification.Severity);
+    }
+
+    [Fact]
+    public async Task EnqueueLocalInstall_WhenPreflightFails_DiscardsStageWithoutInstalling()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter,
+            preflightPackageLifecycleChangesAsync: (_, _, _, _) => throw new InvalidOperationException("preflight rejected"));
+
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Failed);
+
+        Assert.Empty(runtimeClient.InstalledPackageIds);
+        Assert.Empty(runtimeClient.CommittedStageIds);
+        Assert.Single(runtimeClient.DiscardedStageIds);
+        var notification = Assert.Single(notificationCenter.ListNotifications());
+        Assert.Equal(PackageNotificationSeverity.Error, notification.Severity);
+        Assert.Contains("preflight rejected", notification.Message);
     }
 
     [Fact]
@@ -423,11 +448,19 @@ public sealed class PackageOperationServiceTests
 
     private sealed class FakeRuntimeApiClient : IRuntimeApiClient
     {
+        private readonly Dictionary<string, PackageStoreStageRequest> _pendingStages = new(StringComparer.OrdinalIgnoreCase);
+
         public List<string> InstalledPackageIds { get; } = [];
 
         public List<string> EnabledPackageIds { get; } = [];
 
         public List<string> DisabledPackageIds { get; } = [];
+
+        public List<string> UninstalledPackageIds { get; } = [];
+
+        public List<string> CommittedStageIds { get; } = [];
+
+        public List<string> DiscardedStageIds { get; } = [];
 
         public TimeSpan InstallDelay { get; init; }
 
@@ -505,6 +538,69 @@ public sealed class PackageOperationServiceTests
         public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
+        {
+            if (InstallDelay > TimeSpan.Zero && request.Mutations.Any(mutation => mutation.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade))
+            {
+                await Task.Delay(InstallDelay, cancellationToken);
+            }
+
+            if (EnableDelay > TimeSpan.Zero && request.Mutations.Any(mutation => mutation.Kind == PackageStoreMutationKind.Enable))
+            {
+                await Task.Delay(EnableDelay, cancellationToken);
+            }
+
+            var stageId = Guid.NewGuid().ToString("N");
+            _pendingStages[stageId] = request;
+            var impactedPackageIds = request.Mutations.Select(GetMutationPackageId).ToArray();
+            return new PackageStoreStageResult(
+                stageId,
+                new PackageOperationResult(true, "staged", RuntimeSessionApplied: false, RequiresAppRestart: false, [], [])
+                {
+                    ImpactedPackageIds = impactedPackageIds,
+                },
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
+                impactedPackageIds.Select(packageId => new PackageSourceDescriptor(packageId, PackageSourceKind.Installed, packageId)).ToArray());
+        }
+
+        public Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)
+        {
+            CommittedStageIds.Add(stageId);
+            var request = _pendingStages[stageId];
+            _pendingStages.Remove(stageId);
+            var impactedPackageIds = request.Mutations.Select(GetMutationPackageId).ToArray();
+            foreach (var mutation in request.Mutations)
+            {
+                switch (mutation.Kind)
+                {
+                    case PackageStoreMutationKind.Install:
+                        InstalledPackageIds.Add(GetMutationPackageId(mutation));
+                        break;
+                    case PackageStoreMutationKind.Enable:
+                        EnabledPackageIds.Add(GetMutationPackageId(mutation));
+                        break;
+                    case PackageStoreMutationKind.Disable:
+                        DisabledPackageIds.Add(GetMutationPackageId(mutation));
+                        break;
+                    case PackageStoreMutationKind.Uninstall:
+                        UninstalledPackageIds.Add(GetMutationPackageId(mutation));
+                        break;
+                }
+            }
+
+            return Task.FromResult(new PackageOperationResult(true, "committed", RuntimeSessionApplied, RequiresAppRestart, [], [])
+            {
+                ImpactedPackageIds = impactedPackageIds,
+            });
+        }
+
+        public Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)
+        {
+            DiscardedStageIds.Add(stageId);
+            _pendingStages.Remove(stageId);
+            return Task.CompletedTask;
+        }
+
         public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
@@ -542,5 +638,10 @@ public sealed class PackageOperationServiceTests
             => throw new NotSupportedException();
 
         public void Dispose() { }
+
+        private static string GetMutationPackageId(PackageStoreMutationRequest mutation)
+            => !string.IsNullOrWhiteSpace(mutation.PackageId)
+                ? mutation.PackageId
+                : Path.GetFileNameWithoutExtension(mutation.PackagePath ?? string.Empty).Split('.')[0];
     }
 }

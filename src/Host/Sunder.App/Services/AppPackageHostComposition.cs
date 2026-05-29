@@ -10,6 +10,7 @@ internal sealed class AppPackageHostComposition
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
     private readonly AppPackagePreflightCoordinator _preflightCoordinator;
+    private readonly AppPackageResourceAssemblyRegistry? _resourceAssemblyRegistry;
     private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
     private readonly AppPackageHostState _state;
     private readonly AppPackageUnloadCoordinator _unloadCoordinator;
@@ -27,9 +28,11 @@ internal sealed class AppPackageHostComposition
         IPackageSettingsNavigationService? settingsNavigationService,
         IPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
-        BackgroundProcessQueueService? backgroundProcessQueue)
+        BackgroundProcessQueueService? backgroundProcessQueue,
+        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry)
     {
         _eventSender = eventSender;
+        _resourceAssemblyRegistry = resourceAssemblyRegistry;
         _state = state;
         AssemblyTracker = new AppPackageAssemblyTracker();
         var faultNotificationService = notificationCenter is null
@@ -68,7 +71,8 @@ internal sealed class AppPackageHostComposition
             AssemblyTracker,
             resolvedSharedAssemblyRegistry,
             _state.RemoveOwnedDisposable,
-            _state.RemoveLoadContext);
+            _state.RemoveLoadContext,
+            RemovePackageResourceAssemblies);
         _disableCoordinator = new AppPackageDisableCoordinator(
             viewRegistry,
             resolvedExtensionCatalog,
@@ -92,10 +96,14 @@ internal sealed class AppPackageHostComposition
             loadCoordinator.LoadPackageAsync,
             DisablePackageAsync,
             RequiresSharedAssemblyReset,
-            resolvedSharedAssemblyRegistry.ResetPackageAssemblies);
+            resolvedSharedAssemblyRegistry.ResetPackageAssemblies,
+            loadCoordinator.PreparePackageAsync,
+            loadCoordinator.ActivatePreparedPackageAsync,
+            resolvedSharedAssemblyRegistry.AddProbeDirectories);
         _preflightCoordinator = new AppPackagePreflightCoordinator(
             _state.GetLoadedPackage,
-            _state.IsPackageDisabled);
+            _state.IsPackageDisabled,
+            RequiresSharedAssemblyReset);
 
         bool RequiresSharedAssemblyReset(IReadOnlyList<PackageSourceDescriptor> packageSources)
         {
@@ -173,10 +181,26 @@ internal sealed class AppPackageHostComposition
     }
 
     public void RegisterPackageAssembly(string packageId, Assembly assembly)
-        => AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
+    {
+        AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
+        if (_resourceAssemblyRegistry is not null)
+        {
+            AppPackageAvaloniaAssetLoader.TryInvalidateAssemblyCache(_resourceAssemblyRegistry.RegisterPackageAssembly(packageId, assembly));
+        }
+    }
 
     public void DisposeSharedAssemblies()
         => _sharedAssemblyRegistry.Dispose();
+
+    private void RemovePackageResourceAssemblies(string packageId)
+    {
+        if (_resourceAssemblyRegistry is null)
+        {
+            return;
+        }
+
+        AppPackageAvaloniaAssetLoader.TryInvalidateAssemblyCache(_resourceAssemblyRegistry.RemovePackage(packageId));
+    }
 
     private async Task DisablePackageAndLogAsync(
         string packageId,

@@ -67,8 +67,19 @@ public sealed class RegistryApiClient : IRegistryApiClient
     public async Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
         RegistryResolveInstallPlanRequest request,
         CancellationToken cancellationToken = default)
+        => await ResolveInstallPlanCoreAsync("api/packages/resolve-install-plan", request, cancellationToken);
+
+    public async Task<RegistryResolveInstallPlanResponse> ResolvePackageChangesAsync(
+        RegistryResolvePackageChangesRequest request,
+        CancellationToken cancellationToken = default)
+        => await ResolveInstallPlanCoreAsync("api/packages/resolve-package-changes", request, cancellationToken);
+
+    private async Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanCoreAsync<TRequest>(
+        string path,
+        TRequest request,
+        CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.PostAsJsonAsync(CreateRequestUri("api/packages/resolve-install-plan"), request, cancellationToken);
+        using var response = await _httpClient.PostAsJsonAsync(CreateRequestUri(path), request, cancellationToken);
         RegistryResolveInstallPlanResponse? result = null;
         try
         {
