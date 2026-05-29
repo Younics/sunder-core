@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Sunder.Protocol;
 using Sunder.Runtime.Host;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
@@ -30,6 +31,18 @@ app.MapSystemEndpoints(startedAtUtc)
     .MapPackageFaultEndpoints()
     .MapInstalledPackageEndpoints();
 
-await app.Services.GetRequiredService<RuntimePackageSessionService>().LoadInstalledPackagesAsync();
+var packageSessionService = app.Services.GetRequiredService<RuntimePackageSessionService>();
+if (startupOptions.DevPackageFolders.Count > 0)
+{
+    await packageSessionService.LoadPackageLifecycleAsync(new PackageLifecycleLoadRequest(
+        startupOptions.DevPackageFolders
+            .Select(folder => new PackageSessionLoadRequest(PackageSourceKind.Dev, folder))
+            .ToArray(),
+        PackageLifecycleOverlayOwner.Startup));
+}
+else
+{
+    await packageSessionService.LoadInstalledPackagesAsync();
+}
 
 app.Run();

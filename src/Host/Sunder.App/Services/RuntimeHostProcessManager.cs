@@ -101,7 +101,10 @@ public sealed class RuntimeHostProcessManager
             );
         }
 
-        StartRuntimeHostProcess(RuntimeHostStartInfoFactory.Create(runtimeHostPath, runtimeUrl));
+        StartRuntimeHostProcess(RuntimeHostStartInfoFactory.Create(
+            runtimeHostPath,
+            runtimeUrl,
+            _startupOptions.DevPackageFolders));
 
         var started = await WaitForAcceptableRuntimeAsync(runtimeUrl, requiredRuntimeHostVersion, cancellationToken);
         if (!started)

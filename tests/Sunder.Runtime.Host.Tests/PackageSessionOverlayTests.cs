@@ -234,6 +234,40 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
+    public async Task LoadPackageLifecycleAsync_WhenStartupDevPackageOverridesBrokenInstalledPackage_LoadsDevWithoutInstalledErrors()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "test.package", "1.0.0", PackageSourceKind.Installed);
+        var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "test.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
+
+        try
+        {
+            Assert.True((await store.InstallAsync(installedPackage)).Success);
+            File.Delete(installedPackage.EntryAssemblyPath);
+
+            var loadResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+
+            Assert.Empty(loadResult.Errors);
+            var activePackage = Assert.Single(loadResult.ActivePackages);
+            Assert.Equal("test.package", activePackage.PackageId);
+            Assert.Equal("2.0.0", activePackage.Version);
+            var source = Assert.Single(service.GetActivePackageSources());
+            Assert.Equal(PackageSourceKind.Dev, source.Kind);
+            var status = await service.GetPackageSessionStatusAsync("test.package");
+            Assert.NotNull(status);
+            Assert.Equal(PackageSourceKind.Dev, status.ActiveSourceKind);
+            Assert.True(status.OverridesInstalledPackage);
+        }
+        finally
+        {
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
     public async Task ReloadInstalledPackageSessionAsync_PreservesDevOverlays()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());

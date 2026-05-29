@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Protocol;
@@ -177,6 +178,41 @@ public sealed class RuntimeHostProcessManagerTests
             Assert.Contains("Failed to start Sunder.Runtime.Host", exception.Message, StringComparison.Ordinal);
             var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
             Assert.Equal("start failed", innerException.Message);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenDevPackagesConfigured_PassesDevPackageArgsToRuntime()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://localhost:54321/");
+        var devPackageFolder = Path.Combine(rootPath, "dev package");
+        ProcessStartInfo? capturedStartInfo = null;
+        var runtimeStarted = false;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions { DevPackageFolders = [devPackageFolder] },
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeStatusAsync: (_, _) => Task.FromResult<SystemStatusResponse?>(
+                runtimeStarted ? CreateStatus("Sunder.Runtime.Host", "1.0.0") : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            startProcess: startInfo =>
+            {
+                capturedStartInfo = startInfo;
+                runtimeStarted = true;
+            },
+            delayAsync: (_, _) => Task.CompletedTask);
+
+        try
+        {
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.NotNull(capturedStartInfo);
+            Assert.Contains("--dev-package", capturedStartInfo.ArgumentList);
+            Assert.Contains(devPackageFolder, capturedStartInfo.ArgumentList);
         }
         finally
         {
