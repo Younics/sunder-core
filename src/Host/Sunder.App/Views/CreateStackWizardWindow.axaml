@@ -1,0 +1,622 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        x:Class="Sunder.App.Views.CreateStackWizardWindow"
+        x:DataType="vm:CreateStackWizardViewModel"
+        mc:Ignorable="d"
+        Width="980"
+        Height="720"
+        MinWidth="820"
+        MinHeight="620"
+        CanResize="True"
+        WindowStartupLocation="CenterOwner"
+        Title="Create Stack"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        Classes="secondary-window">
+  <Grid RowDefinitions="52,*,Auto"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="Create Stack" />
+      </controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
+
+    <Border Grid.Row="1"
+            Margin="20,12,20,0"
+            Classes="panel-surface"
+            Padding="0">
+      <Border Classes="secondary-panel-content-clip">
+        <Grid ColumnDefinitions="250,*">
+          <Border Grid.Column="0"
+                  Padding="18"
+                  Background="{DynamicResource Sunder.Brush.Surface.Base}">
+            <StackPanel Spacing="14">
+              <TextBlock Text="Stack Wizard"
+                         FontSize="22"
+                         FontWeight="SemiBold" />
+              <TextBlock Classes="caption"
+                         Text="Build a focused setup preset one step at a time."
+                         TextWrapping="Wrap" />
+
+              <Border Classes="settings-note-card">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="1. Packages"
+                             FontWeight="SemiBold" />
+                  <TextBlock Text="2. Items"
+                             FontWeight="SemiBold" />
+                  <TextBlock Text="3. Review"
+                             FontWeight="SemiBold" />
+                </StackPanel>
+              </Border>
+
+              <Border Classes="settings-note-card">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Selection"
+                             FontWeight="SemiBold" />
+                  <TextBlock Classes="muted"
+                             Text="{Binding SelectedSummary}"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <TextBlock Classes="caption"
+                         Text="Items are grouped by owning package so you can see exactly where each export comes from."
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border Grid.Column="1"
+                  Classes="workspace-surface"
+                  Margin="16">
+            <ScrollViewer>
+              <StackPanel Margin="22"
+                          Spacing="18">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="{Binding StepTitle}"
+                             FontSize="26"
+                             FontWeight="SemiBold" />
+                  <TextBlock Classes="caption"
+                             Text="{Binding StepDescription}"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding IsPackagesStep}"
+                            Spacing="16">
+                  <Border Classes="settings-note-card">
+                    <Grid RowDefinitions="Auto,Auto,Auto"
+                          RowSpacing="10">
+                      <Grid ColumnDefinitions="140,*"
+                            ColumnSpacing="12">
+                        <TextBlock Classes="caption"
+                                   Text="Stack name"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding StackName}"
+                                 PlaceholderText="New Stack" />
+                      </Grid>
+                      <Grid Grid.Row="1"
+                            ColumnDefinitions="140,*"
+                            ColumnSpacing="12">
+                        <TextBlock Classes="caption"
+                                   Text="Stack id"
+                                   VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding StackId}"
+                                 PlaceholderText="local-stack" />
+                      </Grid>
+                      <Grid Grid.Row="2"
+                            ColumnDefinitions="140,*"
+                            ColumnSpacing="12">
+                        <TextBlock Classes="caption"
+                                   Text="Summary"
+                                   VerticalAlignment="Top" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding StackSummary}"
+                                 PlaceholderText="Optional setup summary"
+                                 AcceptsReturn="True"
+                                 MinHeight="72" />
+                      </Grid>
+                    </Grid>
+                  </Border>
+
+                  <Border Classes="settings-note-card"
+                          IsVisible="{Binding HasPackageGroups}">
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="12">
+                      <TextBlock Classes="caption"
+                                 Text="Choose package groups first. Setup items and individual values are selected in the next step."
+                                 TextWrapping="Wrap"
+                                 VerticalAlignment="Center" />
+                      <WrapPanel Grid.Column="1">
+                        <Button Classes="stack-card-toggle"
+                                Command="{Binding SelectAllPackagesCommand}"
+                                Content="Select all"
+                                Margin="0,0,8,0" />
+                        <Button Classes="stack-card-toggle"
+                                Command="{Binding UnselectAllPackagesCommand}"
+                                Content="Unselect all" />
+                      </WrapPanel>
+                    </Grid>
+                  </Border>
+
+                  <ItemsControl ItemsSource="{Binding PackageGroups}"
+                                IsVisible="{Binding HasPackageGroups}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:CreateStackPackageGroupViewModel">
+                        <Border Classes="stack-wizard-card"
+                                Classes.selected="{Binding IsSelected}"
+                                Margin="0,0,0,8">
+                          <Grid ColumnDefinitions="Auto,Auto,*,Auto"
+                                RowDefinitions="Auto,Auto"
+                                ColumnSpacing="12"
+                                RowSpacing="6">
+                            <CheckBox IsChecked="{Binding IsSelected}"
+                                      VerticalAlignment="Center" />
+                            <controls:PackageIconView Grid.Column="1"
+                                                      Width="34"
+                                                      Height="34"
+                                                      IconImage="{Binding IconImage}"
+                                                      HasIconImage="{Binding HasIconImage}"
+                                                      Glyph="{Binding Glyph}"
+                                                      ShowFallbackContainer="{Binding ShowGlyphFallback}"
+                                                      GlyphFontSize="14"
+                                                      GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
+                            <StackPanel Grid.Column="2"
+                                        Spacing="2"
+                                        VerticalAlignment="Center">
+                              <TextBlock Text="{Binding DisplayName}"
+                                         FontWeight="SemiBold"
+                                         TextWrapping="Wrap" />
+                              <TextBlock Classes="caption"
+                                         Text="{Binding PackageId}"
+                                         TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Border Grid.Column="3"
+                                    Classes="stack-chip"
+                                    VerticalAlignment="Center">
+                              <TextBlock Text="{Binding CountText}" />
+                            </Border>
+                            <StackPanel Grid.Row="1"
+                                        Grid.Column="2"
+                                        Grid.ColumnSpan="2"
+                                        Spacing="4">
+                              <TextBlock Classes="muted"
+                                         Text="{Binding ContentSummary}"
+                                         TextWrapping="Wrap" />
+                              <TextBlock Classes="caption"
+                                         Text="{Binding SafetySummary}"
+                                         TextWrapping="Wrap"
+                                         IsVisible="{Binding HasSafetySummary}" />
+                            </StackPanel>
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <TextBlock Classes="muted"
+                             Text="No export-capable package setup items were found."
+                             TextWrapping="Wrap"
+                             IsVisible="{Binding ShowNoPackageGroups}" />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding IsItemsStep}"
+                            Spacing="12">
+                  <ItemsControl ItemsSource="{Binding PackageGroups}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:CreateStackPackageGroupViewModel">
+                        <Border Classes="stack-wizard-card package"
+                                Classes.selected="{Binding IsSelected}"
+                                IsVisible="{Binding IsSelected}"
+                                Margin="0,0,0,10">
+                          <Grid RowDefinitions="Auto,Auto,Auto"
+                                RowSpacing="12">
+                            <Grid ColumnDefinitions="Auto,Auto,*,Auto"
+                                  ColumnSpacing="12">
+                              <CheckBox IsChecked="{Binding IsSelected}"
+                                        VerticalAlignment="Center" />
+                              <controls:PackageIconView Grid.Column="1"
+                                                        Width="34"
+                                                        Height="34"
+                                                        IconImage="{Binding IconImage}"
+                                                        HasIconImage="{Binding HasIconImage}"
+                                                        Glyph="{Binding Glyph}"
+                                                        ShowFallbackContainer="{Binding ShowGlyphFallback}"
+                                                        GlyphFontSize="14"
+                                                        GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
+                              <StackPanel Grid.Column="2"
+                                          Spacing="2"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DisplayName}"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Classes="caption"
+                                           Text="{Binding ContentSummary}"
+                                           TextWrapping="Wrap" />
+                              </StackPanel>
+                              <Button Grid.Column="3"
+                                      Classes="stack-card-toggle"
+                                      Command="{Binding ToggleExpandedCommand}"
+                                      Content="{Binding ExpandActionText}" />
+                            </Grid>
+
+                            <WrapPanel Grid.Row="1">
+                              <Border Classes="stack-chip"
+                                      Margin="0,0,8,8">
+                                <TextBlock Text="{Binding CountText}" />
+                              </Border>
+                              <Button Classes="stack-card-toggle"
+                                      Command="{Binding SelectAllItemsCommand}"
+                                      Content="Select all items"
+                                      Margin="0,0,8,8" />
+                              <Button Classes="stack-card-toggle"
+                                      Command="{Binding UnselectAllItemsCommand}"
+                                      Content="Unselect all items"
+                                      Margin="0,0,8,8" />
+                            </WrapPanel>
+
+                            <StackPanel Grid.Row="2"
+                                        Spacing="8"
+                                        IsVisible="{Binding IsExpanded}">
+                          <ItemsControl ItemsSource="{Binding ItemGroups}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:CreateStackExportKindGroupViewModel">
+                                <StackPanel Spacing="8"
+                                            Margin="0,0,0,8">
+                                  <Grid ColumnDefinitions="*,Auto"
+                                        ColumnSpacing="10">
+                                    <TextBlock Text="{Binding DisplayName}"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="Wrap" />
+                                    <Border Grid.Column="1"
+                                            Classes="stack-chip">
+                                      <TextBlock Text="{Binding CountText}" />
+                                    </Border>
+                                  </Grid>
+                                  <ItemsControl ItemsSource="{Binding Items}">
+                                    <ItemsControl.ItemTemplate>
+                                      <DataTemplate x:DataType="vm:CreateStackExportItemViewModel">
+                                        <Border Classes="stack-wizard-item-card"
+                                                Classes.selected="{Binding IsSelected}"
+                                                Margin="0,0,0,8">
+                                          <Grid RowDefinitions="Auto,Auto"
+                                                RowSpacing="10">
+                                            <Grid ColumnDefinitions="Auto,*,Auto"
+                                                  ColumnSpacing="12">
+                                              <CheckBox IsChecked="{Binding IsSelected}"
+                                                        VerticalAlignment="Center" />
+                                              <StackPanel Grid.Column="1"
+                                                          Spacing="4">
+                                                <TextBlock Text="{Binding DisplayName}"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Classes="caption"
+                                                           Text="{Binding SummaryText}"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Classes="muted"
+                                                           Text="{Binding DescriptionPreview}"
+                                                           TextWrapping="Wrap"
+                                                           MaxLines="2" />
+                                              </StackPanel>
+                                              <Button Grid.Column="2"
+                                                      Classes="stack-card-toggle"
+                                                      Command="{Binding ToggleExpandedCommand}"
+                                                      Content="{Binding ExpandActionText}" />
+                                            </Grid>
+
+                                            <Border Grid.Row="1"
+                                                    Classes="stack-wizard-item-details"
+                                                    IsVisible="{Binding IsExpanded}">
+                                              <StackPanel Spacing="10">
+                                                <Grid ColumnDefinitions="*,Auto"
+                                                      ColumnSpacing="12">
+                                                  <StackPanel Spacing="2">
+                                                    <TextBlock Text="Values to include"
+                                                               FontWeight="SemiBold" />
+                                                    <TextBlock Classes="caption"
+                                                               Text="{Binding DetailCountText}" />
+                                                  </StackPanel>
+                                                  <WrapPanel Grid.Column="1">
+                                                    <Button Classes="stack-card-toggle"
+                                                            Command="{Binding SelectAllDetailsCommand}"
+                                                            Content="Select all"
+                                                            Margin="0,0,8,0" />
+                                                    <Button Classes="stack-card-toggle"
+                                                            Command="{Binding UnselectAllDetailsCommand}"
+                                                            Content="Unselect all" />
+                                                  </WrapPanel>
+                                                </Grid>
+                                                <ItemsControl ItemsSource="{Binding Details}"
+                                                              IsVisible="{Binding HasDetails}">
+                                                  <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:CreateStackExportDetailViewModel">
+                                                      <Border Classes="stack-export-detail-row"
+                                                              Margin="0,0,0,8">
+                                                        <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+                                                              RowSpacing="6">
+                                                          <Grid ColumnDefinitions="Auto,*,Auto"
+                                                                ColumnSpacing="10">
+                                                            <CheckBox IsChecked="{Binding IsSelected}"
+                                                                      VerticalAlignment="Center" />
+                                                            <TextBlock Grid.Column="1"
+                                                                       Text="{Binding Label}"
+                                                                       FontWeight="SemiBold"
+                                                                       TextWrapping="Wrap" />
+                                                            <Button Grid.Column="2"
+                                                                    Classes="stack-card-toggle"
+                                                                    Command="{Binding ToggleExpandedCommand}"
+                                                                    Content="{Binding ExpandActionText}" />
+                                                          </Grid>
+                                                          <WrapPanel Grid.Row="1">
+                                                            <Border Classes="stack-chip safety"
+                                                                    IsVisible="{Binding HasFlagText}"
+                                                                    Margin="0,0,8,0">
+                                                              <TextBlock Text="{Binding FlagText}" />
+                                                            </Border>
+                                                            <ComboBox ItemsSource="{Binding AvailableExportBehaviors}"
+                                                                      SelectedItem="{Binding SelectedExportBehavior}"
+                                                                      MinWidth="150"
+                                                                      Margin="0,0,8,0"
+                                                                      IsVisible="{Binding IsExpanded}" />
+                                                          </WrapPanel>
+                                                          <TextBlock Grid.Row="2"
+                                                                     Classes="muted"
+                                                                     Text="{Binding EffectiveValuePreview}"
+                                                                     TextWrapping="Wrap"
+                                                                     IsVisible="{Binding IsCollapsed}" />
+                                                          <TextBox Grid.Row="3"
+                                                                   Text="{Binding EditedValue}"
+                                                                   AcceptsReturn="True"
+                                                                   MinHeight="76"
+                                                                   IsVisible="{Binding IsExpanded}"
+                                                                   IsEnabled="{Binding CanEditValue}" />
+                                                        </Grid>
+                                                      </Border>
+                                                    </DataTemplate>
+                                                  </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                              </StackPanel>
+                                            </Border>
+                                          </Grid>
+                                        </Border>
+                                      </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                  </ItemsControl>
+                                </StackPanel>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                            </StackPanel>
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding IsReviewStep}"
+                            Spacing="14">
+                  <Border Classes="settings-note-card">
+                    <StackPanel Spacing="5">
+                      <TextBlock Text="{Binding StackName}"
+                                 FontSize="20"
+                                 FontWeight="SemiBold" />
+                      <TextBlock Classes="caption"
+                                 Text="{Binding StackId}" />
+                      <TextBlock Classes="muted"
+                                 Text="{Binding StackSummary}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+
+                  <Border Classes="settings-note-card">
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="12">
+                      <StackPanel Spacing="4">
+                        <TextBlock Text="Export Review"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Classes="caption"
+                                   Text="{Binding ReviewImpactSummary}"
+                                   TextWrapping="Wrap" />
+                      </StackPanel>
+                      <TextBlock Grid.Column="1"
+                                 Classes="caption"
+                                 Text="Raw secret values are never exported."
+                                 TextWrapping="Wrap"
+                                 VerticalAlignment="Center" />
+                    </Grid>
+                  </Border>
+
+                  <ItemsControl ItemsSource="{Binding PackageGroups}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:CreateStackPackageGroupViewModel">
+                        <Border Classes="stack-wizard-card"
+                                IsVisible="{Binding HasSelectedItems}"
+                                Margin="0,0,0,8">
+                          <StackPanel Spacing="8">
+                            <Grid ColumnDefinitions="Auto,*,Auto"
+                                  ColumnSpacing="12">
+                              <controls:PackageIconView Width="30"
+                                                        Height="30"
+                                                        IconImage="{Binding IconImage}"
+                                                        HasIconImage="{Binding HasIconImage}"
+                                                        Glyph="{Binding Glyph}"
+                                                        ShowFallbackContainer="{Binding ShowGlyphFallback}"
+                                                        GlyphFontSize="13"
+                                                        GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
+                              <StackPanel Grid.Column="1"
+                                          Spacing="2">
+                                <TextBlock Text="{Binding DisplayName}"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Classes="caption"
+                                           Text="{Binding PackageId}"
+                                           TextWrapping="Wrap" />
+                              </StackPanel>
+                              <Border Grid.Column="2"
+                                      Classes="stack-chip"
+                                      VerticalAlignment="Center">
+                                <TextBlock Text="{Binding CountText}" />
+                              </Border>
+                            </Grid>
+                            <ItemsControl ItemsSource="{Binding ItemGroups}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:CreateStackExportKindGroupViewModel">
+                                  <StackPanel Spacing="8"
+                                              Margin="0,0,0,8">
+                                    <Grid ColumnDefinitions="*,Auto"
+                                          ColumnSpacing="10">
+                                      <TextBlock Text="{Binding DisplayName}"
+                                                 FontWeight="SemiBold"
+                                                 TextWrapping="Wrap" />
+                                      <Border Grid.Column="1"
+                                              Classes="stack-chip">
+                                        <TextBlock Text="{Binding CountText}" />
+                                      </Border>
+                                    </Grid>
+                                    <ItemsControl ItemsSource="{Binding Items}">
+                                      <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:CreateStackExportItemViewModel">
+                                          <Border Classes="stack-wizard-item-details"
+                                                  IsVisible="{Binding IsIncludedInReview}"
+                                                  Margin="0,0,0,8">
+                                            <StackPanel Spacing="8">
+                                              <Grid ColumnDefinitions="*,Auto"
+                                                    ColumnSpacing="10">
+                                                <StackPanel Spacing="2">
+                                                  <TextBlock Text="{Binding DisplayName}"
+                                                             FontWeight="SemiBold"
+                                                             TextWrapping="Wrap" />
+                                                  <TextBlock Classes="caption"
+                                                             Text="{Binding SummaryText}"
+                                                             TextWrapping="Wrap" />
+                                                </StackPanel>
+                                              </Grid>
+                                              <ItemsControl ItemsSource="{Binding Details}">
+                                                <ItemsControl.ItemTemplate>
+                                                  <DataTemplate x:DataType="vm:CreateStackExportDetailViewModel">
+                                                    <Border Classes="stack-export-detail-row"
+                                                            Classes.excluded="{Binding IsExcludedByOptions}"
+                                                            IsVisible="{Binding IsSelected}"
+                                                            Margin="0,0,0,6">
+                                                      <Grid ColumnDefinitions="*,Auto"
+                                                            RowDefinitions="Auto,Auto,Auto"
+                                                            ColumnSpacing="10"
+                                                            RowSpacing="4">
+                                                        <StackPanel Orientation="Horizontal"
+                                                                    Spacing="8">
+                                                          <TextBlock Text="{Binding Label}"
+                                                                     FontWeight="SemiBold"
+                                                                     TextWrapping="Wrap" />
+                                                          <TextBlock Classes="caption"
+                                                                     Text="{Binding FlagText}"
+                                                                     IsVisible="{Binding HasFlagText}" />
+                                                        </StackPanel>
+                                                        <Button Grid.Column="1"
+                                                                Classes="stack-card-toggle"
+                                                                Command="{Binding ToggleExpandedCommand}"
+                                                                Content="{Binding ExpandActionText}" />
+                                                        <TextBlock Grid.Row="1"
+                                                                   Grid.ColumnSpan="2"
+                                                                   Classes="muted"
+                                                                   Text="{Binding EffectiveValuePreview}"
+                                                                   IsVisible="{Binding IsCollapsed}"
+                                                                   TextWrapping="Wrap" />
+                                                        <TextBlock Grid.Row="2"
+                                                                   Grid.ColumnSpan="2"
+                                                                   Classes="muted"
+                                                                   Text="{Binding EffectiveValue}"
+                                                                   IsVisible="{Binding IsExpanded}"
+                                                                   TextWrapping="Wrap" />
+                                                      </Grid>
+                                                    </Border>
+                                                  </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                              </ItemsControl>
+                                            </StackPanel>
+                                          </Border>
+                                        </DataTemplate>
+                                      </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                  </StackPanel>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+
+                <ItemsControl ItemsSource="{Binding Warnings}"
+                              IsVisible="{Binding HasWarnings}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Classes="settings-note-card"
+                              Margin="0,0,0,6">
+                        <TextBlock Classes="muted"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ItemsControl ItemsSource="{Binding Errors}"
+                              IsVisible="{Binding HasErrors}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Classes="settings-note-card"
+                              Margin="0,0,0,6">
+                        <TextBlock Classes="runtime-error-text"
+                                   Text="{Binding}"
+                                   TextWrapping="Wrap" />
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </ScrollViewer>
+          </Border>
+        </Grid>
+      </Border>
+    </Border>
+
+    <Grid Grid.Row="2"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+          Margin="20,16"
+          ColumnSpacing="12">
+      <Button Classes="secondary-action"
+              Content="Cancel"
+              Command="{Binding CancelCommand}" />
+      <TextBlock Grid.Column="1"
+                 Classes="status-text"
+                 Text="{Binding StatusText}"
+                 TextWrapping="Wrap"
+                 VerticalAlignment="Center" />
+      <Button Grid.Column="2"
+              Classes="secondary-action"
+              Content="Back"
+              Command="{Binding BackCommand}"
+              IsEnabled="{Binding CanGoBack}" />
+      <Button Grid.Column="3"
+              Classes="secondary-action"
+              Content="Next"
+              Command="{Binding NextCommand}"
+              IsEnabled="{Binding CanGoNext}" />
+      <Button Grid.Column="4"
+              Classes="primary-action"
+              Content="Create Stack"
+              Command="{Binding CreateCommand}"
+              IsEnabled="{Binding CanCreate}" />
+    </Grid>
+  </Grid>
+</Window>

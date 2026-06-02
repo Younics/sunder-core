@@ -28,6 +28,8 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.NotificationsV1,
         SunderSdkCapabilities.ShellViewV1,
         SunderSdkCapabilities.PackageSessionsV1,
+        SunderSdkCapabilities.StacksV1,
+        SunderSdkCapabilities.StackContributionsV1,
         SunderSdkCapabilities.CallbacksV1,
         SunderSdkCapabilities.AuthV1,
         SunderSdkCapabilities.ThemingV1,

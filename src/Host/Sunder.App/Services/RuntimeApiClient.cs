@@ -146,6 +146,16 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
             cancellationToken
         );
 
+    public async Task<PackageOperationResult> InstallPackagesFromPathsAsync(
+        PackageInstallBatchFromPathRequest request,
+        CancellationToken cancellationToken = default)
+        => await SendPackageOperationAsync(
+            () => _httpClient.PostAsJsonAsync(
+                CreateRequestUri("api/packages/install/local-batch"),
+                request,
+                cancellationToken),
+            cancellationToken);
+
     public async Task<PackageOperationResult> UpgradePackageFromPathAsync(
         string packageId,
         string packagePath,
@@ -222,6 +232,93 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
                 cancellationToken: cancellationToken
             )
             ?? PackageLifecycleOperationResult.Failed("Runtime returned an empty package lifecycle load response.");
+    }
+
+    public async Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<RuntimeStackExportDiscoveryResponse>(
+               CreateRequestUri("api/stacks/export/items"),
+               cancellationToken)
+           ?? new RuntimeStackExportDiscoveryResponse([], [], ["Runtime returned an empty Stack export discovery response."]);
+
+    public async Task<RuntimeStackExportResponse> ExportStackAsync(
+        RuntimeStackExportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("api/stacks/export"),
+            request,
+            cancellationToken);
+
+        RuntimeStackExportResponse? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<RuntimeStackExportResponse>(cancellationToken: cancellationToken);
+        }
+        catch (JsonException)
+        {
+            // Fall through to a generic protocol-level failure.
+        }
+
+        return result ?? new RuntimeStackExportResponse(
+            false,
+            null,
+            [],
+            [response.ReasonPhrase ?? "Stack export failed."]);
+    }
+
+    public async Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(
+        RuntimeStackImportPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("api/stacks/import/preview"),
+            request,
+            cancellationToken);
+
+        RuntimeStackImportPreviewResponse? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<RuntimeStackImportPreviewResponse>(cancellationToken: cancellationToken);
+        }
+        catch (JsonException)
+        {
+            // Fall through to a generic protocol-level failure.
+        }
+
+        return result ?? new RuntimeStackImportPreviewResponse(
+            false,
+            [],
+            [],
+            [],
+            [],
+            [response.ReasonPhrase ?? "Stack import preview failed."]);
+    }
+
+    public async Task<RuntimeStackImportResponse> ImportStackAsync(
+        RuntimeStackImportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("api/stacks/import/apply"),
+            request,
+            cancellationToken);
+
+        RuntimeStackImportResponse? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<RuntimeStackImportResponse>(cancellationToken: cancellationToken);
+        }
+        catch (JsonException)
+        {
+            // Fall through to a generic protocol-level failure.
+        }
+
+        return result ?? new RuntimeStackImportResponse(
+            false,
+            [],
+            request.IdRemaps,
+            [],
+            [response.ReasonPhrase ?? "Stack import failed."]);
     }
 
     public async Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(

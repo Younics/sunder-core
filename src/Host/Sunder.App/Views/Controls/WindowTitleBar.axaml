@@ -25,9 +25,15 @@
         <Border x:Name="LeftLogo"
                 Classes="toolbar-logo-badge"
                 Classes.large="{Binding IsLogoLarge, ElementName=Root}">
-          <Image Source="avares://Sunder.App/Assets/Images/icon.png"
-                 RenderOptions.BitmapInterpolationMode="HighQuality"
-                 Stretch="Uniform" />
+          <Grid>
+            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Stretch="Uniform"
+                   IsVisible="{Binding UseDefaultLogo, ElementName=Root}" />
+            <ContentControl Content="{Binding LogoContent, ElementName=Root}"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch" />
+          </Grid>
         </Border>
 
         <ContentControl Content="{Binding LeadingContent, ElementName=Root}"
@@ -55,9 +61,15 @@
         <Border x:Name="RightLogo"
                 Classes="toolbar-logo-badge"
                 Classes.large="{Binding IsLogoLarge, ElementName=Root}">
-          <Image Source="avares://Sunder.App/Assets/Images/icon.png"
-                 RenderOptions.BitmapInterpolationMode="HighQuality"
-                 Stretch="Uniform" />
+          <Grid>
+            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Stretch="Uniform"
+                   IsVisible="{Binding UseDefaultLogo, ElementName=Root}" />
+            <ContentControl Content="{Binding LogoContent, ElementName=Root}"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch" />
+          </Grid>
         </Border>
 
         <controls:WindowChromeControls x:Name="RightChromeControls" />

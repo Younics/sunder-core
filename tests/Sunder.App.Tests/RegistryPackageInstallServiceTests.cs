@@ -38,6 +38,7 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.Equal(["dependency", "root"], runtimeClient.InstalledPackageIds);
         Assert.Equal(["dependency", "root"], result.ImpactedPackageIds);
         Assert.Equal(["dependency", "root"], registryClient.DownloadedPackageIds);
+        Assert.Single(runtimeClient.BatchInstallRequests);
         Assert.Collection(runtimeClient.ReloadedPackageIds, packageIds => Assert.Equal(["dependency", "root"], packageIds));
     }
 
@@ -147,6 +148,79 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.Contains("No packages", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task InstallPackagesAsync_CombinesStackPackageGraphsBeforeExecutingPlan()
+    {
+        var service = new RegistryPackageInstallService();
+        var registryClient = new FakeRegistryApiClient
+        {
+            ResolveInstallPlan = request => request.PackageId switch
+            {
+                "roota" => new RegistryResolveInstallPlanResponse(
+                    true,
+                    [
+                        CreatePlanItem("dependency", null, "1.0.0"),
+                        CreatePlanItem("roota", null, "1.0.0"),
+                    ],
+                    [],
+                    [],
+                    []),
+                "rootb" => new RegistryResolveInstallPlanResponse(
+                    true,
+                    [CreatePlanItem("rootb", null, "1.0.0")],
+                    [],
+                    [],
+                    []),
+                _ => new RegistryResolveInstallPlanResponse(false, [], [], [$"Unexpected package {request.PackageId}"], []),
+            },
+        };
+        var runtimeClient = new FakeRuntimeApiClient();
+
+        var result = await service.InstallPackagesAsync(
+            [
+                CreateStackRequirement("roota"),
+                CreateStackRequirement("rootb"),
+            ],
+            registryClient,
+            runtimeClient);
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        Assert.Equal(["dependency", "roota", "rootb"], result.PlanItems.Select(item => item.PackageId));
+        Assert.Equal(["dependency", "roota", "rootb"], runtimeClient.InstalledPackageIds);
+        Assert.Single(runtimeClient.BatchInstallRequests);
+        Assert.Equal(["roota", "rootb"], registryClient.InstallPlanRequests.Select(request => request.PackageId));
+        Assert.Contains(registryClient.InstallPlanRequests[1].InstalledPackages, package => package.PackageId == "dependency" && package.Version == "1.0.0");
+        Assert.Collection(runtimeClient.ReloadedPackageIds, packageIds => Assert.Equal(["dependency", "roota", "rootb"], packageIds));
+    }
+
+    [Fact]
+    public async Task ResolveInstallPlanForPackagesAsync_SkipsAlreadyCompatibleStackPackages()
+    {
+        var service = new RegistryPackageInstallService();
+        var registryClient = new FakeRegistryApiClient
+        {
+            ResolveInstallPlan = request => new RegistryResolveInstallPlanResponse(
+                true,
+                [CreatePlanItem(request.PackageId, null, "1.0.0")],
+                [],
+                [],
+                []),
+        };
+        var runtimeClient = new FakeRuntimeApiClient([CreateInstalledPackage("roota", "2.0.0")]);
+
+        var result = await service.ResolveInstallPlanForPackagesAsync(
+            [
+                CreateStackRequirement("roota", minimumVersion: "1.0.0"),
+                CreateStackRequirement("rootb", minimumVersion: "1.0.0"),
+            ],
+            registryClient,
+            runtimeClient);
+
+        Assert.True(result.Success);
+        Assert.Equal(["rootb"], registryClient.InstallPlanRequests.Select(request => request.PackageId));
+        Assert.Equal(["rootb"], result.Items.Select(item => item.PackageId));
+    }
+
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string? currentVersion, string version)
         => new(
             packageId,
@@ -169,9 +243,24 @@ public sealed class RegistryPackageInstallServiceTests
             DateTimeOffset.UtcNow,
             StatusMessage: null);
 
+    private static Sunder.PackageManagement.SunderStackPackageRequirement CreateStackRequirement(
+        string packageId,
+        string? minimumVersion = null)
+        => new()
+        {
+            PackageId = packageId,
+            InstallTag = "latest",
+            MinimumVersion = minimumVersion,
+            Required = true,
+        };
+
     private sealed class FakeRegistryApiClient : IRegistryApiClient
     {
         public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
+
+        public Func<RegistryResolveInstallPlanRequest, RegistryResolveInstallPlanResponse>? ResolveInstallPlan { get; init; }
+
+        public List<RegistryResolveInstallPlanRequest> InstallPlanRequests { get; } = [];
 
         public List<string> DownloadedPackageIds { get; } = [];
 
@@ -190,7 +279,10 @@ public sealed class RegistryPackageInstallServiceTests
             => Task.FromResult(new RegistryResolveUpdatesResponse([]));
 
         public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(RegistryResolveInstallPlanRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(InstallPlan);
+        {
+            InstallPlanRequests.Add(request);
+            return Task.FromResult(ResolveInstallPlan?.Invoke(request) ?? InstallPlan);
+        }
 
         public Task DownloadArtifactAsync(RegistryPackageArtifact artifact, string packageId, string version, string destinationPath, CancellationToken cancellationToken = default)
         {
@@ -214,6 +306,8 @@ public sealed class RegistryPackageInstallServiceTests
         public List<string> UpgradedPackageIds { get; } = [];
 
         public List<IReadOnlyList<string>> ReloadedPackageIds { get; } = [];
+
+        public List<PackageInstallBatchFromPathRequest> BatchInstallRequests { get; } = [];
 
         public bool OperationRuntimeSessionApplied { get; init; } = true;
 
@@ -253,6 +347,38 @@ public sealed class RegistryPackageInstallServiceTests
                 [])
             {
                 ImpactedPackageIds = [packageId],
+            });
+        }
+
+        public Task<PackageOperationResult> InstallPackagesFromPathsAsync(PackageInstallBatchFromPathRequest request, CancellationToken cancellationToken = default)
+        {
+            BatchInstallRequests.Add(request);
+            var impactedPackageIds = new List<string>();
+            foreach (var item in request.Items)
+            {
+                if (string.IsNullOrWhiteSpace(item.PackageId))
+                {
+                    var packageId = Path.GetFileName(item.PackagePath).Split('.')[0];
+                    InstalledPackageIds.Add(packageId);
+                    impactedPackageIds.Add(packageId);
+                }
+                else
+                {
+                    UpgradedPackageIds.Add(item.PackageId);
+                    impactedPackageIds.Add(item.PackageId);
+                }
+            }
+
+            ReloadedPackageIds.Add(impactedPackageIds.ToArray());
+            return Task.FromResult(new PackageOperationResult(
+                true,
+                "installed batch",
+                FinalReloadRuntimeSessionApplied,
+                false,
+                FinalReloadRuntimeSessionApplied ? [] : ["Installed package changes are saved, but the running package session kept the previous loaded packages: final failure"],
+                [])
+            {
+                ImpactedPackageIds = impactedPackageIds.ToArray(),
             });
         }
 

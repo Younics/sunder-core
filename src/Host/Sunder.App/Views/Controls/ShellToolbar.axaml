@@ -7,7 +7,72 @@
              x:Class="Sunder.App.Views.Controls.ShellToolbar"
              x:DataType="vm:MainWindowViewModel"
              mc:Ignorable="d">
-  <controls:WindowTitleBar IsLogoLarge="True">
+  <controls:WindowTitleBar IsLogoLarge="True"
+                             UseDefaultLogo="False"
+                             PreferRightLogo="True">
+    <controls:WindowTitleBar.LogoContent>
+      <Button Classes="toolbar-icon registry-account-button"
+              VerticalAlignment="Center"
+              ToolTip.Tip="{Binding RegistryAccountButtonToolTip}">
+        <Button.Content>
+          <Border Classes="registry-avatar"
+                  Background="{Binding RegistryAccountAvatarBrush}">
+            <TextBlock Classes="registry-avatar-text"
+                       Text="{Binding RegistryAccountAvatarText}" />
+          </Border>
+        </Button.Content>
+        <Button.Flyout>
+          <Flyout FlyoutPresenterClasses="runtime-flyout-surface">
+            <StackPanel x:DataType="vm:MainWindowViewModel"
+                        Width="280"
+                        Spacing="12">
+              <StackPanel Spacing="4">
+                <TextBlock Classes="section-title" Text="Sunder Account" />
+              </StackPanel>
+
+              <Border Height="1"
+                      Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
+
+              <Grid ColumnDefinitions="Auto,*"
+                    ColumnSpacing="12">
+                <Border Classes="registry-avatar large"
+                        Background="{Binding RegistryAccountAvatarBrush}">
+                  <TextBlock Classes="registry-avatar-text large"
+                             Text="{Binding RegistryAccountAvatarText}" />
+                </Border>
+                <StackPanel Grid.Column="1"
+                            Spacing="3"
+                            VerticalAlignment="Center">
+                  <TextBlock Classes="status-text"
+                             Text="{Binding RegistryAccountDisplayName}"
+                             TextWrapping="Wrap" />
+                  <TextBlock Classes="caption"
+                             Text="{Binding RegistryAccountSubtitle}"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+              </Grid>
+
+              <Grid ColumnDefinitions="*,Auto,Auto"
+                    ColumnSpacing="8">
+                <Button Grid.Column="1"
+                        Classes="primary-action compact-action"
+                        Content="Sign in"
+                        Command="{Binding LoginRegistryCommand}"
+                        IsVisible="{Binding ShowRegistrySignInButton}"
+                        IsEnabled="{Binding CanManageRegistryAccount}" />
+                <Button Grid.Column="2"
+                        Classes="secondary-action compact-action danger-action"
+                        Content="Sign out"
+                        Command="{Binding LogoutRegistryCommand}"
+                        IsVisible="{Binding ShowRegistrySignOutButton}"
+                        IsEnabled="{Binding CanManageRegistryAccount}" />
+              </Grid>
+            </StackPanel>
+          </Flyout>
+        </Button.Flyout>
+      </Button>
+    </controls:WindowTitleBar.LogoContent>
+
     <controls:WindowTitleBar.LeadingContent>
       <StackPanel x:Name="ToolbarLeftMenuHost"
                   Orientation="Horizontal"
@@ -22,6 +87,16 @@
                       Spacing="14"
                       Height="40"
                       VerticalAlignment="Center">
+            <Button Classes="toolbar-icon"
+                    Command="{Binding OpenStacksCommand}"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="Stacks">
+              <Path Width="15"
+                    Height="15"
+                    Classes="icon-stroke"
+                    Data="{StaticResource Sunder.Icon.Stacks}" />
+            </Button>
+
             <Button Classes="toolbar-icon"
                     Command="{Binding OpenPackagesCommand}"
                     VerticalAlignment="Center"

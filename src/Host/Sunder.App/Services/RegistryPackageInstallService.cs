@@ -1,4 +1,5 @@
 using Sunder.Protocol;
+using Sunder.PackageManagement;
 using Sunder.Registry.Shared;
 
 namespace Sunder.App.Services;
@@ -54,6 +55,37 @@ public sealed class RegistryPackageInstallService
         var plan = await registryClient.ResolveInstallPlanAsync(request, cancellationToken);
         return plan.Success
             ? await ExecutePlanAsync(plan, allowDowngrade, reinstall, registryClient, runtimeApiClient, progress, cancellationToken)
+            : ToPlanFailure(plan);
+    }
+
+    public async Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
+        IReadOnlyList<SunderStackPackageRequirement> packages,
+        IRegistryApiClient registryClient,
+        IRuntimeApiClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        progress?.Invoke(new RegistryPackageInstallProgress("Reading installed package state...", 5));
+        var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken);
+        progress?.Invoke(new RegistryPackageInstallProgress("Resolving package graph...", 15));
+        return await ResolveInstallPlanForPackagesAsync(
+            packages,
+            ToInstalledPackageStates(installedPackages),
+            registryClient,
+            progress,
+            cancellationToken);
+    }
+
+    public async Task<RegistryPackageInstallExecutionResult> InstallPackagesAsync(
+        IReadOnlyList<SunderStackPackageRequirement> packages,
+        IRegistryApiClient registryClient,
+        IRuntimeApiClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var plan = await ResolveInstallPlanForPackagesAsync(packages, registryClient, runtimeApiClient, progress, cancellationToken);
+        return plan.Success
+            ? await ExecutePlanAsync(plan, allowDowngrade: false, reinstall: false, registryClient, runtimeApiClient, progress, cancellationToken)
             : ToPlanFailure(plan);
     }
 
@@ -166,11 +198,12 @@ public sealed class RegistryPackageInstallService
 
         try
         {
+            var batchItems = new List<PackageInstallBatchFromPathItem>();
             for (var index = 0; index < plan.Items.Count; index++)
             {
                 var item = plan.Items[index];
                 cancellationToken.ThrowIfCancellationRequested();
-                var progressBase = 20 + 70d * index / plan.Items.Count;
+                var progressBase = 20 + 55d * index / plan.Items.Count;
                 var packagePath = Path.Combine(tempDirectory, $"{SanitizeFileName(item.PackageId)}.{SanitizeFileName(item.Version)}.sunderpkg");
                 progress?.Invoke(new RegistryPackageInstallProgress($"Downloading {item.PackageId} {item.Version}...", progressBase));
                 await registryClient.DownloadArtifactAsync(item.Artifact, item.PackageId, item.Version, packagePath, cancellationToken);
@@ -180,51 +213,52 @@ public sealed class RegistryPackageInstallService
                     warnings.Add($"{item.PackageId} {item.Version} is deprecated: {item.DeprecatedMessage}");
                 }
 
-                progress?.Invoke(new RegistryPackageInstallProgress($"Installing {item.PackageId} {item.Version}...", Math.Min(progressBase + 20, 90)));
-                var operationResult = item.CurrentVersion is null
-                    ? await runtimeApiClient.InstallPackageFromPathAsync(packagePath, cancellationToken)
-                    : await runtimeApiClient.UpgradePackageFromPathAsync(item.PackageId, packagePath, allowDowngrade, reinstall, cancellationToken);
+                batchItems.Add(new PackageInstallBatchFromPathItem(
+                    packagePath,
+                    item.CurrentVersion is null ? null : item.PackageId,
+                    allowDowngrade,
+                    reinstall));
+            }
 
-                if (!operationResult.Success)
-                {
-                    var errors = operationResult.Errors.Count == 0
-                        ? [operationResult.Message ?? $"Package operation failed for {item.PackageId}."]
-                        : operationResult.Errors;
-                    return new RegistryPackageInstallExecutionResult(
-                        false,
-                        errors[0],
-                        runtimeSessionApplied,
-                        requiresAppRestart,
-                warnings.Concat(operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning))).ToArray(),
-                errors,
-                        impactedPackageIds.ToArray(),
-                        plan.Items);
-                }
+            progress?.Invoke(new RegistryPackageInstallProgress($"Installing {batchItems.Count} package change(s)...", 82));
+            var operationResult = await runtimeApiClient.InstallPackagesFromPathsAsync(
+                new PackageInstallBatchFromPathRequest(batchItems),
+                cancellationToken);
 
-                warnings.AddRange(operationResult.RuntimeSessionApplied
-                    ? operationResult.Warnings
-                    : operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning)));
-                runtimeSessionApplied = operationResult.RuntimeSessionApplied;
-                requiresAppRestart = operationResult.RequiresAppRestart;
+            if (!operationResult.Success)
+            {
                 foreach (var impactedPackageId in operationResult.ImpactedPackageIds)
                 {
                     impactedPackageIds.Add(impactedPackageId);
                 }
+
+                var errors = operationResult.Errors.Count == 0
+                    ? [operationResult.Message ?? "Package operation failed."]
+                    : operationResult.Errors;
+                return new RegistryPackageInstallExecutionResult(
+                    false,
+                    errors[0],
+                    runtimeSessionApplied,
+                    requiresAppRestart,
+                    warnings.Concat(operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning))).ToArray(),
+                    errors,
+                    impactedPackageIds.ToArray(),
+                    plan.Items);
+            }
+
+            warnings.AddRange(operationResult.RuntimeSessionApplied
+                ? operationResult.Warnings
+                : operationResult.Warnings.Where(warning => !IsRuntimeSessionReloadWarning(warning)));
+            runtimeSessionApplied = operationResult.RuntimeSessionApplied;
+            requiresAppRestart = operationResult.RequiresAppRestart;
+            foreach (var impactedPackageId in operationResult.ImpactedPackageIds)
+            {
+                impactedPackageIds.Add(impactedPackageId);
             }
         }
         finally
         {
             TryDeleteDirectory(tempDirectory);
-        }
-
-        progress?.Invoke(new RegistryPackageInstallProgress("Loading installed packages...", 92));
-        var finalReload = await runtimeApiClient.ReloadInstalledPackageSessionAsync(impactedPackageIds.ToArray(), cancellationToken);
-        warnings.AddRange(finalReload.Warnings);
-        runtimeSessionApplied = finalReload.RuntimeSessionApplied;
-        requiresAppRestart = finalReload.RequiresAppRestart;
-        foreach (var impactedPackageId in finalReload.ImpactedPackageIds)
-        {
-            impactedPackageIds.Add(impactedPackageId);
         }
 
         return new RegistryPackageInstallExecutionResult(
@@ -236,6 +270,101 @@ public sealed class RegistryPackageInstallService
             [],
             impactedPackageIds.ToArray(),
             plan.Items);
+    }
+
+    private static async Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
+        IReadOnlyList<SunderStackPackageRequirement> packages,
+        IReadOnlyList<RegistryInstalledPackageState> installedPackages,
+        IRegistryApiClient registryClient,
+        Action<RegistryPackageInstallProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var packageRequirements = packages
+            .Where(package => !string.IsNullOrWhiteSpace(package.PackageId))
+            .ToArray();
+        if (packageRequirements.Length == 0)
+        {
+            return new RegistryResolveInstallPlanResponse(true, [], [], [], []);
+        }
+
+        var installedState = installedPackages
+            .GroupBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var combinedItems = new List<RegistryPackageInstallPlanItem>();
+        var combinedItemsByPackageId = new Dictionary<string, RegistryPackageInstallPlanItem>(StringComparer.OrdinalIgnoreCase);
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var conflicts = new List<RegistryPackageInstallPlanConflict>();
+
+        for (var index = 0; index < packageRequirements.Length; index++)
+        {
+            var requirement = packageRequirements[index];
+            var packageId = requirement.PackageId!;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (IsInstalledCompatible(installedState, requirement))
+            {
+                continue;
+            }
+
+            progress?.Invoke(new RegistryPackageInstallProgress(
+                $"Resolving {packageId} package graph...",
+                15 + 45d * index / packageRequirements.Length));
+
+            var plan = await registryClient.ResolveInstallPlanAsync(
+                new RegistryResolveInstallPlanRequest(
+                    packageId,
+                    Version: null,
+                    Tag: string.IsNullOrWhiteSpace(requirement.InstallTag) ? "latest" : requirement.InstallTag,
+                    InstalledPackages: installedState.Values.ToArray()),
+                cancellationToken);
+            warnings.AddRange(plan.Warnings);
+            errors.AddRange(plan.Errors);
+            conflicts.AddRange(plan.Conflicts);
+            if (!plan.Success)
+            {
+                continue;
+            }
+
+            foreach (var item in plan.Items)
+            {
+                if (combinedItemsByPackageId.TryGetValue(item.PackageId, out var existingItem))
+                {
+                    if (!string.Equals(existingItem.Version, item.Version, StringComparison.OrdinalIgnoreCase))
+                    {
+                        conflicts.Add(new RegistryPackageInstallPlanConflict(
+                            item.PackageId,
+                            item.CurrentVersion,
+                            item.Version,
+                            packageId,
+                            $"Stack package graph resolved '{item.PackageId}' to both {existingItem.Version} and {item.Version}."));
+                    }
+
+                    continue;
+                }
+
+                combinedItems.Add(item);
+                combinedItemsByPackageId[item.PackageId] = item;
+                installedState[item.PackageId] = new RegistryInstalledPackageState(item.PackageId, item.Version, item.DependsOn);
+            }
+
+            if (!IsInstalledCompatible(installedState, requirement))
+            {
+                conflicts.Add(new RegistryPackageInstallPlanConflict(
+                    packageId,
+                    installedState.TryGetValue(packageId, out var plannedState) ? plannedState.Version : null,
+                    BuildMinimumVersionRange(requirement.MinimumVersion),
+                    RequiredByPackageId: null,
+                    $"Stack requires '{packageId}' {BuildMinimumVersionRange(requirement.MinimumVersion)}, but the registry graph did not resolve a compatible version."));
+            }
+        }
+
+        return new RegistryResolveInstallPlanResponse(
+            errors.Count == 0 && conflicts.Count == 0,
+            combinedItems,
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            conflicts);
     }
 
     private static RegistryPackageInstallExecutionResult ToPlanFailure(RegistryResolveInstallPlanResponse plan)
@@ -259,6 +388,28 @@ public sealed class RegistryPackageInstallService
                     .Select(dependency => new RegistryPackageDependency(dependency.PackageId, dependency.VersionRange))
                     .ToArray()))
             .ToArray();
+
+    private static bool IsInstalledCompatible(
+        IReadOnlyDictionary<string, RegistryInstalledPackageState> installedState,
+        SunderStackPackageRequirement requirement)
+    {
+        if (string.IsNullOrWhiteSpace(requirement.PackageId)
+            || !installedState.TryGetValue(requirement.PackageId, out var installedPackage))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(requirement.MinimumVersion))
+        {
+            return true;
+        }
+
+        return PackageVersionRange.TryCompare(installedPackage.Version, requirement.MinimumVersion, out var comparison)
+               && comparison >= 0;
+    }
+
+    private static string? BuildMinimumVersionRange(string? minimumVersion)
+        => string.IsNullOrWhiteSpace(minimumVersion) ? null : $">= {minimumVersion}";
 
     private static string SanitizeFileName(string value)
     {

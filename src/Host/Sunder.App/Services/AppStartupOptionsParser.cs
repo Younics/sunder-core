@@ -12,6 +12,7 @@ public static class AppStartupOptionsParser
         var runtimeHostPath = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_HOST_PATH");
         var environmentRuntimeUrl = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_URL");
         var hasExplicitRuntimeUrl = !string.IsNullOrWhiteSpace(environmentRuntimeUrl);
+        var launchRequest = new AppLaunchRequest(AppLaunchRequestKind.None);
         var runtimeUrl = TryParseRuntimeUrl(environmentRuntimeUrl, parseErrors)
             ?? RuntimeUrlHelper.Normalize(AppStartupOptions.DefaultRuntimeUrl);
 
@@ -65,6 +66,22 @@ public static class AppStartupOptionsParser
                 continue;
             }
 
+            var parsedLaunchRequest = AppLaunchRequestParser.Parse(argument);
+            if (parsedLaunchRequest.Kind != AppLaunchRequestKind.None)
+            {
+                if (launchRequest.Kind == AppLaunchRequestKind.None)
+                {
+                    launchRequest = parsedLaunchRequest;
+                }
+
+                if (parsedLaunchRequest.Kind == AppLaunchRequestKind.Invalid && !string.IsNullOrWhiteSpace(parsedLaunchRequest.ErrorMessage))
+                {
+                    parseErrors.Add(parsedLaunchRequest.ErrorMessage);
+                }
+
+                continue;
+            }
+
             if (!argument.StartsWith("--", StringComparison.Ordinal))
             {
                 parseErrors.Add($"Unrecognized startup argument '{argument}'. Did you mean --dev-package {argument}?");
@@ -86,6 +103,7 @@ public static class AppStartupOptionsParser
             RuntimeHostPath = string.IsNullOrWhiteSpace(runtimeHostPath) ? null : Path.GetFullPath(runtimeHostPath),
             DevPackageFolders = normalizedDevPackageFolders,
             WatchDevPackages = watchDevPackages,
+            LaunchRequest = launchRequest,
             ParseErrors = parseErrors,
         };
     }

@@ -33,6 +33,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly RuntimeStatusViewModel _runtimeStatus;
     private readonly NotificationTrayViewModel _notificationTray;
     private readonly AppUpdatePromptViewModel _appUpdatePrompt;
+    private readonly RegistryAuthService? _registryAuthService;
     private readonly MainWindowSubscriptionScope _subscriptionScope;
     private readonly ShellSelectionPresenter _selectionPresenter = new();
     private readonly ShellItemViewModelFactory _shellItemFactory;
@@ -60,9 +61,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         AppPackageLifecycleCoordinator? packageLifecycleCoordinator = null,
         IShellCompositionService? shellCompositionService = null,
-        DeveloperLogService? developerLog = null)
+        DeveloperLogService? developerLog = null,
+        RegistryAuthService? registryAuthService = null)
     {
         _windowLauncher = windowLauncher;
+        _registryAuthService = registryAuthService;
         var effectivePackageLifecycleCoordinator = packageLifecycleCoordinator ?? new AppPackageLifecycleCoordinator(packageViewHostService, runtimeApiClientFactory);
         var effectiveShellCompositionService = shellCompositionService ?? new ShellCompositionService();
         _appUpdatePrompt = new AppUpdatePromptViewModel(new AppUpdatePromptCoordinator(updateService ?? new SunderUpdateService()));
@@ -181,6 +184,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         RebuildRailCollections(createHostedViews: !deferInitialHostedViews);
         PersistShellState();
+        _ = RefreshRegistryAccountAsync();
     }
 
     public PackageIconBarViewModel LeftTopBar => _shellLayout.LeftTopBar;
@@ -238,6 +242,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     [RelayCommand]
     private void OpenPackages() => _windowLauncher.ShowPackages();
+
+    [RelayCommand]
+    private void OpenStacks() => _windowLauncher.ShowStacks();
 
     [RelayCommand]
     private void OpenDeveloperLogs() => _windowLauncher.ShowDeveloperLogs();

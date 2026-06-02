@@ -77,6 +77,19 @@ internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog,
         }
     }
 
+    public IReadOnlyList<(string PackageId, TContract Contribution)> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
+    {
+        lock (_syncRoot)
+        {
+            return _extensions.TryGetValue(extensionPoint.Id, out var contributions)
+                ? contributions
+                    .Where(contribution => contribution.Instance is TContract)
+                    .Select(contribution => (contribution.PackageId, (TContract)contribution.Instance))
+                    .ToArray()
+                : [];
+        }
+    }
+
     private sealed record RuntimePackageExtensionContribution(string PackageId, object Instance);
 
     private void RaiseChanged(PackageExtensionCatalogChangeReason reason, IReadOnlyList<PackageExtensionChange> changes)

@@ -34,6 +34,14 @@ internal static class InstalledPackageEndpoints
             });
 
         group.MapPost(
+            "install/local-batch",
+            async (PackageInstallBatchFromPathRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            {
+                var result = await packageSessionService.InstallPackagesFromPathsAsync(request, cancellationToken);
+                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+            });
+
+        group.MapPost(
             "{packageId}/upgrade/local",
             async (string packageId, PackageUpgradeFromPathRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
             {

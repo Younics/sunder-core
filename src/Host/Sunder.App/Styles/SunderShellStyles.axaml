@@ -252,6 +252,93 @@
     <Setter Property="Padding" Value="12" />
   </Style>
 
+  <Style Selector="Border.stack-wizard-card">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
+    <Setter Property="Padding" Value="14" />
+  </Style>
+
+  <Style Selector="Border.stack-wizard-card.selected">
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+  </Style>
+
+  <Style Selector="Border.stack-wizard-card.package">
+    <Setter Property="Padding" Value="12" />
+  </Style>
+
+  <Style Selector="Border.stack-wizard-item-card">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+    <Setter Property="Padding" Value="12" />
+  </Style>
+
+  <Style Selector="Border.stack-wizard-item-card.selected">
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+  </Style>
+
+  <Style Selector="Border.stack-wizard-item-details">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+    <Setter Property="Padding" Value="12" />
+    <Setter Property="Margin" Value="30,0,0,0" />
+  </Style>
+
+  <Style Selector="Border.stack-export-detail-row">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
+    <Setter Property="Padding" Value="10" />
+  </Style>
+
+  <Style Selector="Border.stack-export-detail-row.excluded">
+    <Setter Property="Opacity" Value="0.72" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+  </Style>
+
+  <Style Selector="Border.stack-chip">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="999" />
+    <Setter Property="Padding" Value="8,3" />
+  </Style>
+
+  <Style Selector="Border.stack-chip TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Border.stack-chip.safety">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Shell.Glass.Surface}" />
+  </Style>
+
+  <Style Selector="Button.stack-card-toggle">
+    <Setter Property="Padding" Value="10,5" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Button.stack-card-toggle:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
   <Style Selector="Button.toolbar-icon, Button.window-action-button">
     <Setter Property="Width" Value="32" />
     <Setter Property="Height" Value="32" />
@@ -270,6 +357,32 @@
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Shell.Glass.Hover}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Shell.Glass.Border.Strong}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Border.registry-avatar">
+    <Setter Property="Width" Value="22" />
+    <Setter Property="Height" Value="22" />
+    <Setter Property="CornerRadius" Value="11" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Shell.Glass.Border.Strong}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="Border.registry-avatar.large">
+    <Setter Property="Width" Value="42" />
+    <Setter Property="Height" Value="42" />
+    <Setter Property="CornerRadius" Value="21" />
+  </Style>
+
+  <Style Selector="TextBlock.registry-avatar-text">
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.registry-avatar-text.large">
+    <Setter Property="FontSize" Value="15" />
   </Style>
 
   <Style Selector="Button.mac-window-action-button">

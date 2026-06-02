@@ -91,6 +91,7 @@ internal static class Program
             "dist-tag" => await DistTagAsync(args, registryClient, cancellationToken),
             "validate" => await ValidatePackageAsync(args, cancellationToken),
             "package" => await PackageAsync(args, cancellationToken),
+            "stack" or "stacks" => await StackAsync(args, registryClient, cancellationToken),
             _ => throw new ArgumentException($"Unknown command '{command}'. Run 'sunder --help' for usage.")
         };
     }
@@ -573,6 +574,235 @@ internal static class Program
         };
     }
 
+    private static async Task<int> StackAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        if (args.Count == 0)
+        {
+            throw new ArgumentException("Usage: sunder stack <search|info|download|publish|update|delete|use|inspect|validate> ...");
+        }
+
+        var command = args[0].ToLowerInvariant();
+        args.RemoveAt(0);
+        return command switch
+        {
+            "search" => await SearchStacksAsync(args, registryClient, cancellationToken),
+            "info" => await StackInfoAsync(args, registryClient, cancellationToken),
+            "download" => await DownloadStackAsync(args, registryClient, cancellationToken),
+            "publish" => await PublishStackAsync(args, registryClient, cancellationToken),
+            "update" => await UpdateStackAsync(args, registryClient, cancellationToken),
+            "delete" or "rm" => await DeleteStackAsync(args, registryClient, cancellationToken),
+            "use" => await UseStackAsync(args, registryClient, cancellationToken),
+            "inspect" or "validate" => await ValidateStackAsync(args, cancellationToken),
+            _ => throw new ArgumentException($"Unknown stack command '{command}'. Usage: sunder stack <search|info|download|publish|update|delete|use|inspect|validate> ...")
+        };
+    }
+
+    private static async Task<int> SearchStacksAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var skip = CommandLine.ConsumeInt32Option(args, "--skip", 0);
+        var take = CommandLine.ConsumeInt32Option(args, "--take", 20);
+        if (args.Count > 1)
+        {
+            throw new ArgumentException("Usage: sunder stack search [query] [--skip <count>] [--take <count>]");
+        }
+
+        var query = args.Count == 1 ? args[0] : null;
+        var stacks = await registryClient.SearchStacksAsync(query, skip, take, cancellationToken);
+        if (stacks.Count == 0)
+        {
+            ConsoleOutput.WriteInfo("No Stacks found.");
+            return Success;
+        }
+
+        WriteStackSummaries(stacks);
+        return Success;
+    }
+
+    private static async Task<int> StackInfoAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var stackId = CommandLine.RequireSingleArgument(args, "Usage: sunder stack info <stack-id>");
+        var stack = await registryClient.GetStackAsync(stackId, cancellationToken);
+        if (stack is null)
+        {
+            ConsoleOutput.WriteError($"Stack '{stackId}' was not found.");
+            return Failure;
+        }
+
+        WriteStackDetails(stack);
+        return Success;
+    }
+
+    private static async Task<int> DownloadStackAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var outputPath = CommandLine.ConsumeOption(args, "--output")
+            ?? CommandLine.ConsumeOption(args, "-o");
+        var stackId = CommandLine.RequireSingleArgument(args, "Usage: sunder stack download <stack-id> [--output <path>]");
+        var stack = await registryClient.GetStackAsync(stackId, cancellationToken);
+        if (stack is null)
+        {
+            ConsoleOutput.WriteError($"Stack '{stackId}' was not found.");
+            return Failure;
+        }
+
+        outputPath = ResolveStackOutputPath(outputPath, stack.StackId);
+        ConsoleOutput.WriteInfo($"Downloading Stack '{stack.StackId}'...");
+        await registryClient.DownloadStackAsync(stack.Artifact, stack.StackId, outputPath, cancellationToken);
+        ConsoleOutput.WriteSuccess($"Downloaded Stack '{stack.StackId}' to {outputPath}.");
+        return Success;
+    }
+
+    private static async Task<int> PublishStackAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var stackPath = CommandLine.ConsumeOption(args, "--file");
+        var token = ConsumeRegistryToken(args, registryClient);
+        var devLocal = CommandLine.ConsumeFlag(args, "--dev-local");
+        if (string.IsNullOrWhiteSpace(stackPath))
+        {
+            throw new ArgumentException("Usage: sunder stack publish --file <stack.sunderstack> [--token <token>] [--dev-local] [--timeout <duration>]");
+        }
+
+        CommandLine.EnsureNoExtraArguments(args, "Usage: sunder stack publish --file <stack.sunderstack> [--token <token>] [--dev-local] [--timeout <duration>]");
+
+        var fullPath = Path.GetFullPath(stackPath);
+        if (!File.Exists(fullPath))
+        {
+            ConsoleOutput.WriteError($"Stack file '{fullPath}' was not found.");
+            return Failure;
+        }
+
+        var validation = await ValidateStackArchiveAsync(fullPath, cancellationToken);
+        if (!validation.Success || validation.Manifest?.StackId is null)
+        {
+            WriteStackValidationResult(validation);
+            return Failure;
+        }
+
+        RegistryPublishStackResponse result;
+        if (devLocal)
+        {
+            ConsoleOutput.WriteInfo($"Publishing Stack '{validation.Manifest.StackId}' to the development registry...");
+            result = await registryClient.PublishLocalStackAsync(fullPath, cancellationToken);
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                ConsoleOutput.WriteError("Stack publish requires registry sign-in. Run 'sunder auth login', set SUNDER_REGISTRY_TOKEN, pass --token, or use --dev-local for a local development registry.");
+                return Failure;
+            }
+
+            ConsoleOutput.WriteInfo($"Publishing Stack '{validation.Manifest.StackId}' to the registry...");
+            result = await registryClient.PublishStackAsync(fullPath, token, cancellationToken);
+        }
+
+        return WriteStackPublishResult(result);
+    }
+
+    private static async Task<int> UpdateStackAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var stackPath = CommandLine.ConsumeOption(args, "--file");
+        var token = ConsumeRegistryToken(args, registryClient);
+        var stackId = CommandLine.RequireSingleArgument(args, "Usage: sunder stack update <stack-id> --file <stack.sunderstack> [--token <token>]");
+        if (string.IsNullOrWhiteSpace(stackPath))
+        {
+            throw new ArgumentException("Usage: sunder stack update <stack-id> --file <stack.sunderstack> [--token <token>]");
+        }
+
+        var fullPath = Path.GetFullPath(stackPath);
+        if (!File.Exists(fullPath))
+        {
+            ConsoleOutput.WriteError($"Stack file '{fullPath}' was not found.");
+            return Failure;
+        }
+
+        var validation = await ValidateStackArchiveAsync(fullPath, cancellationToken);
+        if (!validation.Success || validation.Manifest?.StackId is null)
+        {
+            WriteStackValidationResult(validation);
+            return Failure;
+        }
+
+        if (!string.Equals(validation.Manifest.StackId, stackId, StringComparison.OrdinalIgnoreCase))
+        {
+            ConsoleOutput.WriteError($"Stack archive id '{validation.Manifest.StackId}' does not match requested Stack id '{stackId}'.");
+            return Failure;
+        }
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            ConsoleOutput.WriteError("Stack update requires registry sign-in. Run 'sunder auth login', set SUNDER_REGISTRY_TOKEN, or pass --token.");
+            return Failure;
+        }
+
+        ConsoleOutput.WriteInfo($"Updating Stack '{validation.Manifest.StackId}' in the registry...");
+        var result = await registryClient.PublishStackAsync(fullPath, token, cancellationToken);
+        return WriteStackPublishResult(result);
+    }
+
+    private static async Task<int> DeleteStackAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var token = ConsumeRegistryToken(args, registryClient);
+        var stackId = CommandLine.RequireSingleArgument(args, "Usage: sunder stack delete <stack-id> [--token <token>]");
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            ConsoleOutput.WriteError("Stack management requires registry sign-in. Run 'sunder auth login', set SUNDER_REGISTRY_TOKEN, or pass --token.");
+            return Failure;
+        }
+
+        var result = await registryClient.DeleteStackAsync(stackId, token, cancellationToken);
+        return WriteStackManagementResult(result);
+    }
+
+    private static async Task<int> UseStackAsync(
+        List<string> args,
+        RegistryClient registryClient,
+        CancellationToken cancellationToken)
+    {
+        var stackId = CommandLine.RequireSingleArgument(args, "Usage: sunder stack use <stack-id>");
+        var stack = await registryClient.GetStackAsync(stackId, cancellationToken);
+        if (stack is null)
+        {
+            ConsoleOutput.WriteError($"Stack '{stackId}' was not found.");
+            return Failure;
+        }
+
+        WriteStackDetails(stack);
+        Console.WriteLine();
+        ConsoleOutput.WriteInfo("Open this link in Sunder App to review and use the Stack:");
+        Console.WriteLine(BuildStackUseLink(stack.StackId));
+        ConsoleOutput.WriteInfo("Sunder App will preview package installs, required inputs, and setup actions before import.");
+        return Success;
+    }
+
+    private static async Task<int> ValidateStackAsync(List<string> args, CancellationToken cancellationToken)
+    {
+        var stackPath = CommandLine.RequireSingleArgument(args, "Usage: sunder stack inspect <stack.sunderstack>");
+        var result = await ValidateStackArchiveAsync(stackPath, cancellationToken);
+        WriteStackValidationResult(result);
+        return result.Success ? Success : Failure;
+    }
+
     private static async Task<int> ValidatePackageAsync(List<string> args, CancellationToken cancellationToken)
     {
         var packagePath = CommandLine.RequireSingleArgument(args, "Usage: sunder package validate <package.sunderpkg>");
@@ -752,6 +982,21 @@ internal static class Program
         }
     }
 
+    private static async Task<SunderStackArchiveValidationResult> ValidateStackArchiveAsync(
+        string stackPath,
+        CancellationToken cancellationToken)
+    {
+        var stagingPath = Path.Combine(Path.GetTempPath(), "sunder-cli-stack-validate", Guid.NewGuid().ToString("N"));
+        try
+        {
+            return await SunderStackArchiveInspector.ExtractAndValidateAsync(stackPath, stagingPath, cancellationToken);
+        }
+        finally
+        {
+            TryDeleteDirectory(stagingPath);
+        }
+    }
+
     private static IReadOnlyList<RegistryInstalledPackageState> ToInstalledPackageStates(IReadOnlyList<InstalledPackageDescriptor> packages)
         => packages
             .Select(package => new RegistryInstalledPackageState(
@@ -808,6 +1053,19 @@ internal static class Program
         }
     }
 
+    private static void WriteStackSummaries(IReadOnlyList<RegistryStackSummary> stacks)
+    {
+        var idWidth = Math.Max("Stack".Length, stacks.Max(stack => stack.StackId.Length));
+        var packageWidth = Math.Max("Packages".Length, stacks.Max(stack => stack.PackageCount.ToString().Length));
+        var fragmentWidth = Math.Max("Fragments".Length, stacks.Max(stack => stack.FragmentCount.ToString().Length));
+
+        Console.WriteLine($"{"Stack".PadRight(idWidth)}  {"Packages".PadRight(packageWidth)}  {"Fragments".PadRight(fragmentWidth)}  Summary");
+        foreach (var stack in stacks)
+        {
+            Console.WriteLine($"{stack.StackId.PadRight(idWidth)}  {stack.PackageCount.ToString().PadRight(packageWidth)}  {stack.FragmentCount.ToString().PadRight(fragmentWidth)}  {stack.Summary ?? string.Empty}");
+        }
+    }
+
     private static void WriteInstalledPackages(IReadOnlyList<InstalledPackageDescriptor> packages)
     {
         var idWidth = Math.Max("Package".Length, packages.Max(package => package.PackageId.Length));
@@ -841,6 +1099,64 @@ internal static class Program
 
             Console.WriteLine($"  {version.Version}{suffix}");
         }
+    }
+
+    private static void WriteStackDetails(RegistryStackDetails stack)
+    {
+        Console.WriteLine($"Stack: {stack.StackId}");
+        Console.WriteLine($"Name: {stack.Name}");
+        if (!string.IsNullOrWhiteSpace(stack.Summary))
+        {
+            Console.WriteLine($"Summary: {stack.Summary}");
+        }
+
+        Console.WriteLine($"Created: {stack.CreatedAtUtc.LocalDateTime:g}");
+        Console.WriteLine($"Updated: {stack.UpdatedAtUtc.LocalDateTime:g}");
+        Console.WriteLine($"Use Link: {BuildStackUseLink(stack.StackId)}");
+
+        Console.WriteLine("Packages:");
+        if (stack.Packages.Count == 0)
+        {
+            Console.WriteLine("  none");
+        }
+        else
+        {
+            foreach (var package in stack.Packages)
+            {
+                Console.WriteLine($"  {package.PackageId} {BuildStackPackageRequirementText(package)}");
+            }
+        }
+
+        Console.WriteLine("Fragments:");
+        if (stack.Fragments.Count == 0)
+        {
+            Console.WriteLine("  none");
+        }
+        else
+        {
+            foreach (var fragment in stack.Fragments)
+            {
+                var selected = fragment.DefaultSelected ? "selected" : "off by default";
+                Console.WriteLine($"  {fragment.FragmentId} ({fragment.OwnerPackageId}, {selected})");
+            }
+        }
+
+        Console.WriteLine("Required Inputs:");
+        if (stack.RequiredInputs.Count == 0)
+        {
+            Console.WriteLine("  none");
+        }
+        else
+        {
+            foreach (var input in stack.RequiredInputs)
+            {
+                Console.WriteLine($"  {input.InputId} ({input.Kind}, {(input.Required ? "required" : "optional")})");
+            }
+        }
+
+        Console.WriteLine($"Safety: {BuildStackSafetyText(stack.Safety)}");
+        Console.WriteLine($"Artifact SHA-256: {stack.Artifact.Sha256}");
+        Console.WriteLine($"Artifact Size: {stack.Artifact.Size} bytes");
     }
 
     private static void WritePackageVersion(RegistryPackageVersionDetails packageVersion)
@@ -898,6 +1214,26 @@ internal static class Program
         ConsoleOutput.WriteInfo($"Package is valid: {result.Manifest!.Id} {result.Manifest.Version}");
     }
 
+    private static void WriteStackValidationResult(SunderStackArchiveValidationResult result)
+    {
+        foreach (var warning in result.Warnings)
+        {
+            ConsoleOutput.WriteWarning(warning);
+        }
+
+        foreach (var error in result.Errors)
+        {
+            ConsoleOutput.WriteError(error);
+        }
+
+        if (!result.Success)
+        {
+            return;
+        }
+
+        ConsoleOutput.WriteInfo($"Stack is valid: {result.Manifest!.StackId} ({result.Manifest.Name})");
+    }
+
     private static int WriteOperationResult(PackageOperationResult result)
     {
         foreach (var warning in result.Warnings)
@@ -953,6 +1289,31 @@ internal static class Program
         return result.Success ? Success : Failure;
     }
 
+    private static int WriteStackPublishResult(RegistryPublishStackResponse result)
+    {
+        foreach (var warning in result.Warnings)
+        {
+            ConsoleOutput.WriteWarning(warning);
+        }
+
+        foreach (var error in result.Errors)
+        {
+            ConsoleOutput.WriteError(error);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            (result.Success ? Console.Out : Console.Error).WriteLine(result.Message);
+        }
+
+        if (result.Success && !string.IsNullOrWhiteSpace(result.StackId))
+        {
+            ConsoleOutput.WriteInfo($"Use link: {BuildStackUseLink(result.StackId)}");
+        }
+
+        return result.Success ? Success : Failure;
+    }
+
     private static int WriteManagementResult(RegistryPackageManagementOperationResponse result)
     {
         foreach (var error in result.Errors)
@@ -966,6 +1327,82 @@ internal static class Program
         }
 
         return result.Success ? Success : Failure;
+    }
+
+    private static int WriteStackManagementResult(RegistryStackManagementOperationResponse result)
+    {
+        foreach (var error in result.Errors)
+        {
+            ConsoleOutput.WriteError(error);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            (result.Success ? Console.Out : Console.Error).WriteLine(result.Message);
+        }
+
+        return result.Success ? Success : Failure;
+    }
+
+    private static string BuildStackUseLink(string stackId)
+        => $"sunder://stacks/{Uri.EscapeDataString(stackId)}/use";
+
+    private static string ResolveStackOutputPath(string? outputPath, string stackId)
+    {
+        if (string.IsNullOrWhiteSpace(outputPath))
+        {
+            return Path.GetFullPath(BuildStackFileName(stackId));
+        }
+
+        var fullPath = Path.GetFullPath(outputPath);
+        return Directory.Exists(fullPath)
+            ? Path.Combine(fullPath, BuildStackFileName(stackId))
+            : fullPath;
+    }
+
+    private static string BuildStackFileName(string stackId)
+    {
+        var fileName = string.IsNullOrWhiteSpace(stackId)
+            ? "sunder-stack"
+            : string.Concat(stackId.Trim().Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.' ? char.ToLowerInvariant(character) : '-'));
+        return fileName.EndsWith(".sunderstack", StringComparison.OrdinalIgnoreCase)
+            ? fileName
+            : fileName + ".sunderstack";
+    }
+
+    private static string BuildStackPackageRequirementText(RegistryStackPackageRequirement package)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(package.InstallTag))
+        {
+            parts.Add(package.InstallTag);
+        }
+
+        if (!string.IsNullOrWhiteSpace(package.MinimumVersion))
+        {
+            parts.Add($">= {package.MinimumVersion}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(package.CreatedWithVersion))
+        {
+            parts.Add($"created with {package.CreatedWithVersion}");
+        }
+
+        parts.Add(package.Required ? "required" : "optional");
+        return string.Join(" - ", parts);
+    }
+
+    private static string BuildStackSafetyText(RegistryStackSafety safety)
+    {
+        var flags = new List<string>();
+        if (safety.ContainsSecrets) flags.Add("raw secrets");
+        if (safety.ContainsSecretReferences) flags.Add("secret references");
+        if (safety.ContainsLocalPaths) flags.Add("local paths");
+        if (safety.ContainsPrivateText) flags.Add("private text");
+        if (safety.ContainsExecutableCommands) flags.Add("commands");
+        if (safety.ContainsNetworkEndpoints) flags.Add("network endpoints");
+        if (safety.ContainsMachineSpecificValues) flags.Add("machine-specific values");
+        return flags.Count == 0 ? "no sensitive content flags declared" : string.Join(", ", flags);
     }
 
     private static string? ConsumeRegistryToken(List<string> args, RegistryClient registryClient)
@@ -1026,6 +1463,15 @@ internal static class Program
         Console.WriteLine("  sunder dist-tag set <package-id> <tag> <version> [--token <token>]");
         Console.WriteLine("  sunder dist-tag delete <package-id> <tag> [--token <token>]");
         Console.WriteLine("  sunder package validate <package.sunderpkg>");
+        Console.WriteLine("  sunder stack search [query] [--skip <count>] [--take <count>]");
+        Console.WriteLine("  sunder stack info <stack-id>");
+        Console.WriteLine("  sunder stack download <stack-id> [--output <path>]");
+        Console.WriteLine("  sunder stack publish --file <stack.sunderstack> [--token <token>] [--dev-local] [--timeout <duration>]");
+        Console.WriteLine("  sunder stack update <stack-id> --file <stack.sunderstack> [--token <token>]");
+        Console.WriteLine("  sunder stack delete <stack-id> [--token <token>]");
+        Console.WriteLine("  sunder stack use <stack-id>");
+        Console.WriteLine("  sunder stack inspect <stack.sunderstack>");
+        Console.WriteLine("  sunder stack validate <stack.sunderstack>");
         Console.WriteLine();
         Console.WriteLine("Global options:");
         Console.WriteLine("  --registry-api-url <url>  Registry API URL. Debug default: http://localhost:5288/");

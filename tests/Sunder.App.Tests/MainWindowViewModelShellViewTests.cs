@@ -901,6 +901,10 @@ public sealed class MainWindowViewModelShellViewTests
         {
         }
 
+        public void ShowStacks()
+        {
+        }
+
         public void ShowDeveloperLogs()
         {
         }

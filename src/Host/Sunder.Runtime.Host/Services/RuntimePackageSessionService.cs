@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Sunder.PackageManagement;
 using Sunder.Protocol;
+using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -503,6 +505,385 @@ internal sealed class RuntimePackageSessionService
         return await ReloadInstalledPackagesAfterMutationAsync(result, cancellationToken);
     }
 
+    public async Task<PackageOperationResult> InstallPackagesFromPathsAsync(
+        PackageInstallBatchFromPathRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.Items.Count == 0)
+        {
+            return PackageOperationResults.Success(
+                "No package changes required.",
+                runtimeSessionApplied: true,
+                impactedPackageIds: []);
+        }
+
+        var warnings = new List<string>();
+        var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in request.Items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = string.IsNullOrWhiteSpace(item.PackageId)
+                ? await _packageArchiveInstaller.InstallFromPathAsync(item.PackagePath, cancellationToken)
+                : await _packageArchiveInstaller.UpgradeFromPathAsync(
+                    item.PackageId,
+                    item.PackagePath,
+                    item.AllowDowngrade,
+                    item.Reinstall,
+                    cancellationToken);
+
+            warnings.AddRange(result.Warnings);
+            foreach (var packageId in result.ImpactedPackageIds)
+            {
+                impactedPackageIds.Add(packageId);
+            }
+
+            if (!result.Success)
+            {
+                return result with
+                {
+                    Warnings = warnings,
+                    ImpactedPackageIds = impactedPackageIds.ToArray(),
+                };
+            }
+        }
+
+        var operationResult = PackageOperationResults.Success(
+            $"Installed {request.Items.Count} package change(s).",
+            warnings: warnings,
+            impactedPackageIds: impactedPackageIds.ToArray());
+        return await ReloadInstalledPackagesAfterMutationAsync(operationResult, cancellationToken);
+    }
+
+    public async Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(
+        RuntimeStackImportPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var stagingPath = CreateStackStagingPath();
+        try
+        {
+            var loadResult = await LoadStackFragmentsAsync(request.StackPath, request.SelectedFragmentIds, stagingPath, cancellationToken);
+            if (!loadResult.Success)
+            {
+                return new RuntimeStackImportPreviewResponse(false, [], [], [], loadResult.Warnings, loadResult.Errors);
+            }
+
+            var contributors = GetStackContributors();
+            var actions = new List<RuntimeStackImportActionDescriptor>();
+            var requiredInputs = new List<RuntimeStackRequiredInputDescriptor>();
+            var conflicts = new List<RuntimeStackImportConflictDescriptor>();
+            var warnings = loadResult.Warnings.ToList();
+            var errors = new List<string>();
+
+            foreach (var group in loadResult.Fragments.GroupBy(fragment => fragment.ContributorId, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!contributors.TryGetValue(group.Key, out var contributor))
+                {
+                    errors.Add($"No active Stack contributor '{group.Key}' is available. Install and enable its package before importing this Stack.");
+                    continue;
+                }
+
+                try
+                {
+                    var preview = await contributor.PreviewImportAsync(
+                        new StackImportPreviewRequest(group.ToArray(), request.InputValues, request.IdRemaps),
+                        cancellationToken);
+                    actions.AddRange(preview.Actions.Select(action => ToProtocolAction(contributor.ContributorId, action)));
+                    requiredInputs.AddRange(preview.RequiredInputs.Select(input => ToProtocolRequiredInput(contributor.ContributorId, input)));
+                    conflicts.AddRange(preview.Conflicts.Select(conflict => ToProtocolConflict(contributor.ContributorId, conflict)));
+                    warnings.AddRange(preview.Warnings);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    errors.Add($"Stack contributor '{contributor.ContributorId}' preview failed: {ex.Message}");
+                }
+            }
+
+            var hasBlockingConflict = conflicts.Any(conflict => string.Equals(conflict.Severity, StackImportConflictSeverity.Error.ToString(), StringComparison.OrdinalIgnoreCase));
+            return new RuntimeStackImportPreviewResponse(
+                errors.Count == 0 && !hasBlockingConflict,
+                actions,
+                requiredInputs,
+                conflicts,
+                warnings,
+                errors);
+        }
+        finally
+        {
+            TryDeleteDirectory(stagingPath);
+        }
+    }
+
+    public async Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken cancellationToken = default)
+    {
+        var items = new List<RuntimeStackExportItemDescriptor>();
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        foreach (var (packageId, contributor) in _sessionState.GetExtensionContributions(SunderStackExtensionPoints.StackContributors))
+        {
+            try
+            {
+                var discovered = await contributor.ListExportItemsAsync(new StackExportDiscoveryContext(packageId), cancellationToken);
+                items.AddRange(discovered.Select(item => new RuntimeStackExportItemDescriptor(
+                    contributor.ContributorId,
+                    packageId,
+                    item.ItemId,
+                    item.DisplayName,
+                    item.Kind,
+                    item.DefaultSelected,
+                    item.Sensitivities?.Select(sensitivity => sensitivity.ToString()).ToArray() ?? [],
+                    item.Description,
+                    item.Details?.Select(detail => new RuntimeStackExportItemDetail(
+                        detail.Label,
+                        detail.Value,
+                        detail.Sensitivity?.ToString(),
+                        detail.Description,
+                        detail.ValueWhenExcluded,
+                        string.IsNullOrWhiteSpace(detail.DetailId) ? BuildStackDetailId(detail.Label) : detail.DetailId,
+                        detail.DefaultSelected,
+                        detail.IsEditable,
+                        detail.SupportsAskOnImport)).ToArray() ?? [])));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                errors.Add($"Stack contributor '{contributor.ContributorId}' export discovery failed: {ex.Message}");
+            }
+        }
+
+        return new RuntimeStackExportDiscoveryResponse(items, warnings, errors);
+    }
+
+    public async Task<RuntimeStackExportResponse> ExportStackAsync(
+        RuntimeStackExportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.StackId))
+        {
+            return new RuntimeStackExportResponse(false, null, [], ["Stack id is required."]);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            return new RuntimeStackExportResponse(false, null, [], ["Stack name is required."]);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.OutputPath))
+        {
+            return new RuntimeStackExportResponse(false, null, [], ["Stack output path is required."]);
+        }
+
+        if (request.SelectedItems.Count == 0)
+        {
+            return new RuntimeStackExportResponse(false, null, [], ["Select at least one setup item to export."]);
+        }
+
+        var contributors = _sessionState
+            .GetExtensionContributions(SunderStackExtensionPoints.StackContributors)
+            .Where(contribution => !string.IsNullOrWhiteSpace(contribution.Contribution.ContributorId))
+            .GroupBy(contribution => contribution.Contribution.ContributorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var fragments = new List<StackFragmentExport>();
+        var fragmentDisplayMetadata = new Dictionary<string, StackFragmentDisplayMetadata>(StringComparer.OrdinalIgnoreCase);
+        var packageRequirements = new List<StackPackageRequirement>();
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var exportOptions = new StackExportOptions(
+            request.Options.IncludePrivateText,
+            request.Options.IncludeMachineSpecificValues,
+            request.Options.IncludeExecutableCommands,
+            request.Options.IncludeNetworkEndpoints);
+
+        foreach (var group in request.SelectedItems.GroupBy(item => item.ContributorId, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!contributors.TryGetValue(group.Key, out var registration))
+            {
+                errors.Add($"No active Stack contributor '{group.Key}' is available for export.");
+                continue;
+            }
+
+            var (packageId, contributor) = registration;
+
+            try
+            {
+                var itemSelections = group
+                    .GroupBy(item => item.ItemId, StringComparer.OrdinalIgnoreCase)
+                    .Select(itemGroup => new StackExportItemSelection(
+                        itemGroup.Key,
+                        itemGroup.SelectMany(item => item.Details ?? [])
+                            .Select(detail => new StackExportDetailSelection(
+                                detail.DetailId,
+                                detail.IsSelected,
+                                detail.ValueOverride,
+                                Enum.TryParse<StackValueSensitivity>(detail.SensitivityOverride, ignoreCase: true, out var sensitivityOverride)
+                                    ? (StackValueSensitivity?)sensitivityOverride
+                                    : null))
+                            .ToArray()))
+                    .ToArray();
+                var discoveredItems = await contributor.ListExportItemsAsync(new StackExportDiscoveryContext(packageId), cancellationToken);
+                var displayMetadataByItemId = BuildDisplayMetadataByItemId(discoveredItems, itemSelections);
+                var contribution = await contributor.ExportAsync(
+                    new StackExportRequest(
+                        itemSelections.Select(item => item.ItemId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                        exportOptions,
+                        itemSelections),
+                    cancellationToken);
+                fragments.AddRange(contribution.Fragments);
+                foreach (var fragment in contribution.Fragments)
+                {
+                    var sourceItemId = string.IsNullOrWhiteSpace(fragment.SourceItemId)
+                        ? InferSourceItemId(itemSelections, contribution.Fragments)
+                        : fragment.SourceItemId;
+                    displayMetadataByItemId.TryGetValue(sourceItemId ?? string.Empty, out var itemDisplayMetadata);
+                    fragmentDisplayMetadata[fragment.FragmentId] = new StackFragmentDisplayMetadata(
+                        sourceItemId,
+                        itemDisplayMetadata?.Kind,
+                        itemDisplayMetadata?.DisplayDetails ?? []);
+                }
+
+                packageRequirements.AddRange(contribution.PackageRequirements);
+                warnings.AddRange(contribution.Warnings);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                errors.Add($"Stack contributor '{contributor.ContributorId}' export failed: {ex.Message}");
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            return new RuntimeStackExportResponse(false, null, warnings, errors);
+        }
+
+        var secretFragments = fragments
+            .Where(fragment => fragment.Safety.ContainsSecrets)
+            .Select(fragment => fragment.DisplayName)
+            .ToArray();
+        if (secretFragments.Length > 0)
+        {
+            return new RuntimeStackExportResponse(
+                false,
+                null,
+                warnings,
+                ["Stack export cannot include raw secrets. Remove or redact secret values from: " + string.Join(", ", secretFragments)]);
+        }
+
+        if (fragments.Count == 0 && packageRequirements.Count == 0)
+        {
+            return new RuntimeStackExportResponse(false, null, warnings, ["Selected setup items did not produce Stack content."]);
+        }
+
+        var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "export", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var payloadFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var fragment in fragments)
+            {
+                var payloadPath = Path.Combine(stagingPath, "fragments", fragment.FragmentId + ".json");
+                Directory.CreateDirectory(Path.GetDirectoryName(payloadPath)!);
+                await File.WriteAllTextAsync(payloadPath, fragment.JsonPayload, cancellationToken);
+                payloadFiles[$"payload/fragments/{fragment.FragmentId}.json"] = payloadPath;
+
+                foreach (var file in fragment.Files ?? [])
+                {
+                    payloadFiles[$"payload/files/{fragment.FragmentId}/{file.RelativePath.Replace('\\', '/')}"] = file.SourcePath;
+                }
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var manifest = new SunderStackManifest
+            {
+                SchemaVersion = 1,
+                StackId = request.StackId,
+                Name = request.Name,
+                Summary = request.Summary,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                Packages = BuildPackageRequirements(packageRequirements.Concat(fragments.SelectMany(fragment => fragment.RequiresPackages ?? []))),
+                Fragments = fragments.Select(fragment => ToManifestFragment(
+                    fragment,
+                    fragmentDisplayMetadata.TryGetValue(fragment.FragmentId, out var metadata) ? metadata : null)).ToArray(),
+                RequiredInputs = fragments.SelectMany(fragment => fragment.RequiredInputs ?? []).Select(ToManifestRequiredInput).ToArray(),
+                Safety = BuildAggregateSafety(fragments.Select(fragment => fragment.Safety)),
+            };
+
+            await SunderStackArchiveWriter.WriteAsync(manifest, request.OutputPath, payloadFiles, cancellationToken);
+            var validation = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+                request.OutputPath,
+                Path.Combine(stagingPath, "validate"),
+                cancellationToken);
+            warnings.AddRange(validation.Warnings);
+            if (!validation.Success)
+            {
+                TryDeleteFile(request.OutputPath);
+                return new RuntimeStackExportResponse(false, null, warnings, validation.Errors);
+            }
+
+            return new RuntimeStackExportResponse(true, request.OutputPath, warnings, []);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new RuntimeStackExportResponse(false, null, warnings, [$"Failed to write Stack archive: {ex.Message}"]);
+        }
+        finally
+        {
+            TryDeleteDirectory(stagingPath);
+        }
+    }
+
+    public async Task<RuntimeStackImportResponse> ImportStackAsync(
+        RuntimeStackImportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var stagingPath = CreateStackStagingPath();
+        try
+        {
+            var loadResult = await LoadStackFragmentsAsync(request.StackPath, request.SelectedFragmentIds, stagingPath, cancellationToken);
+            if (!loadResult.Success)
+            {
+                return new RuntimeStackImportResponse(false, [], request.IdRemaps, loadResult.Warnings, loadResult.Errors);
+            }
+
+            var contributors = GetStackContributors();
+            var importedItems = new List<RuntimeStackImportedItemDescriptor>();
+            var idRemaps = new Dictionary<string, string>(request.IdRemaps, StringComparer.OrdinalIgnoreCase);
+            var warnings = loadResult.Warnings.ToList();
+            var errors = new List<string>();
+
+            foreach (var group in loadResult.Fragments.GroupBy(fragment => fragment.ContributorId, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!contributors.TryGetValue(group.Key, out var contributor))
+                {
+                    errors.Add($"No active Stack contributor '{group.Key}' is available. Install and enable its package before importing this Stack.");
+                    continue;
+                }
+
+                try
+                {
+                    var result = await contributor.ImportAsync(
+                        new StackImportRequest(group.ToArray(), request.InputValues, idRemaps, request.SelectedActionIds),
+                        cancellationToken);
+                    importedItems.AddRange(result.ImportedItems.Select(item => ToProtocolImportedItem(contributor.ContributorId, item)));
+                    foreach (var (key, value) in result.IdRemaps)
+                    {
+                        idRemaps[key] = value;
+                    }
+
+                    warnings.AddRange(result.Warnings);
+                    errors.AddRange(result.Errors);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    errors.Add($"Stack contributor '{contributor.ContributorId}' import failed: {ex.Message}");
+                }
+            }
+
+            return new RuntimeStackImportResponse(errors.Count == 0, importedItems, idRemaps, warnings, errors);
+        }
+        finally
+        {
+            TryDeleteDirectory(stagingPath);
+        }
+    }
+
     public async Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
         InstalledPackageSessionReloadRequest request,
         CancellationToken cancellationToken = default)
@@ -836,6 +1217,30 @@ internal sealed class RuntimePackageSessionService
             _ => throw new ArgumentOutOfRangeException(nameof(overlayOwner), overlayOwner, null),
         };
 
+    private static string BuildStackDetailId(string label)
+    {
+        var builder = new System.Text.StringBuilder(label.Length);
+        var pendingSeparator = false;
+        foreach (var character in label.Trim().ToLowerInvariant())
+        {
+            if (char.IsAsciiLetterOrDigit(character))
+            {
+                builder.Append(character);
+                pendingSeparator = false;
+                continue;
+            }
+
+            if (builder.Length > 0 && !pendingSeparator)
+            {
+                builder.Append('-');
+                pendingSeparator = true;
+            }
+        }
+
+        var detailId = builder.ToString().Trim('-');
+        return string.IsNullOrWhiteSpace(detailId) ? "detail" : detailId;
+    }
+
     private static IReadOnlyList<string> BuildImpactedPackageIds(
         IReadOnlyList<ActivePackageDescriptor> currentActivePackages,
         IReadOnlyList<PackageSourceDescriptor> currentPackageSources,
@@ -953,11 +1358,294 @@ internal sealed class RuntimePackageSessionService
     private ActiveLoadedPackage? GetLoadedPackage(string packageId)
         => _sessionState.GetLoadedPackage(packageId);
 
+    private Dictionary<string, IPackageStackContributor> GetStackContributors()
+        => _sessionState
+            .GetExtensionContributions(SunderStackExtensionPoints.StackContributors)
+            .Select(contribution => contribution.Contribution)
+            .Where(contributor => !string.IsNullOrWhiteSpace(contributor.ContributorId))
+            .GroupBy(contributor => contributor.ContributorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+    private static async Task<StackFragmentLoadResult> LoadStackFragmentsAsync(
+        string stackPath,
+        IReadOnlyList<string> selectedFragmentIds,
+        string stagingPath,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(stackPath))
+        {
+            return StackFragmentLoadResult.Failed("Stack path is required.");
+        }
+
+        stackPath = Path.GetFullPath(stackPath);
+        if (!File.Exists(stackPath))
+        {
+            return StackFragmentLoadResult.Failed($"Stack file '{stackPath}' does not exist.");
+        }
+
+        var validation = await SunderStackArchiveInspector.ExtractAndValidateAsync(stackPath, stagingPath, cancellationToken);
+        if (!validation.Success || validation.Manifest is null)
+        {
+            return new StackFragmentLoadResult(false, [], validation.Warnings, validation.Errors);
+        }
+
+        var selected = selectedFragmentIds.Count == 0
+            ? (validation.Manifest.Fragments ?? [])
+                .Where(fragment => fragment.DefaultSelected != false)
+                .Select(fragment => fragment.FragmentId)
+                .Where(fragmentId => !string.IsNullOrWhiteSpace(fragmentId))
+                .Select(fragmentId => fragmentId!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : selectedFragmentIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fragments = new List<StackFragmentImport>();
+        foreach (var fragment in validation.Manifest.Fragments ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(fragment.FragmentId) || !selected.Contains(fragment.FragmentId))
+            {
+                continue;
+            }
+
+            var payloadPath = Path.Combine(stagingPath, fragment.PayloadPath!.Replace('/', Path.DirectorySeparatorChar));
+            var jsonPayload = await File.ReadAllTextAsync(payloadPath, cancellationToken);
+            fragments.Add(new StackFragmentImport(
+                fragment.FragmentId,
+                fragment.OwnerPackageId!,
+                fragment.ContributorId!,
+                fragment.SchemaId!,
+                fragment.SchemaVersion!.Value,
+                fragment.DisplayName!,
+                jsonPayload,
+                fragment.Description,
+                ResolveFragmentFiles(stagingPath, fragment.FragmentId)));
+        }
+
+        return new StackFragmentLoadResult(true, fragments, validation.Warnings, []);
+    }
+
+    private static IReadOnlyList<StackPayloadFile> ResolveFragmentFiles(string stagingPath, string fragmentId)
+    {
+        var fragmentFilesPath = Path.Combine(stagingPath, "payload", "files", fragmentId);
+        if (!Directory.Exists(fragmentFilesPath))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(fragmentFilesPath, "*", SearchOption.AllDirectories)
+            .Select(path => new StackPayloadFile(
+                Path.GetRelativePath(fragmentFilesPath, path).Replace('\\', '/'),
+                path))
+            .ToArray();
+    }
+
+    private static RuntimeStackImportActionDescriptor ToProtocolAction(string contributorId, StackImportAction action)
+        => new(action.ActionId, contributorId, action.DisplayName, action.Kind.ToString(), action.DefaultSelected, action.Description);
+
+    private static RuntimeStackRequiredInputDescriptor ToProtocolRequiredInput(string contributorId, StackRequiredInputDescriptor input)
+        => new(input.InputId, contributorId, input.Kind.ToString(), input.Label, input.Required, input.Description, input.DefaultValue);
+
+    private static RuntimeStackImportConflictDescriptor ToProtocolConflict(string contributorId, StackImportConflict conflict)
+        => new(conflict.ConflictId, contributorId, conflict.Message, conflict.Severity.ToString(), conflict.FragmentId);
+
+    private static RuntimeStackImportedItemDescriptor ToProtocolImportedItem(string contributorId, StackImportedItem item)
+        => new(item.ItemId, contributorId, item.DisplayName, item.Kind);
+
+    private static IReadOnlyList<SunderStackPackageRequirement> BuildPackageRequirements(IEnumerable<StackPackageRequirement> requirements)
+        => requirements
+            .Where(requirement => !string.IsNullOrWhiteSpace(requirement.PackageId))
+            .GroupBy(requirement => requirement.PackageId, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group.First();
+                return new SunderStackPackageRequirement
+                {
+                    PackageId = first.PackageId,
+                    InstallTag = string.IsNullOrWhiteSpace(first.InstallTag) ? "latest" : first.InstallTag,
+                    CreatedWithVersion = first.CreatedWithVersion,
+                    MinimumVersion = group.Select(requirement => requirement.MinimumVersion).FirstOrDefault(version => !string.IsNullOrWhiteSpace(version)),
+                    Required = group.Any(requirement => requirement.Required),
+                };
+            })
+            .OrderBy(requirement => requirement.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private sealed record StackFragmentDisplayMetadata(
+        string? SourceItemId,
+        string? Kind,
+        IReadOnlyList<SunderStackFragmentDisplayDetail> DisplayDetails);
+
+    private sealed record StackItemDisplayMetadata(
+        string? Kind,
+        IReadOnlyList<SunderStackFragmentDisplayDetail> DisplayDetails);
+
+    private static IReadOnlyDictionary<string, StackItemDisplayMetadata> BuildDisplayMetadataByItemId(
+        IReadOnlyList<StackExportItemDescriptor> discoveredItems,
+        IReadOnlyList<StackExportItemSelection> itemSelections)
+    {
+        var selectionsByItemId = itemSelections.ToDictionary(selection => selection.ItemId, StringComparer.OrdinalIgnoreCase);
+        var displayMetadataByItemId = new Dictionary<string, StackItemDisplayMetadata>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in discoveredItems)
+        {
+            if (!selectionsByItemId.TryGetValue(item.ItemId, out var selection))
+            {
+                continue;
+            }
+
+            var selectedDetailsById = (selection.Details ?? [])
+                .GroupBy(detail => detail.DetailId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var hasExplicitDetailSelection = selection.Details is not null;
+            var displayDetails = new List<SunderStackFragmentDisplayDetail>();
+            foreach (var detail in item.Details ?? [])
+            {
+                var detailId = string.IsNullOrWhiteSpace(detail.DetailId) ? BuildStackDetailId(detail.Label) : detail.DetailId!;
+                StackExportDetailSelection? selectedDetail = null;
+                if (hasExplicitDetailSelection)
+                {
+                    if (!selectedDetailsById.TryGetValue(detailId, out selectedDetail) || !selectedDetail.IsSelected)
+                    {
+                        continue;
+                    }
+                }
+
+                var effectiveSensitivity = selectedDetail?.SensitivityOverride ?? detail.Sensitivity;
+                var asksOnImport = effectiveSensitivity == StackValueSensitivity.Secret;
+                var value = asksOnImport
+                    ? "Importer will provide this value."
+                    : string.IsNullOrWhiteSpace(selectedDetail?.ValueOverride) ? detail.Value : selectedDetail!.ValueOverride!;
+                if (string.IsNullOrWhiteSpace(detail.Label) || string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                displayDetails.Add(new SunderStackFragmentDisplayDetail
+                {
+                    Label = detail.Label,
+                    Value = value,
+                    Behavior = asksOnImport ? "Ask on import" : "Include value",
+                });
+            }
+
+            displayMetadataByItemId[item.ItemId] = new StackItemDisplayMetadata(item.Kind, displayDetails);
+        }
+
+        return displayMetadataByItemId;
+    }
+
+    private static string? InferSourceItemId(
+        IReadOnlyList<StackExportItemSelection> itemSelections,
+        IReadOnlyList<StackFragmentExport> fragments)
+        => itemSelections.Count == 1 && fragments.Count == 1 ? itemSelections[0].ItemId : null;
+
+    private static SunderStackFragmentManifest ToManifestFragment(StackFragmentExport fragment, StackFragmentDisplayMetadata? displayMetadata)
+        => new()
+        {
+            FragmentId = fragment.FragmentId,
+            OwnerPackageId = fragment.OwnerPackageId,
+            ContributorId = fragment.ContributorId,
+            SchemaId = fragment.SchemaId,
+            SchemaVersion = fragment.SchemaVersion,
+            Kind = displayMetadata?.Kind,
+            DisplayName = fragment.DisplayName,
+            SourceItemId = displayMetadata?.SourceItemId,
+            Description = fragment.Description,
+            DefaultSelected = fragment.DefaultSelected,
+            PayloadPath = $"payload/fragments/{fragment.FragmentId}.json",
+            RequiresPackages = (fragment.RequiresPackages ?? [])
+                .Select(requirement => requirement.PackageId)
+                .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            RequiredInputs = (fragment.RequiredInputs ?? []).Select(ToManifestRequiredInput).ToArray(),
+            DisplayDetails = displayMetadata?.DisplayDetails,
+            Safety = ToManifestSafety(fragment.Safety),
+        };
+
+    private static SunderStackRequiredInputManifest ToManifestRequiredInput(StackRequiredInputDescriptor input)
+        => new()
+        {
+            InputId = input.InputId,
+            Kind = input.Kind.ToString(),
+            Label = input.Label,
+            Description = input.Description,
+            Required = input.Required,
+        };
+
+    private static SunderStackSafetyManifest ToManifestSafety(StackSafetyDescriptor safety)
+        => new()
+        {
+            ContainsSecrets = safety.ContainsSecrets,
+            ContainsSecretReferences = safety.ContainsSecretReferences,
+            ContainsLocalPaths = safety.ContainsLocalPaths,
+            ContainsPrivateText = safety.ContainsPrivateText,
+            ContainsExecutableCommands = safety.ContainsExecutableCommands,
+            ContainsNetworkEndpoints = safety.ContainsNetworkEndpoints,
+            ContainsMachineSpecificValues = safety.ContainsMachineSpecificValues,
+        };
+
+    private static SunderStackSafetyManifest BuildAggregateSafety(IEnumerable<StackSafetyDescriptor> safetyItems)
+    {
+        var items = safetyItems.ToArray();
+        return new SunderStackSafetyManifest
+        {
+            ContainsSecrets = items.Any(item => item.ContainsSecrets),
+            ContainsSecretReferences = items.Any(item => item.ContainsSecretReferences),
+            ContainsLocalPaths = items.Any(item => item.ContainsLocalPaths),
+            ContainsPrivateText = items.Any(item => item.ContainsPrivateText),
+            ContainsExecutableCommands = items.Any(item => item.ContainsExecutableCommands),
+            ContainsNetworkEndpoints = items.Any(item => item.ContainsNetworkEndpoints),
+            ContainsMachineSpecificValues = items.Any(item => item.ContainsMachineSpecificValues),
+        };
+    }
+
+    private static string CreateStackStagingPath()
+        => Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "runtime", Guid.NewGuid().ToString("N"));
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+            // Stack staging cleanup must not hide contributor results.
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Stack export validation cleanup is best effort.
+        }
+    }
+
     private sealed record PendingPackageLifecycleStage(
         string StageId,
         ActivePackageSession Session,
         PackageSessionSourceSnapshot Sources,
         IReadOnlyList<string> ImpactedPackageIds,
         long BaseSessionGeneration);
+
+    private sealed record StackFragmentLoadResult(
+        bool Success,
+        IReadOnlyList<StackFragmentImport> Fragments,
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<string> Errors)
+    {
+        public static StackFragmentLoadResult Failed(string message)
+            => new(false, [], [], [message]);
+    }
 
 }

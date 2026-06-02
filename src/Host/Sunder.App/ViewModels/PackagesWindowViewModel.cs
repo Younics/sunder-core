@@ -437,6 +437,41 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
+    public async Task ApplyLaunchRequestAsync(AppLaunchRequest request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (request.Kind is not (AppLaunchRequestKind.PackageDetails or AppLaunchRequestKind.PackageInstall)
+            || string.IsNullOrWhiteSpace(request.PackageId))
+        {
+            return;
+        }
+
+        ClearWarnings();
+        if (request.RegistryUrl is not null)
+        {
+            RegistryUrlText = request.RegistryUrl.ToString();
+        }
+
+        Mode = PackageWindowMode.Marketplace;
+        _marketplaceSearchText = request.PackageId;
+        ApplySearchTextForCurrentMode();
+        CancelQueuedMarketplaceSearch();
+        await RefreshMarketplaceAsync(cancellationToken);
+
+        var selectedPackage = MarketplacePackages.FirstOrDefault(package =>
+            string.Equals(package.PackageId, request.PackageId, StringComparison.OrdinalIgnoreCase));
+        if (selectedPackage is null)
+        {
+            StatusText = $"Package '{request.PackageId}' was not found in the Registry.";
+            return;
+        }
+
+        await SelectMarketplacePackageAsync(selectedPackage, cancellationToken);
+        StatusText = request.Kind == AppLaunchRequestKind.PackageInstall
+            ? $"Review {selectedPackage.PackageId} before installing."
+            : $"Loaded {selectedPackage.PackageId}.";
+    }
+
     [RelayCommand]
     private async Task ShowMarketplaceAsync()
     {

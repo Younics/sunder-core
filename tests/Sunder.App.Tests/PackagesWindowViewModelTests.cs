@@ -248,6 +248,34 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task ApplyLaunchRequestAsync_WhenPackageInstallLink_SelectsMarketplacePackageWithoutInstalling()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = query => string.Equals(query, "sunder.package.agent", StringComparison.OrdinalIgnoreCase)
+                ? [CreateRegistryPackage("sunder.package.agent")]
+                : [],
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+
+        await viewModel.ApplyLaunchRequestAsync(new AppLaunchRequest(
+            AppLaunchRequestKind.PackageInstall,
+            PackageId: "sunder.package.agent",
+            RegistryUrl: new Uri("https://registry.example/")));
+
+        Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
+        Assert.Equal("sunder.package.agent", viewModel.SearchText);
+        Assert.Equal("sunder.package.agent", viewModel.SelectedMarketplacePackage?.PackageId);
+        Assert.True(viewModel.ShowMarketplaceInstallButton);
+        Assert.Contains("Review sunder.package.agent", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("sunder.package.agent", query));
+    }
+
+    [Fact]
     public async Task SearchText_WhenChangedBeforeThrottleElapsed_SearchesOnlyLatestText()
     {
         var registryClient = new FakeRegistryApiClient

@@ -104,6 +104,31 @@ public sealed class AppStartupOptionsParserTests
         Assert.Contains("--watch requires at least one --dev-package folder.", options.ParseErrors);
     }
 
+    [Fact]
+    public void Parse_WhenStackFileArgumentIsProvided_CapturesLaunchRequestWithoutParseError()
+    {
+        using var environment = PreserveRuntimeEnvironment();
+
+        var options = AppStartupOptionsParser.Parse(["demo.sunderstack"]);
+
+        Assert.Equal(AppLaunchRequestKind.StackFile, options.LaunchRequest.Kind);
+        Assert.EndsWith("demo.sunderstack", options.LaunchRequest.FilePath, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(options.ParseErrors);
+    }
+
+    [Fact]
+    public void Parse_WhenStackFileLikeValueBelongsToOption_DoesNotCaptureLaunchRequest()
+    {
+        using var environment = PreserveRuntimeEnvironment();
+        var expectedPath = Path.GetFullPath("demo.sunderstack");
+
+        var options = AppStartupOptionsParser.Parse(["--dev-package", "demo.sunderstack"]);
+
+        Assert.Equal(AppLaunchRequestKind.None, options.LaunchRequest.Kind);
+        Assert.Equal([expectedPath], options.DevPackageFolders);
+        Assert.Empty(options.ParseErrors);
+    }
+
     private static EnvironmentScope PreserveRuntimeEnvironment()
         => new("SUNDER_RUNTIME_URL", "SUNDER_RUNTIME_HOST_PATH");
 

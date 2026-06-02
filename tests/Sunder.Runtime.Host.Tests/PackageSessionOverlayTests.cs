@@ -1,9 +1,11 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.PackageManagement;
 using Sunder.Protocol;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Stacks;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -568,11 +570,84 @@ public sealed class PackageSessionOverlayTests
 
 public sealed class PackageSessionOverlayTestPackageModule : ISunderPackageModule
 {
+    public static bool RegisterStackContributor { get; set; }
+
+    public static bool StackContributorContainsSecrets { get; set; }
+
     public void ConfigureServices(IServiceCollection services, IPackageContext context)
     {
     }
 
     public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
     {
+        if (!RegisterStackContributor)
+        {
+            return;
+        }
+
+        var context = services.GetRequiredService<IPackageContext>();
+        registry.RegisterExtension(
+            SunderStackExtensionPoints.StackContributors,
+            new PackageSessionOverlayTestStackContributor(context.PackageId, context.Version.ToString(), StackContributorContainsSecrets));
     }
+}
+
+internal sealed class PackageSessionOverlayTestStackContributor(
+    string packageId,
+    string version,
+    bool containsSecrets) : IPackageStackContributor
+{
+    public string ContributorId => "test.stack.contributor";
+
+    public string DisplayName => "Test Stack Contributor";
+
+    public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
+        StackExportDiscoveryContext context,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>(
+            [new StackExportItemDescriptor(
+                "test.profile",
+                "Test Profile",
+                "test-profile",
+                "A test profile export.",
+                Sensitivities: containsSecrets ? [StackValueSensitivity.Secret] : [StackValueSensitivity.PrivateText])]);
+
+    public ValueTask<StackExportContribution> ExportAsync(
+        StackExportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!request.ItemIds.Contains("test.profile", StringComparer.OrdinalIgnoreCase))
+        {
+            return ValueTask.FromResult(new StackExportContribution([], [], []));
+        }
+
+        var packageRequirement = new StackPackageRequirement(
+            packageId,
+            CreatedWithVersion: version,
+            MinimumVersion: "1.0.0");
+        var fragment = new StackFragmentExport(
+            "test.profile",
+            packageId,
+            ContributorId,
+            "test/profile",
+            1,
+            "Test Profile",
+            "{\"name\":\"Test Profile\"}",
+            new StackSafetyDescriptor(
+                ContainsSecrets: containsSecrets,
+                ContainsPrivateText: !containsSecrets),
+            "A test profile export.",
+            RequiresPackages: [packageRequirement]);
+        return ValueTask.FromResult(new StackExportContribution([fragment], [packageRequirement], []));
+    }
+
+    public ValueTask<StackImportPreview> PreviewImportAsync(
+        StackImportPreviewRequest request,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new StackImportPreview([], [], [], []));
+
+    public ValueTask<StackImportResult> ImportAsync(
+        StackImportRequest request,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new StackImportResult(true, [], new Dictionary<string, string>(), [], []));
 }

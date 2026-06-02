@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using Sunder.App.Composition;
 using Sunder.App.Models;
@@ -23,9 +24,11 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly PackageOperationService _packageOperationService;
     private readonly SettingsWindowFactory? _settingsWindowFactory;
     private readonly PackagesWindowFactory? _packagesWindowFactory;
+    private readonly StacksWindowFactory? _stacksWindowFactory;
     private readonly bool _ownsBackgroundProcessQueue;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
+    private StacksWindow? _stacksWindow;
     private DeveloperLogWindow? _developerLogWindow;
     private MainWindowViewModel? _mainWindowViewModel;
     private AppPackageSessionService? _packageSessionService;
@@ -42,7 +45,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         SunderUpdateService? updateService = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         SettingsWindowFactory? settingsWindowFactory = null,
-        PackagesWindowFactory? packagesWindowFactory = null)
+        PackagesWindowFactory? packagesWindowFactory = null,
+        StacksWindowFactory? stacksWindowFactory = null)
     {
         _packageViewHostService = packageViewHostService;
         _runtimeApiClientFactory = runtimeApiClientFactory;
@@ -54,6 +58,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _updateService = updateService ?? new SunderUpdateService();
         _settingsWindowFactory = settingsWindowFactory;
         _packagesWindowFactory = packagesWindowFactory;
+        _stacksWindowFactory = stacksWindowFactory;
         _ownsBackgroundProcessQueue = backgroundProcessQueue is null;
         _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _packageOperationService = new PackageOperationService(
@@ -116,6 +121,56 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         ShowWindow(_packagesWindow);
     }
 
+    public void ShowStacks()
+    {
+        _stacksWindow ??= CreateStacksWindow();
+        ShowWindow(_stacksWindow);
+    }
+
+    public async Task<bool> HandleLaunchRequestAsync(AppLaunchRequest request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        switch (request.Kind)
+        {
+            case AppLaunchRequestKind.None:
+                ActivateMainWindow();
+                return true;
+            case AppLaunchRequestKind.PackageDetails:
+            case AppLaunchRequestKind.PackageInstall:
+                _packagesWindow ??= CreatePackagesWindow();
+                ShowWindow(_packagesWindow);
+                if (_packagesWindow.DataContext is PackagesWindowViewModel packagesViewModel)
+                {
+                    await packagesViewModel.ApplyLaunchRequestAsync(request, cancellationToken);
+                }
+
+                return true;
+            case AppLaunchRequestKind.StackDetails:
+            case AppLaunchRequestKind.StackUse:
+            case AppLaunchRequestKind.StackFile:
+                _stacksWindow ??= CreateStacksWindow();
+                ShowWindow(_stacksWindow);
+                if (_stacksWindow.DataContext is StacksWindowViewModel viewModel)
+                {
+                    await viewModel.ApplyLaunchRequestAsync(request, cancellationToken);
+                }
+
+                return true;
+            case AppLaunchRequestKind.Invalid:
+                await _notificationCenter.PublishAsync(
+                    "sunder.app",
+                    "Sunder",
+                    new Sunder.Sdk.Notifications.PackageNotificationRequest(
+                        "Sunder link could not be opened",
+                        request.ErrorMessage ?? "The launch request is invalid.",
+                        Sunder.Sdk.Notifications.PackageNotificationDisplayMode.ToastAndTray,
+                        Sunder.Sdk.Notifications.PackageNotificationSeverity.Warning));
+                return false;
+            default:
+                return false;
+        }
+    }
+
     public void ShowDeveloperLogs()
     {
         if (!_developerLog.IsEnabled)
@@ -139,6 +194,12 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         {
             _packagesWindow.CloseForShutdown();
             _packagesWindow = null;
+        }
+
+        if (_stacksWindow is not null)
+        {
+            _stacksWindow.CloseForShutdown();
+            _stacksWindow = null;
         }
 
         if (_developerLogWindow is not null)
@@ -231,6 +292,31 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         return window;
     }
 
+    private StacksWindow CreateStacksWindow()
+    {
+        var window = _stacksWindowFactory?.Create(ApplyPackageLifecycleChangesAsync);
+        if (window is null)
+        {
+            window = new StacksWindow(_shellStateService, _shellState);
+            window.DataContext = new StacksWindowViewModel(
+                new LocalStackLibraryService(),
+                new StackArchivePicker(window),
+                _runtimeApiClientFactory.CreateClient(),
+                new RegistryPackageInstallService(),
+                ApplyPackageLifecycleChangesAsync);
+        }
+
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_stacksWindow, window))
+            {
+                _stacksWindow = null;
+            }
+        };
+
+        return window;
+    }
+
     private DeveloperLogWindow CreateDeveloperLogWindow()
     {
         var window = new DeveloperLogWindow
@@ -259,6 +345,14 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
         window.Show();
         window.Activate();
+    }
+
+    private static void ActivateMainWindow()
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } mainWindow })
+        {
+            ShowWindow(mainWindow);
+        }
     }
 
     private void PersistBackgroundProcessPopoverSize(double width, double height)

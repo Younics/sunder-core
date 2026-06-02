@@ -474,6 +474,27 @@ public sealed class PackageOperationServiceTests
             };
         }
 
+        public async Task<PackageOperationResult> InstallPackagesFromPathsAsync(PackageInstallBatchFromPathRequest request, CancellationToken cancellationToken = default)
+        {
+            var impactedPackageIds = new List<string>();
+            foreach (var item in request.Items)
+            {
+                var result = string.IsNullOrWhiteSpace(item.PackageId)
+                    ? await InstallPackageFromPathAsync(item.PackagePath, cancellationToken)
+                    : await UpgradePackageFromPathAsync(item.PackageId, item.PackagePath, item.AllowDowngrade, item.Reinstall, cancellationToken);
+                impactedPackageIds.AddRange(result.ImpactedPackageIds);
+                if (!result.Success)
+                {
+                    return result with { ImpactedPackageIds = impactedPackageIds.ToArray() };
+                }
+            }
+
+            return new PackageOperationResult(true, "Installed batch.", RuntimeSessionApplied, RequiresAppRestart, [], [])
+            {
+                ImpactedPackageIds = impactedPackageIds.ToArray(),
+            };
+        }
+
         public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

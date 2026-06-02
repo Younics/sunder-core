@@ -36,8 +36,26 @@ internal sealed class RegistryClient : IDisposable
         return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryPackageSummary>>(path, cancellationToken) ?? [];
     }
 
+    public async Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(
+        string? query,
+        int skip,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        var path = $"api/stacks?skip={skip}&take={take}";
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            path += $"&query={Uri.EscapeDataString(query)}";
+        }
+
+        return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryStackSummary>>(path, cancellationToken) ?? [];
+    }
+
     public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken)
         => GetFromJsonOrNullAsync<RegistryPackageDetails>($"api/packages/{Uri.EscapeDataString(packageId)}", cancellationToken);
+
+    public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken cancellationToken)
+        => GetFromJsonOrNullAsync<RegistryStackDetails>($"api/stacks/{Uri.EscapeDataString(stackId)}", cancellationToken);
 
     public Task<RegistryPackageVersionDetails?> GetVersionAsync(
         string packageId,
@@ -132,6 +150,49 @@ internal sealed class RegistryClient : IDisposable
                 response,
                 "Authenticated publish endpoint was not found on this registry.",
                 cancellationToken);
+            }, cancellationToken);
+    }
+
+    public async Task<RegistryPublishStackResponse> PublishLocalStackAsync(
+        string stackPath,
+        CancellationToken cancellationToken)
+    {
+        return await RunStackPublishRequestAsync(async () =>
+        {
+            using var response = await _httpClient.PostAsJsonAsync(
+                "api/dev/stacks/publish/local",
+                new RegistryPublishLocalStackRequest(stackPath),
+                cancellationToken);
+
+            return await ReadStackPublishResponseAsync(
+                response,
+                "Development Stack publish endpoint was not found. Start the registry in Development or use the authenticated publish endpoint.",
+                cancellationToken);
+        }, cancellationToken);
+    }
+
+    public async Task<RegistryPublishStackResponse> PublishStackAsync(
+        string stackPath,
+        string bearerToken,
+        CancellationToken cancellationToken)
+    {
+        return await RunStackPublishRequestAsync(async () =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/stacks/publish");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+            using var content = new MultipartFormDataContent();
+            await using var stackStream = File.OpenRead(stackPath);
+            using var stackContent = new StreamContent(stackStream);
+            stackContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            content.Add(stackContent, "stack", Path.GetFileName(stackPath));
+            request.Content = content;
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            return await ReadStackPublishResponseAsync(
+                response,
+                "Authenticated Stack publish endpoint was not found on this registry.",
+                cancellationToken);
         }, cancellationToken);
     }
 
@@ -200,6 +261,17 @@ internal sealed class RegistryClient : IDisposable
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         return await ReadManagementResponseAsync(response, cancellationToken);
+    }
+
+    public async Task<RegistryStackManagementOperationResponse> DeleteStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"api/stacks/{Uri.EscapeDataString(stackId)}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        return await ReadStackManagementResponseAsync(response, cancellationToken);
     }
 
     public async Task<RegistryCliTokenResponse> ExchangeCliTokenAsync(
@@ -274,6 +346,42 @@ internal sealed class RegistryClient : IDisposable
         }
     }
 
+    public async Task DownloadStackAsync(
+        RegistryStackArtifact artifact,
+        string stackId,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+
+        using var response = await _httpClient.GetAsync(artifact.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
+        await using (var destination = File.Create(destinationPath))
+        {
+            await source.CopyToAsync(destination, cancellationToken);
+        }
+
+        var fileInfo = new FileInfo(destinationPath);
+        if (artifact.Size > 0 && fileInfo.Length != artifact.Size)
+        {
+            throw new InvalidOperationException(
+                $"Downloaded Stack '{stackId}' size mismatch. Expected {artifact.Size} bytes, got {fileInfo.Length} bytes.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(artifact.Sha256))
+        {
+            await using var stream = File.OpenRead(destinationPath);
+            var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+            if (!string.Equals(actualHash, artifact.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Downloaded Stack '{stackId}' SHA-256 mismatch. Expected {artifact.Sha256}, got {actualHash}.");
+            }
+        }
+    }
+
     private async Task<T?> GetFromJsonOrNullAsync<T>(string path, CancellationToken cancellationToken)
     {
         using var response = await _httpClient.GetAsync(path, cancellationToken);
@@ -337,6 +445,45 @@ internal sealed class RegistryClient : IDisposable
             : new RegistryPublishPackageResponse(false, null, null, null, [], [response.ReasonPhrase ?? "Package publish failed."]);
     }
 
+    private static async Task<RegistryPublishStackResponse> ReadStackPublishResponseAsync(
+        HttpResponseMessage response,
+        string notFoundMessage,
+        CancellationToken cancellationToken)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return new RegistryPublishStackResponse(false, null, null, [], ["Authentication failed. Set SUNDER_REGISTRY_TOKEN or pass --token."]);
+        }
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            return new RegistryPublishStackResponse(false, null, null, [], ["Authenticated user is not allowed to publish this Stack."]);
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new RegistryPublishStackResponse(false, null, null, [], [notFoundMessage]);
+        }
+
+        RegistryPublishStackResponse? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<RegistryPublishStackResponse>(cancellationToken: cancellationToken);
+        }
+        catch (JsonException) when (!response.IsSuccessStatusCode)
+        {
+        }
+
+        if (result is not null)
+        {
+            return result;
+        }
+
+        return response.IsSuccessStatusCode
+            ? new RegistryPublishStackResponse(true, null, "Stack published.", [], [])
+            : new RegistryPublishStackResponse(false, null, null, [], [response.ReasonPhrase ?? "Stack publish failed."]);
+    }
+
     private async Task<RegistryPublishPackageResponse> RunPublishRequestAsync(
         Func<Task<RegistryPublishPackageResponse>> operation,
         CancellationToken cancellationToken)
@@ -348,6 +495,20 @@ internal sealed class RegistryClient : IDisposable
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
             throw new CliTimeoutException("Registry publish", _timeout, ex);
+        }
+    }
+
+    private async Task<RegistryPublishStackResponse> RunStackPublishRequestAsync(
+        Func<Task<RegistryPublishStackResponse>> operation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await operation();
+        }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new CliTimeoutException("Registry Stack publish", _timeout, ex);
         }
     }
 
@@ -385,6 +546,42 @@ internal sealed class RegistryClient : IDisposable
         return response.IsSuccessStatusCode
             ? new RegistryPackageManagementOperationResponse(true, "Package management operation completed.", [])
             : new RegistryPackageManagementOperationResponse(false, null, [response.ReasonPhrase ?? "Package management operation failed."]);
+    }
+
+    private static async Task<RegistryStackManagementOperationResponse> ReadStackManagementResponseAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return new RegistryStackManagementOperationResponse(false, null, ["Authentication failed. Set SUNDER_REGISTRY_TOKEN or pass --token."]);
+        }
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            return new RegistryStackManagementOperationResponse(false, null, ["Authenticated user is not allowed to manage this Stack."])
+            {
+                Forbidden = true,
+            };
+        }
+
+        RegistryStackManagementOperationResponse? result = null;
+        try
+        {
+            result = await response.Content.ReadFromJsonAsync<RegistryStackManagementOperationResponse>(cancellationToken: cancellationToken);
+        }
+        catch (JsonException) when (!response.IsSuccessStatusCode)
+        {
+        }
+
+        if (result is not null)
+        {
+            return result;
+        }
+
+        return response.IsSuccessStatusCode
+            ? new RegistryStackManagementOperationResponse(true, "Stack management operation completed.", [])
+            : new RegistryStackManagementOperationResponse(false, null, [response.ReasonPhrase ?? "Stack management operation failed."]);
     }
 
     public void Dispose()

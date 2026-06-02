@@ -16,6 +16,7 @@ public sealed class MainWindowFactory(
     AppPackageShellViewService shellViewService,
     SunderUpdateService updateService,
     BackgroundProcessQueueService backgroundProcessQueue,
+    RegistryAuthService registryAuthService,
     IShellCompositionService shellCompositionService)
 {
     public (MainWindow Window, MainWindowViewModel ViewModel) Create(
@@ -40,7 +41,8 @@ public sealed class MainWindowFactory(
             deferInitialHostedViews,
             backgroundProcessQueue,
             shellCompositionService: shellCompositionService,
-            developerLog: developerLog);
+            developerLog: developerLog,
+            registryAuthService: registryAuthService);
 
         return (new MainWindow { DataContext = viewModel }, viewModel);
     }

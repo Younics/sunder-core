@@ -12,6 +12,7 @@ using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Configuration;
 using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Packaging;
+using Sunder.Sdk.Stacks;
 using Sunder.Sdk.Theming;
 using Xunit;
 using MSBuildTaskItem = Microsoft.Build.Utilities.TaskItem;
@@ -64,6 +65,8 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.CallbacksV1,
             SunderSdkCapabilities.AuthV1,
             SunderSdkCapabilities.ExtensionChangesV1,
+            SunderSdkCapabilities.StacksV1,
+            SunderSdkCapabilities.StackContributionsV1,
             SunderSdkCapabilities.ThemingV1);
     }
 
@@ -159,6 +162,7 @@ public sealed class FixturePackageModule : ISunderPackageModule
         services.AddSingleton<IPackageCallbackHandler, FixtureAuthHandler>();
         services.AddSingleton<IPackageAuthHandler, FixtureAuthHandler>();
         services.AddSingleton<IPackageNotificationService, NullPackageNotificationService>();
+        services.AddSingleton<IPackageStackContributor, FixtureStackContributor>();
     }
 
     public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
@@ -169,6 +173,7 @@ public sealed class FixturePackageModule : ISunderPackageModule
         registry.RegisterSettingsViewFactory<FixtureWorkspaceFactory>();
         registry.RegisterBackgroundService<FixtureBackgroundService>();
         registry.RegisterExtension(new PackageExtensionPoint<IFixtureExtension>("fixture.extension"), new FixtureExtension());
+        registry.RegisterExtension(SunderStackExtensionPoints.StackContributors, services.GetRequiredService<IPackageStackContributor>());
         registry.RegisterConfigurationSchema(new PackageConfigurationSchema(
             "test.package.build.fixture",
             "Package Build Fixture",
@@ -203,6 +208,34 @@ public sealed class FixtureBackgroundService : IPackageBackgroundService
 public interface IFixtureExtension;
 
 public sealed class FixtureExtension : IFixtureExtension;
+
+public sealed class FixtureStackContributor : IPackageStackContributor
+{
+    public string ContributorId => "test.package.build.fixture.stacks";
+
+    public string DisplayName => "Fixture Stacks";
+
+    public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
+        StackExportDiscoveryContext context,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>(
+            [new StackExportItemDescriptor("fixture", "Fixture", "fixture")]);
+
+    public ValueTask<StackExportContribution> ExportAsync(
+        StackExportRequest request,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new StackExportContribution([], [], []));
+
+    public ValueTask<StackImportPreview> PreviewImportAsync(
+        StackImportPreviewRequest request,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new StackImportPreview([], [], [], []));
+
+    public ValueTask<StackImportResult> ImportAsync(
+        StackImportRequest request,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new StackImportResult(true, [], new Dictionary<string, string>(), [], []));
+}
 
 public sealed class FixtureAuthHandler : IPackageAuthHandler
 {

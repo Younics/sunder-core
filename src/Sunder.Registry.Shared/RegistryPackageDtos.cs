@@ -239,6 +239,92 @@ public sealed record RegistryPackageManagementOperationResponse(
     public bool Forbidden { get; init; }
 }
 
+public sealed record RegistryStackSummary(
+    string StackId,
+    string Name,
+    string? Summary,
+    int PackageCount,
+    int FragmentCount,
+    RegistryStackSafety Safety,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record RegistryStackSearchResult(
+    IReadOnlyList<RegistryStackSummary> Items,
+    int TotalCount,
+    int Skip,
+    int Take);
+
+public sealed record RegistryStackDetails(
+    string StackId,
+    string Name,
+    string? Summary,
+    IReadOnlyList<RegistryStackPackageRequirement> Packages,
+    IReadOnlyList<RegistryStackFragmentSummary> Fragments,
+    IReadOnlyList<RegistryStackRequiredInput> RequiredInputs,
+    RegistryStackSafety Safety,
+    RegistryStackArtifact Artifact,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record RegistryStackPackageRequirement(
+    string PackageId,
+    string InstallTag,
+    string? CreatedWithVersion,
+    string? MinimumVersion,
+    bool Required);
+
+public sealed record RegistryStackFragmentSummary(
+    string FragmentId,
+    string OwnerPackageId,
+    string ContributorId,
+    string SchemaId,
+    int SchemaVersion,
+    string DisplayName,
+    string? Description,
+    bool DefaultSelected);
+
+public sealed record RegistryStackRequiredInput(
+    string InputId,
+    string Kind,
+    string Label,
+    string? Description,
+    bool Required);
+
+public sealed record RegistryStackSafety(
+    bool ContainsSecrets,
+    bool ContainsSecretReferences,
+    bool ContainsLocalPaths,
+    bool ContainsPrivateText,
+    bool ContainsExecutableCommands,
+    bool ContainsNetworkEndpoints,
+    bool ContainsMachineSpecificValues);
+
+public sealed record RegistryStackArtifact(
+    string Sha256,
+    long Size,
+    string DownloadUrl);
+
+public sealed record RegistryPublishLocalStackRequest(string StackPath);
+
+public sealed record RegistryPublishStackResponse(
+    bool Success,
+    string? StackId,
+    string? Message,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors)
+{
+    public bool Forbidden { get; init; }
+}
+
+public sealed record RegistryStackManagementOperationResponse(
+    bool Success,
+    string? Message,
+    IReadOnlyList<string> Errors)
+{
+    public bool Forbidden { get; init; }
+}
+
 public sealed record RegistryCurrentUserResponse(
     string UserId,
     string? DisplayName,

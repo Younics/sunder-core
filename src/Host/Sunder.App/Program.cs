@@ -9,15 +9,68 @@ sealed class Program
 {
     public static AppStartupOptions StartupOptions { get; private set; } = new();
 
+    internal static AppSingleInstanceCoordinator? SingleInstanceCoordinator { get; private set; }
+
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
     [STAThread]
     public static void Main(string[] args)
     {
-        VelopackApp.Build().Run();
+        var velopackApp = VelopackApp.Build()
+            .OnFirstRun(_ => RegisterShellAssociationsForCurrentUser());
+
+        if (OperatingSystem.IsWindows())
+        {
+            velopackApp
+                .OnAfterInstallFastCallback(_ => WindowsShellAssociationService.RegisterForCurrentUser())
+                .OnBeforeUninstallFastCallback(_ => WindowsShellAssociationService.UnregisterForCurrentUser());
+        }
+
+        velopackApp.Run();
         StartupOptions = AppStartupOptionsParser.Parse(args);
+        if (TryForwardLaunchToPrimaryInstance(args))
+        {
+            return;
+        }
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
+
+    private static bool TryForwardLaunchToPrimaryInstance(string[] args)
+    {
+        try
+        {
+            SingleInstanceCoordinator = AppSingleInstanceCoordinator.CreateForCurrentUser();
+            if (SingleInstanceCoordinator.IsPrimary)
+            {
+                SingleInstanceCoordinator.StartListening();
+                return false;
+            }
+
+            var forwarded = SingleInstanceCoordinator.TryForwardLaunchArgumentsAsync(args).GetAwaiter().GetResult();
+            if (!forwarded)
+            {
+                AppSessionLog.WriteInfo("Another Sunder instance is running, but the launch request could not be forwarded.");
+            }
+
+            SingleInstanceCoordinator.Dispose();
+            SingleInstanceCoordinator = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to initialize Sunder single-instance launch handoff.", ex);
+            SingleInstanceCoordinator?.Dispose();
+            SingleInstanceCoordinator = null;
+            return false;
+        }
+    }
+
+    private static void RegisterShellAssociationsForCurrentUser()
+    {
+        WindowsShellAssociationService.RegisterForCurrentUser();
+        LinuxShellAssociationService.RegisterForCurrentUser();
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.

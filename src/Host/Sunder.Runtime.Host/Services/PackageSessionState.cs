@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Sunder.Protocol;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -179,6 +180,14 @@ internal sealed class PackageSessionState(
         lock (_syncRoot)
         {
             return _activeSession.TryGetLoadedPackage(packageId, out var loadedPackage) ? loadedPackage : null;
+        }
+    }
+
+    public IReadOnlyList<(string PackageId, TContract Contribution)> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
+    {
+        lock (_syncRoot)
+        {
+            return _activeSession.GetExtensionContributions(extensionPoint);
         }
     }
 

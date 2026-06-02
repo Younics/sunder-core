@@ -89,6 +89,8 @@ public partial class App : Application
         }
 
         _ = ActivateDeferredInitialHostedViewsAsync(mainWindowViewModel);
+        Program.SingleInstanceCoordinator?.SetLaunchRequestHandler(HandleForwardedLaunchRequestAsync);
+        _ = HandleInitialLaunchRequestAsync(Program.StartupOptions.LaunchRequest);
     }
 
     private static async Task ShowMainWindowWhenReadyAsync(MainWindow mainWindow)
@@ -119,6 +121,47 @@ public partial class App : Application
         {
             AppSessionLog.WriteError("Failed to activate deferred package views after startup.", ex);
         }
+    }
+
+    private async Task HandleInitialLaunchRequestAsync(AppLaunchRequest request)
+    {
+        if (request.Kind == AppLaunchRequestKind.None || _windowLauncher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _windowLauncher.HandleLaunchRequestAsync(request);
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to handle startup launch request.", ex);
+        }
+    }
+
+    private async Task HandleForwardedLaunchRequestAsync(AppLaunchRequest request, CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                if (_windowLauncher is not null)
+                {
+                    await _windowLauncher.HandleLaunchRequestAsync(request, cancellationToken);
+                }
+
+                completion.SetResult();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to handle forwarded Sunder launch request.", ex);
+                completion.SetException(ex);
+            }
+        });
+
+        await completion.Task.WaitAsync(cancellationToken);
     }
 
     private void RegisterExceptionHandlers()
@@ -189,6 +232,8 @@ public partial class App : Application
                 AppSessionLog.WriteError("Failed to dispose app services.", ex);
             }
         }
+
+        Program.SingleInstanceCoordinator?.Dispose();
 
         try
         {

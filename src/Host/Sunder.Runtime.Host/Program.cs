@@ -29,7 +29,8 @@ app.MapSystemEndpoints(startedAtUtc)
     .MapPackageConfigurationEndpoints()
     .MapPackageAuthEndpoints()
     .MapPackageFaultEndpoints()
-    .MapInstalledPackageEndpoints();
+    .MapInstalledPackageEndpoints()
+    .MapStackEndpoints();
 
 var packageSessionService = app.Services.GetRequiredService<RuntimePackageSessionService>();
 if (startupOptions.DevPackageFolders.Count > 0)

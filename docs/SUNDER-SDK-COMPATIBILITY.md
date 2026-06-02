@@ -50,6 +50,8 @@ Current SDK capabilities are:
 | `notifications.v1` | package notifications |
 | `shell-view.v1` | shell view/hotbar/navigation services |
 | `package-sessions.v1` | package session load/unload/status service |
+| `stacks.v1` | Stack import/export data contracts |
+| `stacks.contributions.v1` | Stack contributor extension contracts |
 | `callbacks.v1` | generic callback sessions |
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |

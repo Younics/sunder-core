@@ -177,6 +177,111 @@ create_macos_icon() {
   printf '%s\n' "$icns"
 }
 
+create_macos_plist() {
+  local plist_dir="$artifact_root/macos"
+  local plist="$plist_dir/Sunder.Info.plist"
+  local bundle_version="${version%%-*}"
+  bundle_version="${bundle_version%%+*}"
+
+  mkdir -p "$plist_dir"
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>Sunder</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>sunderstack</string>
+      </array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array>
+        <string>application/vnd.sunder.stack</string>
+      </array>
+      <key>CFBundleTypeName</key>
+      <string>Sunder Stack</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>${mac_bundle_id}.stack</string>
+      </array>
+    </dict>
+  </array>
+  <key>CFBundleExecutable</key>
+  <string>Sunder.App</string>
+  <key>CFBundleIconFile</key>
+  <string>Sunder.icns</string>
+  <key>CFBundleIdentifier</key>
+  <string>${mac_bundle_id}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Sunder</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${bundle_version}</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>MacOSX</string>
+  </array>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>${mac_bundle_id}.url</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>sunder</string>
+      </array>
+    </dict>
+  </array>
+  <key>CFBundleVersion</key>
+  <string>${bundle_version}</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.utilities</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeDescription</key>
+      <string>Sunder Stack</string>
+      <key>UTTypeIdentifier</key>
+      <string>${mac_bundle_id}.stack</string>
+      <key>UTTypeIconFile</key>
+      <string>Sunder.icns</string>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>sunderstack</string>
+        </array>
+        <key>public.mime-type</key>
+        <string>application/vnd.sunder.stack</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
+
+  printf '%s\n' "$plist"
+}
+
 publish_dir="$artifact_root/publish/sunder/$runtime"
 release_dir="$artifact_root/velopack/$channel/$runtime"
 velopack_channel="app-$runtime-$channel"
@@ -240,7 +345,8 @@ case "$runtime" in
     ;;
   osx-*)
     macos_icon="$(create_macos_icon)"
-    pack_args+=(--icon "$macos_icon" --bundleId "$mac_bundle_id")
+    macos_plist="$(create_macos_plist)"
+    pack_args+=(--icon "$macos_icon" --bundleId "$mac_bundle_id" --plist "$macos_plist")
     if [[ -n "$mac_sign_app_identity" ]]; then
       pack_args+=(
         --signAppIdentity "$mac_sign_app_identity"

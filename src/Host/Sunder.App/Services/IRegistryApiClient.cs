@@ -16,6 +16,18 @@ public interface IRegistryApiClient : IDisposable
         string packageId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(
+        string? query,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<RegistryStackSummary>>([]);
+
+    Task<RegistryStackDetails?> GetStackAsync(
+        string stackId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<RegistryStackDetails?>(null);
+
     Task<RegistryPackageVersionDetails?> GetVersionAsync(
         string packageId,
         string version,
@@ -29,10 +41,40 @@ public interface IRegistryApiClient : IDisposable
         RegistryResolveInstallPlanRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<RegistryCurrentUserResponse?> GetCurrentUserAsync(
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<RegistryCurrentUserResponse?>(null);
+
+    Task<RegistryCliTokenResponse> ExchangeCliTokenAsync(
+        string code,
+        string codeVerifier,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryCliTokenResponse(false, null, null, null, ["Registry token exchange is not supported by this client."]));
+
     Task DownloadArtifactAsync(
         RegistryPackageArtifact artifact,
         string packageId,
         string version,
         string destinationPath,
         CancellationToken cancellationToken = default);
+
+    Task DownloadStackAsync(
+        RegistryStackArtifact artifact,
+        string stackId,
+        string destinationPath,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Registry client does not support Stack downloads.");
+
+    Task<RegistryPublishStackResponse> PublishStackAsync(
+        string stackPath,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryPublishStackResponse(false, null, null, [], ["Registry Stack publishing is not supported by this client."]));
+
+    Task<RegistryStackManagementOperationResponse> DeleteStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryStackManagementOperationResponse(false, null, ["Registry Stack deletion is not supported by this client."]));
 }

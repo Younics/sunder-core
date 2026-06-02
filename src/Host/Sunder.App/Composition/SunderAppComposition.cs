@@ -36,6 +36,9 @@ internal static class SunderAppComposition
         services.AddSingleton<BackgroundProcessQueueService>();
         services.AddSingleton<IBackgroundProcessQueue>(provider => provider.GetRequiredService<BackgroundProcessQueueService>());
         services.AddSingleton<RegistryPackageInstallService>();
+        services.AddSingleton<LocalStackLibraryService>();
+        services.AddSingleton<ExternalBrowserService>();
+        services.AddSingleton<RegistryAuthService>();
         services.AddSingleton(provider => new PackageUpdateStartupCheckService(
             provider.GetRequiredService<IBackgroundProcessQueue>(),
             provider.GetRequiredService<IRuntimeApiClientFactory>(),
@@ -58,6 +61,7 @@ internal static class SunderAppComposition
         services.AddSingleton<MainWindowFactory>();
         services.AddSingleton<SettingsWindowFactory>();
         services.AddSingleton<PackagesWindowFactory>();
+        services.AddSingleton<StacksWindowFactory>();
         services.AddSingleton<ShellStartupCoordinator>();
 
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });

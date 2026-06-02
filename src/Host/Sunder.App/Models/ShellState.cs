@@ -11,6 +11,7 @@ public sealed class ShellState
     public const double DefaultBottomSplitRatio = 0.5;
     public const double DefaultSettingsSidebarWidth = 250;
     public const double DefaultPackagesSidebarWidth = 430;
+    public const double DefaultStacksSidebarWidth = 390;
     public const double DefaultBackgroundProcessPopoverWidth = 500;
     public const double DefaultBackgroundProcessPopoverHeight = 360;
     public const double MinimumBackgroundProcessPopoverWidth = 360;
@@ -50,6 +51,8 @@ public sealed class ShellState
 
     public double PackagesSidebarWidth { get; set; } = DefaultPackagesSidebarWidth;
 
+    public double StacksSidebarWidth { get; set; } = DefaultStacksSidebarWidth;
+
     public double BackgroundProcessPopoverWidth { get; set; } = DefaultBackgroundProcessPopoverWidth;
 
     public double BackgroundProcessPopoverHeight { get; set; } = DefaultBackgroundProcessPopoverHeight;
@@ -57,6 +60,8 @@ public sealed class ShellState
     public ShellWindowPlacement? SettingsWindowPlacement { get; set; }
 
     public ShellWindowPlacement? PackagesWindowPlacement { get; set; }
+
+    public ShellWindowPlacement? StacksWindowPlacement { get; set; }
 
     public string ThemeId { get; set; } = SunderThemeDefinition.GraphiteDark.Id;
 

@@ -13,7 +13,8 @@ public sealed class WindowLauncherFactory(
     SunderUpdateService updateService,
     BackgroundProcessQueueService backgroundProcessQueue,
     SettingsWindowFactory settingsWindowFactory,
-    PackagesWindowFactory packagesWindowFactory)
+    PackagesWindowFactory packagesWindowFactory,
+    StacksWindowFactory stacksWindowFactory)
 {
     public WindowLauncher Create(PackageViewHostService packageViewHostService)
         => new(
@@ -27,5 +28,6 @@ public sealed class WindowLauncherFactory(
             updateService,
             backgroundProcessQueue,
             settingsWindowFactory,
-            packagesWindowFactory);
+            packagesWindowFactory,
+            stacksWindowFactory);
 }

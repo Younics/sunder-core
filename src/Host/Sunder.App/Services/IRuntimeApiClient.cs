@@ -38,6 +38,11 @@ public interface IRuntimeApiClient : IDisposable
         string packagePath,
         CancellationToken cancellationToken = default);
 
+    Task<PackageOperationResult> InstallPackagesFromPathsAsync(
+        PackageInstallBatchFromPathRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support batch package installation.");
+
     Task<PackageOperationResult> UpgradePackageFromPathAsync(
         string packageId,
         string packagePath,
@@ -60,6 +65,25 @@ public interface IRuntimeApiClient : IDisposable
     Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
         PackageLifecycleLoadRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support Stack export discovery.");
+
+    Task<RuntimeStackExportResponse> ExportStackAsync(
+        RuntimeStackExportRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support Stack export.");
+
+    Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(
+        RuntimeStackImportPreviewRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support Stack import preview.");
+
+    Task<RuntimeStackImportResponse> ImportStackAsync(
+        RuntimeStackImportRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support Stack import.");
 
     Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
         IReadOnlyList<string> impactedPackageIds,

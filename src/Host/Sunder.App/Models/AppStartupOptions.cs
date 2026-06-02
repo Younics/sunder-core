@@ -1,3 +1,5 @@
+using Sunder.App.Services;
+
 namespace Sunder.App.Models;
 
 public sealed class AppStartupOptions
@@ -13,6 +15,8 @@ public sealed class AppStartupOptions
     public IReadOnlyList<string> DevPackageFolders { get; init; } = [];
 
     public bool WatchDevPackages { get; init; }
+
+    public AppLaunchRequest LaunchRequest { get; init; } = new(AppLaunchRequestKind.None);
 
     public IReadOnlyList<string> ParseErrors { get; init; } = [];
 }
