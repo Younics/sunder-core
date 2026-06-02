@@ -14,6 +14,7 @@ public sealed class PackagesWindowFactory(
 {
     internal PackagesWindow Create(
         Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
+        Func<IReadOnlyList<Sunder.Protocol.ActivePackageDescriptor>, IReadOnlyList<Sunder.Protocol.PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
         PackageOperationService packageOperationService,
         Action<double, double>? persistBackgroundProcessPopoverSize)
     {
@@ -25,6 +26,7 @@ public sealed class PackagesWindowFactory(
             packageOperationService,
             backgroundProcessQueue,
             notificationCenter: notificationCenter,
+            preflightPackageLifecycleChangesAsync: preflightPackageLifecycleChangesAsync,
             backgroundProcessPopoverWidth: shellState.BackgroundProcessPopoverWidth,
             backgroundProcessPopoverHeight: shellState.BackgroundProcessPopoverHeight,
             persistBackgroundProcessPopoverSize: persistBackgroundProcessPopoverSize);

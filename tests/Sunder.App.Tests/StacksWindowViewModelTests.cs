@@ -563,8 +563,9 @@ public sealed class StacksWindowViewModelTests
 
         await viewModel.ApplyCommand.ExecuteAsync(null);
 
-        Assert.NotNull(runtimeApiClient.LastInstallBatchRequest);
-        var installItem = Assert.Single(runtimeApiClient.LastInstallBatchRequest.Items);
+        Assert.NotNull(runtimeApiClient.LastPackageStoreStageRequest);
+        var installItem = Assert.Single(runtimeApiClient.LastPackageStoreStageRequest.Mutations);
+        Assert.Equal(PackageStoreMutationKind.Install, installItem.Kind);
         Assert.Contains("sunder.package.agent.1.2.0.sunderpkg", installItem.PackagePath, StringComparison.Ordinal);
         Assert.Equal(["install", "lifecycle:sunder.package.agent", "preview", "import"], runtimeApiClient.Events);
         Assert.Equal(["agent-profile"], runtimeApiClient.LastImportRequest?.SelectedFragmentIds);
@@ -852,6 +853,8 @@ public sealed class StacksWindowViewModelTests
 
         public PackageInstallBatchFromPathRequest? LastInstallBatchRequest { get; private set; }
 
+        public PackageStoreStageRequest? LastPackageStoreStageRequest { get; private set; }
+
         public List<string> Events { get; } = [];
 
         public bool WriteArchiveOnExport { get; init; }
@@ -878,6 +881,28 @@ public sealed class StacksWindowViewModelTests
             Events.Add("install");
             return Task.FromResult(InstallPackagesFromPathsResponse);
         }
+
+        public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
+        {
+            LastPackageStoreStageRequest = request;
+            var impactedPackageIds = request.Mutations.Select(GetMutationPackageId).ToArray();
+            return Task.FromResult(new PackageStoreStageResult(
+                "stage-1",
+                SuccessPackageOperation() with
+                {
+                    ImpactedPackageIds = impactedPackageIds,
+                },
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
+                impactedPackageIds.Select(packageId => new PackageSourceDescriptor(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
+        }
+
+        public Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)
+        {
+            Events.Add("install");
+            return Task.FromResult(InstallPackagesFromPathsResponse);
+        }
+
+        public Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default) => Task.FromResult(Success());
 
@@ -965,6 +990,11 @@ public sealed class StacksWindowViewModelTests
 
         private static PackageOperationResult Success()
             => SuccessPackageOperation();
+
+        private static string GetMutationPackageId(PackageStoreMutationRequest mutation)
+            => !string.IsNullOrWhiteSpace(mutation.PackageId)
+                ? mutation.PackageId
+                : Path.GetFileName(mutation.PackagePath ?? string.Empty).Split('.')[0];
     }
 
     private static PackageOperationResult SuccessPackageOperation()

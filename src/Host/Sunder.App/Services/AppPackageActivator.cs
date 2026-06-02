@@ -28,7 +28,6 @@ internal sealed class AppPackageActivator(
         }
 
         activation.PackageInfo = new AppLoadedPackageInfo(package, preparedSource.Folder, manifest);
-        sharedAssemblyRegistry.AddProbeDirectories([activation.PackageInfo.LibraryFolder]);
 
         var loadContext = new AppPackageLoadContext(package.PackageId, activation.PackageInfo.EntryAssemblyPath, sharedAssemblyRegistry, registerPackageAssembly);
         activation.LoadContext = loadContext;

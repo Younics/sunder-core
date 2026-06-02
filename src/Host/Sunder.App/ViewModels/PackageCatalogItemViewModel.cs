@@ -8,6 +8,7 @@ namespace Sunder.App.ViewModels;
 public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewModel, IPackageOperationStateViewModel
 {
     private readonly Action<PackageCatalogItemViewModel> _onSelect;
+    private readonly PackageCatalogItemState _state;
 
     public PackageCatalogItemViewModel(
         SessionPackageDescriptor? sessionPackage,
@@ -15,26 +16,34 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
         RegistryPackageUpdate? update,
         Uri? iconUri,
         Action<PackageCatalogItemViewModel> onSelect)
-        : base(iconUri)
+        : this(CreateState(sessionPackage, installedPackage, update, iconUri), onSelect)
     {
-        PackageId = sessionPackage?.PackageId ?? installedPackage!.PackageId;
-        DisplayName = sessionPackage?.DisplayName ?? installedPackage!.Name;
-        Version = sessionPackage?.Version ?? installedPackage!.Version;
-        Glyph = ToGlyph(sessionPackage?.Icon ?? installedPackage?.Icon, DisplayName);
-        StatusText = ToStatusText(sessionPackage, installedPackage);
-        IsEnabled = sessionPackage?.IsEnabled ?? installedPackage?.IsEnabled ?? false;
-        IsFailed = sessionPackage?.Readiness == PackageReadinessState.Failed;
-        IsInstalled = installedPackage is not null;
-        SourceLabel = installedPackage is null ? "Dev package" : "Installed package";
-        ViewCount = sessionPackage?.Views.Count ?? 0;
-        LastError = sessionPackage?.LastError;
-        FailureOrigin = sessionPackage?.FailureOrigin;
-        CanEnable = installedPackage is { IsEnabled: false };
-        CanDisable = installedPackage is { IsEnabled: true };
-        CanUninstall = installedPackage is not null;
-        AvailableVersion = update?.AvailableVersion;
-        DeprecatedUpdateMessage = update?.DeprecatedMessage;
-        OperationHint = ToOperationHint(installedPackage, update);
+    }
+
+    internal PackageCatalogItemViewModel(
+        PackageCatalogItemState state,
+        Action<PackageCatalogItemViewModel> onSelect)
+        : base(state.IconUri)
+    {
+        _state = state;
+        PackageId = state.PackageId;
+        DisplayName = state.DisplayName;
+        Version = state.Version;
+        Glyph = state.Glyph;
+        StatusText = state.StatusText;
+        IsEnabled = state.IsEnabled;
+        IsFailed = state.IsFailed;
+        IsInstalled = state.IsInstalled;
+        SourceLabel = state.SourceLabel;
+        ViewCount = state.ViewCount;
+        LastError = state.LastError;
+        FailureOrigin = state.FailureOrigin;
+        CanEnable = state.CanEnable;
+        CanDisable = state.CanDisable;
+        CanUninstall = state.CanUninstall;
+        AvailableVersion = state.AvailableVersion;
+        DeprecatedUpdateMessage = state.DeprecatedUpdateMessage;
+        OperationHint = state.OperationHint;
         _onSelect = onSelect;
     }
 
@@ -103,6 +112,38 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
 
     [RelayCommand]
     private void Select() => _onSelect(this);
+
+    internal bool HasState(PackageCatalogItemState state) => _state == state;
+
+    internal static PackageCatalogItemState CreateState(
+        SessionPackageDescriptor? sessionPackage,
+        InstalledPackageDescriptor? installedPackage,
+        RegistryPackageUpdate? update,
+        Uri? iconUri)
+    {
+        var packageId = sessionPackage?.PackageId ?? installedPackage!.PackageId;
+        var displayName = sessionPackage?.DisplayName ?? installedPackage!.Name;
+        return new PackageCatalogItemState(
+            packageId,
+            displayName,
+            sessionPackage?.Version ?? installedPackage!.Version,
+            ToGlyph(sessionPackage?.Icon ?? installedPackage?.Icon, displayName),
+            ToStatusText(sessionPackage, installedPackage),
+            sessionPackage?.IsEnabled ?? installedPackage?.IsEnabled ?? false,
+            sessionPackage?.Readiness == PackageReadinessState.Failed,
+            installedPackage is not null,
+            installedPackage is null ? "Dev package" : "Installed package",
+            sessionPackage?.Views.Count ?? 0,
+            sessionPackage?.LastError,
+            sessionPackage?.FailureOrigin,
+            installedPackage is { IsEnabled: false },
+            installedPackage is { IsEnabled: true },
+            installedPackage is not null,
+            update?.AvailableVersion,
+            update?.DeprecatedMessage,
+            ToOperationHint(installedPackage, update),
+            iconUri);
+    }
 
     private static string ToGlyph(PackageIconDescriptor? icon, string displayName)
     {
@@ -176,3 +217,24 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
             : "Enable or uninstall this package. Running shell changes apply live when possible.";
     }
 }
+
+internal sealed record PackageCatalogItemState(
+    string PackageId,
+    string DisplayName,
+    string Version,
+    string Glyph,
+    string StatusText,
+    bool IsEnabled,
+    bool IsFailed,
+    bool IsInstalled,
+    string SourceLabel,
+    int ViewCount,
+    string? LastError,
+    PackageFailureOrigin? FailureOrigin,
+    bool CanEnable,
+    bool CanDisable,
+    bool CanUninstall,
+    string? AvailableVersion,
+    string? DeprecatedUpdateMessage,
+    string OperationHint,
+    Uri? IconUri);

@@ -43,12 +43,27 @@ public interface IRuntimeApiClient : IDisposable
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("Runtime client does not support batch package installation.");
 
+    Task<PackageOperationResult> InstallPackageFromPathAsync(
+        string packagePath,
+        bool applyRuntimeSession,
+        CancellationToken cancellationToken = default)
+        => InstallPackageFromPathAsync(packagePath, cancellationToken);
+
     Task<PackageOperationResult> UpgradePackageFromPathAsync(
         string packageId,
         string packagePath,
         bool allowDowngrade = false,
         bool reinstall = false,
         CancellationToken cancellationToken = default);
+
+    Task<PackageOperationResult> UpgradePackageFromPathAsync(
+        string packageId,
+        string packagePath,
+        bool allowDowngrade,
+        bool reinstall,
+        bool applyRuntimeSession,
+        CancellationToken cancellationToken = default)
+        => UpgradePackageFromPathAsync(packageId, packagePath, allowDowngrade, reinstall, cancellationToken);
 
     Task<PackageOperationResult> EnableInstalledPackageAsync(
         string packageId,
@@ -61,6 +76,21 @@ public interface IRuntimeApiClient : IDisposable
     Task<PackageOperationResult> UninstallPackageAsync(
         string packageId,
         CancellationToken cancellationToken = default);
+
+    Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
+        PackageStoreStageRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-store staging.");
+
+    Task<PackageOperationResult> CommitPackageStoreStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-store staging.");
+
+    Task DiscardPackageStoreStageAsync(
+        string stageId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-store staging.");
 
     Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
         PackageLifecycleLoadRequest request,

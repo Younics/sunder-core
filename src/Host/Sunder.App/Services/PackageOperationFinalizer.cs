@@ -104,9 +104,9 @@ internal sealed class PackageOperationFinalizer(
         }
         catch (Exception ex)
         {
-            AppSessionLog.WriteError("Package store updated, but the running shell did not apply the change.", ex);
-            var warning = $"Package store updated, but the running shell did not apply the change: {ex.Message}";
-            await PublishWarningAsync("Restart Sunder to apply package changes", warning).ConfigureAwait(false);
+            AppSessionLog.WriteError("Package store updated, but the running shell rejected the live package change.", ex);
+            var warning = $"Package store updated, but the running shell rejected the live change: {ex.Message}";
+            await PublishWarningAsync("Package changes were not applied live", warning).ConfigureAwait(false);
             return warning;
         }
     }

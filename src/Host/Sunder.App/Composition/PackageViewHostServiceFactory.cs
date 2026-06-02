@@ -9,13 +9,14 @@ public sealed class PackageViewHostServiceFactory(
     AppPackageSettingsNavigationService settingsNavigationService,
     AppPackageSessionService packageSessionService,
     NotificationCenterService notificationCenter,
-    BackgroundProcessQueueService backgroundProcessQueue)
+    BackgroundProcessQueueService backgroundProcessQueue,
+    AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry)
 {
     public async Task<PackageViewHostService> CreateForPackagesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageSourceDescriptor> packageSources,
         CancellationToken cancellationToken = default)
-        => await PackageViewHostService.CreateForPackagesAsync(
+        => await PackageViewHostService.CreateForPackagesWithResourceRegistryAsync(
             activePackages,
             packageSources,
             packageFaultReporter,
@@ -24,5 +25,6 @@ public sealed class PackageViewHostServiceFactory(
             packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
+            packageResourceAssemblyRegistry,
             cancellationToken).ConfigureAwait(false);
 }

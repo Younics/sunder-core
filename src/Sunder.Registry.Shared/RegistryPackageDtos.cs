@@ -151,6 +151,18 @@ public sealed record RegistryResolveInstallPlanRequest(
     bool AllowDowngrade = false,
     bool Reinstall = false);
 
+public sealed record RegistryPackageChangeRequest(
+    string PackageId,
+    string? Version,
+    string? Tag = null);
+
+public sealed record RegistryResolvePackageChangesRequest(
+    IReadOnlyList<RegistryPackageChangeRequest> Packages,
+    IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
+    bool IncludePrerelease = false,
+    bool AllowDowngrade = false,
+    bool Reinstall = false);
+
 public sealed record RegistryInstalledPackageState(
     string PackageId,
     string Version,

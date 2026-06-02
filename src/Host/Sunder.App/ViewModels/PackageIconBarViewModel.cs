@@ -51,12 +51,8 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
 
     public void SetItems(IEnumerable<ShellItemViewModel> items)
     {
-        foreach (var item in Items)
-        {
-            item.Dispose();
-        }
-
-        ReplaceCollection(Items, items);
+        var nextItems = items.ToArray();
+        Items.SyncWith(nextItems, removeItem: item => item.Dispose());
         RefreshVisibleItems();
         OnPropertyChanged(nameof(ShowEmptyDropHint));
     }
@@ -64,16 +60,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     public void SetItemsPreservingExisting(IEnumerable<ShellItemViewModel> items)
     {
         var nextItems = items.ToArray();
-        var nextItemSet = nextItems.ToHashSet();
-        foreach (var item in Items)
-        {
-            if (!nextItemSet.Contains(item))
-            {
-                item.Dispose();
-            }
-        }
-
-        ReplaceCollection(Items, nextItems);
+        Items.SyncWith(nextItems, removeItem: item => item.Dispose());
         RefreshVisibleItems();
         OnPropertyChanged(nameof(ShowEmptyDropHint));
     }
@@ -233,11 +220,5 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
         => string.Equals(item.Id, _dragLayoutViewId, StringComparison.OrdinalIgnoreCase);
 
     private static void ReplaceCollection<T>(ObservableCollection<T> target, IEnumerable<T> items)
-    {
-        target.Clear();
-        foreach (var item in items)
-        {
-            target.Add(item);
-        }
-    }
+        => target.SyncWith(items);
 }

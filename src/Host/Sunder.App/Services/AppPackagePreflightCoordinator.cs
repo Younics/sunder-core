@@ -17,7 +17,8 @@ internal sealed record AppPackagePreflightResult(
 
 internal sealed class AppPackagePreflightCoordinator(
     Func<string, AppLoadedPackageHandle?> getLoadedPackage,
-    Func<string, bool> isPackageDisabled)
+    Func<string, bool> isPackageDisabled,
+    Func<IReadOnlyList<PackageSourceDescriptor>, bool>? requiresSharedAssemblyReset = null)
 {
     public async Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -26,7 +27,10 @@ internal sealed class AppPackagePreflightCoordinator(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var candidates = BuildPreflightCandidates(activePackages, packageSources, forceReloadPackageIds).ToArray();
+        var effectiveForceReloadPackageIds = requiresSharedAssemblyReset?.Invoke(packageSources) == true
+            ? activePackages.Select(package => package.PackageId).ToArray()
+            : forceReloadPackageIds;
+        var candidates = BuildPreflightCandidates(activePackages, packageSources, effectiveForceReloadPackageIds).ToArray();
         if (candidates.Length == 0)
         {
             return AppPackagePreflightResult.Succeeded();
@@ -60,12 +64,28 @@ internal sealed class AppPackagePreflightCoordinator(
 
         try
         {
+            var preparedPackages = new List<AppPreparedPackageActivation>();
             foreach (var (package, source) in candidates)
             {
-                var result = await PreflightPackageAsync(
-                    package,
-                    source,
-                    sourceLoader,
+                var sourceLoadResult = await sourceLoader.LoadAsync(package, source, cancellationToken).ConfigureAwait(false);
+                if (!sourceLoadResult.IsSuccess || sourceLoadResult.PreparedSource is null)
+                {
+                    return AppPackagePreflightResult.Failed(
+                        sourceLoadResult.FailureMessage ?? $"Failed to prepare app-side package source for '{package.PackageId}'.");
+                }
+
+                preparedPackages.Add(new AppPreparedPackageActivation(package, source, sourceLoadResult.PreparedSource));
+            }
+
+            if (preparedPackages.Count > 0)
+            {
+                sharedAssemblyRegistry.AddProbeDirectories(preparedPackages.Select(package => package.LibraryFolder));
+            }
+
+            foreach (var preparedPackage in preparedPackages)
+            {
+                var result = await PreflightPreparedPackageAsync(
+                    preparedPackage,
                     packageActivator,
                     unloadCoordinator,
                     assemblyTracker.RegisterPackageAssembly,
@@ -118,10 +138,8 @@ internal sealed class AppPackagePreflightCoordinator(
         }
     }
 
-    private static async Task<AppPackagePreflightResult> PreflightPackageAsync(
-        ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
-        AppPackageSourceLoader sourceLoader,
+    private static async Task<AppPackagePreflightResult> PreflightPreparedPackageAsync(
+        AppPreparedPackageActivation preparedPackage,
         AppPackageActivator packageActivator,
         AppPackageUnloadCoordinator unloadCoordinator,
         Action<string, Assembly> registerPackageAssembly,
@@ -129,24 +147,12 @@ internal sealed class AppPackagePreflightCoordinator(
         Action<object> trackOwnedDisposable,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(source.Folder))
-        {
-            return AppPackagePreflightResult.Failed($"Runtime did not provide a loadable app-side package source for '{package.PackageId}'.");
-        }
-
-        var sourceLoadResult = await sourceLoader.LoadAsync(package, source, cancellationToken).ConfigureAwait(false);
-        if (!sourceLoadResult.IsSuccess || sourceLoadResult.PreparedSource is null)
-        {
-            return AppPackagePreflightResult.Failed(
-                sourceLoadResult.FailureMessage ?? $"Failed to prepare app-side package source for '{package.PackageId}'.");
-        }
-
         var activation = new AppPackageActivationState();
         try
         {
             await packageActivator.ActivateAsync(
-                package,
-                sourceLoadResult.PreparedSource,
+                preparedPackage.Package,
+                preparedPackage.PreparedSource,
                 activation,
                 registerPackageAssembly,
                 trackLoadContext,
@@ -161,12 +167,12 @@ internal sealed class AppPackagePreflightCoordinator(
         }
         catch (Exception ex)
         {
-            return AppPackagePreflightResult.Failed($"App-side package preflight failed for '{package.PackageId}': {ex.Message}");
+            return AppPackagePreflightResult.Failed($"App-side package preflight failed for '{preparedPackage.Package.PackageId}': {ex.Message}");
         }
         finally
         {
             await unloadCoordinator.RollBackActivationAsync(
-                package.PackageId,
+                preparedPackage.Package.PackageId,
                 activation.PackageInfo,
                 activation.ServiceProvider,
                 activation.LoadContext,

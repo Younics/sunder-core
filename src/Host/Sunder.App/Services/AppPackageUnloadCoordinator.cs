@@ -10,7 +10,8 @@ internal sealed class AppPackageUnloadCoordinator(
     AppPackageAssemblyTracker assemblyTracker,
     AppSharedAssemblyRegistry sharedAssemblyRegistry,
     Action<object> removeOwnedDisposable,
-    Action<AppPackageLoadContext> removeLoadContext)
+    Action<AppPackageLoadContext> removeLoadContext,
+    Action<string>? removePackageResourceAssemblies = null)
 {
     public async Task RollBackActivationAsync(
         string packageId,
@@ -27,6 +28,7 @@ internal sealed class AppPackageUnloadCoordinator(
         }
 
         assemblyTracker.RemovePackage(packageId);
+        removePackageResourceAssemblies?.Invoke(packageId);
 
         if (packageInfo is not null)
         {
@@ -59,6 +61,7 @@ internal sealed class AppPackageUnloadCoordinator(
 
         removeLoadContext(handle.LoadContext);
         assemblyTracker.RemovePackage(packageId);
+        removePackageResourceAssemblies?.Invoke(packageId);
         sharedAssemblyRegistry.RemoveProbeDirectories([Path.Combine(handle.Folder, "lib")]);
         AppPackageResourceDisposer.TryUnloadLoadContext(handle.LoadContext, packageId);
     }

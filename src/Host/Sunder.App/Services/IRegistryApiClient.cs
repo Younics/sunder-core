@@ -52,6 +52,16 @@ public interface IRegistryApiClient : IDisposable
         CancellationToken cancellationToken = default)
         => Task.FromResult(new RegistryCliTokenResponse(false, null, null, null, ["Registry token exchange is not supported by this client."]));
 
+    Task<RegistryResolveInstallPlanResponse> ResolvePackageChangesAsync(
+        RegistryResolvePackageChangesRequest request,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryResolveInstallPlanResponse(
+            false,
+            [],
+            [],
+            ["Registry client does not support batch package change planning."],
+            []));
+
     Task DownloadArtifactAsync(
         RegistryPackageArtifact artifact,
         string packageId,

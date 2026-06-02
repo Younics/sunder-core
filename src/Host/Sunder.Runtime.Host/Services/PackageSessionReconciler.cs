@@ -10,8 +10,14 @@ internal sealed class PackageSessionReconciler(
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
         bool startBackgroundServices,
         CancellationToken cancellationToken = default)
+        => await LoadMergedSessionAsync(await installedPackageStore.ListAsync(cancellationToken), devOverlays, startBackgroundServices, cancellationToken);
+
+    public async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
+        IReadOnlyList<InstalledPackageRecord> installedPackages,
+        IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
+        bool startBackgroundServices,
+        CancellationToken cancellationToken = default)
     {
-        var installedPackages = await installedPackageStore.ListAsync(cancellationToken);
         var devFolders = devOverlays.Select(overlay => overlay.Folder).ToArray();
         if (installedPackages.Count == 0 && devFolders.Length == 0)
         {

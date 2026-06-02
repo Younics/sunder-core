@@ -44,16 +44,20 @@ internal sealed class InstalledPackagesPaneViewModel(
 
     public void RebuildList(string searchText)
     {
-        var filteredPackages = InstalledPackageCatalogProjector.Build(
+        var packageStates = InstalledPackageCatalogProjector.Build(
             catalog.SessionPackages,
             catalog.InstalledPackages,
             catalog.AvailableUpdates,
             searchText,
-            createPackageIconUri,
-            selectPackage);
+            createPackageIconUri);
+        var existingById = Packages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
+        var filteredPackages = packageStates
+            .Select(state => existingById.TryGetValue(state.PackageId, out var existingPackage) && existingPackage.HasState(state)
+                ? existingPackage
+                : new PackageCatalogItemViewModel(state, selectPackage))
+            .ToArray();
 
-        DisposeItems();
-        Packages.ReplaceWith(filteredPackages);
+        Packages.SyncWith(filteredPackages, removeItem: package => package.Dispose());
     }
 
     public PackageCatalogItemViewModel? ResolveSelection(string? preferredPackageId, string? currentPackageId)

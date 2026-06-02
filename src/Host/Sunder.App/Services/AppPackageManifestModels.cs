@@ -12,6 +12,27 @@ internal sealed record AppLoadedPackageInfo(ActivePackageDescriptor Package, str
 
 internal sealed record AppPreparedPackageSource(string PackageId, string Folder);
 
+internal sealed record AppPreparedPackageActivation(
+    ActivePackageDescriptor Package,
+    PackageSourceDescriptor Source,
+    AppPreparedPackageSource PreparedSource)
+{
+    public string LibraryFolder => Path.Combine(PreparedSource.Folder, "lib");
+}
+
+internal sealed record AppPackagePrepareResult(
+    AppPreparedPackageActivation? Activation,
+    string? FailureMessage)
+{
+    public bool IsSuccess => Activation is not null && FailureMessage is null;
+
+    public static AppPackagePrepareResult Success(AppPreparedPackageActivation activation)
+        => new(activation, FailureMessage: null);
+
+    public static AppPackagePrepareResult Failure(string failureMessage)
+        => new(Activation: null, failureMessage);
+}
+
 internal sealed record AppLoadedPackageHandle(
     ActivePackageDescriptor Package,
     PackageSourceDescriptor Source,

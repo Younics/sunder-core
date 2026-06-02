@@ -84,8 +84,8 @@ internal static class PackageOperationMessageFormatter
         if (operationResult.RequiresAppRestart)
         {
             message += operationResult.RuntimeSessionApplied
-                ? " Restart Sunder to apply package UI changes."
-                : " Restart Sunder to apply package changes.";
+                ? " Package UI changes were not applied live."
+                : " Package changes were not loaded into the running session.";
         }
 
         if (operationResult.Warnings.Count > 0)

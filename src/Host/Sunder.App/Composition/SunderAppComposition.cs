@@ -9,12 +9,16 @@ namespace Sunder.App.Composition;
 
 internal static class SunderAppComposition
 {
-    public static ServiceProvider CreateServiceProvider(Application application, AppStartupOptions startupOptions)
+    public static ServiceProvider CreateServiceProvider(
+        Application application,
+        AppStartupOptions startupOptions,
+        AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry)
     {
         var services = new ServiceCollection();
 
         services.AddSingleton(application);
         services.AddSingleton(startupOptions);
+        services.AddSingleton(packageResourceAssemblyRegistry);
         services.AddSingleton<SunderAppSettings>(_ => SunderAppSettings.Load());
 
         services.AddSingleton<ShellStateService>();

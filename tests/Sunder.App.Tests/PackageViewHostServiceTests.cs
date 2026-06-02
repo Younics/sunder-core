@@ -646,6 +646,36 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task PreflightPackageDeltaAsync_WhenSharedAssemblyResetRequired_PreflightsAllActivePackages()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var packageASourceFolder = CreateAppPackageSource(rootPath, "package.a");
+        var packageA = CreateActivePackage("package.a");
+        var packageB = CreateActivePackage("package.b");
+        var sourceA = new PackageSourceDescriptor("package.a", PackageSourceKind.Dev, packageASourceFolder);
+        var coordinator = new AppPackagePreflightCoordinator(
+            _ => null,
+            _ => false,
+            _ => true);
+
+        try
+        {
+            var preflight = await coordinator.PreflightPackageDeltaAsync(
+                [packageA, packageB],
+                [sourceA],
+                ["package.a"],
+                CancellationToken.None);
+
+            Assert.False(preflight.Success);
+            Assert.NotEmpty(preflight.Errors);
+        }
+        finally
+        {
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task PreflightPackageDeltaAsync_DoesNotStartBackgroundServices()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));

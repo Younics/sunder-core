@@ -41,28 +41,36 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         => (await ListAsync(cancellationToken)).FirstOrDefault(package =>
             string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
+    public async Task<IReadOnlyList<InstalledPackageRecord>> SnapshotAsync(CancellationToken cancellationToken = default)
+        => await ListAsync(cancellationToken);
+
+    public async Task CommitSnapshotAsync(IReadOnlyList<InstalledPackageRecord> packages, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await WriteStateAsync(packages, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<PackageOperationResult> InstallAsync(InstalledPackageRecord record, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var packages = (await ReadStateAsync(cancellationToken)).ToList();
-            if (packages.Any(package => string.Equals(package.PackageId, record.PackageId, StringComparison.OrdinalIgnoreCase)))
+            var plan = ApplyInstall(packages, record);
+            if (!plan.Result.Success)
             {
-                return PackageOperationResults.Failure($"Package '{record.PackageId}' is already installed.");
+                return plan.Result;
             }
 
-            var dependencyError = ValidateDependencies(record, packages, requireEnabled: true);
-            if (dependencyError is not null)
-            {
-                return PackageOperationResults.Failure(dependencyError);
-            }
-
-            packages.Add(record);
             await WriteStateAsync(packages, cancellationToken);
-            return PackageOperationResults.Success(
-                $"Installed package '{record.Name}' {record.Version}.",
-                impactedPackageIds: BuildDependencyImpactSet(record, packages));
+            return plan.Result;
         }
         finally
         {
@@ -76,41 +84,14 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         try
         {
             var packages = (await ReadStateAsync(cancellationToken)).ToList();
-            var index = packages.FindIndex(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
-            if (index < 0)
+            var plan = ApplySetEnabled(packages, packageId, isEnabled);
+            if (!plan.Result.Success || plan.Result.ImpactedPackageIds.Count == 0)
             {
-                return PackageOperationResults.Failure($"Package '{packageId}' is not installed.");
+                return plan.Result;
             }
 
-            var package = packages[index];
-            if (package.IsEnabled == isEnabled)
-            {
-                return PackageOperationResults.Success($"Package '{package.Name}' is already {(isEnabled ? "enabled" : "disabled")}.", requiresAppRestart: false);
-            }
-
-            if (isEnabled)
-            {
-                var dependencyError = ValidateDependencies(package, packages, requireEnabled: true);
-                if (dependencyError is not null)
-                {
-                    return PackageOperationResults.Failure(dependencyError);
-                }
-            }
-            else
-            {
-                var dependent = packages.FirstOrDefault(candidate => candidate.IsEnabled
-                    && candidate.DependsOn.Any(dependency => string.Equals(dependency.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase)));
-                if (dependent is not null)
-                {
-                    return PackageOperationResults.Failure($"Package '{package.PackageId}' cannot be disabled because enabled package '{dependent.PackageId}' depends on it.");
-                }
-            }
-
-            packages[index] = package with { IsEnabled = isEnabled };
             await WriteStateAsync(packages, cancellationToken);
-            return PackageOperationResults.Success(
-                $"{(isEnabled ? "Enabled" : "Disabled")} package '{package.Name}'.",
-                impactedPackageIds: BuildDependencyImpactSet(package, packages));
+            return plan.Result;
         }
         finally
         {
@@ -128,53 +109,15 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (!string.Equals(packageId, record.PackageId, StringComparison.OrdinalIgnoreCase))
-            {
-                return PackageOperationResults.Failure($"Package archive '{record.PackageId}' does not match selected package '{packageId}'.");
-            }
-
             var packages = (await ReadStateAsync(cancellationToken)).ToList();
-            var index = packages.FindIndex(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
-            if (index < 0)
+            var plan = ApplyUpgrade(packages, packageId, record, allowDowngrade, reinstall);
+            if (!plan.Result.Success)
             {
-                return PackageOperationResults.Failure($"Package '{packageId}' is not installed.");
-            }
-
-            var currentPackage = packages[index];
-            if (!PackageVersionRange.TryCompare(record.Version, currentPackage.Version, out var versionComparison))
-            {
-                return PackageOperationResults.Failure($"Package version '{record.Version}' or installed version '{currentPackage.Version}' is invalid.");
-            }
-
-            if (versionComparison < 0 && !allowDowngrade)
-            {
-                return PackageOperationResults.Failure($"Package '{packageId}' cannot be downgraded from {currentPackage.Version} to {record.Version} without allowing downgrades.");
-            }
-
-            if (versionComparison == 0 && !reinstall)
-            {
-                return PackageOperationResults.Failure($"Package '{packageId}' version {record.Version} is already installed.");
-            }
-
-            var replacementPackage = record with { IsEnabled = currentPackage.IsEnabled };
-            packages[index] = replacementPackage;
-
-            var dependencyError = ValidateDependencies(replacementPackage, packages, requireEnabled: replacementPackage.IsEnabled);
-            if (dependencyError is not null)
-            {
-                return PackageOperationResults.Failure(dependencyError);
-            }
-
-            var dependentError = ValidateDependents(replacementPackage, packages);
-            if (dependentError is not null)
-            {
-                return PackageOperationResults.Failure(dependentError);
+                return plan.Result;
             }
 
             await WriteStateAsync(packages, cancellationToken);
-            return PackageOperationResults.Success(
-                $"Updated package '{replacementPackage.Name}' from {currentPackage.Version} to {replacementPackage.Version}.",
-                impactedPackageIds: BuildUpgradeImpactSet(replacementPackage, packages));
+            return plan.Result;
         }
         finally
         {
@@ -188,15 +131,13 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         try
         {
             var packages = (await ReadStateAsync(cancellationToken)).ToList();
-            var package = packages.FirstOrDefault(candidate => string.Equals(candidate.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
-            if (package is null)
+            var plan = ApplyUninstall(packages, packageId);
+            if (!plan.Result.Success)
             {
-                return PackageOperationResults.Failure($"Package '{packageId}' is not installed.");
+                return plan.Result;
             }
 
-            var packagesToUninstall = BuildUninstallSet(package, packages);
-
-            foreach (var packageToUninstall in packagesToUninstall)
+            foreach (var packageToUninstall in plan.RemovedPackages)
             {
                 try
                 {
@@ -211,16 +152,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                 }
             }
 
-            var removedPackageIds = packagesToUninstall.Select(candidate => candidate.PackageId).ToArray();
-            var removedPackageIdSet = removedPackageIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            packages.RemoveAll(candidate => removedPackageIdSet.Contains(candidate.PackageId));
             await WriteStateAsync(packages, cancellationToken);
-            var message = packagesToUninstall.Count == 1
-                ? $"Uninstalled package '{package.Name}'."
-                : $"Uninstalled package '{package.Name}' and {packagesToUninstall.Count - 1} dependent package(s).";
-            return PackageOperationResults.Success(
-                message,
-                impactedPackageIds: removedPackageIds);
+            return plan.Result;
         }
         finally
         {
@@ -263,6 +196,147 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             ? null
             : PackageAssetPathResolver.TryResolveInstalledAssetPath(package.InstallPath, assetPath);
     }
+
+    public InstalledPackageMutationPlan ApplyInstall(List<InstalledPackageRecord> packages, InstalledPackageRecord record)
+    {
+        if (packages.Any(package => string.Equals(package.PackageId, record.PackageId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return MutationFailure($"Package '{record.PackageId}' is already installed.");
+        }
+
+        var dependencyError = ValidateDependencies(record, packages, requireEnabled: true);
+        if (dependencyError is not null)
+        {
+            return MutationFailure(dependencyError);
+        }
+
+        packages.Add(record);
+        return MutationSuccess(
+            $"Installed package '{record.Name}' {record.Version}.",
+            impactedPackageIds: [record.PackageId]);
+    }
+
+    public InstalledPackageMutationPlan ApplySetEnabled(List<InstalledPackageRecord> packages, string packageId, bool isEnabled)
+    {
+        var index = packages.FindIndex(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            return MutationFailure($"Package '{packageId}' is not installed.");
+        }
+
+        var package = packages[index];
+        if (package.IsEnabled == isEnabled)
+        {
+            return MutationSuccess($"Package '{package.Name}' is already {(isEnabled ? "enabled" : "disabled")}.");
+        }
+
+        if (isEnabled)
+        {
+            var dependencyError = ValidateDependencies(package, packages, requireEnabled: true);
+            if (dependencyError is not null)
+            {
+                return MutationFailure(dependencyError);
+            }
+        }
+        else
+        {
+            var dependent = packages.FirstOrDefault(candidate => candidate.IsEnabled
+                && candidate.DependsOn.Any(dependency => string.Equals(dependency.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase)));
+            if (dependent is not null)
+            {
+                return MutationFailure($"Package '{package.PackageId}' cannot be disabled because enabled package '{dependent.PackageId}' depends on it.");
+            }
+        }
+
+        packages[index] = package with { IsEnabled = isEnabled };
+        return MutationSuccess(
+            $"{(isEnabled ? "Enabled" : "Disabled")} package '{package.Name}'.",
+            impactedPackageIds: [package.PackageId]);
+    }
+
+    public InstalledPackageMutationPlan ApplyUpgrade(
+        List<InstalledPackageRecord> packages,
+        string packageId,
+        InstalledPackageRecord record,
+        bool allowDowngrade,
+        bool reinstall)
+    {
+        if (!string.Equals(packageId, record.PackageId, StringComparison.OrdinalIgnoreCase))
+        {
+            return MutationFailure($"Package archive '{record.PackageId}' does not match selected package '{packageId}'.");
+        }
+
+        var index = packages.FindIndex(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            return MutationFailure($"Package '{packageId}' is not installed.");
+        }
+
+        var currentPackage = packages[index];
+        if (!PackageVersionRange.TryCompare(record.Version, currentPackage.Version, out var versionComparison))
+        {
+            return MutationFailure($"Package version '{record.Version}' or installed version '{currentPackage.Version}' is invalid.");
+        }
+
+        if (versionComparison < 0 && !allowDowngrade)
+        {
+            return MutationFailure($"Package '{packageId}' cannot be downgraded from {currentPackage.Version} to {record.Version} without allowing downgrades.");
+        }
+
+        if (versionComparison == 0 && !reinstall)
+        {
+            return MutationFailure($"Package '{packageId}' version {record.Version} is already installed.");
+        }
+
+        var replacementPackage = record with { IsEnabled = currentPackage.IsEnabled };
+        packages[index] = replacementPackage;
+
+        var dependencyError = ValidateDependencies(replacementPackage, packages, requireEnabled: replacementPackage.IsEnabled);
+        if (dependencyError is not null)
+        {
+            packages[index] = currentPackage;
+            return MutationFailure(dependencyError);
+        }
+
+        var dependentError = ValidateDependents(replacementPackage, packages);
+        if (dependentError is not null)
+        {
+            packages[index] = currentPackage;
+            return MutationFailure(dependentError);
+        }
+
+        return MutationSuccess(
+            $"Updated package '{replacementPackage.Name}' from {currentPackage.Version} to {replacementPackage.Version}.",
+            impactedPackageIds: BuildUpgradeImpactSet(replacementPackage, packages),
+            removedPackages: [currentPackage]);
+    }
+
+    public InstalledPackageMutationPlan ApplyUninstall(List<InstalledPackageRecord> packages, string packageId)
+    {
+        var package = packages.FirstOrDefault(candidate => string.Equals(candidate.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+        if (package is null)
+        {
+            return MutationFailure($"Package '{packageId}' is not installed.");
+        }
+
+        var packagesToUninstall = BuildUninstallSet(package, packages);
+        var removedPackageIds = packagesToUninstall.Select(candidate => candidate.PackageId).ToArray();
+        var removedPackageIdSet = removedPackageIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        packages.RemoveAll(candidate => removedPackageIdSet.Contains(candidate.PackageId));
+        var message = packagesToUninstall.Count == 1
+            ? $"Uninstalled package '{package.Name}'."
+            : $"Uninstalled package '{package.Name}' and {packagesToUninstall.Count - 1} dependent package(s).";
+        return MutationSuccess(message, impactedPackageIds: removedPackageIds, removedPackages: packagesToUninstall);
+    }
+
+    private static InstalledPackageMutationPlan MutationSuccess(
+        string message,
+        IReadOnlyList<string>? impactedPackageIds = null,
+        IReadOnlyList<InstalledPackageRecord>? removedPackages = null)
+        => new(PackageOperationResults.Success(message, impactedPackageIds: impactedPackageIds ?? []), removedPackages ?? []);
+
+    private static InstalledPackageMutationPlan MutationFailure(string message)
+        => new(PackageOperationResults.Failure(message), []);
 
     private static string? ValidateDependencies(
         InstalledPackageRecord package,
@@ -320,40 +394,10 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         return null;
     }
 
-    private static IReadOnlyList<string> BuildDependencyImpactSet(
-        InstalledPackageRecord package,
-        IReadOnlyList<InstalledPackageRecord> packages)
-    {
-        var packagesById = packages.ToDictionary(candidate => candidate.PackageId, StringComparer.OrdinalIgnoreCase);
-        var impactedPackageIds = new List<string>();
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        void AddPackageAndDependencies(InstalledPackageRecord currentPackage)
-        {
-            if (!visited.Add(currentPackage.PackageId))
-            {
-                return;
-            }
-
-            impactedPackageIds.Add(currentPackage.PackageId);
-            foreach (var dependency in currentPackage.DependsOn)
-            {
-                if (packagesById.TryGetValue(dependency.PackageId, out var dependencyPackage))
-                {
-                    AddPackageAndDependencies(dependencyPackage);
-                }
-            }
-        }
-
-        AddPackageAndDependencies(package);
-        return impactedPackageIds;
-    }
-
     private static IReadOnlyList<string> BuildUpgradeImpactSet(
         InstalledPackageRecord package,
         IReadOnlyList<InstalledPackageRecord> packages)
     {
-        var packagesById = packages.ToDictionary(candidate => candidate.PackageId, StringComparer.OrdinalIgnoreCase);
         var dependentsByDependencyId = packages
             .SelectMany(candidate => candidate.DependsOn.Select(dependency => new { DependencyId = dependency.PackageId, Package = candidate }))
             .GroupBy(entry => entry.DependencyId, StringComparer.OrdinalIgnoreCase)
@@ -361,7 +405,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         var impactedPackageIds = new List<string>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        void AddPackageAndRelated(InstalledPackageRecord currentPackage)
+        void AddPackageAndDependents(InstalledPackageRecord currentPackage)
         {
             if (!visited.Add(currentPackage.PackageId))
             {
@@ -369,13 +413,6 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             }
 
             impactedPackageIds.Add(currentPackage.PackageId);
-            foreach (var dependency in currentPackage.DependsOn)
-            {
-                if (packagesById.TryGetValue(dependency.PackageId, out var dependencyPackage))
-                {
-                    AddPackageAndRelated(dependencyPackage);
-                }
-            }
 
             if (!dependentsByDependencyId.TryGetValue(currentPackage.PackageId, out var dependents))
             {
@@ -384,11 +421,11 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 
             foreach (var dependent in dependents)
             {
-                AddPackageAndRelated(dependent);
+                AddPackageAndDependents(dependent);
             }
         }
 
-        AddPackageAndRelated(package);
+        AddPackageAndDependents(package);
         return impactedPackageIds;
     }
 

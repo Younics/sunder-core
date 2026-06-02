@@ -189,6 +189,27 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task RefreshInstalledPackages_PreservesUnchangedRowsAndReplacesChangedRows()
+    {
+        var runtimeClient = new FakeRuntimeApiClient(
+            [
+                CreateInstalledPackage("agent", isEnabled: true),
+                CreateInstalledPackage("tools", isEnabled: true),
+            ]
+        );
+        using var viewModel = CreateViewModel(runtimeClient, CreateNotificationCenter());
+        await viewModel.InitializeAsync();
+        var originalAgent = Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "agent");
+        var originalTools = Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "tools");
+
+        runtimeClient.AddInstalledPackage(CreateInstalledPackage("agent", isEnabled: false));
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        Assert.NotSame(originalAgent, Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "agent"));
+        Assert.Same(originalTools, Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "tools"));
+    }
+
+    [Fact]
     public void MarketplacePackages_UseRegistryIconUrlWhenAvailable()
     {
         var iconUri = new Uri(
@@ -790,6 +811,7 @@ public sealed class PackagesWindowViewModelTests
     {
         private readonly List<InstalledPackageDescriptor> _installedPackages =
             installedPackages.ToList();
+        private readonly Dictionary<string, PackageStoreStageRequest> _pendingStages = new(StringComparer.OrdinalIgnoreCase);
 
         public int GetInstalledPackagesCallCount { get; private set; }
 
@@ -910,6 +932,71 @@ public sealed class PackagesWindowViewModelTests
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
+        public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
+            PackageStoreStageRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (EnableResult is not null && request.Mutations.Any(mutation => mutation.Kind == PackageStoreMutationKind.Enable))
+            {
+                return Task.FromResult(new PackageStoreStageResult(null, EnableResult, [], []));
+            }
+
+            var stageId = Guid.NewGuid().ToString("N");
+            _pendingStages[stageId] = request;
+            var impactedPackageIds = request.Mutations.Select(GetMutationPackageId).ToArray();
+            return Task.FromResult(new PackageStoreStageResult(
+                stageId,
+                new PackageOperationResult(true, "staged", RuntimeSessionApplied: false, RequiresAppRestart: false, [], [])
+                {
+                    ImpactedPackageIds = impactedPackageIds,
+                },
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, ToDisplayName(packageId), "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
+                impactedPackageIds.Select(packageId => new PackageSourceDescriptor(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
+        }
+
+        public Task<PackageOperationResult> CommitPackageStoreStageAsync(
+            string stageId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var request = _pendingStages[stageId];
+            _pendingStages.Remove(stageId);
+            var impactedPackageIds = request.Mutations.Select(GetMutationPackageId).ToArray();
+            var message = "Package store updated.";
+            foreach (var mutation in request.Mutations)
+            {
+                var packageId = GetMutationPackageId(mutation);
+                switch (mutation.Kind)
+                {
+                    case PackageStoreMutationKind.Install:
+                        if (!_installedPackages.Any(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _installedPackages.Add(CreateInstalledPackage(packageId, isEnabled: true));
+                        }
+
+                        message = $"Installed package '{ToDisplayName(packageId)}'.";
+                        break;
+                    case PackageStoreMutationKind.Enable:
+                        EnabledPackageIds.Add(packageId);
+                        SetPackageEnabled(packageId, isEnabled: true);
+                        message = $"Enabled package '{ToDisplayName(packageId)}'.";
+                        break;
+                }
+            }
+
+            return Task.FromResult(new PackageOperationResult(true, message, RuntimeSessionApplied: true, RequiresAppRestart: false, [], [])
+            {
+                ImpactedPackageIds = impactedPackageIds,
+            });
+        }
+
+        public Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)
+        {
+            _pendingStages.Remove(stageId);
+            return Task.CompletedTask;
+        }
+
         public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
             PackageLifecycleLoadRequest request,
             CancellationToken cancellationToken = default
@@ -978,5 +1065,10 @@ public sealed class PackagesWindowViewModelTests
                 };
             }
         }
+
+        private string GetMutationPackageId(PackageStoreMutationRequest mutation)
+            => !string.IsNullOrWhiteSpace(mutation.PackageId)
+                ? mutation.PackageId
+                : RegistryInstallPackageId ?? Path.GetFileNameWithoutExtension(mutation.PackagePath ?? string.Empty);
     }
 }

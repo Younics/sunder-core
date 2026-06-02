@@ -13,13 +13,13 @@ internal sealed class PackagesOperationCommandCoordinator(
     RegistryPackageInstallService registryInstallService,
     PackageOperationService? packageOperationService,
     Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
+    Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
     NotificationCenterService? notificationCenter,
     Func<bool> getIsBusy,
     Action<bool> setIsBusy,
     Action<string> setStatusText,
     Action clearWarnings,
     Action<IReadOnlyList<string>> replaceWarnings,
-    Action<string> addWarning,
     Func<int> getWarningCount,
     Func<string?, PackageOperationResult?, bool, Task> refreshInstalledAsync,
     Action refreshMarketplaceInstalledBadges,
@@ -49,7 +49,9 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         await ExecuteLocalPackageOperationAsync(
-            () => runtimeApiClient.InstallPackageFromPathAsync(packagePath),
+            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: packagePath),
+            ])),
             selectedPackageId: null,
             "Package installed",
             "Package installed from disk.");
@@ -76,7 +78,9 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         await ExecuteLocalPackageOperationAsync(
-            () => runtimeApiClient.EnableInstalledPackageAsync(packageId),
+            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Enable, packageId),
+            ])),
             packageId,
             "Package enabled",
             $"{packageId} was enabled.");
@@ -102,7 +106,9 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         await ExecuteLocalPackageOperationAsync(
-            () => runtimeApiClient.DisableInstalledPackageAsync(packageId),
+            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Disable, packageId),
+            ])),
             packageId,
             "Package disabled",
             $"{packageId} was disabled.");
@@ -123,7 +129,9 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         await ExecuteLocalPackageOperationAsync(
-            () => runtimeApiClient.UninstallPackageAsync(packageId),
+            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Uninstall, packageId),
+            ])),
             packageId,
             "Package uninstalled",
             $"{packageId} was uninstalled.");
@@ -156,7 +164,8 @@ internal sealed class PackagesOperationCommandCoordinator(
                 allowDowngrade: false,
                 reinstall: false,
                 registryClient,
-                runtimeApiClient),
+                runtimeApiClient,
+                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
             selectedPackageIdForRefresh: null,
             "Package installed",
             $"{packageId} was installed from the marketplace.");
@@ -189,7 +198,8 @@ internal sealed class PackagesOperationCommandCoordinator(
                 allowDowngrade: false,
                 reinstall: false,
                 registryClient,
-                runtimeApiClient),
+                runtimeApiClient,
+                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
             update.PackageId,
             "Package updated",
             $"{update.PackageId} was updated to {update.AvailableVersion}.");
@@ -222,7 +232,8 @@ internal sealed class PackagesOperationCommandCoordinator(
                 allowDowngrade: false,
                 reinstall: false,
                 registryClient,
-                runtimeApiClient),
+                runtimeApiClient,
+                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
             selectedInstalledPackageId,
             "Package updated",
             $"{update.PackageId} was updated to {update.AvailableVersion}.");
@@ -248,7 +259,10 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         await ExecuteRegistryInstallAsync(
-            registryClient => registryInstallService.UpdateAllAsync(registryClient, runtimeApiClient),
+            registryClient => registryInstallService.UpdateAllAsync(
+                registryClient,
+                runtimeApiClient,
+                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
             selectedInstalledPackageId,
             "Packages updated",
             "Installed packages were updated.");
@@ -259,6 +273,50 @@ internal sealed class PackagesOperationCommandCoordinator(
         markInstalledCatalogDirty();
         refreshPackageOperationState();
         setStatusText(statusText);
+    }
+
+    private async Task<PackageOperationResult> StagePreflightCommitPackageStoreAsync(PackageStoreStageRequest request)
+    {
+        var stage = await runtimeApiClient.StagePackageStoreChangesAsync(request);
+        if (!stage.Success || stage.StageId is null)
+        {
+            return stage.OperationResult;
+        }
+
+        var committed = false;
+        try
+        {
+            await PreflightPackageStoreStageAsync(stage, CancellationToken.None);
+            var commit = await runtimeApiClient.CommitPackageStoreStageAsync(stage.StageId);
+            committed = true;
+            return commit;
+        }
+        catch (Exception ex)
+        {
+            if (!committed)
+            {
+                await runtimeApiClient.DiscardPackageStoreStageAsync(stage.StageId, CancellationToken.None);
+            }
+
+            return new PackageOperationResult(false, ex.Message, RuntimeSessionApplied: false, RequiresAppRestart: false, stage.Warnings, [ex.Message])
+            {
+                ImpactedPackageIds = stage.ImpactedPackageIds,
+            };
+        }
+    }
+
+    private async Task PreflightPackageStoreStageAsync(PackageStoreStageResult stage, CancellationToken cancellationToken)
+    {
+        if (stage.ImpactedPackageIds.Count == 0)
+        {
+            return;
+        }
+
+        await preflightPackageLifecycleChangesAsync(
+            stage.ActivePackages,
+            stage.PackageSources,
+            stage.ImpactedPackageIds,
+            cancellationToken);
     }
 
     private async Task ExecuteLocalPackageOperationAsync(
@@ -308,8 +366,9 @@ internal sealed class PackagesOperationCommandCoordinator(
         {
             return operationResult with
             {
-                RequiresAppRestart = true,
-                Warnings = operationResult.Warnings.Concat([$"Package store updated, but the running shell did not apply the change: {ex.Message}"]).ToArray(),
+                Success = false,
+                RequiresAppRestart = false,
+                Errors = operationResult.Errors.Concat([$"Package store updated, but the running shell rejected the live change: {ex.Message}"]).ToArray(),
             };
         }
     }
@@ -344,7 +403,12 @@ internal sealed class PackagesOperationCommandCoordinator(
                     }
                     catch (Exception ex)
                     {
-                        addWarning($"Package store updated, but the running shell did not apply the change: {ex.Message}");
+                        result = result with
+                        {
+                            Success = false,
+                            RequiresAppRestart = false,
+                            Errors = result.Errors.Concat([$"Package store updated, but the running shell rejected the live change: {ex.Message}"]).ToArray(),
+                        };
                     }
                 }
             }

@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using Avalonia.Layout;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
@@ -31,6 +32,24 @@ public sealed class PackageIconBarViewModelTests
         Assert.Equal(["agent.chat", "agent.workspaces"], bar.VisibleItems.Select(item => item.Id).ToArray());
         Assert.Empty(bar.OverflowItems);
         Assert.False(bar.HasOverflow);
+    }
+
+    [Fact]
+    public void SetItemsPreservingExisting_WhenOrderChanges_MovesItemsWithoutResettingCollection()
+    {
+        var bar = CreateBar();
+        var chat = CreateItem("agent.chat");
+        var workspaces = CreateItem("agent.workspaces");
+        var subsessions = CreateItem("agent.subsessions");
+        var actions = new List<NotifyCollectionChangedAction>();
+        bar.SetItems([chat, workspaces, subsessions]);
+        bar.Items.CollectionChanged += (_, args) => actions.Add(args.Action);
+
+        bar.SetItemsPreservingExisting([subsessions, chat, workspaces]);
+
+        Assert.Equal([subsessions, chat, workspaces], bar.Items);
+        Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, actions);
+        Assert.Contains(NotifyCollectionChangedAction.Move, actions);
     }
 
     [Fact]

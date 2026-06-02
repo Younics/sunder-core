@@ -24,7 +24,7 @@ using MSBuildTaskItem = Microsoft.Build.Utilities.TaskItem;
 
 [assembly: SunderPackageDependency(
     PackageId = "test.dependency",
-    VersionRange = ">=1.0.0")]
+    VersionRange = ">=$(PackageVersion) <$(NextPackageMajorVersion).0.0")]
 
 namespace Sunder.Package.Build.Tests;
 
@@ -44,6 +44,8 @@ public sealed class PackageBuildManifestTests
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("sdkApiVersion").GetInt32());
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("sdkPackageVersion").GetString()));
+        var dependency = Assert.Single(root.GetProperty("dependsOn").EnumerateArray());
+        Assert.Equal(">=1.2.3 <2.0.0", dependency.GetProperty("versionRange").GetString());
         var capabilities = ReadCapabilities(root);
         AssertContainsCapabilities(
             capabilities,

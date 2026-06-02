@@ -65,7 +65,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
             _backgroundProcessQueue,
             _runtimeApiClientFactory,
             ApplyPackageLifecycleChangesAsync,
-            _notificationCenter);
+            _notificationCenter,
+            preflightPackageLifecycleChangesAsync: PreflightPackageLifecycleChangesAsync);
     }
 
     public void AttachShell(MainWindowViewModel viewModel)
@@ -74,7 +75,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     internal void AttachPackageSessionService(AppPackageSessionService packageSessionService)
     {
         _packageSessionService = packageSessionService;
-        packageSessionService.Attach(ApplyPackageLifecycleChangesAsync);
+        packageSessionService.Attach(ApplyPackageLifecycleChangesAsync, PreflightPackageLifecycleChangesAsync);
     }
 
     public BackgroundProcessQueueService BackgroundProcesses => _backgroundProcessQueue;
@@ -264,6 +265,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     {
         var window = _packagesWindowFactory?.Create(
             ApplyPackageLifecycleChangesAsync,
+            PreflightPackageLifecycleChangesAsync,
             _packageOperationService,
             PersistBackgroundProcessPopoverSize);
         if (window is null)
@@ -276,6 +278,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 _packageOperationService,
                 _backgroundProcessQueue,
                 notificationCenter: _notificationCenter,
+                preflightPackageLifecycleChangesAsync: PreflightPackageLifecycleChangesAsync,
                 backgroundProcessPopoverWidth: _shellState.BackgroundProcessPopoverWidth,
                 backgroundProcessPopoverHeight: _shellState.BackgroundProcessPopoverHeight,
                 persistBackgroundProcessPopoverSize: PersistBackgroundProcessPopoverSize);

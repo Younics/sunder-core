@@ -80,6 +80,7 @@ internal sealed class PackageOperationService : IDisposable
     private readonly Func<Uri, IRegistryApiClient> _createRegistryClient;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly PackageOperationFinalizer _operationFinalizer;
+    private readonly Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
     private readonly object _operationGate = new();
     private volatile bool _disposed;
 
@@ -89,11 +90,13 @@ internal sealed class PackageOperationService : IDisposable
         Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
         NotificationCenterService notificationCenter,
         RegistryPackageInstallService? registryInstallService = null,
-        Func<Uri, IRegistryApiClient>? registryClientFactory = null)
+        Func<Uri, IRegistryApiClient>? registryClientFactory = null,
+        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? preflightPackageLifecycleChangesAsync = null)
     {
         _backgroundProcesses = backgroundProcesses;
         _runtimeApiClientFactory = runtimeApiClientFactory;
         _operationFinalizer = new PackageOperationFinalizer(applyPackageLifecycleChangesAsync, notificationCenter);
+        _preflightPackageLifecycleChangesAsync = preflightPackageLifecycleChangesAsync;
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         _createRegistryClient = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
         _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
@@ -178,7 +181,8 @@ internal sealed class PackageOperationService : IDisposable
                     registryClient,
                     runtimeApiClient,
                     progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
+                    context.CancellationToken,
+                    PreflightPackageStoreStageAsync).ConfigureAwait(false);
 
                 await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Package installed", $"{packageId} was installed from the marketplace.").ConfigureAwait(false);
             });
@@ -197,7 +201,10 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportIndeterminate($"Installing {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
-                var result = await runtimeApiClient.InstallPackageFromPathAsync(packagePath, context.CancellationToken).ConfigureAwait(false);
+                var result = await StagePreflightCommitPackageStoreAsync(
+                    runtimeApiClient,
+                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: packagePath)]),
+                    context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package installed", "Package installed from disk.").ConfigureAwait(false);
             });
     }
@@ -228,7 +235,8 @@ internal sealed class PackageOperationService : IDisposable
                     registryClient,
                     runtimeApiClient,
                     progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
+                    context.CancellationToken,
+                    PreflightPackageStoreStageAsync).ConfigureAwait(false);
 
                 await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Package updated", $"{packageId} was updated to {version}.").ConfigureAwait(false);
             });
@@ -246,7 +254,10 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportIndeterminate($"Enabling {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
-                var result = await runtimeApiClient.EnableInstalledPackageAsync(packageId, context.CancellationToken).ConfigureAwait(false);
+                var result = await StagePreflightCommitPackageStoreAsync(
+                    runtimeApiClient,
+                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Enable, packageId)]),
+                    context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package enabled", $"{packageId} was enabled.").ConfigureAwait(false);
             });
     }
@@ -263,7 +274,10 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportIndeterminate($"Disabling {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
-                var result = await runtimeApiClient.DisableInstalledPackageAsync(packageId, context.CancellationToken).ConfigureAwait(false);
+                var result = await StagePreflightCommitPackageStoreAsync(
+                    runtimeApiClient,
+                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Disable, packageId)]),
+                    context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package disabled", $"{packageId} was disabled.").ConfigureAwait(false);
             });
     }
@@ -280,7 +294,10 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportIndeterminate($"Uninstalling {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
-                var result = await runtimeApiClient.UninstallPackageAsync(packageId, context.CancellationToken).ConfigureAwait(false);
+                var result = await StagePreflightCommitPackageStoreAsync(
+                    runtimeApiClient,
+                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Uninstall, packageId)]),
+                    context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package uninstalled", $"{packageId} was uninstalled.").ConfigureAwait(false);
             });
     }
@@ -302,7 +319,8 @@ internal sealed class PackageOperationService : IDisposable
                     registryClient,
                     runtimeApiClient,
                     progress => ReportRegistryProgress(context, progress),
-                    context.CancellationToken).ConfigureAwait(false);
+                    context.CancellationToken,
+                    PreflightPackageStoreStageAsync).ConfigureAwait(false);
 
                 await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Packages updated", "Installed packages were updated.").ConfigureAwait(false);
             });
@@ -312,6 +330,62 @@ internal sealed class PackageOperationService : IDisposable
     {
         ThrowIfDisposed();
         await _backgroundProcesses.CancelMatchingAsync(IsPackageOperation, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<PackageOperationResult> StagePreflightCommitPackageStoreAsync(
+        IRuntimeApiClient runtimeApiClient,
+        PackageStoreStageRequest request,
+        CancellationToken cancellationToken)
+    {
+        var stage = await runtimeApiClient.StagePackageStoreChangesAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!stage.Success || stage.StageId is null)
+        {
+            return stage.OperationResult;
+        }
+
+        var committed = false;
+        try
+        {
+            await PreflightPackageStoreStageAsync(stage, cancellationToken).ConfigureAwait(false);
+            var commit = await runtimeApiClient.CommitPackageStoreStageAsync(stage.StageId, cancellationToken).ConfigureAwait(false);
+            committed = true;
+            return commit;
+        }
+        catch (OperationCanceledException)
+        {
+            if (!committed)
+            {
+                await runtimeApiClient.DiscardPackageStoreStageAsync(stage.StageId, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (!committed)
+            {
+                await runtimeApiClient.DiscardPackageStoreStageAsync(stage.StageId, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            return new PackageOperationResult(false, ex.Message, RuntimeSessionApplied: false, RequiresAppRestart: false, stage.Warnings, [ex.Message])
+            {
+                ImpactedPackageIds = stage.ImpactedPackageIds,
+            };
+        }
+    }
+
+    private async Task PreflightPackageStoreStageAsync(PackageStoreStageResult stage, CancellationToken cancellationToken)
+    {
+        if (stage.ImpactedPackageIds.Count == 0 || _preflightPackageLifecycleChangesAsync is null)
+        {
+            return;
+        }
+
+        await _preflightPackageLifecycleChangesAsync(
+            stage.ActivePackages,
+            stage.PackageSources,
+            stage.ImpactedPackageIds,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private BackgroundProcessSnapshot EnqueuePackageStoreOperation(

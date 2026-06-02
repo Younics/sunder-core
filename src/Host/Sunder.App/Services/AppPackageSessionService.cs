@@ -13,16 +13,23 @@ public sealed class AppPackageSessionService(
 {
     private readonly ConcurrentDictionary<string, DevPackageSessionWatch> _watches = new(StringComparer.OrdinalIgnoreCase);
     private Func<IReadOnlyList<string>, CancellationToken, Task>? _applyPackageLifecycleChangesAsync;
+    private Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
     private bool _disposed;
 
-    public void Attach(Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync)
-        => _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync;
+    public void Attach(
+        Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
+        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync)
+    {
+        _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync;
+        _preflightPackageLifecycleChangesAsync = preflightPackageLifecycleChangesAsync;
+    }
 
     public void Detach(Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync)
     {
         if (Equals(_applyPackageLifecycleChangesAsync, applyPackageLifecycleChangesAsync))
         {
             _applyPackageLifecycleChangesAsync = null;
+            _preflightPackageLifecycleChangesAsync = null;
         }
     }
 
@@ -101,22 +108,9 @@ public sealed class AppPackageSessionService(
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
-        var result = await runtimeApiClient.LoadPackageSessionAsync(
-            new Sunder.Protocol.PackageSessionLoadRequest(
-                ToProtocolSourceKind(request.SourceKind),
-                request.Source,
-                request.Watch),
-            cancellationToken).ConfigureAwait(false);
-
-        if (!result.Success)
-        {
-            var message = result.Errors.FirstOrDefault() ?? result.Message ?? "Package session load failed.";
-            throw new InvalidOperationException(message);
-        }
-
-        await ApplyLifecycleChangesAsync(result.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
-        var status = ToSdkStatus(result.Status)
-            ?? throw new InvalidOperationException("Runtime did not return package session status after loading the package.");
+        var status = request.SourceKind == SdkPackageSessionSourceKind.Dev
+            ? await LoadDevPackageLifecycleAsync(runtimeApiClient, request, cancellationToken).ConfigureAwait(false)
+            : await LoadPackageSessionAsync(runtimeApiClient, request, cancellationToken).ConfigureAwait(false);
 
         if (updateWatch && request.SourceKind == SdkPackageSessionSourceKind.Dev)
         {
@@ -133,6 +127,78 @@ public sealed class AppPackageSessionService(
         return status;
     }
 
+    private async Task<SdkPackageSessionStatus> LoadPackageSessionAsync(
+        IRuntimeApiClient runtimeApiClient,
+        SdkPackageSessionLoadRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await runtimeApiClient.LoadPackageSessionAsync(
+            new Sunder.Protocol.PackageSessionLoadRequest(
+                ToProtocolSourceKind(request.SourceKind),
+                request.Source,
+                request.Watch),
+            cancellationToken).ConfigureAwait(false);
+
+        if (!result.Success)
+        {
+            var message = result.Errors.FirstOrDefault() ?? result.Message ?? "Package session load failed.";
+            throw new InvalidOperationException(message);
+        }
+
+        await ApplyLifecycleChangesAsync(result.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
+        return ToSdkStatus(result.Status)
+               ?? throw new InvalidOperationException("Runtime did not return package session status after loading the package.");
+    }
+
+    private async Task<SdkPackageSessionStatus> LoadDevPackageLifecycleAsync(
+        IRuntimeApiClient runtimeApiClient,
+        SdkPackageSessionLoadRequest request,
+        CancellationToken cancellationToken)
+    {
+        var packageSource = new Sunder.Protocol.PackageSessionLoadRequest(
+            PackageSourceKind.Dev,
+            request.Source,
+            request.Watch);
+        var stage = await runtimeApiClient.StagePackageLifecycleAsync(
+            new PackageLifecycleStageRequest([packageSource], PackageLifecycleOverlayOwner.Sdk),
+            cancellationToken).ConfigureAwait(false);
+        if (!stage.Success || stage.StageId is null)
+        {
+            var message = stage.Errors.FirstOrDefault() ?? "Package lifecycle stage failed.";
+            throw new InvalidOperationException(message);
+        }
+
+        var committed = false;
+        try
+        {
+            await PreflightLifecycleChangesAsync(stage.ActivePackages, stage.PackageSources, stage.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
+            var commit = await runtimeApiClient.CommitPackageLifecycleStageAsync(stage.StageId, cancellationToken).ConfigureAwait(false);
+            committed = true;
+            if (!commit.Success)
+            {
+                var message = commit.Errors.FirstOrDefault() ?? commit.Message ?? "Package lifecycle commit failed.";
+                throw new InvalidOperationException(message);
+            }
+
+            await ApplyLifecycleChangesAsync(commit.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
+            var packageId = ResolveLoadedDevPackageId(request.Source, commit.PackageSources, commit.ImpactedPackageIds);
+            var status = packageId is null
+                ? null
+                : await runtimeApiClient.GetPackageSessionStatusAsync(packageId, cancellationToken).ConfigureAwait(false);
+            return ToSdkStatus(status)
+                   ?? throw new InvalidOperationException("Runtime did not return package session status after loading the package.");
+        }
+        catch
+        {
+            if (!committed)
+            {
+                await runtimeApiClient.DiscardPackageLifecycleStageAsync(stage.StageId, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+    }
+
     private async Task ApplyLifecycleChangesAsync(
         IReadOnlyList<string> impactedPackageIds,
         CancellationToken cancellationToken)
@@ -145,6 +211,34 @@ public sealed class AppPackageSessionService(
         var applyPackageLifecycleChangesAsync = _applyPackageLifecycleChangesAsync
             ?? throw new InvalidOperationException("Package session service is not attached to the running shell yet.");
         await applyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task PreflightLifecycleChangesAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<string> impactedPackageIds,
+        CancellationToken cancellationToken)
+    {
+        if (impactedPackageIds.Count == 0)
+        {
+            return;
+        }
+
+        var preflightPackageLifecycleChangesAsync = _preflightPackageLifecycleChangesAsync
+            ?? throw new InvalidOperationException("Package session service is not attached to the running shell yet.");
+        await preflightPackageLifecycleChangesAsync(activePackages, packageSources, impactedPackageIds, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string? ResolveLoadedDevPackageId(
+        string folder,
+        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<string> impactedPackageIds)
+    {
+        var normalizedFolder = Path.GetFullPath(folder);
+        var source = packageSources.FirstOrDefault(source =>
+            source.Kind == PackageSourceKind.Dev
+            && string.Equals(Path.GetFullPath(source.Folder), normalizedFolder, StringComparison.OrdinalIgnoreCase));
+        return source?.PackageId ?? impactedPackageIds.FirstOrDefault();
     }
 
     private void StartWatch(string packageId, string folder)
