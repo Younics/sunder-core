@@ -161,6 +161,29 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task HeaderUpdateAllPackages_WhenUpdatesAreAvailable_IsVisibleInInstalledAndMarketplaceModes()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            Updates = [CreateUpdate("sunder.package.agent", "1.0.0", "1.1.0")],
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([CreateInstalledPackage("sunder.package.agent", isEnabled: true)]),
+            CreateNotificationCenter(),
+            _ => registryClient);
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(1, viewModel.AvailableUpdateCount);
+        Assert.True(viewModel.ShowHeaderUpdateAllPackages);
+
+        viewModel.Mode = PackageWindowMode.Marketplace;
+
+        Assert.True(viewModel.ShowHeaderUpdateAllPackages);
+    }
+
+    [Fact]
     public async Task InstalledPackages_UsePackageIconAssetUriWhenAvailable()
     {
         var runtimeClient = new FakeRuntimeApiClient(
@@ -840,6 +863,14 @@ public sealed class PackagesWindowViewModelTests
             DependsOn: [],
             new RegistryPackageArtifact("", 0, $"download/{packageId}/{version}"));
 
+    private static RegistryPackageUpdate CreateUpdate(string packageId, string currentVersion, string availableVersion)
+        => new(
+            packageId,
+            currentVersion,
+            availableVersion,
+            DeprecatedMessage: null,
+            new RegistryPackageArtifact("", 0, $"download/{packageId}/{availableVersion}"));
+
     private static string ToDisplayName(string packageId) =>
         string.Concat(packageId[..1].ToUpperInvariant(), packageId[1..]);
 
@@ -896,6 +927,8 @@ public sealed class PackagesWindowViewModelTests
             (packageId, _) => Task.FromResult<RegistryPackageDetails?>(CreateRegistryPackageDetails(packageId, "1.0.0"));
 
         public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
+
+        public IReadOnlyList<RegistryPackageUpdate> Updates { get; init; } = [];
 
         public RegistryPackageStarResponse StarPackageResponse { get; init; } = new(true, "Starred package.", new RegistryPackageStats(0, 0, 0, [], Stars: 1, IsStarred: true), []);
 
@@ -971,7 +1004,11 @@ public sealed class PackagesWindowViewModelTests
         public Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(
             RegistryResolveUpdatesRequest request,
             CancellationToken cancellationToken = default
-        ) => Task.FromResult(new RegistryResolveUpdatesResponse([]));
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new RegistryResolveUpdatesResponse(Updates));
+        }
 
         public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
             RegistryResolveInstallPlanRequest request,

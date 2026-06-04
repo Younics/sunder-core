@@ -319,7 +319,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowUpdateAllPackages => AvailableUpdateCount > 0;
 
-    public bool ShowHeaderUpdateAllPackages => IsInstalledMode && ShowUpdateAllPackages;
+    public bool ShowHeaderUpdateAllPackages => ShowUpdateAllPackages;
 
     public string SearchPlaceholder => IsMarketplaceMode ? "Search marketplace packages" : "Search installed and session packages";
 

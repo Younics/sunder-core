@@ -1,6 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui">
   <Style Selector="ListBox.package-list">
-    <Setter Property="Padding" Value="0" />
+    <Setter Property="Padding" Value="0,0,14,0" />
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
     <Setter Property="BorderThickness" Value="0" />
