@@ -13,13 +13,12 @@
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
     <Setter Property="FontSize" Value="14" />
     <Setter Property="TextWrapping" Value="Wrap" />
-    <Setter Property="LineHeight" Value="22" />
     <Setter Property="SelectionBrush" Value="{DynamicResource Sunder.Brush.Selection}" />
     <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
   <Style Selector="md|MarkdownTextBlock.ParagraphBlock">
-    <Setter Property="Margin" Value="0,1,0,8" />
+    <Setter Property="Margin" Value="0,1,0,7" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
   </Style>
 
@@ -62,8 +61,16 @@
   <Style Selector="md|MarkdownListGrid.ListBlock">
     <Setter Property="MinWidth" Value="0" />
     <Setter Property="ColumnSpacing" Value="9" />
-    <Setter Property="RowSpacing" Value="5" />
-    <Setter Property="Margin" Value="0,4,0,10" />
+    <Setter Property="RowSpacing" Value="2" />
+    <Setter Property="Margin" Value="0,4,0,8" />
+  </Style>
+
+  <Style Selector="md|MarkdownListGrid.ListBlock StackPanel.ListItemBlock">
+    <Setter Property="Spacing" Value="0" />
+  </Style>
+
+  <Style Selector="md|MarkdownListGrid.ListBlock md|MarkdownTextBlock.ParagraphBlock">
+    <Setter Property="Margin" Value="0" />
   </Style>
 
   <Style Selector="TextBlock.ListBlockNumber, TextBlock.ListBlockBullet">
@@ -71,7 +78,7 @@
     <Setter Property="FontSize" Value="14" />
     <Setter Property="FontWeight" Value="SemiBold" />
     <Setter Property="HorizontalAlignment" Value="Right" />
-    <Setter Property="LineHeight" Value="22" />
+    <Setter Property="LineHeight" Value="20" />
     <Setter Property="Margin" Value="0" />
     <Setter Property="VerticalAlignment" Value="Top" />
   </Style>
@@ -144,6 +151,15 @@
 
   <Style Selector="md|Link:clicked">
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+  </Style>
+
+  <Style Selector="md|MarkdownRenderer Image.Link">
+    <Setter Property="HorizontalAlignment" Value="Left" />
+    <Setter Property="VerticalAlignment" Value="Top" />
+    <Setter Property="Stretch" Value="Uniform" />
+    <Setter Property="MaxWidth" Value="{Binding $parent[md:MarkdownRenderer].Bounds.Width}" />
+    <Setter Property="MaxHeight" Value="420" />
+    <Setter Property="Margin" Value="0,8,0,14" />
   </Style>
 
   <Style Selector="InlineUIContainer.Code">

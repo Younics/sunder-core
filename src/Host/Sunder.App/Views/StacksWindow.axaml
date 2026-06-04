@@ -290,38 +290,49 @@
                                  IsVisible="{Binding HasSelectedSummary}" />
                     </StackPanel>
 
-                    <StackPanel Grid.Row="1"
-                                Orientation="Horizontal"
-                                Spacing="10"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Top">
-                      <TextBlock Classes="caption"
-                                 Text="{Binding SelectedStackStatsText}"
-                                 TextAlignment="Right"
-                                 VerticalAlignment="Center"
-                                 IsVisible="{Binding ShowSelectedStackStats}" />
-                      <Button Classes="secondary-action"
-                              Command="{Binding PublishSelectedStackCommand}"
-                              Content="Publish"
-                              IsEnabled="{Binding CanPublishSelectedStack}"
-                              IsVisible="{Binding ShowPublishSelectedStack}" />
-                      <Button Classes="secondary-action star-action"
-                              Classes.starred="{Binding SelectedStackIsStarred}"
-                              Command="{Binding ToggleSelectedStackStarCommand}"
-                              IsEnabled="{Binding CanToggleSelectedStackStar}"
-                              IsVisible="{Binding ShowSelectedStackStarAction}"
-                              ToolTip.Tip="{Binding SelectedStackStarActionText}">
-                        <Path Width="16"
-                              Height="16"
-                              Classes="star-icon"
-                              Data="{StaticResource Sunder.Icon.Star}" />
-                      </Button>
-                      <Button Classes="secondary-action danger-action"
-                              Command="{Binding UnpublishSelectedStackCommand}"
-                              Content="Unpublish"
-                              IsEnabled="{Binding CanUnpublishSelectedStack}"
-                              IsVisible="{Binding ShowUnpublishSelectedStack}" />
-                    </StackPanel>
+                    <Grid Grid.Row="1"
+                          ColumnDefinitions="Auto,*"
+                          ColumnSpacing="10">
+                      <StackPanel Grid.Column="0"
+                                  Orientation="Horizontal"
+                                  Spacing="10"
+                                  HorizontalAlignment="Left"
+                                  VerticalAlignment="Top">
+                        <Button Classes="secondary-action"
+                                Command="{Binding PublishSelectedStackCommand}"
+                                Content="Publish"
+                                IsEnabled="{Binding CanPublishSelectedStack}"
+                                IsVisible="{Binding ShowPublishSelectedStack}" />
+                        <Button Classes="secondary-action danger-action"
+                                Command="{Binding UnpublishSelectedStackCommand}"
+                                Content="Unpublish"
+                                IsEnabled="{Binding CanUnpublishSelectedStack}"
+                                IsVisible="{Binding ShowUnpublishSelectedStack}" />
+                      </StackPanel>
+
+                      <StackPanel Grid.Column="1"
+                                  Orientation="Horizontal"
+                                  Spacing="10"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Top">
+                        <TextBlock Classes="caption"
+                                   Text="{Binding SelectedStackStatsText}"
+                                   TextAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   IsVisible="{Binding ShowSelectedStackStats}" />
+                        <Button Classes="secondary-action star-action"
+                                Classes.starred="{Binding SelectedStackIsStarred}"
+                                Command="{Binding ToggleSelectedStackStarCommand}"
+                                IsEnabled="{Binding CanToggleSelectedStackStar}"
+                                IsVisible="{Binding ShowSelectedStackStarAction}"
+                                ToolTip.Tip="{Binding SelectedStackStarActionText}">
+                          <Path Width="16"
+                                Height="16"
+                                Classes="star-icon"
+                                Data="{StaticResource Sunder.Icon.Star}" />
+                        </Button>
+                      </StackPanel>
+                    </Grid>
                   </Grid>
 
                   <Border Classes="card-surface"
