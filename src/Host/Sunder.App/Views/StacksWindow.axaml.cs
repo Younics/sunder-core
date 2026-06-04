@@ -82,6 +82,31 @@ public partial class StacksWindow : Window
         }
     }
 
+    private async void EditStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (ViewModel is null)
+        {
+            return;
+        }
+
+        var wizardViewModel = ViewModel.CreateEditStackWizardViewModel();
+        if (wizardViewModel is null)
+        {
+            return;
+        }
+
+        var wizardWindow = new CreateStackWizardWindow
+        {
+            DataContext = wizardViewModel,
+        };
+        ApplyCreateStackWizardPlacement(wizardWindow);
+        var result = await wizardWindow.ShowDialog<bool?>(this);
+        if (result == true)
+        {
+            await ViewModel.RefreshAfterEditedStackAsync(wizardViewModel.CreatedStackId);
+        }
+    }
+
     private async void ImportStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (ViewModel is not null)

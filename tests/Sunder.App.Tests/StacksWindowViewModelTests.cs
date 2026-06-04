@@ -312,6 +312,43 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task RefreshAfterEditedStackAsync_WhenStackIsPublished_UpdatesRegistryWithSavedMetadata()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack");
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        await library.ImportAsync(stackPath);
+        var publishedAt = DateTimeOffset.UtcNow.AddDays(-2);
+        var publishedUpdatedAt = DateTimeOffset.UtcNow.AddDays(-1);
+        await library.UpdatePublishStateAsync(
+            "team-stack",
+            "https://registry.example/",
+            "published-team-stack",
+            publishedAt,
+            publishedUpdatedAt);
+        var replacementPath = await CreateStackArchiveAsync(root, "team-stack", "Updated Team Stack");
+        await library.ReplaceAsync(replacementPath, "team-stack");
+        var registryClient = new FakeRegistryApiClient();
+        using var viewModel = CreateViewModel(
+            root,
+            registryClient,
+            library,
+            registryUrl => new RegistryAuthToken(registryUrl.ToString(), "token-123", "owner", DateTimeOffset.UtcNow.AddHours(1)));
+        viewModel.ShowLocalCommand.Execute(null);
+        await viewModel.InitializeAsync();
+
+        await viewModel.RefreshAfterEditedStackAsync("team-stack");
+
+        Assert.Equal("token-123", registryClient.LastPublishToken);
+        Assert.EndsWith("team-stack.sunderstack", registryClient.LastPublishPath);
+        var publishedStack = Assert.Single(await library.ListAsync());
+        Assert.Equal("Updated Team Stack", publishedStack.Name);
+        Assert.Equal(publishedAt, publishedStack.PublishedAtUtc);
+        Assert.True(publishedStack.PublishedUpdatedAtUtc > publishedUpdatedAt);
+        Assert.True(viewModel.SelectedStack?.IsPublished);
+    }
+
+    [Fact]
     public async Task UnpublishSelectedStackCommand_DeletesRegistryStackAndClearsPublishedState()
     {
         var root = CreateTempDirectory();
@@ -688,6 +725,90 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task CreateStackWizard_EditMode_PrepopulatesExistingStackSelections()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includeDisplayDetails: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
+                [CreateExportItem(
+                    "sunder.package.agent",
+                    "profile",
+                    "Agent profile",
+                    ["Public", "Secret"],
+                    [
+                        new RuntimeStackExportItemDetail("Custom instructions", "Use a concise tone.", "Public"),
+                        new RuntimeStackExportItemDetail("Provider connections", "OpenAI", "Secret", SupportsAskOnImport: true),
+                    ],
+                    kind: "agent-profile",
+                    contributorId: "agent")],
+                [],
+                []),
+        };
+        var viewModel = new CreateStackWizardViewModel(library, runtimeApiClient, new CreateStackWizardEditContext(stack));
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.IsEditMode);
+        Assert.Equal("Edit Stack", viewModel.WindowTitle);
+        Assert.Equal("Save Changes", viewModel.PrimaryActionText);
+        Assert.True(viewModel.IsStackIdReadOnly);
+        Assert.Equal("team-stack", viewModel.StackId);
+        Assert.Equal("Team Stack", viewModel.StackName);
+        var package = Assert.Single(viewModel.PackageGroups);
+        Assert.True(package.IsSelected);
+        var item = Assert.Single(package.Items);
+        Assert.True(item.IsSelected);
+        var instructions = Assert.Single(item.Details, detail => detail.Label == "Custom instructions");
+        Assert.True(instructions.IsSelected);
+        Assert.Equal("Use a concise tone.", instructions.EditedValue);
+        var provider = Assert.Single(item.Details, detail => detail.Label == "Provider connections");
+        Assert.True(provider.IsSelected);
+        Assert.Equal("Ask on import", provider.SelectedExportBehavior);
+        Assert.Empty(viewModel.PreservedFragments);
+    }
+
+    [Fact]
+    public async Task CreateStackWizard_EditCommand_PreservesUnmatchedFragmentsAndPublishState()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: true);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        var publishedAt = DateTimeOffset.UtcNow.AddDays(-2);
+        var publishedUpdatedAt = DateTimeOffset.UtcNow.AddDays(-1);
+        await library.UpdatePublishStateAsync(stack.StackId, "https://registry.example/", "team-stack", publishedAt, publishedUpdatedAt);
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            WriteArchiveOnExport = true,
+        };
+        var viewModel = new CreateStackWizardViewModel(library, runtimeApiClient, new CreateStackWizardEditContext(stack));
+
+        await viewModel.InitializeAsync();
+        Assert.Single(viewModel.PreservedFragments);
+        viewModel.StackName = "Updated Team Stack";
+        viewModel.NextCommand.Execute(null);
+        viewModel.NextCommand.Execute(null);
+        await viewModel.CreateCommand.ExecuteAsync(null);
+
+        Assert.NotNull(runtimeApiClient.LastExportRequest);
+        Assert.Equal(["sunder.package.agent"], runtimeApiClient.LastExportRequest.SelectedPackages);
+        Assert.Empty(runtimeApiClient.LastExportRequest.SelectedItems);
+        var listed = Assert.Single(await library.ListAsync());
+        Assert.Equal("Updated Team Stack", listed.Name);
+        Assert.Equal("https://registry.example/", listed.RegistryUrl);
+        Assert.Equal("team-stack", listed.PublishedStackId);
+        Assert.Equal(publishedAt, listed.PublishedAtUtc);
+        Assert.Equal(publishedUpdatedAt, listed.PublishedUpdatedAtUtc);
+        var manifest = await library.ReadManifestAsync(listed.LocalPath);
+        var preservedFragment = Assert.Single(manifest.Fragments ?? []);
+        Assert.Equal("agent-profile", preservedFragment.FragmentId);
+    }
+
+    [Fact]
     public async Task UseStackWizard_ExposesReadOnlyProfileMediaAndMarkdown()
     {
         var root = CreateTempDirectory();
@@ -1044,9 +1165,10 @@ public sealed class StacksWindowViewModelTests
         string displayName,
         IReadOnlyList<string>? sensitivities = null,
         IReadOnlyList<RuntimeStackExportItemDetail>? details = null,
-        string kind = "Configuration")
+        string kind = "Configuration",
+        string? contributorId = null)
         => new(
-            ownerPackageId + ".contributor",
+            contributorId ?? ownerPackageId + ".contributor",
             ownerPackageId,
             itemId,
             displayName,

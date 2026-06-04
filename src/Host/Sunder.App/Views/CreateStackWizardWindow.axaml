@@ -13,7 +13,7 @@
         MinHeight="620"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
-        Title="Create Stack"
+        Title="{Binding WindowTitle}"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
@@ -24,7 +24,7 @@
       <controls:WindowTitleBar.LeadingContent>
         <TextBlock Classes="section-title"
                    VerticalAlignment="Center"
-                   Text="Create Stack" />
+                   Text="{Binding WindowTitle}" />
       </controls:WindowTitleBar.LeadingContent>
     </controls:WindowTitleBar>
 
@@ -38,11 +38,11 @@
                   Padding="18"
                   Background="{DynamicResource Sunder.Brush.Surface.Base}">
             <StackPanel Spacing="14">
-              <TextBlock Text="Stack Wizard"
+              <TextBlock Text="{Binding WizardTitle}"
                          FontSize="22"
                          FontWeight="SemiBold" />
               <TextBlock Classes="caption"
-                         Text="Build a focused setup preset one step at a time."
+                         Text="{Binding WizardDescription}"
                          TextWrapping="Wrap" />
 
               <StackPanel Spacing="8">
@@ -155,6 +155,7 @@
                                    VerticalAlignment="Center" />
                         <TextBox Grid.Column="1"
                                  Text="{Binding StackId}"
+                                 IsReadOnly="{Binding IsStackIdReadOnly}"
                                  PlaceholderText="local-stack" />
                       </Grid>
                       <Grid Grid.Row="2"
@@ -616,6 +617,39 @@
                   </ItemsControl>
                 </StackPanel>
 
+                <Border Classes="settings-note-card"
+                        IsVisible="{Binding HasPreservedFragments}">
+                  <StackPanel Spacing="10">
+                    <StackPanel Spacing="4">
+                      <TextBlock Text="Unavailable existing setup items"
+                                 FontWeight="SemiBold" />
+                      <TextBlock Classes="muted"
+                                 Text="{Binding PreservedFragmentsSummary}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ItemsControl ItemsSource="{Binding PreservedFragments}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:CreateStackPreservedFragmentViewModel">
+                          <Border Classes="marketplace-profile-row"
+                                  Margin="0,0,0,6">
+                            <StackPanel Spacing="3">
+                              <TextBlock Text="{Binding DisplayName}"
+                                         FontWeight="SemiBold"
+                                         TextWrapping="Wrap" />
+                              <TextBlock Classes="caption"
+                                         Text="{Binding Subtitle}"
+                                         TextWrapping="Wrap" />
+                              <TextBlock Classes="muted"
+                                         Text="{Binding Summary}"
+                                         TextWrapping="Wrap" />
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
                 <ItemsControl ItemsSource="{Binding Warnings}"
                               IsVisible="{Binding HasWarnings}">
                   <ItemsControl.ItemTemplate>
@@ -675,7 +709,7 @@
               IsVisible="{Binding ShowNextButton}" />
       <Button Grid.Column="4"
               Classes="primary-action"
-              Content="Create Stack"
+              Content="{Binding PrimaryActionText}"
               Command="{Binding CreateCommand}"
               IsEnabled="{Binding CanCreate}"
               IsVisible="{Binding IsReviewStep}" />

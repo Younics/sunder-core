@@ -16,20 +16,43 @@ public enum CreateStackWizardStep
 
 public sealed partial class CreateStackWizardViewModel(
     LocalStackLibraryService library,
-    IRuntimeApiClient runtimeApiClient) : ViewModelBase, IDisposable
+    IRuntimeApiClient runtimeApiClient,
+    CreateStackWizardEditContext? editContext = null) : ViewModelBase, IDisposable
 {
+    private readonly CreateStackWizardEditContext? _editContext = editContext;
     private IReadOnlyList<RuntimeStackExportItemDescriptor> _allItems = [];
+    private SunderStackManifest? _editManifest;
     private bool _disposed;
 
     public event Action<bool?>? CloseRequested;
 
     public ObservableCollection<CreateStackPackageGroupViewModel> PackageGroups { get; } = [];
 
+    public ObservableCollection<CreateStackPreservedFragmentViewModel> PreservedFragments { get; } = [];
+
     public ObservableCollection<string> Warnings { get; } = [];
 
     public ObservableCollection<string> Errors { get; } = [];
 
     public string? CreatedStackId { get; private set; }
+
+    public bool IsEditMode => _editContext is not null;
+
+    public bool IsCreateMode => !IsEditMode;
+
+    public string WindowTitle => IsEditMode ? "Edit Stack" : "Create Stack";
+
+    public string WizardTitle => IsEditMode ? "Edit Stack" : "Stack Wizard";
+
+    public string WizardDescription => IsEditMode
+        ? "Update the packages and setup items in this local Stack."
+        : "Build a focused setup preset one step at a time.";
+
+    public string PrimaryActionText => IsEditMode ? "Save Changes" : "Create Stack";
+
+    public bool CanEditStackId => !IsEditMode;
+
+    public bool IsStackIdReadOnly => IsEditMode;
 
     public bool IsPackagesStep => CurrentStep == CreateStackWizardStep.Packages;
 
@@ -67,6 +90,14 @@ public sealed partial class CreateStackWizardViewModel(
 
     public bool HasSelectedPackages => PackageGroups.Any(group => group.IsSelected);
 
+    public bool HasPreservedFragments => PreservedFragments.Count > 0;
+
+    public int SelectedPreservedFragmentCount => GetSelectedPreservedFragments().Count;
+
+    public string PreservedFragmentsSummary => SelectedPreservedFragmentCount == 0
+        ? "Existing setup items from unavailable packages will be removed unless their package remains selected."
+        : $"{SelectedPreservedFragmentCount} unavailable setup item{StackDisplayFormatters.Plural(SelectedPreservedFragmentCount)} will be preserved because their package remains selected.";
+
     public bool HasSelectedPackagesWithItems => PackageGroups.Any(group => group.IsVisibleInItemsStep);
 
     public bool ShowNoItemsStepPackages => HasSelectedPackages && !HasSelectedPackagesWithItems;
@@ -92,18 +123,22 @@ public sealed partial class CreateStackWizardViewModel(
         CreateStackWizardStep.Packages => "Choose Packages",
         CreateStackWizardStep.Items => "Choose Setup Items",
         CreateStackWizardStep.Review => "Review Stack",
-        _ => "Create Stack",
+        _ => WindowTitle,
     };
 
     public string StepDescription => CurrentStep switch
     {
         CreateStackWizardStep.Packages => "Pick the packages that should be installed when this Stack is used.",
         CreateStackWizardStep.Items => "Optionally choose setup items that should be imported after selected packages are installed.",
-        CreateStackWizardStep.Review => "Review the exact content that will be exported and create the Stack when it looks safe.",
+        CreateStackWizardStep.Review => IsEditMode
+            ? "Review the exact content that will be saved into this local Stack."
+            : "Review the exact content that will be exported and create the Stack when it looks safe.",
         _ => string.Empty,
     };
 
-    public string SelectedSummary => $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} · {SelectedItemCount} setup item{StackDisplayFormatters.Plural(SelectedItemCount)} selected";
+    public string SelectedSummary => SelectedPreservedFragmentCount == 0
+        ? $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} · {SelectedItemCount} setup item{StackDisplayFormatters.Plural(SelectedItemCount)} selected"
+        : $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} · {SelectedItemCount} setup item{StackDisplayFormatters.Plural(SelectedItemCount)} selected · {SelectedPreservedFragmentCount} preserved";
 
     public string PackagesStepStatus => SelectedPackageCount == 0
         ? "Choose package groups"
@@ -113,7 +148,9 @@ public sealed partial class CreateStackWizardViewModel(
         ? HasSelectedPackages ? "No setup items selected" : "Select packages first"
         : $"{SelectedItemCount} setup item{StackDisplayFormatters.Plural(SelectedItemCount)} selected";
 
-    public string ReviewStepStatus => CanCreate ? "Ready to create" : "Complete selections first";
+    public string ReviewStepStatus => CanCreate
+        ? (IsEditMode ? "Ready to save" : "Ready to create")
+        : "Complete selections first";
 
     public int IncludedReviewDetailCount => SelectedDetails.Count(detail => detail.IsIncludedByOptions);
 
@@ -141,16 +178,16 @@ public sealed partial class CreateStackWizardViewModel(
     private bool _isBusy;
 
     [ObservableProperty]
-    private string _stackName = "New Stack";
+    private string _stackName = editContext?.Stack.Name ?? "New Stack";
 
     [ObservableProperty]
-    private string _stackId = "sunder-stack-" + DateTimeOffset.Now.ToString("yyyyMMddHHmm");
+    private string _stackId = editContext?.Stack.StackId ?? "sunder-stack-" + DateTimeOffset.Now.ToString("yyyyMMddHHmm");
 
     [ObservableProperty]
-    private string _stackShortDescription = string.Empty;
+    private string _stackShortDescription = editContext?.Stack.Summary ?? string.Empty;
 
     [ObservableProperty]
-    private string _statusText = "Choose packages to include in the Stack.";
+    private string _statusText = editContext is null ? "Choose packages to include in the Stack." : "Loading existing Stack content.";
 
     partial void OnCurrentStepChanged(CreateStackWizardStep value) => NotifyWizardStateChanged();
 
@@ -174,8 +211,10 @@ public sealed partial class CreateStackWizardViewModel(
         Warnings.Clear();
         Errors.Clear();
         PackageGroups.Clear();
+        PreservedFragments.Clear();
         try
         {
+            var editManifest = await LoadEditManifestAsync(cancellationToken);
             StatusText = "Discovering setup items...";
             var discovery = await runtimeApiClient.ListStackExportItemsAsync(cancellationToken);
             _allItems = discovery.Items;
@@ -199,6 +238,11 @@ public sealed partial class CreateStackWizardViewModel(
                 packageIds.Add(packageId);
             }
 
+            foreach (var packageId in GetEditPackageIds(editManifest))
+            {
+                packageIds.Add(packageId);
+            }
+
             foreach (var packageId in packageIds.OrderBy(packageId => packageInfo.TryGetValue(packageId, out var info) ? info.DisplayName : packageId, StringComparer.OrdinalIgnoreCase))
             {
                 packageInfo.TryGetValue(packageId, out var info);
@@ -209,9 +253,13 @@ public sealed partial class CreateStackWizardViewModel(
                     NotifyWizardStateChanged));
             }
 
+            ApplyEditManifestSelections(editManifest);
+
             StatusText = PackageGroups.Count == 0
                 ? "No active packages are available to include in a Stack."
-                : $"Discovered {PackageGroups.Count} package{StackDisplayFormatters.Plural(PackageGroups.Count)} and {_allItems.Count} setup item{StackDisplayFormatters.Plural(_allItems.Count)}.";
+                : IsEditMode
+                    ? $"Loaded {PackageGroups.Count} package{StackDisplayFormatters.Plural(PackageGroups.Count)} and {_allItems.Count} available setup item{StackDisplayFormatters.Plural(_allItems.Count)}."
+                    : $"Discovered {PackageGroups.Count} package{StackDisplayFormatters.Plural(PackageGroups.Count)} and {_allItems.Count} setup item{StackDisplayFormatters.Plural(_allItems.Count)}.";
         }
         catch (Exception ex)
         {
@@ -223,6 +271,141 @@ public sealed partial class CreateStackWizardViewModel(
             IsBusy = false;
             NotifyWizardStateChanged();
         }
+    }
+
+    private async Task<SunderStackManifest?> LoadEditManifestAsync(CancellationToken cancellationToken)
+    {
+        if (_editContext is null)
+        {
+            return null;
+        }
+
+        var manifest = await library.ReadManifestAsync(_editContext.Stack.LocalPath, cancellationToken);
+        _editManifest = manifest;
+        StackId = string.IsNullOrWhiteSpace(manifest.StackId) ? _editContext.Stack.StackId : manifest.StackId!;
+        StackName = string.IsNullOrWhiteSpace(manifest.Name) ? _editContext.Stack.Name : manifest.Name!;
+        StackShortDescription = manifest.Summary ?? string.Empty;
+        return manifest;
+    }
+
+    private static IReadOnlyList<string> GetEditPackageIds(SunderStackManifest? manifest)
+    {
+        if (manifest is null)
+        {
+            return [];
+        }
+
+        return (manifest.Packages ?? [])
+            .Select(package => package.PackageId)
+            .Concat((manifest.Fragments ?? []).Select(fragment => fragment.OwnerPackageId))
+            .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+            .Select(packageId => packageId!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private void ApplyEditManifestSelections(SunderStackManifest? manifest)
+    {
+        if (manifest is null)
+        {
+            return;
+        }
+
+        var selectedPackageIds = GetEditPackageIds(manifest).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in PackageGroups)
+        {
+            group.IsSelected = selectedPackageIds.Contains(group.PackageId);
+        }
+
+        foreach (var fragment in manifest.Fragments ?? [])
+        {
+            var item = FindMatchingItem(fragment);
+            if (item is null)
+            {
+                PreservedFragments.Add(new CreateStackPreservedFragmentViewModel(fragment));
+                continue;
+            }
+
+            item.IsSelected = true;
+            item.IsExpanded = true;
+            ApplyFragmentDetailSelections(item, fragment);
+        }
+
+        NotifyWizardStateChanged();
+    }
+
+    private CreateStackExportItemViewModel? FindMatchingItem(SunderStackFragmentManifest fragment)
+    {
+        if (string.IsNullOrWhiteSpace(fragment.OwnerPackageId) || string.IsNullOrWhiteSpace(fragment.ContributorId))
+        {
+            return null;
+        }
+
+        var sourceItemId = fragment.Preview?.SourceItemId;
+        foreach (var item in PackageGroups
+                     .Where(group => string.Equals(group.PackageId, fragment.OwnerPackageId, StringComparison.OrdinalIgnoreCase))
+                     .SelectMany(group => group.Items)
+                     .Where(item => string.Equals(item.ContributorId, fragment.ContributorId, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!string.IsNullOrWhiteSpace(sourceItemId)
+                && string.Equals(item.ItemId, sourceItemId, StringComparison.OrdinalIgnoreCase))
+            {
+                return item;
+            }
+
+            if (string.IsNullOrWhiteSpace(sourceItemId)
+                && string.Equals(item.ItemId, fragment.FragmentId, StringComparison.OrdinalIgnoreCase))
+            {
+                return item;
+            }
+        }
+
+        return null;
+    }
+
+    private static void ApplyFragmentDetailSelections(CreateStackExportItemViewModel item, SunderStackFragmentManifest fragment)
+    {
+        var displayDetails = fragment.Preview?.DisplayDetails ?? [];
+        if (displayDetails.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var detail in item.Details)
+        {
+            detail.IsSelected = false;
+        }
+
+        foreach (var displayDetail in displayDetails)
+        {
+            if (string.IsNullOrWhiteSpace(displayDetail.Label))
+            {
+                continue;
+            }
+
+            var detail = item.Details.FirstOrDefault(candidate => string.Equals(candidate.Label, displayDetail.Label, StringComparison.OrdinalIgnoreCase));
+            if (detail is null)
+            {
+                continue;
+            }
+
+            detail.IsSelected = true;
+            if (string.Equals(displayDetail.Behavior, "Ask on import", StringComparison.OrdinalIgnoreCase)
+                && detail.AvailableExportBehaviors.Contains("Ask on import", StringComparer.OrdinalIgnoreCase))
+            {
+                detail.SelectedExportBehavior = "Ask on import";
+                continue;
+            }
+
+            detail.SelectedExportBehavior = "Include value";
+            if (detail.CanEditValue && !string.IsNullOrWhiteSpace(displayDetail.Value))
+            {
+                detail.EditedValue = displayDetail.Value!;
+            }
+        }
+
+        item.RefreshOptionState();
+        item.RefreshReviewState();
     }
 
     [RelayCommand(CanExecute = nameof(CanGoBack))]
@@ -313,7 +496,7 @@ public sealed partial class CreateStackWizardViewModel(
         Warnings.Clear();
         try
         {
-            StatusText = "Saving local Stack...";
+            StatusText = IsEditMode ? "Saving Stack changes..." : "Saving local Stack...";
             var result = await runtimeApiClient.ExportStackAsync(new RuntimeStackExportRequest(
                 StackId: StackId.Trim(),
                 Name: StackName.Trim(),
@@ -340,10 +523,18 @@ public sealed partial class CreateStackWizardViewModel(
                 return;
             }
 
-            var imported = await library.ImportAsync(result.StackPath ?? path);
-            await library.UpdateDetailsAsync(imported.StackId, BuildLocalDetails(), CancellationToken.None);
-            CreatedStackId = imported.StackId;
-            StatusText = $"Created local Stack '{imported.Name}'.";
+            var saved = IsEditMode
+                ? await SaveEditedStackAsync(result.StackPath ?? path, Path.GetDirectoryName(path)!, CancellationToken.None)
+                : await library.ImportAsync(result.StackPath ?? path);
+            if (!IsEditMode)
+            {
+                await library.UpdateDetailsAsync(saved.StackId, BuildLocalDetails(), CancellationToken.None);
+            }
+
+            CreatedStackId = saved.StackId;
+            StatusText = IsEditMode
+                ? $"Saved local Stack '{saved.Name}'."
+                : $"Created local Stack '{saved.Name}'.";
             CloseRequested?.Invoke(true);
         }
         catch (Exception ex)
@@ -384,6 +575,131 @@ public sealed partial class CreateStackWizardViewModel(
                 group.IconAssetPath))
             .ToArray();
 
+    private async Task<LocalStackLibraryItem> SaveEditedStackAsync(
+        string generatedStackPath,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        if (_editContext is null || _editManifest is null)
+        {
+            throw new InvalidOperationException("Edit mode is missing the local Stack being edited.");
+        }
+
+        var generatedManifest = await library.ReadManifestAsync(generatedStackPath, cancellationToken);
+        var preservedFragments = GetSelectedPreservedFragments();
+        var finalManifest = BuildEditedManifest(generatedManifest, preservedFragments);
+        var mergedPath = Path.Combine(workingDirectory, SunderStackFormat.BuildStackFileName(StackId.Trim() + "-edited"));
+        await SunderStackArchiveWriter.MergeAsync(
+            generatedStackPath,
+            _editContext.Stack.LocalPath,
+            finalManifest,
+            mergedPath,
+            BuildPreservedArchivePaths(preservedFragments),
+            cancellationToken);
+        return await library.ReplaceAsync(mergedPath, _editContext.Stack.StackId, cancellationToken);
+    }
+
+    private SunderStackManifest BuildEditedManifest(
+        SunderStackManifest generatedManifest,
+        IReadOnlyList<SunderStackFragmentManifest> preservedFragments)
+    {
+        var selectedPackageIds = PackageGroups
+            .Where(group => group.IsSelected)
+            .Select(group => group.PackageId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var generatedFragments = generatedManifest.Fragments ?? [];
+        var generatedFragmentIds = generatedFragments
+            .Select(fragment => fragment.FragmentId)
+            .Where(fragmentId => !string.IsNullOrWhiteSpace(fragmentId))
+            .Select(fragmentId => fragmentId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fragments = generatedFragments
+            .Concat(preservedFragments.Where(fragment => string.IsNullOrWhiteSpace(fragment.FragmentId) || !generatedFragmentIds.Contains(fragment.FragmentId!)))
+            .ToArray();
+
+        return new SunderStackManifest
+        {
+            SchemaVersion = generatedManifest.SchemaVersion ?? _editManifest?.SchemaVersion ?? SunderStackFormat.CurrentSchemaVersion,
+            MinReaderVersion = generatedManifest.MinReaderVersion ?? _editManifest?.MinReaderVersion ?? SunderStackFormat.CurrentReaderVersion,
+            Features = _editManifest?.Features ?? generatedManifest.Features,
+            StackId = StackId.Trim(),
+            Name = StackName.Trim(),
+            Summary = NormalizeOptionalText(StackShortDescription),
+            ReadmeMarkdown = _editManifest?.ReadmeMarkdown,
+            CreatedAtUtc = _editManifest?.CreatedAtUtc ?? _editContext?.Stack.CreatedAtUtc ?? generatedManifest.CreatedAtUtc,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            Packages = MergePackageRequirements(
+                generatedManifest.Packages ?? [],
+                (_editManifest?.Packages ?? []).Where(package => !string.IsNullOrWhiteSpace(package.PackageId) && selectedPackageIds.Contains(package.PackageId!))),
+            Fragments = fragments,
+            Media = _editManifest?.Media,
+        };
+    }
+
+    private static IReadOnlyList<SunderStackPackageRequirement> MergePackageRequirements(
+        IReadOnlyList<SunderStackPackageRequirement> generatedPackages,
+        IEnumerable<SunderStackPackageRequirement> preservedPackages)
+    {
+        var packages = new Dictionary<string, SunderStackPackageRequirement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var package in preservedPackages.Concat(generatedPackages))
+        {
+            if (string.IsNullOrWhiteSpace(package.PackageId) || packages.ContainsKey(package.PackageId!))
+            {
+                continue;
+            }
+
+            packages[package.PackageId!] = package;
+        }
+
+        return packages.Values
+            .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private IReadOnlyList<string> BuildPreservedArchivePaths(IReadOnlyList<SunderStackFragmentManifest> preservedFragments)
+    {
+        var paths = new List<string>();
+        foreach (var fragment in preservedFragments)
+        {
+            if (!string.IsNullOrWhiteSpace(fragment.PayloadPath))
+            {
+                paths.Add(fragment.PayloadPath!);
+            }
+
+            if (!string.IsNullOrWhiteSpace(fragment.FragmentId))
+            {
+                paths.Add($"{SunderStackFormat.FragmentFileRoot}{fragment.FragmentId}/");
+            }
+        }
+
+        foreach (var media in _editManifest?.Media ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(media.Path))
+            {
+                paths.Add(media.Path!);
+            }
+        }
+
+        return paths;
+    }
+
+    private IReadOnlyList<SunderStackFragmentManifest> GetSelectedPreservedFragments()
+    {
+        if (_editManifest is null || PreservedFragments.Count == 0)
+        {
+            return [];
+        }
+
+        var selectedPackageIds = PackageGroups
+            .Where(group => group.IsSelected)
+            .Select(group => group.PackageId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return PreservedFragments
+            .Select(fragment => fragment.Fragment)
+            .Where(fragment => string.IsNullOrWhiteSpace(fragment.OwnerPackageId) || selectedPackageIds.Contains(fragment.OwnerPackageId!))
+            .ToArray();
+    }
+
     private void NotifyWizardStateChanged()
     {
         OnPropertyChanged(nameof(IsPackagesStep));
@@ -396,11 +712,20 @@ public sealed partial class CreateStackWizardViewModel(
         OnPropertyChanged(nameof(CanGoBack));
         OnPropertyChanged(nameof(CanGoNext));
         OnPropertyChanged(nameof(CanCreate));
+        OnPropertyChanged(nameof(WindowTitle));
+        OnPropertyChanged(nameof(WizardTitle));
+        OnPropertyChanged(nameof(WizardDescription));
+        OnPropertyChanged(nameof(PrimaryActionText));
+        OnPropertyChanged(nameof(CanEditStackId));
+        OnPropertyChanged(nameof(IsStackIdReadOnly));
         OnPropertyChanged(nameof(HasPackageGroups));
         OnPropertyChanged(nameof(ShowNoPackageGroups));
         OnPropertyChanged(nameof(HasWarnings));
         OnPropertyChanged(nameof(HasErrors));
         OnPropertyChanged(nameof(HasSelectedPackages));
+        OnPropertyChanged(nameof(HasPreservedFragments));
+        OnPropertyChanged(nameof(SelectedPreservedFragmentCount));
+        OnPropertyChanged(nameof(PreservedFragmentsSummary));
         OnPropertyChanged(nameof(HasSelectedPackagesWithItems));
         OnPropertyChanged(nameof(ShowNoItemsStepPackages));
         OnPropertyChanged(nameof(HasSelectedItems));
@@ -479,6 +804,29 @@ public sealed partial class CreateStackWizardViewModel(
     private static string? NormalizeOptionalText(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+}
+
+public sealed record CreateStackWizardEditContext(LocalStackLibraryItem Stack);
+
+public sealed class CreateStackPreservedFragmentViewModel(SunderStackFragmentManifest fragment)
+{
+    public SunderStackFragmentManifest Fragment { get; } = fragment;
+
+    public string DisplayName { get; } = string.IsNullOrWhiteSpace(fragment.DisplayName)
+        ? fragment.FragmentId ?? "Unavailable setup item"
+        : fragment.DisplayName!;
+
+    public string Subtitle { get; } = string.Join(
+        " · ",
+        new[]
+        {
+            string.IsNullOrWhiteSpace(fragment.OwnerPackageId) ? null : fragment.OwnerPackageId,
+            string.IsNullOrWhiteSpace(fragment.ContributorId) ? null : fragment.ContributorId,
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    public string Summary { get; } = string.IsNullOrWhiteSpace(fragment.Description)
+        ? "This setup item is not available from the current runtime session and will be copied from the existing Stack archive."
+        : fragment.Description!;
 }
 
 public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemViewModel

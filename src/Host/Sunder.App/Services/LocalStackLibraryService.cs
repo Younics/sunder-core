@@ -43,6 +43,19 @@ public sealed class LocalStackLibraryService
     }
 
     public async Task<LocalStackLibraryItem> ImportAsync(string stackPath, CancellationToken cancellationToken = default)
+        => await StoreAsync(stackPath, expectedStackId: null, preservePublishState: false, cancellationToken);
+
+    public async Task<LocalStackLibraryItem> ReplaceAsync(
+        string stackPath,
+        string expectedStackId,
+        CancellationToken cancellationToken = default)
+        => await StoreAsync(stackPath, expectedStackId, preservePublishState: true, cancellationToken);
+
+    private async Task<LocalStackLibraryItem> StoreAsync(
+        string stackPath,
+        string? expectedStackId,
+        bool preservePublishState,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(stackPath))
         {
@@ -51,9 +64,27 @@ public sealed class LocalStackLibraryService
 
         var manifest = await ReadManifestAsync(stackPath, cancellationToken);
         var stackId = manifest.StackId ?? throw new InvalidOperationException("Stack manifest is missing stackId.");
+        if (!string.IsNullOrWhiteSpace(expectedStackId) && !string.Equals(stackId, expectedStackId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Edited Stack id '{stackId}' does not match local Stack '{expectedStackId}'.");
+        }
+
+        var index = await LoadIndexAsync(cancellationToken);
+        var existing = index.Items.FirstOrDefault(item => string.Equals(item.StackId, stackId, StringComparison.OrdinalIgnoreCase));
         var destinationPath = Path.Combine(GetLocalStacksDirectory(), SanitizeFileName(stackId) + ".sunderstack");
+        var temporaryDestinationPath = destinationPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        File.Copy(stackPath, destinationPath, overwrite: true);
+        File.Copy(stackPath, temporaryDestinationPath, overwrite: false);
+
+        try
+        {
+            await ReadManifestAsync(temporaryDestinationPath, cancellationToken);
+            File.Move(temporaryDestinationPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteFile(temporaryDestinationPath);
+        }
 
         var now = DateTimeOffset.UtcNow;
         var details = BuildDetailsFromManifest(manifest);
@@ -67,17 +98,16 @@ public sealed class LocalStackLibraryService
             manifest.UpdatedAtUtc ?? now,
             PackageCount: manifest.Packages?.Count ?? 0,
             FragmentCount: manifest.Fragments?.Count ?? 0,
-            RegistryUrl: null,
-            PublishedStackId: null,
-            PublishedAtUtc: null,
-            PublishedUpdatedAtUtc: null,
+            RegistryUrl: preservePublishState ? existing?.RegistryUrl : null,
+            PublishedStackId: preservePublishState ? existing?.PublishedStackId : null,
+            PublishedAtUtc: preservePublishState ? existing?.PublishedAtUtc : null,
+            PublishedUpdatedAtUtc: preservePublishState ? existing?.PublishedUpdatedAtUtc : null,
             Details: details.Count == 0 ? null : details,
             ReadmeMarkdown: manifest.ReadmeMarkdown,
             Media: media.Count == 0 ? null : media);
 
-        var index = await LoadIndexAsync(cancellationToken);
         var items = index.Items
-            .Where(existing => !string.Equals(existing.StackId, stackId, StringComparison.OrdinalIgnoreCase))
+            .Where(item => !string.Equals(item.StackId, stackId, StringComparison.OrdinalIgnoreCase))
             .Append(ToStoredPath(item))
             .ToArray();
         await SaveIndexAsync(new LocalStackLibraryIndex(items), cancellationToken);
@@ -400,6 +430,21 @@ public sealed class LocalStackLibraryService
         catch
         {
             // Best effort cleanup for temporary Stack inspection.
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Best effort cleanup for temporary Stack replacement.
         }
     }
 }

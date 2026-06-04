@@ -343,6 +343,8 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool CanCreateStack => !IsBusy;
 
+    public bool CanEditSelectedStack => !IsBusy && ShowSelectedDetails && SelectedStack is not null;
+
     public bool CanImportSelectedRegistryStack => !IsBusy && ShowRegistryStackDetailsContent && SelectedRegistryStack is not null;
 
     public bool CanUseSelectedRegistryStack => !IsBusy && ShowRegistryStackDetailsContent && SelectedRegistryStack is not null;
@@ -490,6 +492,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     public CreateStackWizardViewModel CreateCreateStackWizardViewModel()
         => new(_library, _runtimeApiClient);
 
+    public CreateStackWizardViewModel? CreateEditStackWizardViewModel()
+        => SelectedStack is null
+            ? null
+            : new CreateStackWizardViewModel(_library, _runtimeApiClient, new CreateStackWizardEditContext(SelectedStack.Item));
+
     public UseStackWizardViewModel? CreateUseStackWizardViewModel()
         => SelectedStack is null
             ? null
@@ -510,6 +517,68 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         StatusText = string.IsNullOrWhiteSpace(stackId)
             ? "Created local Stack."
             : $"Created local Stack '{stackId}'.";
+    }
+
+    public async Task RefreshAfterEditedStackAsync(string? stackId)
+    {
+        _allStacks = await _library.ListAsync();
+        RebuildStackList(stackId);
+        var selectedStack = SelectedStack;
+        StatusText = string.IsNullOrWhiteSpace(stackId)
+            ? "Saved local Stack changes."
+            : $"Saved local Stack '{stackId}'.";
+        if (selectedStack?.IsPublished == true)
+        {
+            await UpdatePublishedStackAfterEditAsync(selectedStack);
+        }
+    }
+
+    private async Task UpdatePublishedStackAfterEditAsync(LocalStackLibraryItemViewModel selectedStack)
+    {
+        if (!RegistryUrlHelper.TryParse(selectedStack.RegistryUrl, out var registryUrl) || registryUrl is null)
+        {
+            StatusText = $"Saved local Stack '{selectedStack.StackId}'. Registry update was skipped because its saved Registry URL is invalid.";
+            return;
+        }
+
+        if (!TryGetRegistryToken(registryUrl, "updating", out var token))
+        {
+            StatusText = $"Saved local Stack '{selectedStack.StackId}'. Sign in to the Registry to update the published Stack.";
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            using var registryClient = _registryClientFactory(registryUrl);
+            var result = await registryClient.PublishStackAsync(selectedStack.LocalPath, token.Token);
+            if (!result.Success)
+            {
+                StatusText = $"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {result.Errors.FirstOrDefault() ?? "publish failed"}.";
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var publishedStackId = string.IsNullOrWhiteSpace(result.StackId) ? selectedStack.PublishedStackId ?? selectedStack.StackId : result.StackId!;
+            await _library.UpdatePublishStateAsync(
+                selectedStack.StackId,
+                registryUrl.ToString(),
+                publishedStackId,
+                selectedStack.Item.PublishedAtUtc ?? now,
+                now);
+            _allStacks = await _library.ListAsync();
+            RebuildStackList(selectedStack.StackId);
+            StatusText = result.Message ?? $"Saved and updated Registry Stack '{publishedStackId}'.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifySelectionChanged();
+        }
     }
 
     public async Task RefreshAfterUsedStackAsync()
@@ -2099,6 +2168,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowNoRegistryStacks));
         OnPropertyChanged(nameof(CanSearchRegistryStacks));
         OnPropertyChanged(nameof(CanCreateStack));
+        OnPropertyChanged(nameof(CanEditSelectedStack));
         OnPropertyChanged(nameof(CanImportSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedRegistryStack));
         OnPropertyChanged(nameof(CanDeleteSelectedRegistryStack));
@@ -2199,6 +2269,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowSelectedStackStats));
         OnPropertyChanged(nameof(ShowSelectedStackStarAction));
         OnPropertyChanged(nameof(ShowNoSelection));
+        OnPropertyChanged(nameof(CanEditSelectedStack));
         NotifyCommandStateChanged();
     }
 
@@ -2233,6 +2304,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(CanRefresh));
         OnPropertyChanged(nameof(CanImportStack));
         OnPropertyChanged(nameof(CanSearchRegistryStacks));
+        OnPropertyChanged(nameof(CanEditSelectedStack));
         OnPropertyChanged(nameof(CanImportSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedStack));

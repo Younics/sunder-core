@@ -50,7 +50,36 @@ public sealed class LocalStackLibraryServiceTests
         Assert.Single(manifest.Media ?? []);
     }
 
-    private static async Task<string> CreateStackArchiveAsync(string root)
+    [Fact]
+    public async Task ReplaceAsync_WhenStackWasPublished_PreservesPublishMetadata()
+    {
+        var root = CreateTempDirectory();
+        var source = await CreateStackArchiveAsync(root);
+        var service = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var imported = await service.ImportAsync(source);
+        var publishedAt = DateTimeOffset.UtcNow.AddDays(-2);
+        var publishedUpdatedAt = DateTimeOffset.UtcNow.AddDays(-1);
+        await service.UpdatePublishStateAsync(
+            imported.StackId,
+            "https://registry.example/",
+            "published-stack",
+            publishedAt,
+            publishedUpdatedAt);
+        var replacement = await CreateStackArchiveAsync(root, name: "Updated Fullstack Agent Dev");
+
+        var replaced = await service.ReplaceAsync(replacement, imported.StackId);
+        var listed = Assert.Single(await service.ListAsync());
+
+        Assert.Equal("Updated Fullstack Agent Dev", replaced.Name);
+        Assert.Equal("https://registry.example/", replaced.RegistryUrl);
+        Assert.Equal("published-stack", replaced.PublishedStackId);
+        Assert.Equal(publishedAt, replaced.PublishedAtUtc);
+        Assert.Equal(publishedUpdatedAt, replaced.PublishedUpdatedAtUtc);
+        Assert.Equal(replaced.RegistryUrl, listed.RegistryUrl);
+        Assert.Equal(replaced.PublishedStackId, listed.PublishedStackId);
+    }
+
+    private static async Task<string> CreateStackArchiveAsync(string root, string name = "Fullstack Agent Dev")
     {
         var payloadPath = Path.Combine(root, "payload.json");
         var mediaPath = Path.Combine(root, "hero.png");
@@ -59,7 +88,7 @@ public sealed class LocalStackLibraryServiceTests
 
         var archivePath = Path.Combine(root, "agent-fullstack.sunderstack");
         await SunderStackArchiveWriter.WriteAsync(
-            CreateManifest(),
+            CreateManifest(name),
             archivePath,
             new Dictionary<string, string>
             {
@@ -69,13 +98,13 @@ public sealed class LocalStackLibraryServiceTests
         return archivePath;
     }
 
-    private static SunderStackManifest CreateManifest()
+    private static SunderStackManifest CreateManifest(string name)
         => new()
         {
             SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
             MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
             StackId = "sunder.stack.agent.fullstack-dev",
-            Name = "Fullstack Agent Dev",
+            Name = name,
             Summary = "Agent setup for coding.",
             ReadmeMarkdown = "# Fullstack Agent Dev\n\n![Hero](payload/media/hero.png)",
             CreatedAtUtc = DateTimeOffset.UtcNow,

@@ -299,6 +299,10 @@
                                   HorizontalAlignment="Left"
                                   VerticalAlignment="Top">
                         <Button Classes="secondary-action"
+                                Click="EditStackButton_OnClick"
+                                Content="Edit"
+                                IsEnabled="{Binding CanEditSelectedStack}" />
+                        <Button Classes="secondary-action"
                                 Command="{Binding PublishSelectedStackCommand}"
                                 Content="Publish"
                                 IsEnabled="{Binding CanPublishSelectedStack}"
