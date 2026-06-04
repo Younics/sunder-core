@@ -8,8 +8,35 @@
              x:DataType="vm:PackagesWindowViewModel"
              mc:Ignorable="d">
   <StackPanel Spacing="16">
-    <Grid ColumnDefinitions="*,*,*"
-          ColumnSpacing="12">
+    <Grid MinHeight="220"
+          IsVisible="{Binding ShowMarketplacePackageDetailsLoading}">
+      <Path Classes="marketplace-detail-spinner"
+            Data="M 15,3 A 12,12 0 1 1 6.5,24.5"
+            Fill="{x:Null}"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            RenderTransformOrigin="50%,50%">
+        <Path.RenderTransform>
+          <RotateTransform Angle="0" />
+        </Path.RenderTransform>
+      </Path>
+    </Grid>
+
+    <Border Classes="settings-note-card"
+            IsVisible="{Binding ShowMarketplacePackageDetailsError}">
+      <StackPanel Spacing="6">
+        <TextBlock Text="Package details unavailable"
+                   FontWeight="SemiBold" />
+        <TextBlock Classes="muted"
+                   Text="{Binding MarketplacePackageDetailsError}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+
+    <StackPanel Spacing="16"
+                IsVisible="{Binding ShowMarketplacePackageDetailsContent}">
+      <Grid ColumnDefinitions="*,*,*"
+            ColumnSpacing="12">
       <Border Classes="card-surface">
         <StackPanel Spacing="4">
           <TextBlock Classes="caption" Text="Latest" />
@@ -219,5 +246,6 @@
                    TextWrapping="Wrap" />
       </StackPanel>
     </Border>
+    </StackPanel>
   </StackPanel>
 </UserControl>

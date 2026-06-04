@@ -307,7 +307,8 @@ public sealed class PackagesWindowViewModelTests
             new FakeRuntimeApiClient([]),
             CreateNotificationCenter(),
             _ => registryClient,
-            TimeSpan.FromMilliseconds(40));
+            TimeSpan.FromMilliseconds(40),
+            marketplaceDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
 
         await viewModel.ApplyLaunchRequestAsync(new AppLaunchRequest(
             AppLaunchRequestKind.PackageInstall,
@@ -440,6 +441,85 @@ public sealed class PackagesWindowViewModelTests
 
         Assert.Equal("Sunder.package.tools", viewModel.SelectedPackageTitle);
         Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+    }
+
+    [Fact]
+    public async Task MarketplaceSelection_WhenDetailsAreLoading_ClearsStaleDetailContent()
+    {
+        var toolsDetailsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseToolsDetails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ =>
+            [
+                CreateRegistryPackage("sunder.package.agent", "9.0.0"),
+                CreateRegistryPackage("sunder.package.tools", "2.0.0"),
+            ],
+            PackageDetails = async (packageId, cancellationToken) =>
+            {
+                if (string.Equals(packageId, "sunder.package.tools", StringComparison.OrdinalIgnoreCase))
+                {
+                    toolsDetailsStarted.SetResult();
+                    await releaseToolsDetails.Task.WaitAsync(cancellationToken);
+                }
+
+                return CreateRegistryPackageDetails(packageId, packageId.EndsWith("tools", StringComparison.OrdinalIgnoreCase) ? "2.0.0" : "9.0.0");
+            },
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        Assert.True(viewModel.MarketplacePackageDetailsLoaded);
+        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("9.0.0", version.Version));
+
+        var selectTask = viewModel.MarketplacePackages[1].SelectCommand.ExecuteAsync(null);
+        await toolsDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.IsMarketplacePackageDetailsLoading);
+        Assert.False(viewModel.MarketplacePackageDetailsLoaded);
+        Assert.False(viewModel.ShowMarketplacePackageDetailsLoading);
+        Assert.False(viewModel.ShowMarketplacePackageDetailsContent);
+        Assert.Equal(string.Empty, viewModel.SelectedPackageSummary);
+        Assert.Empty(viewModel.MarketplaceVersions);
+        Assert.False(viewModel.ShowNoMarketplaceVersions);
+        Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
+
+        await WaitForConditionAsync(() => viewModel.ShowMarketplacePackageDetailsLoading);
+
+        releaseToolsDetails.SetResult();
+        await selectTask;
+
+        Assert.False(viewModel.IsMarketplacePackageDetailsLoading);
+        Assert.True(viewModel.MarketplacePackageDetailsLoaded);
+        Assert.True(viewModel.ShowMarketplacePackageDetailsContent);
+        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+    }
+
+    [Fact]
+    public async Task MarketplaceSelection_WhenDetailsLoadBeforeDelay_DoesNotShowLoadingSpinner()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40),
+            marketplaceDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await Task.Delay(80);
+
+        Assert.True(viewModel.MarketplacePackageDetailsLoaded);
+        Assert.False(viewModel.IsMarketplacePackageDetailsLoading);
+        Assert.False(viewModel.ShowMarketplacePackageDetailsLoading);
     }
 
     [Fact]
@@ -681,7 +761,8 @@ public sealed class PackagesWindowViewModelTests
         NotificationCenterService notificationCenter,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
-        Func<Uri, RegistryAuthToken?>? tokenProvider = null
+        Func<Uri, RegistryAuthToken?>? tokenProvider = null,
+        TimeSpan? marketplaceDetailSpinnerDelay = null
     )
     {
         var viewModel = new PackagesWindowViewModel(
@@ -690,7 +771,8 @@ public sealed class PackagesWindowViewModelTests
             notificationCenter: notificationCenter,
             registryClientFactory: registryClientFactory,
             registryTokenProvider: tokenProvider,
-            marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay
+            marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay,
+            marketplaceDetailSpinnerDelay: marketplaceDetailSpinnerDelay
         )
         {
             Mode = PackageWindowMode.Installed,

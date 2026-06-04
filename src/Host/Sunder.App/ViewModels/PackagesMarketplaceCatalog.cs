@@ -56,7 +56,7 @@ internal sealed class PackagesMarketplaceCatalog(
                 .ThenByDescending(version => version.PublishedAtUtc)
                 .Select(version => new RegistryPackageVersionItemViewModel(version, selectVersion))
                 .ToArray() ?? [];
-            return PackagesMarketplaceDetailsResult.Succeeded(package?.Profile, package?.Stats, package?.Creator, package?.Maintainers ?? [], versions, package is not null);
+            return PackagesMarketplaceDetailsResult.Succeeded(package, versions);
         }
     }
 }
@@ -75,6 +75,7 @@ internal sealed record PackagesMarketplaceSearchResult(
 
 internal sealed record PackagesMarketplaceDetailsResult(
     bool Success,
+    RegistryPackageDetails? Package,
     RegistryPackageProfile? Profile,
     RegistryPackageStats? Stats,
     RegistryUserAttribution? Creator,
@@ -84,14 +85,16 @@ internal sealed record PackagesMarketplaceDetailsResult(
     string? ErrorMessage)
 {
     public static PackagesMarketplaceDetailsResult Succeeded(
-        RegistryPackageProfile? profile,
-        RegistryPackageStats? stats,
-        RegistryUserAttribution? creator,
-        IReadOnlyList<RegistryUserAttribution> maintainers,
+        RegistryPackageDetails? package,
         IReadOnlyList<RegistryPackageVersionItemViewModel> versions,
         bool packageFound)
-        => new(true, profile, stats, creator, maintainers, versions, packageFound, null);
+        => new(true, package, package?.Profile, package?.Stats, package?.Creator, package?.Maintainers ?? [], versions, packageFound, null);
+
+    public static PackagesMarketplaceDetailsResult Succeeded(
+        RegistryPackageDetails? package,
+        IReadOnlyList<RegistryPackageVersionItemViewModel> versions)
+        => Succeeded(package, versions, package is not null);
 
     public static PackagesMarketplaceDetailsResult Failed(string errorMessage)
-        => new(false, null, null, null, [], [], false, errorMessage);
+        => new(false, null, null, null, null, [], [], false, errorMessage);
 }

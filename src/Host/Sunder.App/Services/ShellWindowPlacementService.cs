@@ -18,6 +18,7 @@ public static class ShellWindowPlacementService
             return;
         }
 
+        window.WindowStartupLocation = WindowStartupLocation.Manual;
         var screen = ResolveScreen(window, placement);
         var size = screen is null
             ? new Size(Math.Max(window.MinWidth, placement.Width), Math.Max(window.MinHeight, placement.Height))

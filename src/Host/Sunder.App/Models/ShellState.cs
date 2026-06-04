@@ -63,6 +63,10 @@ public sealed class ShellState
 
     public ShellWindowPlacement? StacksWindowPlacement { get; set; }
 
+    public ShellWindowPlacement? CreateStackWizardWindowPlacement { get; set; }
+
+    public ShellWindowPlacement? UseStackWizardWindowPlacement { get; set; }
+
     public string ThemeId { get; set; } = SunderThemeDefinition.GraphiteDark.Id;
 
     public string? PreferredRuntimeUrl { get; set; }

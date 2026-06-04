@@ -12,6 +12,8 @@ public partial class StacksWindow : Window
     private StacksWindowViewModel? ViewModel => DataContext as StacksWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
     private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private readonly ShellStateService? _shellStateService;
+    private readonly ShellState? _shellState;
     private StacksWindowViewModel? _subscribedViewModel;
 
     public StacksWindow()
@@ -29,6 +31,8 @@ public partial class StacksWindow : Window
     public StacksWindow(ShellStateService shellStateService, ShellState shellState)
         : this()
     {
+        _shellStateService = shellStateService;
+        _shellState = shellState;
         _stateController = new SecondaryWindowStateController(
             this,
             shellStateService,
@@ -68,6 +72,7 @@ public partial class StacksWindow : Window
         }
 
         var wizardWindow = new CreateStackWizardWindow();
+        ApplyCreateStackWizardPlacement(wizardWindow);
         var wizardViewModel = ViewModel.CreateCreateStackWizardViewModel();
         wizardWindow.DataContext = wizardViewModel;
         var result = await wizardWindow.ShowDialog<bool?>(this);
@@ -117,6 +122,7 @@ public partial class StacksWindow : Window
         {
             DataContext = wizardViewModel,
         };
+        ApplyUseStackWizardPlacement(wizardWindow);
         var result = await wizardWindow.ShowDialog<bool?>(this);
         if (result == true)
         {
@@ -129,6 +135,36 @@ public partial class StacksWindow : Window
         SubscribeToViewModel(null);
         ViewModel?.Dispose();
         DataContext = null;
+    }
+
+    private void ApplyCreateStackWizardPlacement(Window wizardWindow)
+        => ApplyStackWizardPlacement(
+            wizardWindow,
+            state => state.CreateStackWizardWindowPlacement,
+            (state, placement) => state.CreateStackWizardWindowPlacement = placement);
+
+    private void ApplyUseStackWizardPlacement(Window wizardWindow)
+        => ApplyStackWizardPlacement(
+            wizardWindow,
+            state => state.UseStackWizardWindowPlacement,
+            (state, placement) => state.UseStackWizardWindowPlacement = placement);
+
+    private void ApplyStackWizardPlacement(
+        Window wizardWindow,
+        Func<ShellState, ShellWindowPlacement?> getPlacement,
+        Action<ShellState, ShellWindowPlacement?> setPlacement)
+    {
+        if (_shellState is null || _shellStateService is null)
+        {
+            return;
+        }
+
+        ShellWindowPlacementService.Apply(wizardWindow, getPlacement(_shellState));
+        wizardWindow.Closing += (_, _) =>
+        {
+            setPlacement(_shellState, ShellWindowPlacementService.Capture(wizardWindow, getPlacement(_shellState)));
+            _shellStateService.Save(_shellState);
+        };
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e) => SubscribeToViewModel(ViewModel);

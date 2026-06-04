@@ -49,6 +49,7 @@ public sealed class ShellStateService
                 state.BottomSplitRatio = ClampRatio(state.BottomSplitRatio, ShellState.DefaultBottomSplitRatio);
                 state.SettingsSidebarWidth = ClampSecondarySidebarWidth(state.SettingsSidebarWidth, ShellState.DefaultSettingsSidebarWidth);
                 state.PackagesSidebarWidth = ClampSecondarySidebarWidth(state.PackagesSidebarWidth, ShellState.DefaultPackagesSidebarWidth);
+                state.StacksSidebarWidth = ClampSecondarySidebarWidth(state.StacksSidebarWidth, ShellState.DefaultStacksSidebarWidth);
                 state.BackgroundProcessPopoverWidth = ClampBackgroundProcessPopoverWidth(state.BackgroundProcessPopoverWidth);
                 state.BackgroundProcessPopoverHeight = ClampBackgroundProcessPopoverHeight(state.BackgroundProcessPopoverHeight);
                 return state;

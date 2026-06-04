@@ -593,6 +593,33 @@
                     </StackPanel>
                   </Grid>
 
+                  <Grid MinHeight="300"
+                        IsVisible="{Binding ShowRegistryStackDetailsLoading}">
+                    <Path Classes="marketplace-detail-spinner"
+                          Data="M 15,3 A 12,12 0 1 1 6.5,24.5"
+                          Fill="{x:Null}"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          RenderTransformOrigin="50%,50%">
+                      <Path.RenderTransform>
+                        <RotateTransform Angle="0" />
+                      </Path.RenderTransform>
+                    </Path>
+                  </Grid>
+
+                  <Border Classes="settings-note-card"
+                          IsVisible="{Binding ShowRegistryStackDetailsError}">
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="Stack details unavailable"
+                                 FontWeight="SemiBold" />
+                      <TextBlock Classes="muted"
+                                 Text="{Binding RegistryStackDetailsError}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+
+                  <StackPanel Spacing="16"
+                              IsVisible="{Binding ShowRegistryStackDetailsContent}">
                   <Border Classes="settings-note-card">
                     <Grid RowDefinitions="Auto,Auto"
                           RowSpacing="6">
@@ -933,6 +960,7 @@
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                  </StackPanel>
                   </StackPanel>
 
                 </StackPanel>

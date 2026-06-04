@@ -68,6 +68,40 @@ internal sealed record PackageSelectionDetails(
             item.InstalledVersion ?? "Not installed",
             MarketplaceSelectedVersion: "Latest");
 
+    public static PackageSelectionDetails FromMarketplaceLoading(RegistryPackageSearchItemViewModel item)
+        => new(
+            item.Name,
+            item.PackageId,
+            string.Empty,
+            string.Empty,
+            item.Glyph,
+            item.IconImage,
+            item.IconLoadError ?? string.Empty,
+            HasError: false,
+            Error: string.Empty,
+            OperationHint: string.Empty,
+            MarketplaceLatestVersion: "-",
+            item.InstalledVersion ?? "Not installed",
+            MarketplaceSelectedVersion: "Latest");
+
+    public static PackageSelectionDetails FromMarketplaceDetails(
+        RegistryPackageSearchItemViewModel item,
+        Sunder.Registry.Shared.RegistryPackageDetails package)
+        => new(
+            string.IsNullOrWhiteSpace(package.Name) ? item.Name : package.Name,
+            package.PackageId,
+            string.Empty,
+            package.Summary ?? "No package summary provided.",
+            string.IsNullOrWhiteSpace(package.Name) ? item.Glyph : package.Name.Trim()[0].ToString().ToUpperInvariant(),
+            item.IconImage,
+            item.IconLoadError ?? string.Empty,
+            HasError: false,
+            Error: string.Empty,
+            OperationHint: string.Empty,
+            package.LatestVersion ?? "-",
+            item.InstalledVersion ?? "Not installed",
+            MarketplaceSelectedVersion: "Latest");
+
     public static PackageSelectionDetails NoMarketplaceMatch()
         => new(
             "No package selected",

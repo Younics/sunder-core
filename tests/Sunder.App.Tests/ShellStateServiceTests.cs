@@ -72,6 +72,7 @@ public sealed class ShellStateServiceTests
             RightPanelWidth = 390,
             SettingsSidebarWidth = 310,
             PackagesSidebarWidth = 520,
+            StacksSidebarWidth = 470,
             SettingsWindowPlacement = new ShellWindowPlacement
             {
                 X = 120,
@@ -86,6 +87,27 @@ public sealed class ShellStateServiceTests
                 Y = 240,
                 Width = 1280,
                 Height = 820,
+            },
+            StacksWindowPlacement = new ShellWindowPlacement
+            {
+                X = 320,
+                Y = 340,
+                Width = 1180,
+                Height = 780,
+            },
+            CreateStackWizardWindowPlacement = new ShellWindowPlacement
+            {
+                X = 420,
+                Y = 440,
+                Width = 1040,
+                Height = 740,
+            },
+            UseStackWizardWindowPlacement = new ShellWindowPlacement
+            {
+                X = 520,
+                Y = 540,
+                Width = 1060,
+                Height = 760,
             },
             PreferredRuntimeUrl = "http://127.0.0.1:5280/",
         };
@@ -102,6 +124,7 @@ public sealed class ShellStateServiceTests
         Assert.Equal(390, reloaded.RightPanelWidth);
         Assert.Equal(310, reloaded.SettingsSidebarWidth);
         Assert.Equal(520, reloaded.PackagesSidebarWidth);
+        Assert.Equal(470, reloaded.StacksSidebarWidth);
         var settingsPlacement = Assert.IsType<ShellWindowPlacement>(reloaded.SettingsWindowPlacement);
         Assert.Equal(120, settingsPlacement.X);
         Assert.Equal(1100, settingsPlacement.Width);
@@ -109,6 +132,15 @@ public sealed class ShellStateServiceTests
         var packagesPlacement = Assert.IsType<ShellWindowPlacement>(reloaded.PackagesWindowPlacement);
         Assert.Equal(220, packagesPlacement.X);
         Assert.Equal(1280, packagesPlacement.Width);
+        var stacksPlacement = Assert.IsType<ShellWindowPlacement>(reloaded.StacksWindowPlacement);
+        Assert.Equal(320, stacksPlacement.X);
+        Assert.Equal(1180, stacksPlacement.Width);
+        var createStackWizardPlacement = Assert.IsType<ShellWindowPlacement>(reloaded.CreateStackWizardWindowPlacement);
+        Assert.Equal(420, createStackWizardPlacement.X);
+        Assert.Equal(1040, createStackWizardPlacement.Width);
+        var useStackWizardPlacement = Assert.IsType<ShellWindowPlacement>(reloaded.UseStackWizardWindowPlacement);
+        Assert.Equal(520, useStackWizardPlacement.X);
+        Assert.Equal(1060, useStackWizardPlacement.Width);
         Assert.Equal("http://127.0.0.1:5280/", reloaded.PreferredRuntimeUrl);
     }
 
@@ -121,6 +153,7 @@ public sealed class ShellStateServiceTests
         {
             SettingsSidebarWidth = 0,
             PackagesSidebarWidth = -1,
+            StacksSidebarWidth = -2,
         }));
         var service = new ShellStateService(statePath);
 
@@ -128,6 +161,7 @@ public sealed class ShellStateServiceTests
 
         Assert.Equal(ShellState.DefaultSettingsSidebarWidth, state.SettingsSidebarWidth);
         Assert.Equal(ShellState.DefaultPackagesSidebarWidth, state.PackagesSidebarWidth);
+        Assert.Equal(ShellState.DefaultStacksSidebarWidth, state.StacksSidebarWidth);
     }
 
 }

@@ -81,7 +81,10 @@ public sealed class StacksWindowViewModelTests
         {
             StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack")],
         };
-        using var viewModel = CreateViewModel(root, registryClient);
+        using var viewModel = CreateViewModel(
+            root,
+            registryClient,
+            registryDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
 
         await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
         viewModel.SelectedRegistrySortOption = viewModel.RegistrySortOptions.Single(option => option.Sort == RegistrySearchSort.Stars);
@@ -121,6 +124,140 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal("Agent profile", item.DisplayName);
         Assert.Equal("Custom instructions", Assert.Single(item.Values).Label);
         Assert.Equal("API key", Assert.Single(viewModel.RegistrySelectedRequiredInputs));
+    }
+
+    [Fact]
+    public async Task RegistryStackSelection_WhenDetailsAreLoading_ClearsStaleDetailContent()
+    {
+        var root = CreateTempDirectory();
+        var toolsDetailsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseToolsDetails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults =
+            [
+                CreateRegistryStackSummary("team-stack", "Team Stack"),
+                CreateRegistryStackSummary("tools-stack", "Tools Stack"),
+            ],
+            StackDetailsFactory = async (stackId, cancellationToken) =>
+            {
+                if (string.Equals(stackId, "tools-stack", StringComparison.OrdinalIgnoreCase))
+                {
+                    toolsDetailsStarted.SetResult();
+                    await releaseToolsDetails.Task.WaitAsync(cancellationToken);
+                    return CreateRegistryStackDetails(stackId, "Tools Stack");
+                }
+
+                return CreateRegistryStackDetails(stackId, "Team Stack");
+            },
+        };
+        using var viewModel = CreateViewModel(root, registryClient);
+
+        await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded);
+        Assert.Equal("Team Stack", viewModel.SelectedRegistryStackTitle);
+        Assert.Single(viewModel.RegistrySelectedPackages);
+        Assert.Single(viewModel.RegistrySelectedDetails);
+
+        viewModel.SelectedRegistryStack = viewModel.RegistryStacks[1];
+        await toolsDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.IsRegistryStackDetailsLoading);
+        Assert.False(viewModel.RegistryStackDetailsLoaded);
+        Assert.False(viewModel.ShowRegistryStackDetailsLoading);
+        Assert.False(viewModel.ShowRegistryStackDetailsContent);
+        Assert.Equal(string.Empty, viewModel.SelectedRegistryStackSummary);
+        Assert.Empty(viewModel.RegistrySelectedPackages);
+        Assert.Empty(viewModel.RegistrySelectedDetails);
+        Assert.False(viewModel.CanImportSelectedRegistryStack);
+        Assert.False(viewModel.CanUseSelectedRegistryStack);
+
+        await WaitForConditionAsync(() => viewModel.ShowRegistryStackDetailsLoading);
+
+        releaseToolsDetails.SetResult();
+        await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded && viewModel.SelectedRegistryStackTitle == "Tools Stack");
+
+        Assert.False(viewModel.IsRegistryStackDetailsLoading);
+        Assert.True(viewModel.ShowRegistryStackDetailsContent);
+        Assert.Single(viewModel.RegistrySelectedPackages);
+        Assert.Single(viewModel.RegistrySelectedDetails);
+    }
+
+    [Fact]
+    public async Task RegistryStackSelection_WhenDetailsLoadBeforeDelay_DoesNotShowLoadingSpinner()
+    {
+        var root = CreateTempDirectory();
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack")],
+            StackDetails = CreateRegistryStackDetails("team-stack", "Team Stack"),
+        };
+        using var viewModel = CreateViewModel(
+            root,
+            registryClient,
+            registryDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
+
+        await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
+        await Task.Delay(80);
+
+        Assert.True(viewModel.RegistryStackDetailsLoaded);
+        Assert.False(viewModel.IsRegistryStackDetailsLoading);
+        Assert.False(viewModel.ShowRegistryStackDetailsLoading);
+    }
+
+    [Fact]
+    public async Task RegistryStackSelection_WhenEarlierDetailsCompleteLater_DoesNotOverwriteCurrentDetails()
+    {
+        var root = CreateTempDirectory();
+        var teamDetailsStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var teamDetailsCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTeamDetails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults =
+            [
+                CreateRegistryStackSummary("team-stack", "Team Stack"),
+                CreateRegistryStackSummary("tools-stack", "Tools Stack"),
+            ],
+            StackDetailsFactory = async (stackId, cancellationToken) =>
+            {
+                if (string.Equals(stackId, "team-stack", StringComparison.OrdinalIgnoreCase))
+                {
+                    teamDetailsStarted.SetResult();
+                    try
+                    {
+                        await releaseTeamDetails.Task.WaitAsync(cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        teamDetailsCancelled.SetResult();
+                        throw;
+                    }
+
+                    return CreateRegistryStackDetails(stackId, "Team Stack");
+                }
+
+                return CreateRegistryStackDetails(stackId, "Tools Stack");
+            },
+        };
+        using var viewModel = CreateViewModel(root, registryClient);
+
+        await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
+        await teamDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        viewModel.SelectedRegistryStack = viewModel.RegistryStacks[1];
+        await teamDetailsCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded && viewModel.SelectedRegistryStackTitle == "Tools Stack");
+
+        Assert.Equal("Tools Stack", viewModel.SelectedRegistryStackTitle);
+        Assert.Equal("tools-stack", viewModel.SelectedRegistryStackSubtitle);
+        Assert.Single(viewModel.RegistrySelectedPackages);
+        Assert.Single(viewModel.RegistrySelectedDetails);
+
+        releaseTeamDetails.SetResult();
+        await Task.Delay(50);
+
+        Assert.Equal("Tools Stack", viewModel.SelectedRegistryStackTitle);
+        Assert.Equal("tools-stack", viewModel.SelectedRegistryStackSubtitle);
     }
 
     [Fact]
@@ -855,14 +992,16 @@ public sealed class StacksWindowViewModelTests
         LocalStackLibraryService? library = null,
         Func<Uri, RegistryAuthToken?>? tokenProvider = null,
         FakeRuntimeApiClient? runtimeApiClient = null,
-        TimeSpan? registrySearchThrottleDelay = null)
+        TimeSpan? registrySearchThrottleDelay = null,
+        TimeSpan? registryDetailSpinnerDelay = null)
         => new(
             library ?? new LocalStackLibraryService(Path.Combine(root, "library")),
             new FakeStackArchivePicker(),
             runtimeApiClient ?? new FakeRuntimeApiClient(),
             registryClientFactory: _ => registryClient,
             registryTokenProvider: tokenProvider ?? (_ => null),
-            registrySearchThrottleDelay: registrySearchThrottleDelay);
+            registrySearchThrottleDelay: registrySearchThrottleDelay,
+            registryDetailSpinnerDelay: registryDetailSpinnerDelay);
 
     private static RegistryStackSummary CreateRegistryStackSummary(string stackId, string name, RegistryStackStats? stats = null)
         => new(
@@ -1037,6 +1176,8 @@ public sealed class StacksWindowViewModelTests
 
         public RegistryStackDetails? StackDetails { get; init; }
 
+        public Func<string, CancellationToken, Task<RegistryStackDetails?>>? StackDetailsFactory { get; init; }
+
         public string? StackDownloadSourcePath { get; init; }
 
         public string? LastStackSearchQuery { get; private set; }
@@ -1093,10 +1234,15 @@ public sealed class StacksWindowViewModelTests
         }
 
         public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken cancellationToken = default)
-            => Task.FromResult(StackDetails);
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return StackDetailsFactory is null
+                ? Task.FromResult(StackDetails)
+                : StackDetailsFactory(stackId, cancellationToken);
+        }
 
         public Task<RegistryStackDetails?> GetStackAsync(string stackId, string bearerToken, CancellationToken cancellationToken = default)
-            => Task.FromResult(StackDetails);
+            => GetStackAsync(stackId, cancellationToken);
 
         public Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(RegistryResolveUpdatesRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RegistryResolveUpdatesResponse([]));
