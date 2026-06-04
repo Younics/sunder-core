@@ -346,7 +346,7 @@ case "$runtime" in
   osx-*)
     macos_icon="$(create_macos_icon)"
     macos_plist="$(create_macos_plist)"
-    pack_args+=(--icon "$macos_icon" --bundleId "$mac_bundle_id" --plist "$macos_plist")
+    pack_args+=(--icon "$macos_icon" --plist "$macos_plist")
     if [[ -n "$mac_sign_app_identity" ]]; then
       pack_args+=(
         --signAppIdentity "$mac_sign_app_identity"
