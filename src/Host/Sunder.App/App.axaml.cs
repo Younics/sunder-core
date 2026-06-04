@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
@@ -17,10 +18,12 @@ public partial class App : Application
     private ServiceProvider? _serviceProvider;
     private WindowLauncher? _windowLauncher;
     private DevPackageHotReloadSession? _devPackageHotReloadSession;
+    private AboutSunderWindow? _aboutSunderWindow;
 
     public override void Initialize()
     {
         AppPackageAvaloniaAssetLoader.Install(_packageResourceAssemblyRegistry);
+        SunderAsyncImageLoader.Install();
         AvaloniaXamlLoader.Load(this);
 
 #if DEBUG
@@ -166,6 +169,52 @@ public partial class App : Application
         await completion.Task.WaitAsync(cancellationToken);
     }
 
+    private void AboutSunderMenuItem_OnClick(object? sender, EventArgs e)
+        => ShowAboutSunderWindow();
+
+    private void SettingsMenuItem_OnClick(object? sender, EventArgs e)
+        => _windowLauncher?.ShowSettings();
+
+    private void StacksMenuItem_OnClick(object? sender, EventArgs e)
+        => _windowLauncher?.ShowStacks();
+
+    private void PackagesMenuItem_OnClick(object? sender, EventArgs e)
+        => _windowLauncher?.ShowPackages();
+
+    private void ShowAboutSunderWindow()
+    {
+        if (_aboutSunderWindow is not null)
+        {
+            _aboutSunderWindow.Activate();
+            return;
+        }
+
+        _aboutSunderWindow = new AboutSunderWindow();
+        _aboutSunderWindow.Closed += AboutSunderWindow_OnClosed;
+        var owner = GetCurrentOwnerWindow();
+        if (owner is null)
+        {
+            _aboutSunderWindow.Show();
+            return;
+        }
+
+        _aboutSunderWindow.Show(owner);
+    }
+
+    private void AboutSunderWindow_OnClosed(object? sender, EventArgs e)
+    {
+        if (_aboutSunderWindow is not null)
+        {
+            _aboutSunderWindow.Closed -= AboutSunderWindow_OnClosed;
+            _aboutSunderWindow = null;
+        }
+    }
+
+    private Window? GetCurrentOwnerWindow()
+        => ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } mainWindow }
+            ? mainWindow
+            : null;
+
     private void RegisterExceptionHandlers()
     {
         Dispatcher.UIThread.UnhandledException += (_, e) =>
@@ -208,6 +257,9 @@ public partial class App : Application
 
             windowLauncher.CloseForShutdown();
         }
+
+        _aboutSunderWindow?.Close();
+        _aboutSunderWindow = null;
 
         var hostService = _packageViewHostService;
         _packageViewHostService = PackageViewHostService.Empty;

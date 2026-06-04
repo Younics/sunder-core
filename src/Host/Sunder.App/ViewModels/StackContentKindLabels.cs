@@ -9,7 +9,9 @@ internal static class StackContentKindLabels
         {
             "agent-profile" => "Agent Profiles",
             "agent-workspace" => "Agent Workspaces",
+            "docker-image" => "Docker Images",
             "mcp-server" => "MCP Servers",
+            "package-requirement" => "Package Install",
             "package-settings" => "Package Settings",
             "skill" => "Agent Skills",
             "subagent" => "Subagents",

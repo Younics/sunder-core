@@ -10,32 +10,6 @@
     <TextBlock Classes="caption" Text="{Binding SelectedPackageStatus}" />
     <TextBlock Classes="muted" Text="{Binding SelectedPackageOperationHint}" TextWrapping="Wrap" />
 
-    <StackPanel Orientation="Horizontal" Spacing="8">
-      <Button Classes="secondary-action"
-              Command="{Binding EnableSelectedPackageCommand}"
-              Content="Enable"
-              IsEnabled="{Binding CanEnableSelectedPackage}"
-              IsVisible="{Binding ShowEnableSelectedPackage}" />
-      <Button Classes="secondary-action"
-              Command="{Binding DisableSelectedPackageCommand}"
-              Content="Disable"
-              IsEnabled="{Binding CanDisableSelectedPackage}"
-              IsVisible="{Binding ShowDisableSelectedPackage}" />
-      <Button Classes="primary-action"
-              Command="{Binding UpdateSelectedInstalledPackageCommand}"
-              Content="Update"
-              IsEnabled="{Binding CanUpdateSelectedInstalledPackage}"
-              IsVisible="{Binding ShowUpdateSelectedInstalledPackage}" />
-      <Button Classes="secondary-action"
-              Command="{Binding UninstallSelectedPackageCommand}"
-              Content="Uninstall"
-              IsEnabled="{Binding CanUninstallSelectedPackage}" />
-      <Button Classes="secondary-action"
-              Command="{Binding CancelSelectedPackageOperationCommand}"
-              Content="Cancel"
-              IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
-    </StackPanel>
-
     <TextBlock Classes="caption"
                Text="{Binding SelectedPackageOperationStatusText}"
                IsVisible="{Binding ShowSelectedPackageOperationStatus}"

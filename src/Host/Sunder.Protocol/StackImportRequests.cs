@@ -26,7 +26,16 @@ public sealed record RuntimeStackImportResponse(
     IReadOnlyList<RuntimeStackImportedItemDescriptor> ImportedItems,
     IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors)
+{
+    public IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> AppliedContributions { get; init; } = [];
+}
+
+public sealed record RuntimeStackImportAppliedContributionDescriptor(
+    string OwnerPackageId,
+    string ContributorId,
+    IReadOnlyList<string> FragmentIds,
+    IReadOnlyList<RuntimeStackImportedItemDescriptor> ImportedItems);
 
 public sealed record RuntimeStackImportActionDescriptor(
     string ActionId,
@@ -34,26 +43,37 @@ public sealed record RuntimeStackImportActionDescriptor(
     string DisplayName,
     string Kind,
     bool DefaultSelected,
-    string? Description = null);
+    string? Description = null)
+{
+    public string? OwnerPackageId { get; init; }
+}
 
 public sealed record RuntimeStackRequiredInputDescriptor(
     string InputId,
     string ContributorId,
-    string Kind,
     string Label,
     bool Required,
     string? Description = null,
-    string? DefaultValue = null);
+    string? DefaultValue = null)
+{
+    public string? OwnerPackageId { get; init; }
+}
 
 public sealed record RuntimeStackImportConflictDescriptor(
     string ConflictId,
     string ContributorId,
     string Message,
     string Severity,
-    string? FragmentId = null);
+    string? FragmentId = null)
+{
+    public string? OwnerPackageId { get; init; }
+}
 
 public sealed record RuntimeStackImportedItemDescriptor(
     string ItemId,
     string ContributorId,
     string DisplayName,
-    string Kind);
+    string Kind)
+{
+    public string? OwnerPackageId { get; init; }
+}

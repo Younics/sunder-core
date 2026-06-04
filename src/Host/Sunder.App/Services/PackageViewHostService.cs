@@ -2,6 +2,7 @@ using System.Reflection;
 using Avalonia.Controls;
 using Sunder.Protocol;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Stacks;
 using Sunder.App.Views.Controls;
 
 namespace Sunder.App.Services;
@@ -270,6 +271,57 @@ public sealed class PackageViewHostService : IAsyncDisposable
     {
         ThrowIfDisposed();
         return _composition.ViewFacade.GetOrCreateSettingsView(packageId);
+    }
+
+    public async Task<IReadOnlyList<string>> NotifyStackImportAppliedAsync(
+        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (appliedContributions.Count == 0)
+        {
+            return [];
+        }
+
+        var warnings = new List<string>();
+        var stackContributions = _composition.ExtensionCatalog.GetExtensionContributions(SunderStackExtensionPoints.StackContributors);
+        foreach (var applied in appliedContributions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var handlers = stackContributions
+                .Where(contribution => string.Equals(contribution.PackageId, applied.OwnerPackageId, StringComparison.OrdinalIgnoreCase)
+                                       && string.Equals(contribution.Contribution.ContributorId, applied.ContributorId, StringComparison.OrdinalIgnoreCase))
+                .Select(contribution => contribution.Contribution)
+                .OfType<IPackageStackImportAppliedHandler>()
+                .ToArray();
+            if (handlers.Length == 0)
+            {
+                continue;
+            }
+
+            var context = new StackImportAppliedContext(
+                applied.OwnerPackageId,
+                applied.ContributorId,
+                applied.FragmentIds,
+                applied.ImportedItems
+                    .Select(item => new StackImportedItem(item.ItemId, item.DisplayName, item.Kind))
+                    .ToArray());
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    await handler.OnStackImportAppliedAsync(context, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var message = $"Package '{applied.OwnerPackageId}' did not refresh imported Stack data: {ex.Message}";
+                    warnings.Add(message);
+                    AppSessionLog.WriteError(message, ex);
+                }
+            }
+        }
+
+        return warnings;
     }
 
     internal Control? CreateHostedViewBoundary(string packageId, string viewId, Control? hostedView)

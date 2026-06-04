@@ -34,6 +34,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly NotificationTrayViewModel _notificationTray;
     private readonly AppUpdatePromptViewModel _appUpdatePrompt;
     private readonly RegistryAuthService? _registryAuthService;
+    private readonly ExternalBrowserService? _externalBrowserService;
     private readonly MainWindowSubscriptionScope _subscriptionScope;
     private readonly ShellSelectionPresenter _selectionPresenter = new();
     private readonly ShellItemViewModelFactory _shellItemFactory;
@@ -62,10 +63,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         AppPackageLifecycleCoordinator? packageLifecycleCoordinator = null,
         IShellCompositionService? shellCompositionService = null,
         DeveloperLogService? developerLog = null,
-        RegistryAuthService? registryAuthService = null)
+        RegistryAuthService? registryAuthService = null,
+        ExternalBrowserService? externalBrowserService = null)
     {
         _windowLauncher = windowLauncher;
         _registryAuthService = registryAuthService;
+        _externalBrowserService = externalBrowserService;
         var effectivePackageLifecycleCoordinator = packageLifecycleCoordinator ?? new AppPackageLifecycleCoordinator(packageViewHostService, runtimeApiClientFactory);
         var effectiveShellCompositionService = shellCompositionService ?? new ShellCompositionService();
         _appUpdatePrompt = new AppUpdatePromptViewModel(new AppUpdatePromptCoordinator(updateService ?? new SunderUpdateService()));

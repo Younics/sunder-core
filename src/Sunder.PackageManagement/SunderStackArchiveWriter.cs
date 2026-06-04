@@ -51,7 +51,7 @@ public static class SunderStackArchiveWriter
         IReadOnlyDictionary<string, string> payloadFiles,
         CancellationToken cancellationToken)
     {
-        var manifestOutputPath = Path.Combine(stagingPath, "manifest", "sunder-stack.json");
+        var manifestOutputPath = Path.Combine(stagingPath, SunderStackFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(manifestOutputPath)!);
         await File.WriteAllTextAsync(manifestOutputPath, JsonSerializer.Serialize(manifest, JsonOptions) + Environment.NewLine, cancellationToken);
 
@@ -64,7 +64,7 @@ public static class SunderStackArchiveWriter
             }
 
             var normalizedPath = relativePath.Replace('\\', '/');
-            if (!normalizedPath.StartsWith("payload/", StringComparison.OrdinalIgnoreCase))
+            if (!normalizedPath.StartsWith(SunderStackFormat.PayloadRoot, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException($"Stack payload file '{relativePath}' must be written under payload/.");
             }
@@ -83,8 +83,8 @@ public static class SunderStackArchiveWriter
             .OrderBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var index = new SunderStackContentIndex(1, files);
-        var outputPath = Path.Combine(stagingPath, "manifest", "content-index.json");
+        var index = new SunderStackContentIndex(SunderStackFormat.CurrentContentIndexVersion, files);
+        var outputPath = Path.Combine(stagingPath, SunderStackFormat.ContentIndexPath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         File.WriteAllText(outputPath, JsonSerializer.Serialize(index, JsonOptions) + Environment.NewLine);
     }
@@ -97,28 +97,7 @@ public static class SunderStackArchiveWriter
         return new SunderStackContentIndexEntry(
             relativePath,
             Convert.ToHexString(hash).ToLowerInvariant(),
-            stream.Length,
-            ResolveRole(relativePath));
-    }
-
-    private static string ResolveRole(string relativePath)
-    {
-        if (relativePath.StartsWith("payload/fragments/", StringComparison.OrdinalIgnoreCase))
-        {
-            return "stack-fragment";
-        }
-
-        if (relativePath.StartsWith("payload/files/", StringComparison.OrdinalIgnoreCase))
-        {
-            return "stack-file";
-        }
-
-        if (relativePath.StartsWith("manifest/", StringComparison.OrdinalIgnoreCase))
-        {
-            return "manifest";
-        }
-
-        return "file";
+            stream.Length);
     }
 
     private static void ValidateArchiveRelativePath(string path)

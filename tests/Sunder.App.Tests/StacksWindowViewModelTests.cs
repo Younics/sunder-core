@@ -33,6 +33,68 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task RegistrySearchText_WhenMarketplaceMode_SearchesRegistryAfterThrottle()
+    {
+        var root = CreateTempDirectory();
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack")],
+        };
+        using var viewModel = CreateViewModel(root, registryClient, registrySearchThrottleDelay: TimeSpan.FromMilliseconds(40));
+
+        viewModel.RegistrySearchText = " team ";
+
+        await Task.Delay(10);
+        Assert.Empty(registryClient.StackSearchQueries);
+
+        await WaitForConditionAsync(() => registryClient.StackSearchQueries.Count == 1);
+
+        Assert.Collection(registryClient.StackSearchQueries, query => Assert.Equal("team", query));
+        Assert.Equal("team-stack", Assert.Single(viewModel.RegistryStacks).StackId);
+        Assert.True(viewModel.HasRegistrySearchText);
+    }
+
+    [Fact]
+    public async Task RegistrySearchText_WhenChangedBeforeThrottleElapsed_SearchesOnlyLatestText()
+    {
+        var root = CreateTempDirectory();
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack")],
+        };
+        using var viewModel = CreateViewModel(root, registryClient, registrySearchThrottleDelay: TimeSpan.FromMilliseconds(50));
+
+        viewModel.RegistrySearchText = "t";
+        await Task.Delay(10);
+        viewModel.RegistrySearchText = "team";
+
+        await WaitForConditionAsync(() => registryClient.StackSearchQueries.Count == 1);
+
+        Assert.Collection(registryClient.StackSearchQueries, query => Assert.Equal("team", query));
+    }
+
+    [Fact]
+    public async Task RegistrySortOption_WhenChanged_SearchesWithSelectedSort()
+    {
+        var root = CreateTempDirectory();
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack")],
+        };
+        using var viewModel = CreateViewModel(root, registryClient);
+
+        await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
+        viewModel.SelectedRegistrySortOption = viewModel.RegistrySortOptions.Single(option => option.Sort == RegistrySearchSort.Stars);
+
+        await WaitForConditionAsync(() => registryClient.StackSearchSorts.Count == 2);
+
+        Assert.Collection(
+            registryClient.StackSearchSorts,
+            sort => Assert.Equal(RegistrySearchSort.Downloads, sort),
+            sort => Assert.Equal(RegistrySearchSort.Stars, sort));
+    }
+
+    [Fact]
     public async Task SearchRegistryStacksCommand_LoadsSelectedRegistryStackDetails()
     {
         var root = CreateTempDirectory();
@@ -45,15 +107,20 @@ public sealed class StacksWindowViewModelTests
 
         viewModel.ShowMarketplaceCommand.Execute(null);
         await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => viewModel.RegistrySelectedPackages.Count == 1);
+        await WaitForConditionAsync(() => viewModel.RegistrySelectedDetails.Count == 1);
 
         Assert.True(viewModel.IsMarketplaceMode);
         Assert.True(viewModel.ShowRegistrySelectedDetails);
         Assert.Equal("Team Stack", viewModel.SelectedRegistryStackTitle);
-        Assert.Contains("private text", viewModel.SelectedRegistryStackSafetyText, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("sunder.package.agent", Assert.Single(viewModel.RegistrySelectedPackages).PackageId);
-        Assert.Equal("Agent profile", Assert.Single(viewModel.RegistrySelectedFragments).DisplayName);
-        Assert.Equal("API key (Secret)", Assert.Single(viewModel.RegistrySelectedRequiredInputs));
+        var detailPackage = Assert.Single(viewModel.RegistrySelectedDetails);
+        Assert.Equal("sunder.package.agent", detailPackage.PackageId);
+        var group = Assert.Single(detailPackage.ItemGroups);
+        Assert.Equal("Agent Profiles", group.DisplayName);
+        var item = Assert.Single(group.Items);
+        Assert.Equal("Agent profile", item.DisplayName);
+        Assert.Equal("Custom instructions", Assert.Single(item.Values).Label);
+        Assert.Equal("API key", Assert.Single(viewModel.RegistrySelectedRequiredInputs));
     }
 
     [Fact]
@@ -144,6 +211,42 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task PublishedLocalStack_LoadsStatsAndCanToggleStar()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack");
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        await library.ImportAsync(stackPath);
+        await library.UpdatePublishStateAsync(
+            "team-stack",
+            "https://registry.example/",
+            "published-team-stack",
+            DateTimeOffset.UtcNow.AddDays(-1),
+            DateTimeOffset.UtcNow.AddDays(-1));
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackDetails = CreateRegistryStackDetails("published-team-stack", "Team Stack", new RegistryStackStats(5, 2, false)),
+            StarStackResponse = new RegistryStackStarResponse(true, "Starred Stack.", new RegistryStackStats(5, 3, true), []),
+        };
+        using var viewModel = CreateViewModel(
+            root,
+            registryClient,
+            library,
+            registryUrl => new RegistryAuthToken(registryUrl.ToString(), "token-123", "owner", DateTimeOffset.UtcNow.AddHours(1)));
+        viewModel.ShowLocalCommand.Execute(null);
+
+        await viewModel.InitializeAsync();
+        await WaitForConditionAsync(() => viewModel.SelectedStackStatsText.Contains("5 downloads", StringComparison.Ordinal));
+        await viewModel.ToggleSelectedStackStarCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.ShowSelectedStackStats);
+        Assert.Equal("3 stars · 5 downloads", viewModel.SelectedStackStatsText);
+        Assert.Equal("Unstar", viewModel.SelectedStackStarActionText);
+        Assert.Equal("published-team-stack", registryClient.LastStarStackId);
+        Assert.Equal("token-123", registryClient.LastStarToken);
+    }
+
+    [Fact]
     public async Task DeleteSelectedRegistryStackCommand_UsesSavedRegistryTokenAndRemovesResult()
     {
         var root = CreateTempDirectory();
@@ -164,6 +267,32 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal("token-123", registryClient.LastDeleteToken);
         Assert.Empty(viewModel.RegistryStacks);
         Assert.Contains("Deleted Stack", viewModel.StatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MarketplaceStack_CanToggleStar()
+    {
+        var root = CreateTempDirectory();
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack", new RegistryStackStats(4, 1, false))],
+            StackDetails = CreateRegistryStackDetails("team-stack", "Team Stack", new RegistryStackStats(4, 1, false)),
+            StarStackResponse = new RegistryStackStarResponse(true, "Starred Stack.", new RegistryStackStats(4, 2, true), []),
+        };
+        using var viewModel = CreateViewModel(
+            root,
+            registryClient,
+            tokenProvider: registryUrl => new RegistryAuthToken(registryUrl.ToString(), "token-123", "owner", DateTimeOffset.UtcNow.AddHours(1)));
+
+        await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => viewModel.SelectedRegistryStackStatsText.Contains("4 downloads", StringComparison.Ordinal));
+        await viewModel.ToggleSelectedRegistryStackStarCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.ShowRegistryStackStats);
+        Assert.Equal("2 stars · 4 downloads", viewModel.SelectedRegistryStackStatsText);
+        Assert.Equal("Unstar", viewModel.SelectedRegistryStackStarActionText);
+        Assert.Equal("team-stack", registryClient.LastStarStackId);
+        Assert.Equal("token-123", registryClient.LastStarToken);
     }
 
     [Fact]
@@ -190,13 +319,10 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal(2, viewModel.PackageGroups.Count);
         Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "sunder.package.agent" && group.Items.Count == 2);
         Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "sunder.package.agent.tools" && group.Items.Count == 1);
-        Assert.All(viewModel.PackageGroups, group => Assert.True(group.IsSelected));
-        Assert.All(viewModel.PackageGroups.SelectMany(group => group.Items), item => Assert.False(item.IsSelected));
-        Assert.Equal(0, viewModel.SelectedItemCount);
-        Assert.True(viewModel.CanGoNext);
-
-        viewModel.UnselectAllPackagesCommand.Execute(null);
         Assert.All(viewModel.PackageGroups, group => Assert.False(group.IsSelected));
+        Assert.All(viewModel.PackageGroups.SelectMany(group => group.Items), item => Assert.False(item.IsSelected));
+        Assert.Equal(0, viewModel.SelectedPackageCount);
+        Assert.Equal(0, viewModel.SelectedItemCount);
         Assert.False(viewModel.CanGoNext);
         viewModel.SelectAllPackagesCommand.Execute(null);
         Assert.All(viewModel.PackageGroups, group => Assert.True(group.IsSelected));
@@ -204,7 +330,7 @@ public sealed class StacksWindowViewModelTests
 
         viewModel.NextCommand.Execute(null);
 
-        Assert.False(viewModel.CanGoNext);
+        Assert.True(viewModel.CanGoNext);
         var agentGroup = viewModel.PackageGroups.First(group => group.PackageId == "sunder.package.agent");
         Assert.Equal(["Agent Profiles", "Agent Workspaces"], agentGroup.ItemGroups.Select(group => group.DisplayName));
         agentGroup.SelectAllItemsCommand.Execute(null);
@@ -213,7 +339,42 @@ public sealed class StacksWindowViewModelTests
         Assert.True(viewModel.CanGoNext);
         agentGroup.UnselectAllItemsCommand.Execute(null);
         Assert.Equal("0/2 items", agentGroup.CountText);
-        Assert.False(viewModel.CanGoNext);
+        Assert.True(viewModel.CanGoNext);
+    }
+
+    [Fact]
+    public async Task CreateStackWizard_HidesZeroItemPackagesOnItemsStepAndShowsThemInReview()
+    {
+        var root = CreateTempDirectory();
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ActivePackages =
+            [
+                CreateActivePackage("sunder.package.agent.tools.shell", "Sunder Agent Tools Shell"),
+                CreateActivePackage("sunder.package.agent.tools.web", "Sunder Agent Tools Web"),
+            ],
+        };
+        var viewModel = new CreateStackWizardViewModel(
+            new LocalStackLibraryService(Path.Combine(root, "library")),
+            runtimeApiClient);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(2, viewModel.PackageGroups.Count);
+        Assert.All(viewModel.PackageGroups, group => Assert.Empty(group.Items));
+        Assert.All(viewModel.PackageGroups, group => Assert.Contains("No setup items", group.ContentSummary, StringComparison.Ordinal));
+        viewModel.SelectAllPackagesCommand.Execute(null);
+        viewModel.NextCommand.Execute(null);
+        Assert.Equal(0, viewModel.SelectedItemCount);
+        Assert.False(viewModel.HasSelectedPackagesWithItems);
+        Assert.True(viewModel.ShowNoItemsStepPackages);
+        Assert.True(viewModel.CanGoNext);
+
+        viewModel.NextCommand.Execute(null);
+
+        Assert.True(viewModel.IsReviewStep);
+        Assert.All(viewModel.PackageGroups, group => Assert.True(group.ShowReviewNoSelectedItems));
+        Assert.All(viewModel.PackageGroups, group => Assert.Contains("Package will be installed", group.ReviewNoSelectedItemsText, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -227,10 +388,10 @@ public sealed class StacksWindowViewModelTests
                     "sunder.package.agent",
                     "profile",
                     "Agent profile",
-                    ["PrivateText", "NetworkEndpoint"],
+                    ["Public", "Secret"],
                     [
-                        new RuntimeStackExportItemDetail("Custom instructions", "Use a concise tone.", "PrivateText", ValueWhenExcluded: "Not exported"),
-                        new RuntimeStackExportItemDetail("Provider connections", "OpenAI", "NetworkEndpoint", ValueWhenExcluded: "Not exported", SupportsAskOnImport: true),
+                        new RuntimeStackExportItemDetail("Custom instructions", "Use a concise tone.", "Public", ValueWhenExcluded: "Not exported"),
+                        new RuntimeStackExportItemDetail("Provider connections", "OpenAI", "Secret", ValueWhenExcluded: "Not exported", SupportsAskOnImport: true),
                     ])],
                 [],
                 []),
@@ -243,7 +404,7 @@ public sealed class StacksWindowViewModelTests
 
         var item = Assert.Single(Assert.Single(viewModel.PackageGroups).Items);
         Assert.Contains("Provider connections", item.SummaryText, StringComparison.Ordinal);
-        Assert.Contains("network", item.SafetyChips);
+        Assert.Contains("secret prompt", item.SecretChips);
         var instructions = Assert.Single(item.Details, detail => detail.Label == "Custom instructions");
         Assert.Equal("Use a concise tone.", instructions.Value);
         Assert.Equal("Include value", Assert.Single(instructions.AvailableExportBehaviors));
@@ -263,14 +424,47 @@ public sealed class StacksWindowViewModelTests
         Assert.Contains("Ask on import", provider.AvailableExportBehaviors);
         provider.SelectedExportBehavior = "Ask on import";
         Assert.Equal("ask on import", provider.FlagText);
-        Assert.Equal("Secret", provider.SensitivityOverride);
+        Assert.Null(provider.SensitivityOverride);
         Assert.Equal("Importer will provide this value.", provider.EffectiveValue);
         provider.SelectedExportBehavior = "Include value";
         provider.EditedValue = "OpenAI shared endpoint";
         Assert.False(provider.HasFlagText);
         Assert.Equal("OpenAI shared endpoint", provider.ValueOverride);
-        Assert.Null(provider.SensitivityOverride);
+        Assert.Equal("Public", provider.SensitivityOverride);
         Assert.DoesNotContain("contributor", item.SummaryText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CreateStackWizard_ReviewGroupsOnlyIncludeSelectedItems()
+    {
+        var root = CreateTempDirectory();
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
+                [
+                    CreateExportItem("sunder.package.agent", "profile", "Agent profile", kind: "agent-profile"),
+                    CreateExportItem("sunder.package.agent", "workspace", "Agent workspace", kind: "agent-workspace"),
+                ],
+                [],
+                []),
+        };
+        var viewModel = new CreateStackWizardViewModel(
+            new LocalStackLibraryService(Path.Combine(root, "library")),
+            runtimeApiClient);
+
+        await viewModel.InitializeAsync();
+
+        var packageGroup = Assert.Single(viewModel.PackageGroups);
+        packageGroup.IsSelected = true;
+        packageGroup.Items.Single(item => item.ItemId == "profile").IsSelected = true;
+
+        var includedGroup = Assert.Single(packageGroup.ItemGroups, group => group.Kind == "agent-profile");
+        var emptyGroup = Assert.Single(packageGroup.ItemGroups, group => group.Kind == "agent-workspace");
+        Assert.True(includedGroup.IsIncludedInReview);
+        Assert.Equal("1 item", includedGroup.ReviewCountText);
+        Assert.Equal("profile", Assert.Single(includedGroup.ReviewItems).ItemId);
+        Assert.False(emptyGroup.IsIncludedInReview);
+        Assert.Empty(emptyGroup.ReviewItems);
     }
 
     [Fact]
@@ -290,8 +484,10 @@ public sealed class StacksWindowViewModelTests
         {
             StackId = "team-stack",
             StackName = "Team Stack",
+            StackShortDescription = "Team setup\nfor coding agents",
         };
         await viewModel.InitializeAsync();
+        viewModel.SelectAllPackagesCommand.Execute(null);
         viewModel.NextCommand.Execute(null);
         Assert.Single(viewModel.PackageGroups).SelectAllItemsCommand.Execute(null);
         Assert.Single(Assert.Single(viewModel.PackageGroups).Items).Details[0].EditedValue = "Edited setup detail";
@@ -302,6 +498,10 @@ public sealed class StacksWindowViewModelTests
         Assert.NotNull(runtimeApiClient.LastExportRequest);
         Assert.Equal("team-stack", runtimeApiClient.LastExportRequest.StackId);
         Assert.Equal("Team Stack", runtimeApiClient.LastExportRequest.Name);
+        Assert.Null(runtimeApiClient.LastExportRequest.ReadmeMarkdown);
+        Assert.Equal("Team setup\nfor coding agents", runtimeApiClient.LastExportRequest.Summary);
+        Assert.Null(runtimeApiClient.LastExportRequest.Media);
+        Assert.Equal(["sunder.package.agent"], runtimeApiClient.LastExportRequest.SelectedPackages);
         var selectedItem = Assert.Single(runtimeApiClient.LastExportRequest.SelectedItems);
         var selectedDetail = Assert.Single(selectedItem.Details ?? []);
         Assert.True(selectedDetail.IsSelected);
@@ -317,6 +517,80 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal("Setup item", detailValue.Label);
         Assert.Equal("Edited setup detail", detailValue.Value);
         Assert.Equal("team-stack", viewModel.CreatedStackId);
+    }
+
+    [Fact]
+    public async Task CreateStackWizard_CreateCommand_AllowsPackageOnlyStack()
+    {
+        var root = CreateTempDirectory();
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ActivePackages = [CreateActivePackage("sunder.package.agent.tools.shell", "Sunder Agent Tools Shell")],
+            WriteArchiveOnExport = true,
+        };
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var viewModel = new CreateStackWizardViewModel(library, runtimeApiClient)
+        {
+            StackId = "tools-stack",
+            StackName = "Tools Stack",
+        };
+        await viewModel.InitializeAsync();
+        viewModel.SelectAllPackagesCommand.Execute(null);
+        viewModel.NextCommand.Execute(null);
+        Assert.True(viewModel.CanGoNext);
+        viewModel.NextCommand.Execute(null);
+        Assert.True(viewModel.CanCreate);
+
+        await viewModel.CreateCommand.ExecuteAsync(null);
+
+        Assert.NotNull(runtimeApiClient.LastExportRequest);
+        Assert.Empty(runtimeApiClient.LastExportRequest.SelectedItems);
+        Assert.Equal(["sunder.package.agent.tools.shell"], runtimeApiClient.LastExportRequest.SelectedPackages);
+        var stack = Assert.Single(await library.ListAsync());
+        Assert.Equal("tools-stack", stack.StackId);
+    }
+
+    [Fact]
+    public async Task UseStackWizard_ExposesReadOnlyProfileMediaAndMarkdown()
+    {
+        var root = CreateTempDirectory();
+        var mediaPath = Path.Combine(root, "hero.png");
+        await File.WriteAllBytesAsync(mediaPath, [1, 2, 3, 4]);
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: false);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = (await library.ImportAsync(stackPath)) with
+        {
+            ReadmeMarkdown = "# Team Stack\n\nUse this setup.",
+            Media =
+            [
+                new LocalStackMedia(
+                    "payload/media/hero.png",
+                    "hero.png",
+                    "image/png",
+                    4,
+                    "Hero image",
+                    0,
+                    mediaPath),
+            ],
+        };
+        var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            new FakeRuntimeApiClient(),
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.HasStackReadme);
+        Assert.True(viewModel.HasStackProfileMedia);
+        Assert.True(viewModel.StackReadmeMarkdownBuilder.Length > 0);
+        var media = Assert.Single(viewModel.StackProfileMedia);
+        Assert.Equal("Hero image", media.Caption);
+        Assert.Equal("hero.png", media.FileName);
     }
 
     [Fact]
@@ -414,7 +688,7 @@ public sealed class StacksWindowViewModelTests
                 [
                     new RuntimeStackImportActionDescriptor("profile", "agent", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
                 ],
-                [new RuntimeStackRequiredInputDescriptor("api-key", "agent", "Secret", "API key", true, "Provider key.")],
+                [new RuntimeStackRequiredInputDescriptor("api-key", "agent", "API key", true, "Provider key.")],
                 [],
                 [],
                 []),
@@ -431,6 +705,7 @@ public sealed class StacksWindowViewModelTests
             runtimeApiClient,
             new RegistryPackageInstallService(),
             (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
 
@@ -472,6 +747,7 @@ public sealed class StacksWindowViewModelTests
             new FakeRuntimeApiClient(),
             new RegistryPackageInstallService(),
             (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
 
@@ -552,6 +828,7 @@ public sealed class StacksWindowViewModelTests
                 runtimeApiClient.Events.Add("lifecycle:" + string.Join(",", packageIds));
                 return Task.CompletedTask;
             },
+            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => registryClient,
             "https://registry.example/");
 
@@ -577,37 +854,50 @@ public sealed class StacksWindowViewModelTests
         FakeRegistryApiClient registryClient,
         LocalStackLibraryService? library = null,
         Func<Uri, RegistryAuthToken?>? tokenProvider = null,
-        FakeRuntimeApiClient? runtimeApiClient = null)
+        FakeRuntimeApiClient? runtimeApiClient = null,
+        TimeSpan? registrySearchThrottleDelay = null)
         => new(
             library ?? new LocalStackLibraryService(Path.Combine(root, "library")),
             new FakeStackArchivePicker(),
             runtimeApiClient ?? new FakeRuntimeApiClient(),
             registryClientFactory: _ => registryClient,
-            registryTokenProvider: tokenProvider ?? (_ => null));
+            registryTokenProvider: tokenProvider ?? (_ => null),
+            registrySearchThrottleDelay: registrySearchThrottleDelay);
 
-    private static RegistryStackSummary CreateRegistryStackSummary(string stackId, string name)
+    private static RegistryStackSummary CreateRegistryStackSummary(string stackId, string name, RegistryStackStats? stats = null)
         => new(
             stackId,
             name,
             "A shared Stack.",
             PackageCount: 1,
             FragmentCount: 0,
-            new RegistryStackSafety(false, false, false, true, false, false, false),
             DateTimeOffset.UtcNow.AddDays(-1),
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            stats);
 
-    private static RegistryStackDetails CreateRegistryStackDetails(string stackId, string name)
+    private static RegistryStackDetails CreateRegistryStackDetails(string stackId, string name, RegistryStackStats? stats = null)
         => new(
             stackId,
             name,
             "A shared Stack.",
             [new RegistryStackPackageRequirement("sunder.package.agent", "latest", null, "1.0.0", true)],
-            [new RegistryStackFragmentSummary("agent-profile", "sunder.package.agent", "sunder.package.agent.profile", "sunder.package.agent/profile", 1, "Agent profile", "Profile settings.", true)],
-            [new RegistryStackRequiredInput("api-key", "Secret", "API key", "Provider key.", true)],
-            new RegistryStackSafety(false, false, false, true, false, false, false),
+            [new RegistryStackFragmentSummary(
+                "agent-profile",
+                "sunder.package.agent",
+                "sunder.package.agent.profile",
+                "sunder.package.agent/profile",
+                1,
+                "Agent profile",
+                "Profile settings.",
+                true,
+                "profile",
+                "agent-profile",
+                [new RegistryStackFragmentDetail("Custom instructions", "Use a concise tone.", "Include value")])],
+            [new RegistryStackRequiredInput("api-key", "API key", "Provider key.", true)],
             new RegistryStackArtifact("", 0, $"https://registry.example/api/stacks/{stackId}/download"),
             DateTimeOffset.UtcNow.AddDays(-1),
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            stats);
 
     private static RuntimeStackExportItemDescriptor CreateExportItem(
         string ownerPackageId,
@@ -626,6 +916,9 @@ public sealed class StacksWindowViewModelTests
             sensitivities ?? [],
             "Exportable setup item.",
             details ?? []);
+
+    private static ActivePackageDescriptor CreateActivePackage(string packageId, string displayName)
+        => new(packageId, displayName, "1.0.0", null, true, PackageReadinessState.Ready, []);
 
     private static async Task<string> CreateStackArchiveAsync(
         string root,
@@ -649,44 +942,47 @@ public sealed class StacksWindowViewModelTests
                 new SunderStackFragmentManifest
                 {
                     FragmentId = "agent-profile",
-                    SourceItemId = "profile",
                     OwnerPackageId = "sunder.package.agent",
                     ContributorId = "agent",
                     SchemaId = "agent.profile",
                     SchemaVersion = 1,
-                    Kind = "agent-profile",
                     DisplayName = includeDisplayDetails ? "Blender Artist" : "Agent profile",
                     Description = "Profile settings.",
                     DefaultSelected = false,
                     PayloadPath = "payload/fragments/agent-profile.json",
                     RequiredInputs = includeRequiredInput
-                        ? [new SunderStackRequiredInputManifest { InputId = "api-key", Kind = "Secret", Label = "API key", Required = true }]
+                        ? [new SunderStackRequiredInputManifest { InputId = "api-key", Label = "API key", Required = true }]
                         : [],
-                    DisplayDetails = includeDisplayDetails
-                        ?
-                        [
-                            new SunderStackFragmentDisplayDetail
-                            {
-                                Label = "Custom instructions",
-                                Value = "Use a concise tone.",
-                                Behavior = "Include value",
-                            },
-                            new SunderStackFragmentDisplayDetail
-                            {
-                                Label = "Provider connections",
-                                Value = "Importer will provide this value.",
-                                Behavior = "Ask on import",
-                            },
-                        ]
-                        : [],
-                    Safety = new SunderStackSafetyManifest(),
+                    Preview = new SunderStackFragmentPreview
+                    {
+                        SourceItemId = "profile",
+                        Kind = "agent-profile",
+                        DisplayDetails = includeDisplayDetails
+                            ?
+                            [
+                                new SunderStackFragmentDisplayDetail
+                                {
+                                    Label = "Custom instructions",
+                                    Value = "Use a concise tone.",
+                                    Behavior = "Include value",
+                                },
+                                new SunderStackFragmentDisplayDetail
+                                {
+                                    Label = "Provider connections",
+                                    Value = "Importer will provide this value.",
+                                    Behavior = "Ask on import",
+                                },
+                            ]
+                            : [],
+                    },
                 },
             ];
         }
 
         await SunderStackArchiveWriter.WriteAsync(new SunderStackManifest
         {
-            SchemaVersion = 1,
+            SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
+            MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
             StackId = stackId,
             Name = name,
             Summary = "A shared Stack.",
@@ -705,11 +1001,6 @@ public sealed class StacksWindowViewModelTests
                 ]
                 : [],
             Fragments = fragments,
-            RequiredInputs = [],
-            Safety = new SunderStackSafetyManifest
-            {
-                ContainsPrivateText = true,
-            },
         }, path, payloadFiles);
         return path;
     }
@@ -735,6 +1026,7 @@ public sealed class StacksWindowViewModelTests
             LastSuggestedFileName = suggestedFileName;
             return Task.FromResult(StackSavePath);
         }
+
     }
 
     private sealed class FakeRegistryApiClient : IRegistryApiClient
@@ -749,6 +1041,10 @@ public sealed class StacksWindowViewModelTests
 
         public string? LastStackSearchQuery { get; private set; }
 
+        public List<string?> StackSearchQueries { get; } = [];
+
+        public List<RegistrySearchSort> StackSearchSorts { get; } = [];
+
         public string? LastDownloadedStackId { get; private set; }
 
         public string? LastPublishToken { get; private set; }
@@ -759,7 +1055,19 @@ public sealed class StacksWindowViewModelTests
 
         public string? LastDeleteToken { get; private set; }
 
+        public string? LastStarStackId { get; private set; }
+
+        public string? LastStarToken { get; private set; }
+
+        public string? LastUnstarStackId { get; private set; }
+
+        public string? LastUnstarToken { get; private set; }
+
         public RegistryStackManagementOperationResponse DeleteStackResponse { get; init; } = new(true, "Deleted Stack.", []);
+
+        public RegistryStackStarResponse StarStackResponse { get; init; } = new(true, "Starred Stack.", new RegistryStackStats(0, 1, true), []);
+
+        public RegistryStackStarResponse UnstarStackResponse { get; init; } = new(true, "Unstarred Stack.", new RegistryStackStats(0, 0, false), []);
 
         public IReadOnlyList<RegistryResolveInstallPlanResponse> InstallPlanResponses { get; init; } = [new(true, [], [], [], [])];
 
@@ -767,7 +1075,7 @@ public sealed class StacksWindowViewModelTests
 
         private int _installPlanResponseIndex;
 
-        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<RegistryPackageSummary>>([]);
 
         public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)
@@ -776,13 +1084,18 @@ public sealed class StacksWindowViewModelTests
         public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken cancellationToken = default)
             => Task.FromResult<RegistryPackageVersionDetails?>(null);
 
-        public Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
         {
             LastStackSearchQuery = query;
+            StackSearchQueries.Add(query);
+            StackSearchSorts.Add(sort);
             return Task.FromResult<IReadOnlyList<RegistryStackSummary>>(StackSearchResults.Skip(skip).Take(take).ToArray());
         }
 
         public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken cancellationToken = default)
+            => Task.FromResult(StackDetails);
+
+        public Task<RegistryStackDetails?> GetStackAsync(string stackId, string bearerToken, CancellationToken cancellationToken = default)
             => Task.FromResult(StackDetails);
 
         public Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(RegistryResolveUpdatesRequest request, CancellationToken cancellationToken = default)
@@ -824,6 +1137,20 @@ public sealed class StacksWindowViewModelTests
             LastDeleteStackId = stackId;
             LastDeleteToken = bearerToken;
             return Task.FromResult(DeleteStackResponse);
+        }
+
+        public Task<RegistryStackStarResponse> StarStackAsync(string stackId, string bearerToken, CancellationToken cancellationToken = default)
+        {
+            LastStarStackId = stackId;
+            LastStarToken = bearerToken;
+            return Task.FromResult(StarStackResponse);
+        }
+
+        public Task<RegistryStackStarResponse> UnstarStackAsync(string stackId, string bearerToken, CancellationToken cancellationToken = default)
+        {
+            LastUnstarStackId = stackId;
+            LastUnstarToken = bearerToken;
+            return Task.FromResult(UnstarStackResponse);
         }
 
         public void Dispose()
@@ -941,10 +1268,11 @@ public sealed class StacksWindowViewModelTests
             LastExportRequest = request;
             if (WriteArchiveOnExport)
             {
-                var selectedPackages = ExportDiscoveryResponse.Items
+                var selectedPackages = (request.SelectedPackages ?? [])
+                    .Concat(ExportDiscoveryResponse.Items
                     .Where(item => request.SelectedItems.Any(selected => string.Equals(selected.ContributorId, item.ContributorId, StringComparison.Ordinal)
-                                                               && string.Equals(selected.ItemId, item.ItemId, StringComparison.Ordinal)))
-                    .Select(item => item.OwnerPackageId)
+                                                                && string.Equals(selected.ItemId, item.ItemId, StringComparison.Ordinal)))
+                    .Select(item => item.OwnerPackageId))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Select(packageId => new SunderStackPackageRequirement
                     {
@@ -959,13 +1287,21 @@ public sealed class StacksWindowViewModelTests
                     StackId = request.StackId,
                     Name = request.Name,
                     Summary = request.Summary,
+                    ReadmeMarkdown = request.ReadmeMarkdown,
                     CreatedAtUtc = DateTimeOffset.UtcNow,
                     UpdatedAtUtc = DateTimeOffset.UtcNow,
                     Packages = selectedPackages,
                     Fragments = [],
-                    RequiredInputs = [],
-                    Safety = new SunderStackSafetyManifest(),
-                }, request.OutputPath, cancellationToken: cancellationToken);
+                    Media = request.Media?.Select(media => new SunderStackMediaManifest
+                    {
+                        Path = media.ArchivePath,
+                        FileName = media.FileName,
+                        ContentType = media.ContentType,
+                        Size = new FileInfo(media.SourcePath).Length,
+                        AltText = media.AltText,
+                        SortOrder = media.SortOrder,
+                    }).ToArray(),
+                }, request.OutputPath, request.Media?.ToDictionary(media => media.ArchivePath, media => media.SourcePath) ?? [], cancellationToken);
             }
 
             return new RuntimeStackExportResponse(true, request.OutputPath, [], []);

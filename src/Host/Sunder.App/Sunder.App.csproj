@@ -21,6 +21,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
+    <PackageReference Include="AsyncImageLoader.Avalonia" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="LiveMarkdown.Avalonia" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />

@@ -63,6 +63,14 @@
     <Setter Property="Stretch" Value="Uniform" />
   </Style>
 
+  <Style Selector="Path.star-icon">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="Stretch" Value="Uniform" />
+    <Setter Property="Stroke" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    <Setter Property="StrokeLineCap" Value="Round" />
+    <Setter Property="StrokeThickness" Value="1.55" />
+  </Style>
+
   <Style Selector="Ellipse.toolbar-dot">
     <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
   </Style>
@@ -252,6 +260,58 @@
     <Setter Property="Padding" Value="12" />
   </Style>
 
+  <Style Selector="Border.wizard-step-card">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+    <Setter Property="Padding" Value="10" />
+  </Style>
+
+  <Style Selector="Border.wizard-step-card.ready">
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Shell.Glass.Border.Strong}" />
+  </Style>
+
+  <Style Selector="Border.wizard-step-card.active">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Shell.Glass.Surface}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
+  <Style Selector="Border.wizard-step-number">
+    <Setter Property="Width" Value="26" />
+    <Setter Property="Height" Value="26" />
+    <Setter Property="CornerRadius" Value="13" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="Border.wizard-step-card.active Border.wizard-step-number">
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
+  <Style Selector="Border.wizard-step-number TextBlock">
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Border.wizard-step-card.active Border.wizard-step-number TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="TextBlock.wizard-step-title">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.wizard-step-status">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
+    <Setter Property="FontSize" Value="11" />
+  </Style>
+
   <Style Selector="Border.stack-wizard-card">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
@@ -365,6 +425,7 @@
     <Setter Property="CornerRadius" Value="11" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Shell.Glass.Border.Strong}" />
     <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="ClipToBounds" Value="True" />
   </Style>
 
   <Style Selector="Border.registry-avatar.large">
@@ -383,6 +444,10 @@
 
   <Style Selector="TextBlock.registry-avatar-text.large">
     <Setter Property="FontSize" Value="15" />
+  </Style>
+
+  <Style Selector="Image.registry-avatar-image">
+    <Setter Property="Stretch" Value="UniformToFill" />
   </Style>
 
   <Style Selector="Button.mac-window-action-button">
@@ -514,6 +579,32 @@
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.star-action">
+    <Setter Property="Width" Value="36" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="MinWidth" Value="36" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.star-action.starred">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Accent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.OnAccent}" />
+  </Style>
+
+  <Style Selector="Button.star-action.starred:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Info}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.OnAccent}" />
+  </Style>
+
+  <Style Selector="Button.star-action.starred Path.star-icon">
+    <Setter Property="Fill" Value="{DynamicResource Sunder.Brush.Foreground.OnAccent}" />
+    <Setter Property="Stroke" Value="{DynamicResource Sunder.Brush.Foreground.OnAccent}" />
   </Style>
 
   <Style Selector="TextBlock.runtime-error-text">

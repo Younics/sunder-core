@@ -29,16 +29,8 @@ public sealed record StackExportItemDetail(
     bool SupportsAskOnImport = false);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-public sealed record StackExportOptions(
-    bool IncludePrivateText = true,
-    bool IncludeMachineSpecificValues = false,
-    bool IncludeExecutableCommands = true,
-    bool IncludeNetworkEndpoints = true);
-
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackExportRequest(
     IReadOnlyList<string> ItemIds,
-    StackExportOptions Options,
     IReadOnlyList<StackExportItemSelection>? ItemSelections = null);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
@@ -94,18 +86,15 @@ public sealed record StackExportContribution(
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackFragmentExport(
     string FragmentId,
-    string OwnerPackageId,
     string ContributorId,
     string SchemaId,
     int SchemaVersion,
     string DisplayName,
     string JsonPayload,
-    StackSafetyDescriptor Safety,
     string? Description = null,
     bool DefaultSelected = true,
-    IReadOnlyList<StackPackageRequirement>? RequiresPackages = null,
     IReadOnlyList<StackRequiredInputDescriptor>? RequiredInputs = null,
-    IReadOnlyList<StackPayloadFile>? Files = null,
+    IReadOnlyList<StackExportPayloadFile>? Files = null,
     string? SourceItemId = null);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
@@ -118,12 +107,17 @@ public sealed record StackFragmentImport(
     string DisplayName,
     string JsonPayload,
     string? Description = null,
-    IReadOnlyList<StackPayloadFile>? Files = null);
+    IReadOnlyList<StackImportPayloadFile>? Files = null);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-public sealed record StackPayloadFile(
+public sealed record StackExportPayloadFile(
     string RelativePath,
     string SourcePath);
+
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+public sealed record StackImportPayloadFile(
+    string RelativePath,
+    string ExtractedPath);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackPackageRequirement(
@@ -136,21 +130,10 @@ public sealed record StackPackageRequirement(
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackRequiredInputDescriptor(
     string InputId,
-    StackRequiredInputKind Kind,
     string Label,
     bool Required = true,
     string? Description = null,
     string? DefaultValue = null);
-
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-public sealed record StackSafetyDescriptor(
-    bool ContainsSecrets = false,
-    bool ContainsSecretReferences = false,
-    bool ContainsLocalPaths = false,
-    bool ContainsPrivateText = false,
-    bool ContainsExecutableCommands = false,
-    bool ContainsNetworkEndpoints = false,
-    bool ContainsMachineSpecificValues = false);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackImportPreviewRequest(
@@ -202,26 +185,17 @@ public sealed record StackImportedItem(
     string Kind);
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+public sealed record StackImportAppliedContext(
+    string OwnerPackageId,
+    string ContributorId,
+    IReadOnlyList<string> FragmentIds,
+    IReadOnlyList<StackImportedItem> ImportedItems);
+
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public enum StackValueSensitivity
 {
     Public,
-    PrivateText,
     Secret,
-    AuthSession,
-    LocalPath,
-    NetworkEndpoint,
-    ExecutableCommand,
-    MachineSpecific,
-}
-
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-public enum StackRequiredInputKind
-{
-    Text,
-    Secret,
-    LocalPath,
-    AuthSession,
-    Choice,
 }
 
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]

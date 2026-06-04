@@ -48,6 +48,7 @@ internal sealed class AppPackageHostComposition
         var resolvedSharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         _sharedAssemblyRegistry = resolvedSharedAssemblyRegistry;
         var resolvedExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
+        ExtensionCatalog = resolvedExtensionCatalog;
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(backgroundServices, resolvedBackgroundProcessQueue);
         var serviceProviderFactory = new AppPackageServiceProviderFactory(
@@ -122,6 +123,8 @@ internal sealed class AppPackageHostComposition
     public AppPackageFaultNotifier FaultNotifier { get; }
 
     public AppPackageHostedViewFacade ViewFacade { get; }
+
+    public AppPackageExtensionCatalog ExtensionCatalog { get; }
 
     public Task ApplyPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,

@@ -51,4 +51,5 @@ public sealed class StackArchivePicker(Window owner) : IStackArchivePicker
         cancellationToken.ThrowIfCancellationRequested();
         return file?.TryGetLocalPath();
     }
+
 }

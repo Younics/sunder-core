@@ -8,6 +8,8 @@ namespace Sunder.PackageManagement.Tests;
 
 public sealed class SunderStackArchiveInspectorTests
 {
+    private const string RawApiKey = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDE";
+
     [Fact]
     public async Task ExtractAndValidateAsync_WhenArchiveIsValid_ReturnsManifest()
     {
@@ -30,6 +32,49 @@ public sealed class SunderStackArchiveInspectorTests
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
         Assert.Equal("sunder.stack.agent.fullstack-dev", result.Manifest?.StackId);
         Assert.True(File.Exists(Path.Combine(stagingPath, "payload", "fragments", "agent-profile.fullstack.json")));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_WhenArchiveIncludesValidMedia_ReturnsManifestMedia()
+    {
+        var root = CreateTempDirectory();
+        var payloadPath = Path.Combine(root, "fragment.json");
+        var mediaPath = Path.Combine(root, "hero.png");
+        await File.WriteAllTextAsync(payloadPath, "{\"profileId\":\"fullstack\"}");
+        await File.WriteAllBytesAsync(mediaPath, [1, 2, 3, 4]);
+
+        var archivePath = Path.Combine(root, "valid-media.sunderstack");
+        await SunderStackArchiveWriter.WriteAsync(
+            CreateManifest(
+                readmeMarkdown: "# Fullstack Agent Dev\n\n![Hero](payload/media/hero.png)",
+                media:
+                [
+                    new SunderStackMediaManifest
+                    {
+                        Path = "payload/media/hero.png",
+                        FileName = "hero.png",
+                        ContentType = "image/png",
+                        Size = 4,
+                        AltText = "Hero image",
+                        SortOrder = 0,
+                    },
+                ]),
+            archivePath,
+            new Dictionary<string, string>
+            {
+                ["payload/fragments/agent-profile.fullstack.json"] = payloadPath,
+                ["payload/media/hero.png"] = mediaPath,
+            });
+
+        var stagingPath = Path.Combine(root, "staging");
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, stagingPath);
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        Assert.Equal("# Fullstack Agent Dev\n\n![Hero](payload/media/hero.png)", result.Manifest?.ReadmeMarkdown);
+        var media = Assert.Single(result.Manifest?.Media ?? []);
+        Assert.Equal("hero.png", media.FileName);
+        Assert.Equal("Hero image", media.AltText);
+        Assert.True(File.Exists(Path.Combine(stagingPath, "payload", "media", "hero.png")));
     }
 
     [Fact]
@@ -63,32 +108,6 @@ public sealed class SunderStackArchiveInspectorTests
     }
 
     [Fact]
-    public async Task ExtractAndValidateAsync_WhenFragmentOmitsSafety_ReturnsError()
-    {
-        var root = CreateTempDirectory();
-        var manifest = CreateManifest(omitFragmentSafety: true);
-        var archivePath = CreateStackArchive(root, manifest: manifest);
-
-        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
-
-        Assert.False(result.Success);
-        Assert.Contains(result.Errors, error => error.Contains("missing safety metadata", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task ExtractAndValidateAsync_WhenFragmentDeclaresSecrets_ReturnsWarning()
-    {
-        var root = CreateTempDirectory();
-        var manifest = CreateManifest(new SunderStackSafetyManifest { ContainsSecrets = true });
-        var archivePath = CreateStackArchive(root, manifest: manifest);
-
-        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
-
-        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-        Assert.Contains(result.Warnings, warning => warning.Contains("raw secrets", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
     public async Task ExtractAndValidateAsync_WhenPayloadContainsPrivateKey_ReturnsError()
     {
         var root = CreateTempDirectory();
@@ -108,7 +127,7 @@ public sealed class SunderStackArchiveInspectorTests
         var root = CreateTempDirectory();
         var archivePath = CreateStackArchive(
             root,
-            payloadContent: "{\"apiKey\":\"sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDE\"}");
+            payloadContent: $"{{\"apiKey\":\"{RawApiKey}\"}}");
 
         var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
 
@@ -116,15 +135,44 @@ public sealed class SunderStackArchiveInspectorTests
         Assert.Contains(result.Errors, error => error.Contains("api key", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ExtractAndValidateAsync_WhenManifestContainsRawApiKey_ReturnsError()
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreateStackArchive(root, CreateManifest(summary: RawApiKey));
+
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("manifest/sunder-stack.json", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, error => error.Contains("api key", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_WhenContentIndexContainsRawApiKey_ReturnsError()
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreateStackArchive(root, extraIndexedPath: $"payload/files/{RawApiKey}/note.txt");
+
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("manifest/content-index.json", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, error => error.Contains("api key", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static SunderStackManifest CreateManifest(
-        SunderStackSafetyManifest? fragmentSafety = null,
-        bool omitFragmentSafety = false)
+        string summary = "Agent setup for coding.",
+        string? readmeMarkdown = null,
+        IReadOnlyList<SunderStackMediaManifest>? media = null)
         => new()
         {
-            SchemaVersion = 1,
+            SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
+            MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
             StackId = "sunder.stack.agent.fullstack-dev",
             Name = "Fullstack Agent Dev",
-            Summary = "Agent setup for coding.",
+            Summary = summary,
+            ReadmeMarkdown = readmeMarkdown,
             CreatedAtUtc = DateTimeOffset.UtcNow,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
             Packages =
@@ -151,28 +199,17 @@ public sealed class SunderStackArchiveInspectorTests
                     Description = "A coding profile.",
                     DefaultSelected = true,
                     PayloadPath = "payload/fragments/agent-profile.fullstack.json",
-                    RequiresPackages = ["sunder.package.agent"],
-                    Safety = omitFragmentSafety
-                        ? null
-                        : fragmentSafety ?? new SunderStackSafetyManifest
-                    {
-                        ContainsSecrets = false,
-                        ContainsSecretReferences = false,
-                        ContainsLocalPaths = false,
-                        ContainsPrivateText = true,
-                        ContainsExecutableCommands = false,
-                        ContainsNetworkEndpoints = false,
-                        ContainsMachineSpecificValues = false,
-                    },
                 },
             ],
+            Media = media,
         };
 
     private static string CreateStackArchive(
         string root,
         SunderStackManifest? manifest = null,
         bool corruptHash = false,
-        string payloadContent = "{\"profileId\":\"fullstack\"}")
+        string payloadContent = "{\"profileId\":\"fullstack\"}",
+        string? extraIndexedPath = null)
     {
         var sourceRoot = Path.Combine(root, "stack-source-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
@@ -184,6 +221,13 @@ public sealed class SunderStackArchiveInspectorTests
 
         var payloadPath = Path.Combine(sourceRoot, "payload", "fragments", "agent-profile.fullstack.json");
         File.WriteAllText(payloadPath, payloadContent);
+
+        if (!string.IsNullOrWhiteSpace(extraIndexedPath))
+        {
+            var extraPath = Path.Combine(sourceRoot, extraIndexedPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(extraPath)!);
+            File.WriteAllText(extraPath, "harmless indexed content");
+        }
 
         var contentIndex = new SunderStackContentIndex(
             1,
@@ -210,8 +254,7 @@ public sealed class SunderStackArchiveInspectorTests
         return new SunderStackContentIndexEntry(
             Path.GetRelativePath(sourceRoot, path).Replace('\\', '/'),
             hash,
-            new FileInfo(path).Length,
-            Role: "stack");
+            new FileInfo(path).Length);
     }
 
     private static string CreateTempDirectory()

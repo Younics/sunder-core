@@ -651,7 +651,7 @@ internal sealed class PackageSessionOverlayTestStackContributor(
                 "Test Profile",
                 "test-profile",
                 "A test profile export.",
-                Sensitivities: containsSecrets ? [StackValueSensitivity.Secret] : [StackValueSensitivity.PrivateText])]);
+                Sensitivities: containsSecrets ? [StackValueSensitivity.Secret] : [StackValueSensitivity.Public])]);
 
     public ValueTask<StackExportContribution> ExportAsync(
         StackExportRequest request,
@@ -668,17 +668,12 @@ internal sealed class PackageSessionOverlayTestStackContributor(
             MinimumVersion: "1.0.0");
         var fragment = new StackFragmentExport(
             "test.profile",
-            packageId,
             ContributorId,
             "test/profile",
             1,
             "Test Profile",
             "{\"name\":\"Test Profile\"}",
-            new StackSafetyDescriptor(
-                ContainsSecrets: containsSecrets,
-                ContainsPrivateText: !containsSecrets),
-            "A test profile export.",
-            RequiresPackages: [packageRequirement]);
+            "A test profile export.");
         return ValueTask.FromResult(new StackExportContribution([fragment], [packageRequirement], []));
     }
 

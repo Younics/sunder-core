@@ -45,16 +45,62 @@
                          Text="Build a focused setup preset one step at a time."
                          TextWrapping="Wrap" />
 
-              <Border Classes="settings-note-card">
-                <StackPanel Spacing="8">
-                  <TextBlock Text="1. Packages"
-                             FontWeight="SemiBold" />
-                  <TextBlock Text="2. Items"
-                             FontWeight="SemiBold" />
-                  <TextBlock Text="3. Review"
-                             FontWeight="SemiBold" />
-                </StackPanel>
-              </Border>
+              <StackPanel Spacing="8">
+                <Border Classes="wizard-step-card"
+                        Classes.active="{Binding IsPackagesStep}"
+                        Classes.ready="{Binding PackagesStepComplete}">
+                  <Grid ColumnDefinitions="Auto,*"
+                        ColumnSpacing="10">
+                    <Border Classes="wizard-step-number">
+                      <TextBlock Text="1" />
+                    </Border>
+                    <StackPanel Grid.Column="1"
+                                Spacing="2">
+                      <TextBlock Classes="wizard-step-title"
+                                 Text="Packages" />
+                      <TextBlock Classes="wizard-step-status"
+                                 Text="{Binding PackagesStepStatus}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+                <Border Classes="wizard-step-card"
+                        Classes.active="{Binding IsItemsStep}"
+                        Classes.ready="{Binding ItemsStepComplete}">
+                  <Grid ColumnDefinitions="Auto,*"
+                        ColumnSpacing="10">
+                    <Border Classes="wizard-step-number">
+                      <TextBlock Text="2" />
+                    </Border>
+                    <StackPanel Grid.Column="1"
+                                Spacing="2">
+                      <TextBlock Classes="wizard-step-title"
+                                 Text="Items" />
+                      <TextBlock Classes="wizard-step-status"
+                                 Text="{Binding ItemsStepStatus}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+                <Border Classes="wizard-step-card"
+                        Classes.active="{Binding IsReviewStep}"
+                        Classes.ready="{Binding ReviewStepReady}">
+                  <Grid ColumnDefinitions="Auto,*"
+                        ColumnSpacing="10">
+                    <Border Classes="wizard-step-number">
+                      <TextBlock Text="3" />
+                    </Border>
+                    <StackPanel Grid.Column="1"
+                                Spacing="2">
+                      <TextBlock Classes="wizard-step-title"
+                                 Text="Review" />
+                      <TextBlock Classes="wizard-step-status"
+                                 Text="{Binding ReviewStepStatus}"
+                                 TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </StackPanel>
 
               <Border Classes="settings-note-card">
                 <StackPanel Spacing="6">
@@ -66,16 +112,16 @@
                 </StackPanel>
               </Border>
 
-              <TextBlock Classes="caption"
-                         Text="Items are grouped by owning package so you can see exactly where each export comes from."
-                         TextWrapping="Wrap" />
+               <TextBlock Classes="caption"
+                          Text="Packages are installed first. Setup items are optional content imported after install."
+                          TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
           <Border Grid.Column="1"
                   Classes="workspace-surface"
                   Margin="16">
-            <ScrollViewer>
+            <ScrollViewer x:Name="StepScrollViewer">
               <StackPanel Margin="22"
                           Spacing="18">
                 <StackPanel Spacing="6">
@@ -115,13 +161,15 @@
                             ColumnDefinitions="140,*"
                             ColumnSpacing="12">
                         <TextBlock Classes="caption"
-                                   Text="Summary"
-                                   VerticalAlignment="Top" />
+                                   Text="Short description"
+                                   VerticalAlignment="Top"
+                                   Margin="0,8,0,0" />
                         <TextBox Grid.Column="1"
-                                 Text="{Binding StackSummary}"
-                                 PlaceholderText="Optional setup summary"
+                                 Text="{Binding StackShortDescription}"
                                  AcceptsReturn="True"
-                                 MinHeight="72" />
+                                 TextWrapping="Wrap"
+                                 MinHeight="74"
+                                 PlaceholderText="Shown in Stack lists and Stack headers" />
                       </Grid>
                     </Grid>
                   </Border>
@@ -130,10 +178,10 @@
                           IsVisible="{Binding HasPackageGroups}">
                     <Grid ColumnDefinitions="*,Auto"
                           ColumnSpacing="12">
-                      <TextBlock Classes="caption"
-                                 Text="Choose package groups first. Setup items and individual values are selected in the next step."
-                                 TextWrapping="Wrap"
-                                 VerticalAlignment="Center" />
+                       <TextBlock Classes="caption"
+                                  Text="Choose packages to install when this Stack is used. Setup items and individual values are selected in the next step."
+                                  TextWrapping="Wrap"
+                                  VerticalAlignment="Center" />
                       <WrapPanel Grid.Column="1">
                         <Button Classes="stack-card-toggle"
                                 Command="{Binding SelectAllPackagesCommand}"
@@ -191,9 +239,9 @@
                                          Text="{Binding ContentSummary}"
                                          TextWrapping="Wrap" />
                               <TextBlock Classes="caption"
-                                         Text="{Binding SafetySummary}"
+                                         Text="{Binding SecretSummary}"
                                          TextWrapping="Wrap"
-                                         IsVisible="{Binding HasSafetySummary}" />
+                                         IsVisible="{Binding HasSecretSummary}" />
                             </StackPanel>
                           </Grid>
                         </Border>
@@ -202,7 +250,7 @@
                   </ItemsControl>
 
                   <TextBlock Classes="muted"
-                             Text="No export-capable package setup items were found."
+                             Text="No active packages were found."
                              TextWrapping="Wrap"
                              IsVisible="{Binding ShowNoPackageGroups}" />
                 </StackPanel>
@@ -214,7 +262,7 @@
                       <DataTemplate x:DataType="vm:CreateStackPackageGroupViewModel">
                         <Border Classes="stack-wizard-card package"
                                 Classes.selected="{Binding IsSelected}"
-                                IsVisible="{Binding IsSelected}"
+                                IsVisible="{Binding IsVisibleInItemsStep}"
                                 Margin="0,0,0,10">
                           <Grid RowDefinitions="Auto,Auto,Auto"
                                 RowSpacing="12">
@@ -399,6 +447,12 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  <Border Classes="settings-note-card"
+                          IsVisible="{Binding ShowNoItemsStepPackages}">
+                    <TextBlock Classes="muted"
+                               Text="Selected packages do not expose setup items. They will still be included in the Stack."
+                               TextWrapping="Wrap" />
+                  </Border>
                 </StackPanel>
 
                 <StackPanel IsVisible="{Binding IsReviewStep}"
@@ -411,8 +465,9 @@
                       <TextBlock Classes="caption"
                                  Text="{Binding StackId}" />
                       <TextBlock Classes="muted"
-                                 Text="{Binding StackSummary}"
-                                 TextWrapping="Wrap" />
+                                 Text="{Binding StackShortDescription}"
+                                 TextWrapping="Wrap"
+                                 IsVisible="{Binding HasStackShortDescription}" />
                     </StackPanel>
                   </Border>
 
@@ -438,7 +493,7 @@
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="vm:CreateStackPackageGroupViewModel">
                         <Border Classes="stack-wizard-card"
-                                IsVisible="{Binding HasSelectedItems}"
+                                IsVisible="{Binding IsSelected}"
                                 Margin="0,0,0,8">
                           <StackPanel Spacing="8">
                             <Grid ColumnDefinitions="Auto,*,Auto"
@@ -466,10 +521,15 @@
                                 <TextBlock Text="{Binding CountText}" />
                               </Border>
                             </Grid>
+                            <TextBlock Classes="muted"
+                                       Text="{Binding ReviewNoSelectedItemsText}"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding ShowReviewNoSelectedItems}" />
                             <ItemsControl ItemsSource="{Binding ItemGroups}">
                               <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:CreateStackExportKindGroupViewModel">
                                   <StackPanel Spacing="8"
+                                              IsVisible="{Binding IsIncludedInReview}"
                                               Margin="0,0,0,8">
                                     <Grid ColumnDefinitions="*,Auto"
                                           ColumnSpacing="10">
@@ -478,10 +538,10 @@
                                                  TextWrapping="Wrap" />
                                       <Border Grid.Column="1"
                                               Classes="stack-chip">
-                                        <TextBlock Text="{Binding CountText}" />
+                                        <TextBlock Text="{Binding ReviewCountText}" />
                                       </Border>
                                     </Grid>
-                                    <ItemsControl ItemsSource="{Binding Items}">
+                                    <ItemsControl ItemsSource="{Binding ReviewItems}">
                                       <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:CreateStackExportItemViewModel">
                                           <Border Classes="stack-wizard-item-details"
@@ -611,12 +671,14 @@
               Classes="secondary-action"
               Content="Next"
               Command="{Binding NextCommand}"
-              IsEnabled="{Binding CanGoNext}" />
+              IsEnabled="{Binding CanGoNext}"
+              IsVisible="{Binding ShowNextButton}" />
       <Button Grid.Column="4"
               Classes="primary-action"
               Content="Create Stack"
               Command="{Binding CreateCommand}"
-              IsEnabled="{Binding CanCreate}" />
+              IsEnabled="{Binding CanCreate}"
+              IsVisible="{Binding IsReviewStep}" />
     </Grid>
   </Grid>
 </Window>

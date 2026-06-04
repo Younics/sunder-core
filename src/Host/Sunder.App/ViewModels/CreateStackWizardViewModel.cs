@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
+using Sunder.PackageManagement;
 using Sunder.Protocol;
 
 namespace Sunder.App.ViewModels;
@@ -36,17 +37,23 @@ public sealed partial class CreateStackWizardViewModel(
 
     public bool IsReviewStep => CurrentStep == CreateStackWizardStep.Review;
 
+    public bool PackagesStepComplete => HasSelectedPackages;
+
+    public bool ItemsStepComplete => HasSelectedPackages;
+
+    public bool ReviewStepReady => CanCreate;
+
+    public bool ShowNextButton => !IsReviewStep;
+
     public bool CanGoBack => !IsBusy && CurrentStep != CreateStackWizardStep.Packages;
 
     public bool CanGoNext => !IsBusy
                              && CurrentStep != CreateStackWizardStep.Review
-                             && HasSelectedPackages
-                             && (CurrentStep == CreateStackWizardStep.Packages || HasSelectedItems);
+                             && HasSelectedPackages;
 
     public bool CanCreate => !IsBusy
                              && IsReviewStep
                              && HasSelectedPackages
-                             && HasSelectedItems
                              && !string.IsNullOrWhiteSpace(StackId)
                              && !string.IsNullOrWhiteSpace(StackName);
 
@@ -59,6 +66,10 @@ public sealed partial class CreateStackWizardViewModel(
     public bool HasErrors => Errors.Count > 0;
 
     public bool HasSelectedPackages => PackageGroups.Any(group => group.IsSelected);
+
+    public bool HasSelectedPackagesWithItems => PackageGroups.Any(group => group.IsVisibleInItemsStep);
+
+    public bool ShowNoItemsStepPackages => HasSelectedPackages && !HasSelectedPackagesWithItems;
 
     public bool HasSelectedItems => PackageGroups
         .Where(group => group.IsSelected)
@@ -86,13 +97,23 @@ public sealed partial class CreateStackWizardViewModel(
 
     public string StepDescription => CurrentStep switch
     {
-        CreateStackWizardStep.Packages => "Pick the packages whose setup should be part of this Stack.",
-        CreateStackWizardStep.Items => "Review setup items grouped by package. Expand an item to inspect what it contributes before export.",
+        CreateStackWizardStep.Packages => "Pick the packages that should be installed when this Stack is used.",
+        CreateStackWizardStep.Items => "Optionally choose setup items that should be imported after selected packages are installed.",
         CreateStackWizardStep.Review => "Review the exact content that will be exported and create the Stack when it looks safe.",
         _ => string.Empty,
     };
 
-    public string SelectedSummary => $"{SelectedPackageCount} package{Plural(SelectedPackageCount)} · {SelectedItemCount} setup item{Plural(SelectedItemCount)} selected";
+    public string SelectedSummary => $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} · {SelectedItemCount} setup item{StackDisplayFormatters.Plural(SelectedItemCount)} selected";
+
+    public string PackagesStepStatus => SelectedPackageCount == 0
+        ? "Choose package groups"
+        : $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} selected";
+
+    public string ItemsStepStatus => SelectedItemCount == 0
+        ? HasSelectedPackages ? "No setup items selected" : "Select packages first"
+        : $"{SelectedItemCount} setup item{StackDisplayFormatters.Plural(SelectedItemCount)} selected";
+
+    public string ReviewStepStatus => CanCreate ? "Ready to create" : "Complete selections first";
 
     public int IncludedReviewDetailCount => SelectedDetails.Count(detail => detail.IsIncludedByOptions);
 
@@ -100,9 +121,11 @@ public sealed partial class CreateStackWizardViewModel(
 
     public bool HasExcludedReviewDetails => ExcludedReviewDetailCount > 0;
 
+    public bool HasStackShortDescription => !string.IsNullOrWhiteSpace(StackShortDescription);
+
     public string ReviewImpactSummary => HasExcludedReviewDetails
-        ? $"{IncludedReviewDetailCount} part{Plural(IncludedReviewDetailCount)} included · {ExcludedReviewDetailCount} affected by current options"
-        : $"{IncludedReviewDetailCount} part{Plural(IncludedReviewDetailCount)} included";
+        ? $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} · {IncludedReviewDetailCount} setup part{StackDisplayFormatters.Plural(IncludedReviewDetailCount)} included · {ExcludedReviewDetailCount} affected by current options"
+        : $"{SelectedPackageCount} package{StackDisplayFormatters.Plural(SelectedPackageCount)} · {IncludedReviewDetailCount} setup part{StackDisplayFormatters.Plural(IncludedReviewDetailCount)} included";
 
     private IEnumerable<CreateStackExportDetailViewModel> SelectedDetails => PackageGroups
         .Where(group => group.IsSelected)
@@ -124,19 +147,7 @@ public sealed partial class CreateStackWizardViewModel(
     private string _stackId = "sunder-stack-" + DateTimeOffset.Now.ToString("yyyyMMddHHmm");
 
     [ObservableProperty]
-    private string _stackSummary = string.Empty;
-
-    [ObservableProperty]
-    private bool _includePrivateText = true;
-
-    [ObservableProperty]
-    private bool _includeMachineSpecificValues;
-
-    [ObservableProperty]
-    private bool _includeExecutableCommands = true;
-
-    [ObservableProperty]
-    private bool _includeNetworkEndpoints = true;
+    private string _stackShortDescription = string.Empty;
 
     [ObservableProperty]
     private string _statusText = "Choose packages to include in the Stack.";
@@ -149,13 +160,8 @@ public sealed partial class CreateStackWizardViewModel(
 
     partial void OnStackIdChanged(string value) => NotifyWizardStateChanged();
 
-    partial void OnIncludePrivateTextChanged(bool value) => NotifyOptionStateChanged();
-
-    partial void OnIncludeMachineSpecificValuesChanged(bool value) => NotifyOptionStateChanged();
-
-    partial void OnIncludeExecutableCommandsChanged(bool value) => NotifyOptionStateChanged();
-
-    partial void OnIncludeNetworkEndpointsChanged(bool value) => NotifyOptionStateChanged();
+    partial void OnStackShortDescriptionChanged(string value)
+        => OnPropertyChanged(nameof(HasStackShortDescription));
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -184,17 +190,28 @@ public sealed partial class CreateStackWizardViewModel(
             }
 
             var packageInfo = await LoadPackageInfoAsync(cancellationToken);
-            foreach (var group in _allItems
-                         .GroupBy(item => item.OwnerPackageId, StringComparer.OrdinalIgnoreCase)
-                         .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+            var packageIds = _allItems
+                .Select(item => item.OwnerPackageId)
+                .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var packageId in await LoadActivePackageIdsAsync(cancellationToken))
             {
-                packageInfo.TryGetValue(group.Key, out var info);
-                PackageGroups.Add(new CreateStackPackageGroupViewModel(group.Key, group, info, NotifyWizardStateChanged));
+                packageIds.Add(packageId);
+            }
+
+            foreach (var packageId in packageIds.OrderBy(packageId => packageInfo.TryGetValue(packageId, out var info) ? info.DisplayName : packageId, StringComparer.OrdinalIgnoreCase))
+            {
+                packageInfo.TryGetValue(packageId, out var info);
+                PackageGroups.Add(new CreateStackPackageGroupViewModel(
+                    packageId,
+                    _allItems.Where(item => string.Equals(item.OwnerPackageId, packageId, StringComparison.OrdinalIgnoreCase)),
+                    info,
+                    NotifyWizardStateChanged));
             }
 
             StatusText = PackageGroups.Count == 0
-                ? "No active packages currently expose Stack setup items."
-                : $"Discovered {_allItems.Count} setup item{Plural(_allItems.Count)} across {PackageGroups.Count} package{Plural(PackageGroups.Count)}.";
+                ? "No active packages are available to include in a Stack."
+                : $"Discovered {PackageGroups.Count} package{StackDisplayFormatters.Plural(PackageGroups.Count)} and {_allItems.Count} setup item{StackDisplayFormatters.Plural(_allItems.Count)}.";
         }
         catch (Exception ex)
         {
@@ -259,6 +276,10 @@ public sealed partial class CreateStackWizardViewModel(
     [RelayCommand(CanExecute = nameof(CanCreate))]
     private async Task CreateAsync()
     {
+        var selectedPackages = PackageGroups
+            .Where(group => group.IsSelected)
+            .Select(group => group.PackageId)
+            .ToArray();
         var selectedItems = PackageGroups
             .Where(group => group.IsSelected)
             .SelectMany(group => group.Items)
@@ -273,15 +294,18 @@ public sealed partial class CreateStackWizardViewModel(
                         IsSelected: true,
                         detail.ValueOverride,
                         detail.SensitivityOverride))
-                    .ToArray()))
+                    .ToArray())
+            {
+                OwnerPackageId = item.OwnerPackageId,
+            })
             .ToArray();
-        if (selectedItems.Length == 0)
+        if (selectedPackages.Length == 0)
         {
-            StatusText = "Select at least one setup item.";
+            StatusText = "Select at least one package.";
             return;
         }
 
-        var path = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "create", Guid.NewGuid().ToString("N"), BuildStackFileName(StackId));
+        var path = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "create", Guid.NewGuid().ToString("N"), SunderStackFormat.BuildStackFileName(StackId));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         IsBusy = true;
@@ -291,16 +315,14 @@ public sealed partial class CreateStackWizardViewModel(
         {
             StatusText = "Saving local Stack...";
             var result = await runtimeApiClient.ExportStackAsync(new RuntimeStackExportRequest(
-                StackId.Trim(),
-                StackName.Trim(),
-                string.IsNullOrWhiteSpace(StackSummary) ? null : StackSummary.Trim(),
-                path,
-                selectedItems,
-                new RuntimeStackExportOptions(
-                    IncludePrivateText: true,
-                    IncludeMachineSpecificValues: true,
-                    IncludeExecutableCommands: true,
-                    IncludeNetworkEndpoints: true)));
+                StackId: StackId.Trim(),
+                Name: StackName.Trim(),
+                Summary: NormalizeOptionalText(StackShortDescription),
+                OutputPath: path,
+                SelectedItems: selectedItems,
+                ReadmeMarkdown: null,
+                Media: null,
+                SelectedPackages: selectedPackages));
 
             foreach (var warning in result.Warnings)
             {
@@ -367,6 +389,10 @@ public sealed partial class CreateStackWizardViewModel(
         OnPropertyChanged(nameof(IsPackagesStep));
         OnPropertyChanged(nameof(IsItemsStep));
         OnPropertyChanged(nameof(IsReviewStep));
+        OnPropertyChanged(nameof(PackagesStepComplete));
+        OnPropertyChanged(nameof(ItemsStepComplete));
+        OnPropertyChanged(nameof(ReviewStepReady));
+        OnPropertyChanged(nameof(ShowNextButton));
         OnPropertyChanged(nameof(CanGoBack));
         OnPropertyChanged(nameof(CanGoNext));
         OnPropertyChanged(nameof(CanCreate));
@@ -375,15 +401,21 @@ public sealed partial class CreateStackWizardViewModel(
         OnPropertyChanged(nameof(HasWarnings));
         OnPropertyChanged(nameof(HasErrors));
         OnPropertyChanged(nameof(HasSelectedPackages));
+        OnPropertyChanged(nameof(HasSelectedPackagesWithItems));
+        OnPropertyChanged(nameof(ShowNoItemsStepPackages));
         OnPropertyChanged(nameof(HasSelectedItems));
         OnPropertyChanged(nameof(SelectedPackageCount));
         OnPropertyChanged(nameof(SelectedItemCount));
         OnPropertyChanged(nameof(CanSelectAllPackages));
         OnPropertyChanged(nameof(CanUnselectAllPackages));
         OnPropertyChanged(nameof(SelectedSummary));
+        OnPropertyChanged(nameof(PackagesStepStatus));
+        OnPropertyChanged(nameof(ItemsStepStatus));
+        OnPropertyChanged(nameof(ReviewStepStatus));
         OnPropertyChanged(nameof(IncludedReviewDetailCount));
         OnPropertyChanged(nameof(ExcludedReviewDetailCount));
         OnPropertyChanged(nameof(HasExcludedReviewDetails));
+        OnPropertyChanged(nameof(HasStackShortDescription));
         OnPropertyChanged(nameof(ReviewImpactSummary));
         OnPropertyChanged(nameof(StepTitle));
         OnPropertyChanged(nameof(StepDescription));
@@ -394,73 +426,23 @@ public sealed partial class CreateStackWizardViewModel(
         CreateCommand.NotifyCanExecuteChanged();
     }
 
-    private void NotifyOptionStateChanged()
+    private async Task<IReadOnlyDictionary<string, StackPackageInfo>> LoadPackageInfoAsync(CancellationToken cancellationToken)
+        => await new StackPackageInfoProvider(runtimeApiClient).LoadAsync(cancellationToken);
+
+    private async Task<IReadOnlyList<string>> LoadActivePackageIdsAsync(CancellationToken cancellationToken)
     {
-        foreach (var group in PackageGroups)
-        {
-            group.RefreshOptionState();
-        }
-
-        NotifyWizardStateChanged();
-    }
-
-    private async Task<IReadOnlyDictionary<string, CreateStackPackageInfo>> LoadPackageInfoAsync(CancellationToken cancellationToken)
-    {
-        var packages = new Dictionary<string, CreateStackPackageInfo>(StringComparer.OrdinalIgnoreCase);
-
-        async Task AddInstalledAsync()
-        {
-            foreach (var package in await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken))
-            {
-                AddPackageInfo(packages, package.PackageId, package.Name, package.Icon);
-            }
-        }
-
-        async Task AddSessionAsync()
-        {
-            foreach (var package in await runtimeApiClient.GetSessionPackagesAsync(cancellationToken))
-            {
-                AddPackageInfo(packages, package.PackageId, package.DisplayName, package.Icon);
-            }
-        }
-
-        async Task AddActiveAsync()
-        {
-            foreach (var package in await runtimeApiClient.GetActivePackagesAsync(cancellationToken))
-            {
-                AddPackageInfo(packages, package.PackageId, package.DisplayName, package.Icon);
-            }
-        }
-
         try
         {
-            await AddInstalledAsync();
-            await AddSessionAsync();
-            await AddActiveAsync();
+            return (await runtimeApiClient.GetActivePackagesAsync(cancellationToken))
+                .Select(package => package.PackageId)
+                .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
         catch
         {
-            // Stack creation should still work when optional package icon metadata is unavailable.
+            return [];
         }
-
-        return packages;
-    }
-
-    private void AddPackageInfo(
-        IDictionary<string, CreateStackPackageInfo> packages,
-        string packageId,
-        string displayName,
-        PackageIconDescriptor? icon)
-    {
-        if (string.IsNullOrWhiteSpace(packageId))
-        {
-            return;
-        }
-
-        packages[packageId] = new CreateStackPackageInfo(
-            string.IsNullOrWhiteSpace(displayName) ? packageId : displayName,
-            icon,
-            PackageIconUriResolver.Resolve(packageId, icon, runtimeApiClient.CreatePackageAssetUri));
     }
 
     public void Dispose()
@@ -479,16 +461,6 @@ public sealed partial class CreateStackWizardViewModel(
         GC.SuppressFinalize(this);
     }
 
-    private static string BuildStackFileName(string stackId)
-    {
-        var fileName = string.IsNullOrWhiteSpace(stackId)
-            ? "sunder-stack"
-            : string.Concat(stackId.Trim().Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.' ? char.ToLowerInvariant(character) : '-'));
-        return fileName.EndsWith(".sunderstack", StringComparison.OrdinalIgnoreCase)
-            ? fileName
-            : fileName + ".sunderstack";
-    }
-
     private static void TryDeleteDirectory(string? path)
     {
         try
@@ -504,10 +476,10 @@ public sealed partial class CreateStackWizardViewModel(
         }
     }
 
-    private static string Plural(int count) => count == 1 ? string.Empty : "s";
-}
+    private static string? NormalizeOptionalText(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-public sealed record CreateStackPackageInfo(string DisplayName, PackageIconDescriptor? Icon, Uri? IconUri);
+}
 
 public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemViewModel
 {
@@ -516,13 +488,13 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
     public CreateStackPackageGroupViewModel(
         string packageId,
         IEnumerable<RuntimeStackExportItemDescriptor> items,
-        CreateStackPackageInfo? packageInfo,
+        StackPackageInfo? packageInfo,
         Action changed)
         : base(packageInfo?.IconUri)
     {
         PackageId = packageId;
         DisplayName = packageInfo?.DisplayName ?? packageId;
-        Glyph = BuildPackageGlyph(packageInfo?.Icon, DisplayName, packageId);
+        Glyph = StackDisplayFormatters.PackageGlyph(packageInfo?.Icon, DisplayName, packageId);
         IconAssetPath = packageInfo?.Icon?.AssetPath;
         _changed = changed;
         foreach (var item in items.OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase))
@@ -536,7 +508,6 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
             .Select(group => new CreateStackExportKindGroupViewModel(group.Key, group.ToArray()))
             .ToArray();
 
-        _isSelected = true;
         ContentSummary = BuildContentSummary(Items);
     }
 
@@ -550,9 +521,9 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
 
     public string ContentSummary { get; }
 
-    public string SafetySummary => BuildSafetySummary(Items);
+    public string SecretSummary => BuildSecretSummary(Items);
 
-    public bool HasSafetySummary => !string.IsNullOrWhiteSpace(SafetySummary);
+    public bool HasSecretSummary => !string.IsNullOrWhiteSpace(SecretSummary);
 
     public ObservableCollection<CreateStackExportItemViewModel> Items { get; } = [];
 
@@ -561,6 +532,14 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
     public bool HasItems => Items.Count > 0;
 
     public bool HasSelectedItems => IsSelected && Items.Any(item => item.IsSelected && item.HasSelectedDetails);
+
+    public bool IsVisibleInItemsStep => IsSelected && HasItems;
+
+    public bool ShowReviewNoSelectedItems => IsSelected && !HasSelectedItems;
+
+    public string ReviewNoSelectedItemsText => HasItems
+        ? "Package will be installed. No setup items selected."
+        : "Package will be installed. It does not expose setup items.";
 
     public int SelectedItemCount => Items.Count(item => item.IsSelected);
 
@@ -583,17 +562,6 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
     private bool _isExpanded = true;
 
     partial void OnIsExpandedChanged(bool value) => OnPropertyChanged(nameof(ExpandActionText));
-
-    public void RefreshOptionState()
-    {
-        foreach (var item in Items)
-        {
-            item.RefreshOptionState();
-        }
-
-        OnPropertyChanged(nameof(SafetySummary));
-        OnPropertyChanged(nameof(HasSafetySummary));
-    }
 
     [RelayCommand]
     private void ToggleExpanded()
@@ -635,8 +603,21 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
 
     private void NotifyGroupChanged()
     {
+        foreach (var item in Items)
+        {
+            item.RefreshReviewState();
+        }
+
+        foreach (var itemGroup in ItemGroups)
+        {
+            itemGroup.RefreshReviewState();
+        }
+
         OnPropertyChanged(nameof(SelectedItemCount));
         OnPropertyChanged(nameof(HasSelectedItems));
+        OnPropertyChanged(nameof(IsVisibleInItemsStep));
+        OnPropertyChanged(nameof(ShowReviewNoSelectedItems));
+        OnPropertyChanged(nameof(ReviewNoSelectedItemsText));
         OnPropertyChanged(nameof(CountText));
         OnPropertyChanged(nameof(CanSelectAllItems));
         OnPropertyChanged(nameof(CanUnselectAllItems));
@@ -645,23 +626,11 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
         _changed();
     }
 
-    private static string BuildPackageGlyph(PackageIconDescriptor? icon, string displayName, string packageId)
-    {
-        if (!string.IsNullOrWhiteSpace(icon?.Glyph))
-        {
-            return icon.Glyph!;
-        }
-
-        var source = string.IsNullOrWhiteSpace(displayName) ? packageId : displayName;
-        var first = source.FirstOrDefault(char.IsLetterOrDigit);
-        return first == default ? "?" : char.ToUpperInvariant(first).ToString();
-    }
-
     private static string BuildContentSummary(IReadOnlyCollection<CreateStackExportItemViewModel> items)
     {
         if (items.Count == 0)
         {
-            return "No setup items discovered.";
+            return "No setup items. The package itself will be included.";
         }
 
         var kinds = items
@@ -672,27 +641,21 @@ public sealed partial class CreateStackPackageGroupViewModel : PackageIconItemVi
             .Take(4)
             .ToArray();
         return kinds.Length == 0
-            ? $"{items.Count} setup item{Plural(items.Count)}"
-            : $"{items.Count} setup item{Plural(items.Count)} · {string.Join(", ", kinds)}";
+            ? $"{items.Count} setup item{StackDisplayFormatters.Plural(items.Count)}"
+            : $"{items.Count} setup item{StackDisplayFormatters.Plural(items.Count)} · {string.Join(", ", kinds)}";
     }
 
-    private static string BuildSafetySummary(IReadOnlyCollection<CreateStackExportItemViewModel> items)
+    private static string BuildSecretSummary(IReadOnlyCollection<CreateStackExportItemViewModel> items)
     {
-        var flags = items
-            .SelectMany(item => item.SafetyChips)
-            .Where(flag => !string.IsNullOrWhiteSpace(flag))
-            .Where(flag => !string.Equals(flag, "none", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(flag => flag, StringComparer.OrdinalIgnoreCase)
-            .Take(5)
-            .ToArray();
-        return flags.Length == 0 ? string.Empty : string.Join(", ", flags);
+        var secretItemCount = items.Count(item => item.HasSecretValues);
+        return secretItemCount == 0
+            ? string.Empty
+            : $"{secretItemCount} setup item{StackDisplayFormatters.Plural(secretItemCount)} will ask for secret values on import.";
     }
 
-    private static string Plural(int count) => count == 1 ? string.Empty : "s";
 }
 
-public sealed class CreateStackExportKindGroupViewModel(string? kind, IReadOnlyList<CreateStackExportItemViewModel> items)
+public sealed class CreateStackExportKindGroupViewModel(string? kind, IReadOnlyList<CreateStackExportItemViewModel> items) : ViewModelBase
 {
     public string? Kind { get; } = kind;
 
@@ -700,7 +663,22 @@ public sealed class CreateStackExportKindGroupViewModel(string? kind, IReadOnlyL
 
     public IReadOnlyList<CreateStackExportItemViewModel> Items { get; } = items;
 
+    public IReadOnlyList<CreateStackExportItemViewModel> ReviewItems => Items
+        .Where(item => item.IsIncludedInReview)
+        .ToArray();
+
+    public bool IsIncludedInReview => ReviewItems.Count > 0;
+
     public string CountText => $"{Items.Count} item{(Items.Count == 1 ? string.Empty : "s")}";
+
+    public string ReviewCountText => $"{ReviewItems.Count} item{(ReviewItems.Count == 1 ? string.Empty : "s")}";
+
+    public void RefreshReviewState()
+    {
+        OnPropertyChanged(nameof(ReviewItems));
+        OnPropertyChanged(nameof(IsIncludedInReview));
+        OnPropertyChanged(nameof(ReviewCountText));
+    }
 }
 
 public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportItemDescriptor item, Action changed) : ViewModelBase
@@ -733,11 +711,11 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
 
     public bool IsIncludedInReview => IsSelected && HasSelectedDetails;
 
-    public IReadOnlyList<string> SafetyChips { get; } = BuildSafetyChips(item.Sensitivities);
+    public IReadOnlyList<string> SecretChips { get; } = BuildSecretChips(item.Sensitivities);
 
-    public bool HasSafetyChips => SafetyChips.Count > 0;
+    public bool HasSecretChips => SecretChips.Count > 0;
 
-    public string SensitivityText { get; } = BuildSensitivityText(item.Sensitivities);
+    public bool HasSecretValues { get; } = item.Sensitivities.Any(sensitivity => string.Equals(sensitivity, "Secret", StringComparison.OrdinalIgnoreCase));
 
     public string SummaryText { get; } = BuildSummaryText(item);
 
@@ -783,6 +761,14 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
         OnPropertyChanged(nameof(IncludedDetailCount));
         OnPropertyChanged(nameof(ExcludedDetailCount));
         OnPropertyChanged(nameof(HasExcludedDetails));
+        OnPropertyChanged(nameof(HasSelectedDetails));
+        OnPropertyChanged(nameof(IsIncludedInReview));
+        OnPropertyChanged(nameof(SelectedDetailCount));
+        OnPropertyChanged(nameof(DetailCountText));
+    }
+
+    public void RefreshReviewState()
+    {
         OnPropertyChanged(nameof(HasSelectedDetails));
         OnPropertyChanged(nameof(IsIncludedInReview));
         OnPropertyChanged(nameof(SelectedDetailCount));
@@ -846,18 +832,12 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
             item.Sensitivities.FirstOrDefault()), changed)] ;
     }
 
-    private static IReadOnlyList<string> BuildSafetyChips(IReadOnlyList<string> sensitivities)
+    private static IReadOnlyList<string> BuildSecretChips(IReadOnlyList<string> sensitivities)
     {
-        var chips = sensitivities
-            .Where(sensitivity => !string.Equals(sensitivity, "Public", StringComparison.OrdinalIgnoreCase))
-            .Select(FriendlySensitivityLabel)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return chips.Length == 0 ? ["none"] : chips;
+        return sensitivities.Any(sensitivity => string.Equals(sensitivity, "Secret", StringComparison.OrdinalIgnoreCase))
+            ? ["secret prompt"]
+            : [];
     }
-
-    private static string BuildSensitivityText(IReadOnlyList<string> sensitivities)
-        => string.Join(", ", BuildSafetyChips(sensitivities));
 
     private static string BuildSummaryText(RuntimeStackExportItemDescriptor item)
     {
@@ -872,21 +852,6 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
             ? StackContentKindLabels.HumanizeToken(item.Kind)
             : string.Join(", ", names);
     }
-
-    internal static string FriendlySensitivityLabel(string? sensitivity)
-        => sensitivity switch
-        {
-            "PrivateText" => "private",
-            "Secret" => "secret ref",
-            "AuthSession" => "auth",
-            "LocalPath" => "local path",
-            "NetworkEndpoint" => "network",
-            "ExecutableCommand" => "command",
-            "MachineSpecific" => "machine-specific",
-            "Public" => "none",
-            null or "" => string.Empty,
-            _ => StackContentKindLabels.HumanizeToken(sensitivity),
-        };
 
     private static string Shorten(string value, int maxLength)
     {
@@ -922,7 +887,7 @@ public sealed partial class CreateStackExportDetailViewModel(RuntimeStackExportI
         ? "Importer will provide this value."
         : IsIncludedByOptions ? Value : ValueWhenExcluded;
 
-    public string EffectiveValuePreview => ShortenSingleLine(SelectedExportBehavior == AskOnImportBehavior ? "Importer will provide this value." : EffectiveValue, 180);
+    public string EffectiveValuePreview => StackDisplayFormatters.ShortenSingleLine(SelectedExportBehavior == AskOnImportBehavior ? "Importer will provide this value." : EffectiveValue, 180);
 
     public string ValueWhenExcluded { get; } = string.IsNullOrWhiteSpace(detail.ValueWhenExcluded) ? "Not included" : detail.ValueWhenExcluded!;
 
@@ -1015,17 +980,6 @@ public sealed partial class CreateStackExportDetailViewModel(RuntimeStackExportI
         OnPropertyChanged(nameof(IsExcludedByOptions));
     }
 
-    private static string ShortenSingleLine(string value, int maxLength)
-    {
-        var normalized = string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (normalized.Length <= maxLength)
-        {
-            return normalized;
-        }
-
-        return normalized[..Math.Max(4, maxLength - 3)] + "...";
-    }
-
     private static string BuildDetailId(string label)
     {
         var builder = new System.Text.StringBuilder(label.Length);
@@ -1049,5 +1003,4 @@ public sealed partial class CreateStackExportDetailViewModel(RuntimeStackExportI
         var detailId = builder.ToString().Trim('-');
         return string.IsNullOrWhiteSpace(detailId) ? "detail" : detailId;
     }
-
 }

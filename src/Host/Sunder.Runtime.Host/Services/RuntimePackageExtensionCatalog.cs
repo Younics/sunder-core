@@ -77,14 +77,14 @@ internal sealed class RuntimePackageExtensionCatalog : IPackageExtensionCatalog,
         }
     }
 
-    public IReadOnlyList<(string PackageId, TContract Contribution)> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
+    public IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
     {
         lock (_syncRoot)
         {
             return _extensions.TryGetValue(extensionPoint.Id, out var contributions)
                 ? contributions
                     .Where(contribution => contribution.Instance is TContract)
-                    .Select(contribution => (contribution.PackageId, (TContract)contribution.Instance))
+                    .Select(contribution => new PackageExtensionContribution<TContract>(contribution.PackageId, (TContract)contribution.Instance))
                     .ToArray()
                 : [];
         }

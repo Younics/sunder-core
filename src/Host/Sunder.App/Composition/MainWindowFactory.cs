@@ -17,6 +17,7 @@ public sealed class MainWindowFactory(
     SunderUpdateService updateService,
     BackgroundProcessQueueService backgroundProcessQueue,
     RegistryAuthService registryAuthService,
+    ExternalBrowserService externalBrowserService,
     IShellCompositionService shellCompositionService)
 {
     public (MainWindow Window, MainWindowViewModel ViewModel) Create(
@@ -42,7 +43,8 @@ public sealed class MainWindowFactory(
             backgroundProcessQueue,
             shellCompositionService: shellCompositionService,
             developerLog: developerLog,
-            registryAuthService: registryAuthService);
+            registryAuthService: registryAuthService,
+            externalBrowserService: externalBrowserService);
 
         return (new MainWindow { DataContext = viewModel }, viewModel);
     }

@@ -7,12 +7,20 @@ namespace Sunder.PackageManagement;
 
 public static class SunderStackArchiveInspector
 {
+    private const long MaxMediaSize = 10L * 1024L * 1024L;
     private static readonly Regex PackageIdRegex = new("^[a-z0-9]+(\\.[a-z0-9]+)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex StackIdRegex = new("^[a-z0-9]+([.-][a-z0-9]+)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FragmentIdRegex = new("^[a-z0-9]+([._-][a-z0-9]+)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SemVerRegex = new("^\\d+\\.\\d+\\.\\d+([-.+][0-9A-Za-z.-]+)?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TagRegex = new("^[A-Za-z0-9._-]{1,64}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly HashSet<string> AllowedMediaTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    };
 
     public static async Task<SunderStackArchiveValidationResult> ExtractAndValidateAsync(
         string stackPath,
@@ -58,17 +66,17 @@ public static class SunderStackArchiveInspector
     {
         var warnings = new List<string>();
         var errors = new List<string>();
-        var manifestPath = Path.Combine(stagingPath, "manifest", "sunder-stack.json");
-        var contentIndexPath = Path.Combine(stagingPath, "manifest", "content-index.json");
+        var manifestPath = Path.Combine(stagingPath, SunderStackFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
+        var contentIndexPath = Path.Combine(stagingPath, SunderStackFormat.ContentIndexPath.Replace('/', Path.DirectorySeparatorChar));
 
         if (!File.Exists(manifestPath))
         {
-            errors.Add("Stack archive is missing manifest/sunder-stack.json.");
+            errors.Add($"Stack archive is missing {SunderStackFormat.ManifestPath}.");
         }
 
         if (!File.Exists(contentIndexPath))
         {
-            errors.Add("Stack archive is missing manifest/content-index.json.");
+            errors.Add($"Stack archive is missing {SunderStackFormat.ContentIndexPath}.");
         }
 
         if (errors.Count > 0)
@@ -111,9 +119,14 @@ public static class SunderStackArchiveInspector
             return;
         }
 
-        if (manifest.SchemaVersion != 1)
+        if (manifest.SchemaVersion != SunderStackFormat.CurrentSchemaVersion)
         {
-            errors.Add("Stack manifest must declare schemaVersion 1.");
+            errors.Add($"Stack manifest must declare schemaVersion {SunderStackFormat.CurrentSchemaVersion}.");
+        }
+
+        if (manifest.MinReaderVersion is not null && manifest.MinReaderVersion > SunderStackFormat.CurrentReaderVersion)
+        {
+            errors.Add($"Stack manifest requires reader version {manifest.MinReaderVersion}, but this Sunder reader supports {SunderStackFormat.CurrentReaderVersion}.");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.StackId) || !StackIdRegex.IsMatch(manifest.StackId))
@@ -135,12 +148,7 @@ public static class SunderStackArchiveInspector
 
         ValidatePackageRequirements(packages, errors);
         ValidateFragments(fragments, stagingPath, warnings, errors);
-        ValidateRequiredInputs(manifest.RequiredInputs ?? [], "Stack", errors);
-
-        if (manifest.Safety?.ContainsSecrets == true)
-        {
-            warnings.Add($"Stack '{manifest.StackId ?? stagingPath}' declares that it contains raw secrets.");
-        }
+        ValidateMedia(manifest.Media ?? [], stagingPath, errors);
     }
 
     private static void ValidatePackageRequirements(
@@ -243,24 +251,81 @@ public static class SunderStackArchiveInspector
                 }
             }
 
-            foreach (var packageId in fragment.RequiresPackages ?? [])
-            {
-                if (string.IsNullOrWhiteSpace(packageId) || !PackageIdRegex.IsMatch(packageId))
-                {
-                    errors.Add($"Stack fragment '{fragmentId}' requires invalid package id '{packageId}'.");
-                }
-            }
-
-            if (fragment.Safety is null)
-            {
-                errors.Add($"Stack fragment '{fragmentId}' is missing safety metadata.");
-            }
-            else if (fragment.Safety.ContainsSecrets == true)
-            {
-                warnings.Add($"Stack fragment '{fragmentId}' declares that it contains raw secrets.");
-            }
-
             ValidateRequiredInputs(fragment.RequiredInputs ?? [], $"Stack fragment '{fragmentId}'", errors);
+        }
+    }
+
+    private static void ValidateMedia(
+        IReadOnlyList<SunderStackMediaManifest> mediaItems,
+        string stagingPath,
+        ICollection<string> errors)
+    {
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var media in mediaItems)
+        {
+            var label = string.IsNullOrWhiteSpace(media.FileName) ? media.Path ?? "unknown" : media.FileName;
+            if (string.IsNullOrWhiteSpace(media.Path))
+            {
+                errors.Add($"Stack media '{label}' is missing path.");
+                continue;
+            }
+
+            var mediaPath = media.Path.Replace('\\', '/');
+            ValidateRelativePath(mediaPath, "media path", errors);
+            if (!mediaPath.StartsWith(SunderStackFormat.MediaPayloadRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"Stack media '{label}' path '{media.Path}' must be under {SunderStackFormat.MediaPayloadRoot}.");
+            }
+            else if (!seenPaths.Add(mediaPath))
+            {
+                errors.Add($"Stack media path '{mediaPath}' is declared more than once.");
+            }
+
+            var filePath = Path.Combine(stagingPath, mediaPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(filePath))
+            {
+                errors.Add($"Stack media '{label}' path '{media.Path}' was not found in the Stack archive.");
+                continue;
+            }
+
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length <= 0)
+            {
+                errors.Add($"Stack media '{label}' is empty.");
+            }
+            else if (fileInfo.Length > MaxMediaSize)
+            {
+                errors.Add($"Stack media '{label}' must be 10 MB or smaller.");
+            }
+
+            if (media.Size is null or <= 0)
+            {
+                errors.Add($"Stack media '{label}' must declare size.");
+            }
+            else if (media.Size != fileInfo.Length)
+            {
+                errors.Add($"Stack media '{label}' size mismatch.");
+            }
+
+            if (string.IsNullOrWhiteSpace(media.FileName) || media.FileName != Path.GetFileName(media.FileName))
+            {
+                errors.Add($"Stack media '{label}' must declare a fileName without path separators.");
+            }
+
+            if (string.IsNullOrWhiteSpace(media.ContentType) || !AllowedMediaTypes.Contains(media.ContentType))
+            {
+                errors.Add($"Stack media '{label}' must be a PNG, JPEG, WebP, or GIF image.");
+            }
+
+            if (media.SortOrder is < 0)
+            {
+                errors.Add($"Stack media '{label}' sortOrder must not be negative.");
+            }
+
+            if (media.AltText?.Length > 500)
+            {
+                errors.Add($"Stack media '{label}' altText must be 500 characters or shorter.");
+            }
         }
     }
 
@@ -279,11 +344,6 @@ public static class SunderStackArchiveInspector
             else if (!seenInputs.Add(input.InputId))
             {
                 errors.Add($"{label} required input id '{input.InputId}' is declared more than once.");
-            }
-
-            if (string.IsNullOrWhiteSpace(input.Kind))
-            {
-                errors.Add($"{label} required input '{input.InputId ?? "unknown"}' is missing kind.");
             }
 
             if (string.IsNullOrWhiteSpace(input.Label))
@@ -306,9 +366,9 @@ public static class SunderStackArchiveInspector
             return;
         }
 
-        if (contentIndex.SchemaVersion != 1)
+        if (contentIndex.SchemaVersion != SunderStackFormat.CurrentContentIndexVersion)
         {
-            errors.Add("Stack content index must declare schemaVersion 1.");
+            errors.Add($"Stack content index must declare schemaVersion {SunderStackFormat.CurrentContentIndexVersion}.");
         }
 
         if (contentIndex.Files is null)
@@ -354,7 +414,7 @@ public static class SunderStackArchiveInspector
             .ToArray();
         foreach (var actualFile in actualFiles)
         {
-            if (string.Equals(actualFile, "manifest/content-index.json", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(actualFile, SunderStackFormat.ContentIndexPath, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

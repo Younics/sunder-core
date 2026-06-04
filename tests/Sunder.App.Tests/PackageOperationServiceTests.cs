@@ -416,7 +416,7 @@ public sealed class PackageOperationServiceTests
 
         public Uri RegistryUrl { get; } = new("https://registry.example/");
 
-        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)

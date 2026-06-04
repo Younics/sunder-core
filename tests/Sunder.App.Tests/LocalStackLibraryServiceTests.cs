@@ -22,6 +22,14 @@ public sealed class LocalStackLibraryServiceTests
         Assert.Equal(imported.StackId, stacks[0].StackId);
         Assert.True(File.Exists(stacks[0].LocalPath));
         Assert.StartsWith(libraryRoot, stacks[0].LocalPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("# Fullstack Agent Dev\n\n![Hero](payload/media/hero.png)", imported.ReadmeMarkdown);
+        var media = Assert.Single(imported.Media ?? []);
+        Assert.Equal("payload/media/hero.png", media.ArchivePath);
+        Assert.Equal("Hero image", media.AltText);
+        Assert.StartsWith(libraryRoot, media.LocalPath, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(media.LocalPath));
+        var listedMedia = Assert.Single(stacks[0].Media ?? []);
+        Assert.True(File.Exists(listedMedia.LocalPath));
     }
 
     [Fact]
@@ -38,12 +46,16 @@ public sealed class LocalStackLibraryServiceTests
         Assert.True(File.Exists(destination));
         var manifest = await service.ReadManifestAsync(destination);
         Assert.Equal(imported.StackId, manifest.StackId);
+        Assert.Equal(imported.ReadmeMarkdown, manifest.ReadmeMarkdown);
+        Assert.Single(manifest.Media ?? []);
     }
 
     private static async Task<string> CreateStackArchiveAsync(string root)
     {
         var payloadPath = Path.Combine(root, "payload.json");
+        var mediaPath = Path.Combine(root, "hero.png");
         await File.WriteAllTextAsync(payloadPath, "{\"profileId\":\"fullstack\"}");
+        await File.WriteAllBytesAsync(mediaPath, [1, 2, 3, 4]);
 
         var archivePath = Path.Combine(root, "agent-fullstack.sunderstack");
         await SunderStackArchiveWriter.WriteAsync(
@@ -52,6 +64,7 @@ public sealed class LocalStackLibraryServiceTests
             new Dictionary<string, string>
             {
                 ["payload/fragments/agent-profile.fullstack.json"] = payloadPath,
+                ["payload/media/hero.png"] = mediaPath,
             });
         return archivePath;
     }
@@ -59,10 +72,12 @@ public sealed class LocalStackLibraryServiceTests
     private static SunderStackManifest CreateManifest()
         => new()
         {
-            SchemaVersion = 1,
+            SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
+            MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
             StackId = "sunder.stack.agent.fullstack-dev",
             Name = "Fullstack Agent Dev",
             Summary = "Agent setup for coding.",
+            ReadmeMarkdown = "# Fullstack Agent Dev\n\n![Hero](payload/media/hero.png)",
             CreatedAtUtc = DateTimeOffset.UtcNow,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
             Packages =
@@ -89,17 +104,18 @@ public sealed class LocalStackLibraryServiceTests
                     Description = "A coding profile.",
                     DefaultSelected = true,
                     PayloadPath = "payload/fragments/agent-profile.fullstack.json",
-                    RequiresPackages = ["sunder.package.agent"],
-                    Safety = new SunderStackSafetyManifest
-                    {
-                        ContainsSecrets = false,
-                        ContainsSecretReferences = false,
-                        ContainsLocalPaths = false,
-                        ContainsPrivateText = true,
-                        ContainsExecutableCommands = false,
-                        ContainsNetworkEndpoints = false,
-                        ContainsMachineSpecificValues = false,
-                    },
+                },
+            ],
+            Media =
+            [
+                new SunderStackMediaManifest
+                {
+                    Path = "payload/media/hero.png",
+                    FileName = "hero.png",
+                    ContentType = "image/png",
+                    Size = 4,
+                    AltText = "Hero image",
+                    SortOrder = 0,
                 },
             ],
         };

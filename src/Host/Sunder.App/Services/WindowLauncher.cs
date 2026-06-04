@@ -297,7 +297,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private StacksWindow CreateStacksWindow()
     {
-        var window = _stacksWindowFactory?.Create(ApplyPackageLifecycleChangesAsync);
+        var window = _stacksWindowFactory?.Create(ApplyPackageLifecycleChangesAsync, NotifyStackImportAppliedAsync);
         if (window is null)
         {
             window = new StacksWindow(_shellStateService, _shellState);
@@ -306,7 +306,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 new StackArchivePicker(window),
                 _runtimeApiClientFactory.CreateClient(),
                 new RegistryPackageInstallService(),
-                ApplyPackageLifecycleChangesAsync);
+                ApplyPackageLifecycleChangesAsync,
+                NotifyStackImportAppliedAsync);
         }
 
         window.Closed += (_, _) =>
@@ -394,6 +395,11 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
             throw new InvalidOperationException(preflight.Errors.FirstOrDefault() ?? "App-side package preflight failed.");
         }
     }
+
+    internal async Task<IReadOnlyList<string>> NotifyStackImportAppliedAsync(
+        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
+        CancellationToken cancellationToken)
+        => await _packageViewHostService.NotifyStackImportAppliedAsync(appliedContributions, cancellationToken).ConfigureAwait(false);
 
     private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
     {

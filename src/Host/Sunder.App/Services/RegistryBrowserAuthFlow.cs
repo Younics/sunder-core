@@ -38,18 +38,23 @@ public sealed class RegistryBrowserAuthFlow(
     }
 
     private Uri BuildAuthorizeUri(Uri callbackUri, string state, string codeChallenge)
+        => BuildAuthorizeUri(registryUrl, callbackUri, state, codeChallenge);
+
+    internal static Uri BuildAuthorizeUri(Uri registryUrl, Uri callbackUri, string state, string codeChallenge)
     {
         var builder = new UriBuilder(registryUrl)
         {
             Path = CombinePath(registryUrl.AbsolutePath, "cli/authorize"),
-            Query = string.Join('&',
-                $"redirect_uri={Uri.EscapeDataString(callbackUri.ToString())}",
-                $"state={Uri.EscapeDataString(state)}",
-                $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
-                "display_name=Sunder%20App"),
+            Query = string.Empty,
+            Fragment = string.Empty,
         };
+        var query = string.Join('&',
+            $"redirect_uri={Uri.EscapeDataString(callbackUri.ToString())}",
+            $"state={Uri.EscapeDataString(state)}",
+            $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
+            $"display_name={Uri.EscapeDataString("Sunder App")}");
 
-        return builder.Uri;
+        return new Uri(builder.Uri.GetLeftPart(UriPartial.Path) + "?" + query);
     }
 
     private static string CombinePath(string basePath, string relativePath)
@@ -78,6 +83,91 @@ public sealed class RegistryBrowserAuthFlow(
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
+
+    internal static string BuildCallbackPage()
+    {
+        const string title = "Sunder Registry authorized";
+        const string subtitle = "You can close this window and return to Sunder.";
+
+        return $$"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>{{title}}</title>
+                <link rel="preconnect" href="https://fonts.googleapis.com" />
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+                <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+                <style>
+                    :root {
+                        color-scheme: dark;
+                        --bg: #15171a;
+                        --bg-lifted: #1d2025;
+                        --text: #dedad3;
+                        --muted: #ccc7be;
+                        --accent-strong: #e7b765;
+                        --accent-rgb: 217, 154, 58;
+                        --success-rgb: 110, 231, 183;
+                        --white-rgb: 255, 255, 255;
+                        font-family: "IBM Plex Sans", system-ui, sans-serif;
+                    }
+
+                    * {
+                        box-sizing: border-box;
+                    }
+
+                    body {
+                        margin: 0;
+                        min-height: 100vh;
+                        background:
+                            radial-gradient(circle at 20% 10%, rgba(var(--accent-rgb), 0.18), transparent 28rem),
+                            radial-gradient(circle at 85% 0%, rgba(var(--success-rgb), 0.12), transparent 24rem),
+                            linear-gradient(180deg, var(--bg-lifted) 0%, var(--bg) 42rem);
+                        color: var(--text);
+                    }
+
+                    .boot-shell {
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 14px;
+                        min-height: 100vh;
+                    }
+
+                    .boot-mark {
+                        display: grid;
+                        width: 44px;
+                        height: 44px;
+                        place-items: center;
+                        border: 1px solid rgba(var(--accent-rgb), 0.46);
+                        border-radius: 14px;
+                        background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(var(--white-rgb), 0.04));
+                        color: var(--accent-strong);
+                        font-weight: 800;
+                    }
+
+                    .boot-title {
+                        font-weight: 800;
+                    }
+
+                    .boot-subtitle {
+                        color: var(--muted);
+                    }
+                </style>
+            </head>
+            <body>
+                <main class="boot-shell">
+                    <div class="boot-mark">S</div>
+                    <div>
+                        <div class="boot-title">{{title}}</div>
+                        <div class="boot-subtitle">{{subtitle}}</div>
+                    </div>
+                </main>
+            </body>
+            </html>
+            """;
+    }
 
     private sealed class LoopbackCallbackListener : IAsyncDisposable
     {
@@ -162,7 +252,7 @@ public sealed class RegistryBrowserAuthFlow(
 
         private static async Task WriteResponseAsync(Stream stream, CancellationToken cancellationToken)
         {
-            const string body = "<!doctype html><html><body><h1>Sunder Registry authorized</h1><p>You can close this window and return to Sunder.</p></body></html>";
+            var body = BuildCallbackPage();
             var bytes = Encoding.UTF8.GetBytes(
                 "HTTP/1.1 200 OK\r\n" +
                 "Content-Type: text/html; charset=utf-8\r\n" +

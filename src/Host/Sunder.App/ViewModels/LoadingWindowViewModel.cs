@@ -15,7 +15,7 @@ public partial class LoadingWindowViewModel : ViewModelBase
 
     public string Version { get; } = SunderAppVersion.CurrentDisplayText;
 
-    public string Subtitle { get; } = "Local package platform";
+    public string Subtitle { get; } = "Your personal workspace";
 
     public string FooterText { get; } = "SUNDER PLATFORM";
 }

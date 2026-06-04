@@ -31,6 +31,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private readonly PackageWarningsViewModel _warnings = new();
     private readonly SelectedPackageIconObserver _selectedPackageIconObserver;
     private readonly MarketplaceSearchScheduler _marketplaceSearchScheduler;
+    private readonly Func<Uri, RegistryAuthToken?> _registryTokenProvider;
     private int _marketplaceSearchVersion;
     private bool _disposed;
     private bool _isApplyingModeSearchText;
@@ -55,6 +56,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         RegistryPackageInstallService? registryInstallService = null,
         NotificationCenterService? notificationCenter = null,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
+        Func<Uri, RegistryAuthToken?>? registryTokenProvider = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
         double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
         double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
@@ -69,11 +71,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         _registryClientProvider = new PackageRegistryClientProvider(
             () => RegistryUrlText,
             registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl)));
+        _registryTokenProvider = registryTokenProvider ?? (registryUrl => SunderAuthStore.Load().GetToken(registryUrl));
         _installedPackages = new InstalledPackagesPaneViewModel(
             new PackagesInstalledCatalog(_runtimeApiClient, _registryClientProvider),
             CreatePackageIconUri,
             SelectInstalledPackage);
-        _marketplace = new MarketplacePackagesPaneViewModel(new PackagesMarketplaceCatalog(_registryClientProvider));
+        _marketplace = new MarketplacePackagesPaneViewModel(new PackagesMarketplaceCatalog(_registryClientProvider, _registryTokenProvider));
         _operationState = new PackageOperationStatePresenter(_packageOperationService);
         _operationCommands = new PackagesOperationCommandCoordinator(
             _runtimeApiClient,
@@ -131,6 +134,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<RegistryPackageSearchItemViewModel> MarketplacePackages => _marketplace.Packages;
 
+    public ObservableCollection<RegistrySearchSortOptionViewModel> MarketplaceSortOptions { get; } = new(RegistrySearchSortOptionViewModel.Defaults);
+
     public ObservableCollection<RegistryPackageVersionItemViewModel> MarketplaceVersions => _marketplace.Versions;
 
     public ObservableCollection<RegistryPackageProfileLinkViewModel> MarketplaceProfileLinks => _marketplace.ProfileLinks;
@@ -140,6 +145,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<string> MarketplaceProfileTags => _marketplace.ProfileTags;
 
     public ObservableCollection<RegistryPackageMediaItemViewModel> MarketplaceProfileMedia => _marketplace.ProfileMedia;
+
+    public ObservableCollection<RegistryUserAttributionViewModel> MarketplaceAttributions { get; } = [];
+
+    public ObservableCollection<RegistryUserAttributionViewModel> MarketplaceCreators { get; } = [];
+
+    public ObservableCollection<RegistryUserAttributionViewModel> MarketplaceMaintainers { get; } = [];
 
     public LiveMarkdown.Avalonia.ObservableStringBuilder MarketplaceReadmeMarkdownBuilder => _marketplace.ReadmeMarkdownBuilder;
 
@@ -217,6 +228,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasMarketplaceProfileMedia => _marketplace.HasProfileMedia;
 
+    public bool HasMarketplaceAttributions => MarketplaceAttributions.Count > 0;
+
+    public bool HasMarketplaceCreators => MarketplaceCreators.Count > 0;
+
+    public bool HasMarketplaceMaintainers => MarketplaceMaintainers.Count > 0;
+
     public bool HasWarnings => _warnings.HasWarnings;
 
     public bool ShowInstalledDetails => IsInstalledMode && _selectedInstalledPackage is not null;
@@ -269,6 +286,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowMarketplaceUpdateButton => ShowMarketplaceInstalledActions && !SelectedPackageHasActiveOperation;
 
+    public bool ShowMarketplacePackageStats => ShowMarketplaceDetails && HasMarketplacePackageStats;
+
+    public bool ShowMarketplacePackageStarAction => ShowMarketplaceDetails;
+
+    public bool CanToggleSelectedMarketplacePackageStar => !IsBusy && _selectedMarketplacePackage is not null;
+
     public bool CanInstallSelectedMarketplacePackage => ShowMarketplaceInstallAction
         && _selectedMarketplacePackage is { IsYanked: false }
         && _selectedMarketplaceVersion is { IsYanked: false }
@@ -281,6 +304,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public bool CanUpdateAllPackages => !IsBusy && AvailableUpdateCount > 0;
 
     public bool ShowUpdateAllPackages => AvailableUpdateCount > 0;
+
+    public bool ShowHeaderUpdateAllPackages => IsInstalledMode && ShowUpdateAllPackages;
 
     public string SearchPlaceholder => IsMarketplaceMode ? "Search marketplace packages" : "Search installed and session packages";
 
@@ -307,6 +332,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     [ObservableProperty]
     private string _searchText = string.Empty;
+
+    [ObservableProperty]
+    private RegistrySearchSortOptionViewModel? _selectedMarketplaceSortOption = RegistrySearchSortOptionViewModel.Defaults[0];
 
     [ObservableProperty]
     private string _statusText = "Search the marketplace or inspect installed packages.";
@@ -365,11 +393,24 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private string _marketplaceSelectedVersion = "Latest";
 
+    [ObservableProperty]
+    private string _marketplacePackageStatsText = string.Empty;
+
+    [ObservableProperty]
+    private string _marketplacePackageStarActionText = "Star";
+
+    [ObservableProperty]
+    private bool _hasMarketplacePackageStats;
+
+    [ObservableProperty]
+    private bool _selectedMarketplacePackageIsStarred;
+
     partial void OnModeChanged(PackageWindowMode value)
     {
         OnPropertyChanged(nameof(IsMarketplaceMode));
         OnPropertyChanged(nameof(IsInstalledMode));
         OnPropertyChanged(nameof(SearchPlaceholder));
+        OnPropertyChanged(nameof(ShowHeaderUpdateAllPackages));
         ApplySearchTextForCurrentMode();
         NotifyListVisibilityChanged();
         NotifyDetailsChanged();
@@ -397,6 +438,14 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         {
             _marketplaceSearchText = value;
             QueueMarketplaceSearch();
+        }
+    }
+
+    partial void OnSelectedMarketplaceSortOptionChanged(RegistrySearchSortOptionViewModel? value)
+    {
+        if (IsMarketplaceMode)
+        {
+            QueueMarketplaceSearch(TimeSpan.Zero);
         }
     }
 
@@ -623,6 +672,65 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private void CancelSelectedPackageOperation()
         => _selectedOperationCommands.CancelSelectedPackageOperation();
 
+    [RelayCommand(CanExecute = nameof(CanToggleSelectedMarketplacePackageStar))]
+    private async Task ToggleSelectedMarketplacePackageStarAsync()
+    {
+        var selectedPackage = SelectedMarketplacePackage;
+        if (selectedPackage is null)
+        {
+            return;
+        }
+
+        if (!TryResolveRegistryUrl(out var registryUrl))
+        {
+            return;
+        }
+
+        if (!TryGetRegistryToken(registryUrl, "starring", out var token))
+        {
+            NotifyCommandStateChanged();
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            if (!_registryClientProvider.TryCreate(out var registryClient, out var errorMessage))
+            {
+                StatusText = errorMessage ?? "Enter a valid HTTP Registry URL before starring a package.";
+                return;
+            }
+
+            using (registryClient)
+            {
+            var result = SelectedMarketplacePackageIsStarred
+                ? await registryClient.UnstarPackageAsync(selectedPackage.PackageId, token.Token)
+                : await registryClient.StarPackageAsync(selectedPackage.PackageId, token.Token);
+            if (!result.Success)
+            {
+                StatusText = result.Forbidden
+                    ? "Sign in to the Registry before starring a package."
+                    : result.Errors.FirstOrDefault() ?? "Registry package star update failed.";
+                return;
+            }
+
+            selectedPackage.Stats = result.Stats;
+            ApplyMarketplacePackageStats(result.Stats);
+            StatusText = result.Message ?? "Updated package star.";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = ex.Message;
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifyDetailsChanged();
+            NotifyCommandStateChanged();
+        }
+    }
+
     private async Task RefreshInstalledAsync(
         string? preferredPackageId = null,
         PackageOperationResult? operationResult = null,
@@ -664,6 +772,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var searchResult = await _marketplace.Catalog.SearchAsync(
                 _marketplaceSearchText,
+                SelectedMarketplaceSortOption?.Sort ?? RegistrySearchSort.Downloads,
                 _installedPackages.Catalog,
                 item => SelectMarketplacePackageAsync(item),
                 cancellationToken);
@@ -791,6 +900,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         ObserveSelectedInstalledPackage(null);
         ObserveSelectedMarketplacePackage(item);
         ApplySelectedPackageDetails(PackageSelectionDetails.FromMarketplace(item));
+        ApplyMarketplacePackageStats(item.Stats);
+        ApplyMarketplaceAttributions(null, []);
         ApplyMarketplaceProfile(null);
         ClearWarnings();
         RefreshSelectedPackageOperationState();
@@ -823,6 +934,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             }
 
             ApplyMarketplaceProfile(details.Profile);
+            item.Stats = details.Stats;
+            ApplyMarketplacePackageStats(details.Stats);
+            ApplyMarketplaceAttributions(details.Creator, details.Maintainers);
             _marketplace.ReplaceVersions(details.Versions);
             OnPropertyChanged(nameof(HasMarketplaceVersions));
             OnPropertyChanged(nameof(ShowNoMarketplaceVersions));
@@ -880,6 +994,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         ObserveSelectedMarketplacePackage(null);
         _marketplace.ClearVersions();
         ApplyMarketplaceProfile(null);
+        ClearMarketplacePackageStats();
+        ApplyMarketplaceAttributions(null, []);
         ApplySelectedPackageDetails(PackageSelectionDetails.NoMarketplaceMatch());
         ClearWarnings();
         RefreshSelectedPackageOperationState();
@@ -1066,6 +1182,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowMarketplaceDetails));
         OnPropertyChanged(nameof(ShowNoSelection));
         OnPropertyChanged(nameof(ShowSelectedPackageIcon));
+        OnPropertyChanged(nameof(ShowMarketplacePackageStats));
+        OnPropertyChanged(nameof(ShowMarketplacePackageStarAction));
         NotifyMarketplaceProfileChanged();
     }
 
@@ -1077,6 +1195,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(HasMarketplaceProfileTags));
         OnPropertyChanged(nameof(HasMarketplaceProfile));
         OnPropertyChanged(nameof(HasMarketplaceProfileMedia));
+        OnPropertyChanged(nameof(HasMarketplaceAttributions));
+        OnPropertyChanged(nameof(HasMarketplaceCreators));
+        OnPropertyChanged(nameof(HasMarketplaceMaintainers));
     }
 
     private void NotifyPackageCountsChanged()
@@ -1092,6 +1213,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(AvailableUpdateCount));
         OnPropertyChanged(nameof(CanUpdateAllPackages));
         OnPropertyChanged(nameof(ShowUpdateAllPackages));
+        OnPropertyChanged(nameof(ShowHeaderUpdateAllPackages));
         NotifyCommandStateChanged();
     }
 
@@ -1115,6 +1237,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(CanInstallSelectedMarketplacePackage));
         OnPropertyChanged(nameof(CanUninstallSelectedMarketplacePackage));
         OnPropertyChanged(nameof(CanUpdateSelectedMarketplacePackage));
+        OnPropertyChanged(nameof(CanToggleSelectedMarketplacePackageStar));
         OnPropertyChanged(nameof(CanUpdateAllPackages));
         RefreshCommand.NotifyCanExecuteChanged();
         InstallPackageCommand.NotifyCanExecuteChanged();
@@ -1124,6 +1247,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         InstallSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();
         UpdateSelectedInstalledPackageCommand.NotifyCanExecuteChanged();
         UpdateSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();
+        ToggleSelectedMarketplacePackageStarCommand.NotifyCanExecuteChanged();
         UninstallSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();
         UpdateAllPackagesCommand.NotifyCanExecuteChanged();
     }
@@ -1137,6 +1261,84 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         }
 
         NotifyMarketplaceProfileChanged();
+    }
+
+    private void ApplyMarketplacePackageStats(RegistryPackageStats? stats)
+    {
+        if (stats is null)
+        {
+            ClearMarketplacePackageStats();
+            return;
+        }
+
+        HasMarketplacePackageStats = true;
+        MarketplacePackageStatsText = $"{stats.TotalDownloads:N0} downloads · {stats.Stars:N0} stars";
+        SelectedMarketplacePackageIsStarred = stats.IsStarred;
+        MarketplacePackageStarActionText = stats.IsStarred ? "Unstar" : "Star";
+        OnPropertyChanged(nameof(ShowMarketplacePackageStats));
+        NotifyCommandStateChanged();
+    }
+
+    private void ClearMarketplacePackageStats()
+    {
+        HasMarketplacePackageStats = false;
+        MarketplacePackageStatsText = string.Empty;
+        SelectedMarketplacePackageIsStarred = false;
+        MarketplacePackageStarActionText = "Star";
+        OnPropertyChanged(nameof(ShowMarketplacePackageStats));
+        NotifyCommandStateChanged();
+    }
+
+    private void ApplyMarketplaceAttributions(
+        RegistryUserAttribution? creator,
+        IReadOnlyList<RegistryUserAttribution> maintainers)
+    {
+        var creators = creator is null
+            ? Array.Empty<RegistryUserAttributionViewModel>()
+            : new[] { new RegistryUserAttributionViewModel(creator) };
+        var maintainerAttributions = maintainers
+            .Where(maintainer => creator is null || !maintainer.IsOwner)
+            .Select(maintainer => new RegistryUserAttributionViewModel(maintainer))
+            .ToArray();
+
+        MarketplaceCreators.ReplaceWith(creators);
+        MarketplaceMaintainers.ReplaceWith(maintainerAttributions);
+        MarketplaceAttributions.ReplaceWith(creators.Concat(maintainerAttributions));
+        OnPropertyChanged(nameof(HasMarketplaceAttributions));
+        OnPropertyChanged(nameof(HasMarketplaceCreators));
+        OnPropertyChanged(nameof(HasMarketplaceMaintainers));
+    }
+
+    private bool TryResolveRegistryUrl(out Uri registryUrl)
+    {
+        if (RegistryUrlHelper.TryParse(RegistryUrlText, out registryUrl!) && registryUrl is not null)
+        {
+            return true;
+        }
+
+        StatusText = "Enter a valid HTTP Registry URL before using this action.";
+        return false;
+    }
+
+    private bool TryGetRegistryToken(Uri registryUrl, string actionName, out RegistryAuthToken token)
+    {
+        var resolvedToken = _registryTokenProvider(registryUrl);
+        if (resolvedToken is null || string.IsNullOrWhiteSpace(resolvedToken.Token))
+        {
+            StatusText = $"Sign in to {registryUrl.Host} before {actionName}.";
+            token = null!;
+            return false;
+        }
+
+        if (resolvedToken.ExpiresAtUtc is not null && resolvedToken.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            StatusText = $"Registry sign-in for {registryUrl.Host} expired. Sign in again before {actionName}.";
+            token = null!;
+            return false;
+        }
+
+        token = resolvedToken;
+        return true;
     }
 
     public void Dispose()

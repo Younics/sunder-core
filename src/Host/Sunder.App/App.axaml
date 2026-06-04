@@ -3,6 +3,16 @@
              x:Class="Sunder.App.App"
              Name="Sunder"
              RequestedThemeVariant="Dark">
+  <NativeMenu.Menu>
+    <NativeMenu>
+      <NativeMenuItem Header="About Sunder" Click="AboutSunderMenuItem_OnClick" />
+      <NativeMenuItemSeparator />
+      <NativeMenuItem Header="Settings" Gesture="Meta+," Click="SettingsMenuItem_OnClick" />
+      <NativeMenuItem Header="Stacks" Click="StacksMenuItem_OnClick" />
+      <NativeMenuItem Header="Packages" Click="PackagesMenuItem_OnClick" />
+    </NativeMenu>
+  </NativeMenu.Menu>
+
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
@@ -23,6 +33,9 @@
       <SolidColorBrush x:Key="Sunder.Brush.Shell.Glass.Border.Strong" Color="#3AFFFFFF" />
       <SolidColorBrush x:Key="Sunder.Brush.Shell.Glass.Highlight" Color="#32FFFFFF" />
       <SolidColorBrush x:Key="Sunder.Brush.Shell.Glass.Highlight.Inactive" Color="#24FFFFFF" />
+      <SolidColorBrush x:Key="Sunder.Brush.Star" Color="#F6C343" />
+      <SolidColorBrush x:Key="Sunder.Brush.Star.Hover" Color="#FFD36A" />
+      <SolidColorBrush x:Key="Sunder.Brush.Foreground.OnStar" Color="#211704" />
     </ResourceDictionary>
   </Application.Resources>
 

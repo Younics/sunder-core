@@ -16,20 +16,39 @@ public enum StackBrowserMode
 
 public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 {
+    private const int MarketplaceSearchThrottleDelayMilliseconds = 300;
+
     private readonly LocalStackLibraryService _library;
     private readonly IStackArchivePicker _archivePicker;
     private readonly IRuntimeApiClient _runtimeApiClient;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _applyPackageLifecycleChangesAsync;
+    private readonly Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> _notifyStackImportAppliedAsync;
     private readonly Func<Uri, IRegistryApiClient> _registryClientFactory;
     private readonly Func<Uri, RegistryAuthToken?> _registryTokenProvider;
+    private readonly MarketplaceSearchScheduler _registrySearchScheduler;
+    private readonly MarketplacePackageProfileViewModel _selectedLocalProfile = new();
+    private readonly MarketplacePackageProfileViewModel _registryProfile = new();
     private IReadOnlyList<LocalStackLibraryItem> _allStacks = [];
     private IReadOnlyList<SunderStackPackageRequirement> _selectedPackageRequirements = [];
     private int _selectionVersion;
     private int _registrySelectionVersion;
+    private int _registrySearchVersion;
     private bool _selectedInstallPlanReady;
     private bool _selectedInstallPlanHasErrors;
     private bool _disposed;
+
+    public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? RegistryImageGalleryRequested
+    {
+        add => _registryProfile.ImageGalleryRequested += value;
+        remove => _registryProfile.ImageGalleryRequested -= value;
+    }
+
+    public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? LocalImageGalleryRequested
+    {
+        add => _selectedLocalProfile.ImageGalleryRequested += value;
+        remove => _selectedLocalProfile.ImageGalleryRequested -= value;
+    }
 
     public StacksWindowViewModel(
         LocalStackLibraryService library,
@@ -37,17 +56,23 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         IRuntimeApiClient runtimeApiClient,
         RegistryPackageInstallService? registryInstallService = null,
         Func<IReadOnlyList<string>, CancellationToken, Task>? applyPackageLifecycleChangesAsync = null,
+        Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>>? notifyStackImportAppliedAsync = null,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
-        Func<Uri, RegistryAuthToken?>? registryTokenProvider = null)
+        Func<Uri, RegistryAuthToken?>? registryTokenProvider = null,
+        TimeSpan? registrySearchThrottleDelay = null)
     {
         _library = library;
         _archivePicker = archivePicker;
         _runtimeApiClient = runtimeApiClient;
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync ?? ((_, _) => Task.CompletedTask);
+        _notifyStackImportAppliedAsync = notifyStackImportAppliedAsync ?? ((_, _) => Task.FromResult<IReadOnlyList<string>>([]));
         _registryClientFactory = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
-        _registryTokenProvider = registryTokenProvider ?? (registryUrl => RegistryAuthStore.Load().GetToken(registryUrl));
-        RegistryUrlText = RegistryUrlHelper.DefaultRegistryUrl.ToString();
+        _registryTokenProvider = registryTokenProvider ?? (registryUrl => SunderAuthStore.Load().GetToken(registryUrl));
+        _registrySearchScheduler = new MarketplaceSearchScheduler(
+            SearchRegistryStacksCoreAsync,
+            registrySearchThrottleDelay ?? TimeSpan.FromMilliseconds(MarketplaceSearchThrottleDelayMilliseconds));
+        _registryUrlText = RegistryUrlHelper.DefaultRegistryUrl.ToString();
     }
 
     public ObservableCollection<LocalStackLibraryItemViewModel> Stacks { get; } = [];
@@ -74,19 +99,35 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<string> SelectedImportErrors { get; } = [];
 
-    public ObservableCollection<StackExportItemViewModel> ExportItems { get; } = [];
+    public ObservableCollection<RegistryPackageMediaItemViewModel> SelectedStackProfileMedia => _selectedLocalProfile.Media;
 
-    public ObservableCollection<string> ExportWarnings { get; } = [];
-
-    public ObservableCollection<string> ExportErrors { get; } = [];
+    public LiveMarkdown.Avalonia.ObservableStringBuilder SelectedStackReadmeMarkdownBuilder => _selectedLocalProfile.ReadmeMarkdownBuilder;
 
     public ObservableCollection<RegistryStackSearchItemViewModel> RegistryStacks { get; } = [];
 
     public ObservableCollection<RegistryStackPackageRequirementViewModel> RegistrySelectedPackages { get; } = [];
 
-    public ObservableCollection<RegistryStackFragmentViewModel> RegistrySelectedFragments { get; } = [];
+    public ObservableCollection<LocalStackDetailPackageViewModel> RegistrySelectedDetails { get; } = [];
 
     public ObservableCollection<string> RegistrySelectedRequiredInputs { get; } = [];
+
+    public ObservableCollection<RegistrySearchSortOptionViewModel> RegistrySortOptions { get; } = new(RegistrySearchSortOptionViewModel.Defaults);
+
+    public ObservableCollection<RegistryPackageProfileLinkViewModel> RegistryProfileLinks => _registryProfile.Links;
+
+    public ObservableCollection<RegistryPackageProfileMetadataItemViewModel> RegistryProfileMetadata => _registryProfile.Metadata;
+
+    public ObservableCollection<string> RegistryProfileTags => _registryProfile.Tags;
+
+    public ObservableCollection<RegistryPackageMediaItemViewModel> RegistryProfileMedia => _registryProfile.Media;
+
+    public LiveMarkdown.Avalonia.ObservableStringBuilder RegistryReadmeMarkdownBuilder => _registryProfile.ReadmeMarkdownBuilder;
+
+    public ObservableCollection<RegistryUserAttributionViewModel> RegistryAttributions { get; } = [];
+
+    public ObservableCollection<RegistryUserAttributionViewModel> RegistryCreators { get; } = [];
+
+    public ObservableCollection<RegistryUserAttributionViewModel> RegistryMaintainers { get; } = [];
 
     [ObservableProperty]
     private StackBrowserMode _browserMode = StackBrowserMode.Marketplace;
@@ -102,6 +143,9 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     [ObservableProperty]
     private string _registrySearchText = string.Empty;
+
+    [ObservableProperty]
+    private RegistrySearchSortOptionViewModel? _selectedRegistrySortOption = RegistrySearchSortOptionViewModel.Defaults[0];
 
     [ObservableProperty]
     private RegistryStackSearchItemViewModel? _selectedRegistryStack;
@@ -128,7 +172,16 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private string _selectedStackPath = string.Empty;
 
     [ObservableProperty]
-    private string _selectedStackSafetyText = string.Empty;
+    private string _selectedStackStatsText = string.Empty;
+
+    [ObservableProperty]
+    private string _selectedStackStarActionText = "Star";
+
+    [ObservableProperty]
+    private bool _hasSelectedStackStats;
+
+    [ObservableProperty]
+    private bool _selectedStackIsStarred;
 
     [ObservableProperty]
     private string _selectedRegistryStackTitle = "No Marketplace Stack selected";
@@ -140,34 +193,22 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private string _selectedRegistryStackSummary = string.Empty;
 
     [ObservableProperty]
-    private string _selectedRegistryStackMetadata = string.Empty;
+    private string _selectedRegistryStackContentText = string.Empty;
 
     [ObservableProperty]
-    private string _selectedRegistryStackSafetyText = string.Empty;
+    private string _selectedRegistryStackUpdatedText = string.Empty;
 
     [ObservableProperty]
-    private bool _isCreatingStack;
+    private string _selectedRegistryStackStatsText = string.Empty;
 
     [ObservableProperty]
-    private string _newStackId = string.Empty;
+    private string _selectedRegistryStackStarActionText = "Star";
 
     [ObservableProperty]
-    private string _newStackName = string.Empty;
+    private bool _hasSelectedRegistryStackStats;
 
     [ObservableProperty]
-    private string _newStackSummary = string.Empty;
-
-    [ObservableProperty]
-    private bool _includePrivateText = true;
-
-    [ObservableProperty]
-    private bool _includeMachineSpecificValues;
-
-    [ObservableProperty]
-    private bool _includeExecutableCommands = true;
-
-    [ObservableProperty]
-    private bool _includeNetworkEndpoints = true;
+    private bool _selectedRegistryStackIsStarred;
 
     public bool HasStacks => Stacks.Count > 0;
 
@@ -195,11 +236,35 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasRegistrySelectedPackages => RegistrySelectedPackages.Count > 0;
 
-    public bool HasRegistrySelectedFragments => RegistrySelectedFragments.Count > 0;
+    public bool HasRegistrySelectedFragments => RegistrySelectedDetails.Count > 0;
 
     public bool HasRegistrySelectedRequiredInputs => RegistrySelectedRequiredInputs.Count > 0;
 
+    public bool HasRegistryReadme => _registryProfile.HasReadme;
+
+    public bool HasRegistryProfileLinks => _registryProfile.HasLinks;
+
+    public bool HasRegistryProfileMetadata => _registryProfile.HasMetadata;
+
+    public bool HasRegistryProfileTags => _registryProfile.HasTags;
+
+    public bool HasRegistryProfile => _registryProfile.HasProfile;
+
+    public bool HasRegistryProfileMedia => _registryProfile.HasMedia;
+
+    public bool HasRegistryAttributions => RegistryAttributions.Count > 0;
+
+    public bool HasRegistryCreators => RegistryCreators.Count > 0;
+
+    public bool HasRegistryMaintainers => RegistryMaintainers.Count > 0;
+
     public bool HasSelectedSummary => !string.IsNullOrWhiteSpace(SelectedStackSummary);
+
+    public bool HasSelectedReadme => _selectedLocalProfile.HasReadme;
+
+    public bool HasSelectedProfileMedia => _selectedLocalProfile.HasMedia;
+
+    public bool ShowSelectedStackStats => ShowSelectedDetails && HasSelectedStackStats;
 
     public bool HasSelectedPackages => SelectedPackages.Count > 0;
 
@@ -225,16 +290,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasSelectedImportErrors => SelectedImportErrors.Count > 0;
 
-    public bool HasExportItems => ExportItems.Count > 0;
-
-    public bool HasExportWarnings => ExportWarnings.Count > 0;
-
-    public bool HasExportErrors => ExportErrors.Count > 0;
-
-    public bool ShowCreateStackPanel => IsCreatingStack;
-
-    public bool ShowNoExportItems => IsCreatingStack && !HasExportItems && !HasExportErrors && !IsBusy;
-
     public bool ShowSelectedInstallPlan => HasSelection && _selectedPackageRequirements.Count > 0;
 
     public bool ShowNoSelectedInstallPlanChanges => ShowSelectedInstallPlan
@@ -244,13 +299,15 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowSelectedImportPreview => HasSelection && HasSelectedFragments;
 
-    public bool ShowSelectedDetails => IsLocalMode && HasSelection && !IsCreatingStack;
+    public bool ShowSelectedDetails => IsLocalMode && HasSelection;
 
-    public bool ShowRegistrySelectedDetails => IsMarketplaceMode && HasRegistrySelection && !IsCreatingStack;
+    public bool ShowRegistrySelectedDetails => IsMarketplaceMode && HasRegistrySelection;
 
-    public bool ShowNoSelection => IsLocalMode && !HasSelection && !IsCreatingStack;
+    public bool ShowRegistryStackStats => ShowRegistrySelectedDetails && HasSelectedRegistryStackStats;
 
-    public bool ShowNoRegistrySelection => IsMarketplaceMode && !HasRegistrySelection && !IsCreatingStack;
+    public bool ShowNoSelection => IsLocalMode && !HasSelection;
+
+    public bool ShowNoRegistrySelection => IsMarketplaceMode && !HasRegistrySelection;
 
     public bool CanRefresh => !IsBusy;
 
@@ -258,23 +315,15 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool CanSearchRegistryStacks => !IsBusy && HasRegistryUrlText;
 
+    public bool CanCreateStack => !IsBusy;
+
     public bool CanImportSelectedRegistryStack => !IsBusy && SelectedRegistryStack is not null;
 
     public bool CanUseSelectedRegistryStack => !IsBusy && SelectedRegistryStack is not null;
 
+    public bool CanUseSelectedStack => !IsBusy && SelectedStack is not null;
+
     public bool CanDeleteSelectedRegistryStack => !IsBusy && SelectedRegistryStack is not null;
-
-    public bool CanCreateStack => !IsBusy;
-
-    public bool CanRefreshStackExportItems => !IsBusy && IsCreatingStack;
-
-    public bool CanSaveCreatedStack => !IsBusy
-                                           && IsCreatingStack
-                                           && !string.IsNullOrWhiteSpace(NewStackId)
-                                           && !string.IsNullOrWhiteSpace(NewStackName)
-                                           && ExportItems.Any(item => item.IsSelected);
-
-    public bool CanCancelCreateStack => !IsBusy && IsCreatingStack;
 
     public bool CanExportSelectedStack => !IsBusy && SelectedStack is not null;
 
@@ -286,9 +335,15 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool CanUnpublishSelectedStack => !IsBusy && ShowUnpublishSelectedStack;
 
-    public bool CanRemoveSelectedStack => !IsBusy && SelectedStack is not null;
+    public bool ShowSelectedStackStarAction => ShowSelectedDetails && SelectedStack?.IsPublished == true;
 
-    public bool CanUseSelectedStack => !IsBusy && SelectedStack is not null;
+    public bool CanToggleSelectedStackStar => !IsBusy && ShowSelectedStackStarAction;
+
+    public bool ShowSelectedRegistryStackStarAction => ShowRegistrySelectedDetails;
+
+    public bool CanToggleSelectedRegistryStackStar => !IsBusy && SelectedRegistryStack is not null;
+
+    public bool CanRemoveSelectedStack => !IsBusy && SelectedStack is not null;
 
     partial void OnSelectedStackChanged(LocalStackLibraryItemViewModel? value)
     {
@@ -303,6 +358,10 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         if (value is not null)
         {
             _ = LoadSelectedStackManifestAsync(value.Item, selectionVersion);
+            if (value.IsPublished)
+            {
+                _ = LoadSelectedPublishedStackStatsAsync(value, selectionVersion);
+            }
         }
     }
 
@@ -317,29 +376,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     {
         OnPropertyChanged(nameof(ShowNoStacks));
         OnPropertyChanged(nameof(ShowNoRegistryStacks));
-        OnPropertyChanged(nameof(ShowNoExportItems));
         NotifyCommandStateChanged();
-    }
-
-    partial void OnIsCreatingStackChanged(bool value)
-    {
-        OnPropertyChanged(nameof(ShowCreateStackPanel));
-        OnPropertyChanged(nameof(ShowSelectedDetails));
-        OnPropertyChanged(nameof(ShowRegistrySelectedDetails));
-        OnPropertyChanged(nameof(ShowNoSelection));
-        OnPropertyChanged(nameof(ShowNoRegistrySelection));
-        NotifyExportStateChanged();
-        NotifyCommandStateChanged();
-    }
-
-    partial void OnNewStackIdChanged(string value)
-    {
-        NotifyExportStateChanged();
-    }
-
-    partial void OnNewStackNameChanged(string value)
-    {
-        NotifyExportStateChanged();
     }
 
     partial void OnSearchTextChanged(string value)
@@ -351,6 +388,18 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     partial void OnRegistrySearchTextChanged(string value)
     {
         OnPropertyChanged(nameof(HasRegistrySearchText));
+        if (IsMarketplaceMode && HasRegistryUrlText)
+        {
+            QueueRegistrySearch();
+        }
+    }
+
+    partial void OnSelectedRegistrySortOptionChanged(RegistrySearchSortOptionViewModel? value)
+    {
+        if (IsMarketplaceMode && HasRegistryUrlText)
+        {
+            QueueRegistrySearch(TimeSpan.Zero);
+        }
     }
 
     partial void OnSelectedRegistryStackChanged(RegistryStackSearchItemViewModel? value)
@@ -374,6 +423,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     partial void OnRegistryUrlTextChanged(string value)
     {
         OnPropertyChanged(nameof(HasRegistryUrlText));
+        if (IsMarketplaceMode && HasRegistryUrlText)
+        {
+            QueueRegistrySearch();
+        }
+
         NotifyRegistryStackStateChanged();
     }
 
@@ -385,7 +439,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
+        _registrySearchScheduler.Dispose();
         DisposeSelectedLocalDetails();
+        DisposeRegistrySelectedDetails();
+        _selectedLocalProfile.Dispose();
+        _registryProfile.Dispose();
         _runtimeApiClient.Dispose();
     }
 
@@ -393,7 +451,12 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     {
         if (_allStacks.Count == 0)
         {
-            await RefreshAsync();
+            await RefreshLocalStacksAsync();
+        }
+
+        if (IsMarketplaceMode && RegistryStacks.Count == 0 && HasRegistryUrlText)
+        {
+            await SearchRegistryStacksAsync();
         }
     }
 
@@ -409,13 +472,13 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 _runtimeApiClient,
                 _registryInstallService,
                 _applyPackageLifecycleChangesAsync,
+                _notifyStackImportAppliedAsync,
                 _registryClientFactory,
                 RegistryUrlText);
 
     public async Task RefreshAfterCreatedStackAsync(string? stackId)
     {
         _allStacks = await _library.ListAsync();
-        IsCreatingStack = false;
         RebuildStackList(stackId);
         StatusText = string.IsNullOrWhiteSpace(stackId)
             ? "Created local Stack."
@@ -449,6 +512,17 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     private async Task RefreshAsync()
     {
+        if (IsMarketplaceMode)
+        {
+            await SearchRegistryStacksAsync();
+            return;
+        }
+
+        await RefreshLocalStacksAsync();
+    }
+
+    private async Task RefreshLocalStacksAsync()
+    {
         IsBusy = true;
         try
         {
@@ -480,6 +554,10 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private void ShowMarketplace()
     {
         BrowserMode = StackBrowserMode.Marketplace;
+        if (RegistryStacks.Count == 0 && HasRegistryUrlText)
+        {
+            QueueRegistrySearch(TimeSpan.Zero);
+        }
     }
 
     [RelayCommand]
@@ -491,17 +569,33 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void ClearRegistrySearch()
     {
-        RegistrySearchText = string.Empty;
+        if (!string.IsNullOrEmpty(RegistrySearchText))
+        {
+            RegistrySearchText = string.Empty;
+            return;
+        }
+
+        if (IsMarketplaceMode && HasRegistryUrlText)
+        {
+            QueueRegistrySearch(TimeSpan.Zero);
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanSearchRegistryStacks))]
     private async Task SearchRegistryStacksAsync()
+    {
+        CancelQueuedRegistrySearch();
+        await SearchRegistryStacksCoreAsync();
+    }
+
+    private async Task SearchRegistryStacksCoreAsync(CancellationToken cancellationToken = default)
     {
         if (!TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
         }
 
+        var searchVersion = ++_registrySearchVersion;
         IsBusy = true;
         SelectedRegistryStack = null;
         RegistryStacks.Clear();
@@ -510,7 +604,19 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         {
             StatusText = "Searching Registry Stacks...";
             using var registryClient = _registryClientFactory(registryUrl);
-            var results = await registryClient.SearchStacksAsync(RegistrySearchText, 0, 50);
+            var query = string.IsNullOrWhiteSpace(RegistrySearchText) ? null : RegistrySearchText.Trim();
+            var results = await registryClient.SearchStacksAsync(
+                query,
+                0,
+                50,
+                SelectedRegistrySortOption?.Sort ?? RegistrySearchSort.Downloads,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (searchVersion != _registrySearchVersion)
+            {
+                return;
+            }
+
             foreach (var stack in results)
             {
                 RegistryStacks.Add(new RegistryStackSearchItemViewModel(stack));
@@ -521,14 +627,23 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 ? "No Registry Stacks matched the search."
                 : $"Found {RegistryStacks.Count} Registry Stack{(RegistryStacks.Count == 1 ? string.Empty : "s")}.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            if (searchVersion == _registrySearchVersion)
+            {
+                StatusText = ex.Message;
+            }
         }
         finally
         {
-            IsBusy = false;
-            NotifyRegistryStackStateChanged();
+            if (searchVersion == _registrySearchVersion)
+            {
+                IsBusy = false;
+                NotifyRegistryStackStateChanged();
+            }
         }
     }
 
@@ -546,150 +661,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
 
         return await ImportRegistryStackAsync(SelectedRegistryStack.StackId, registryUrl, launchKind, cancellationToken) is not null;
-    }
-
-    [RelayCommand(CanExecute = nameof(CanCreateStack))]
-    private async Task CreateStackAsync()
-    {
-        if (string.IsNullOrWhiteSpace(NewStackId))
-        {
-            NewStackId = "sunder-stack-" + DateTimeOffset.Now.ToString("yyyyMMddHHmm");
-        }
-
-        if (string.IsNullOrWhiteSpace(NewStackName))
-        {
-            NewStackName = "New Stack";
-        }
-
-        IsCreatingStack = true;
-        await RefreshStackExportItemsAsync();
-    }
-
-    [RelayCommand(CanExecute = nameof(CanRefreshStackExportItems))]
-    private async Task RefreshStackExportItemsAsync()
-    {
-        IsBusy = true;
-        ClearExportDiscovery();
-        try
-        {
-            StatusText = "Discovering setup items from active packages...";
-            var discovery = await _runtimeApiClient.ListStackExportItemsAsync();
-            foreach (var item in discovery.Items)
-            {
-                ExportItems.Add(new StackExportItemViewModel(item, NotifyExportItemSelectionChanged));
-            }
-
-            foreach (var warning in discovery.Warnings)
-            {
-                ExportWarnings.Add(warning);
-            }
-
-            foreach (var error in discovery.Errors)
-            {
-                ExportErrors.Add(error);
-            }
-
-            StatusText = discovery.Errors.Count > 0
-                ? discovery.Errors[0]
-                : ExportItems.Count == 0
-                    ? "No active packages currently expose Stack setup items."
-                    : $"Discovered {ExportItems.Count} setup item{(ExportItems.Count == 1 ? string.Empty : "s")} for export.";
-        }
-        catch (Exception ex)
-        {
-            ExportErrors.Add(ex.Message);
-            StatusText = ex.Message;
-        }
-        finally
-        {
-            IsBusy = false;
-            NotifyExportStateChanged();
-        }
-    }
-
-    [RelayCommand(CanExecute = nameof(CanSaveCreatedStack))]
-    private async Task SaveCreatedStackAsync()
-    {
-        var selectedItems = ExportItems
-            .Where(item => item.IsSelected)
-            .Select(item => new RuntimeStackExportSelection(item.ContributorId, item.ItemId))
-            .ToArray();
-        if (selectedItems.Length == 0)
-        {
-            StatusText = "Select at least one setup item to export.";
-            return;
-        }
-
-        var path = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "create", Guid.NewGuid().ToString("N"), BuildStackFileName(NewStackId));
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-
-        IsBusy = true;
-        ExportWarnings.Clear();
-        ExportErrors.Clear();
-        NotifyExportStateChanged();
-        try
-        {
-            StatusText = "Writing Stack archive...";
-            var result = await _runtimeApiClient.ExportStackAsync(new RuntimeStackExportRequest(
-                NewStackId.Trim(),
-                NewStackName.Trim(),
-                string.IsNullOrWhiteSpace(NewStackSummary) ? null : NewStackSummary.Trim(),
-                path,
-                selectedItems,
-                new RuntimeStackExportOptions(
-                    IncludePrivateText,
-                    IncludeMachineSpecificValues,
-                    IncludeExecutableCommands,
-                    IncludeNetworkEndpoints)));
-
-            foreach (var warning in result.Warnings)
-            {
-                ExportWarnings.Add(warning);
-            }
-
-            foreach (var error in result.Errors)
-            {
-                ExportErrors.Add(error);
-            }
-
-            if (!result.Success)
-            {
-                StatusText = ExportErrors.FirstOrDefault() ?? "Stack export failed.";
-                return;
-            }
-
-            var imported = await _library.ImportAsync(result.StackPath ?? path);
-            _allStacks = await _library.ListAsync();
-            IsCreatingStack = false;
-            RebuildStackList(imported.StackId);
-            StatusText = $"Created local Stack '{imported.Name}'. Review it before use.";
-        }
-        catch (Exception ex)
-        {
-            ExportErrors.Add(ex.Message);
-            StatusText = ex.Message;
-        }
-        finally
-        {
-            IsBusy = false;
-            var tempDirectory = Path.GetDirectoryName(path);
-            if (!string.IsNullOrWhiteSpace(tempDirectory))
-            {
-                TryDeleteDirectory(tempDirectory);
-            }
-
-            NotifyExportStateChanged();
-        }
-    }
-
-    [RelayCommand(CanExecute = nameof(CanCancelCreateStack))]
-    private void CancelCreateStack()
-    {
-        IsCreatingStack = false;
-        ClearExportDiscovery();
-        StatusText = SelectedStack is null
-            ? "Import a .sunderstack file or select a local Stack."
-            : $"Selected '{SelectedStack.Name}'.";
     }
 
     [RelayCommand(CanExecute = nameof(CanImportStack))]
@@ -834,6 +805,101 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanToggleSelectedStackStar))]
+    private async Task ToggleSelectedStackStarAsync()
+    {
+        var selectedStack = SelectedStack;
+        var publishedStackId = selectedStack?.PublishedStackId;
+        if (selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
+        {
+            return;
+        }
+
+        if (!TryResolvePublishedRegistryUrl(selectedStack, out var registryUrl))
+        {
+            return;
+        }
+
+        if (!TryGetRegistryToken(registryUrl, "starring", out var token))
+        {
+            NotifyCommandStateChanged();
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            using var registryClient = _registryClientFactory(registryUrl);
+            var result = SelectedStackIsStarred
+                ? await registryClient.UnstarStackAsync(publishedStackId, token.Token)
+                : await registryClient.StarStackAsync(publishedStackId, token.Token);
+            if (!result.Success)
+            {
+                StatusText = result.Forbidden
+                    ? "Sign in to the Registry before starring a Stack."
+                    : result.Errors.FirstOrDefault() ?? "Registry Stack star update failed.";
+                return;
+            }
+
+            ApplySelectedStackStats(result.Stats);
+            StatusText = result.Message ?? "Updated Stack star.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = ex.Message;
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifySelectionChanged();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleSelectedRegistryStackStar))]
+    private async Task ToggleSelectedRegistryStackStarAsync()
+    {
+        var selectedStack = SelectedRegistryStack;
+        if (selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        {
+            return;
+        }
+
+        if (!TryGetRegistryToken(registryUrl, "starring", out var token))
+        {
+            NotifyCommandStateChanged();
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            using var registryClient = _registryClientFactory(registryUrl);
+            var result = SelectedRegistryStackIsStarred
+                ? await registryClient.UnstarStackAsync(selectedStack.StackId, token.Token)
+                : await registryClient.StarStackAsync(selectedStack.StackId, token.Token);
+            if (!result.Success)
+            {
+                StatusText = result.Forbidden
+                    ? "Sign in to the Registry before starring a Stack."
+                    : result.Errors.FirstOrDefault() ?? "Registry Stack star update failed.";
+                return;
+            }
+
+            ApplySelectedRegistryStackStats(result.Stats);
+            StatusText = result.Message ?? "Updated Stack star.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = ex.Message;
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifyRegistrySelectionChanged();
+            NotifyRegistryStackStateChanged();
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(CanDeleteSelectedRegistryStack))]
     private async Task DeleteSelectedRegistryStackAsync()
     {
@@ -962,7 +1028,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         CancellationToken cancellationToken = default)
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "registry", Guid.NewGuid().ToString("N"));
-        var tempPath = Path.Combine(tempDirectory, BuildStackFileName(stackId));
+        var tempPath = Path.Combine(tempDirectory, SunderStackFormat.BuildStackFileName(stackId));
         IsBusy = true;
         try
         {
@@ -1046,6 +1112,35 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private async Task LoadSelectedPublishedStackStatsAsync(LocalStackLibraryItemViewModel stack, int selectionVersion)
+    {
+        if (string.IsNullOrWhiteSpace(stack.PublishedStackId)
+            || !RegistryUrlHelper.TryParse(stack.RegistryUrl, out var registryUrl)
+            || registryUrl is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var registryClient = _registryClientFactory(registryUrl);
+            var token = _registryTokenProvider(registryUrl);
+            var details = token is not null && !string.IsNullOrWhiteSpace(token.Token)
+                ? await registryClient.GetStackAsync(stack.PublishedStackId, token.Token)
+                : await registryClient.GetStackAsync(stack.PublishedStackId);
+            if (selectionVersion != _selectionVersion || SelectedStack?.StackId != stack.StackId)
+            {
+                return;
+            }
+
+            ApplySelectedStackStats(details?.Stats);
+        }
+        catch
+        {
+            // Published Stack stats are auxiliary; keep the local Stack details usable if the Registry is unavailable.
+        }
+    }
+
     private void ApplySelectedStackSummary(LocalStackLibraryItemViewModel? value)
     {
         SelectedPackages.Clear();
@@ -1063,7 +1158,8 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
             SelectedStackSummary = string.Empty;
             SelectedStackMetadata = string.Empty;
             SelectedStackPath = string.Empty;
-            SelectedStackSafetyText = string.Empty;
+            _selectedLocalProfile.Apply((RegistryStackProfile?)null);
+            ClearSelectedStackStats();
             NotifySelectedDetailsChanged();
             return;
         }
@@ -1071,9 +1167,21 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         SelectedStackTitle = value.Name;
         SelectedStackSubtitle = value.StackId;
         SelectedStackSummary = value.Summary;
-        SelectedStackMetadata = $"{value.PackageCount} package{(value.PackageCount == 1 ? string.Empty : "s")} · {value.FragmentCount} setup fragment{(value.FragmentCount == 1 ? string.Empty : "s")} · {value.UpdatedText}";
+        SelectedStackMetadata = $"{value.PackageCount} package{(value.PackageCount == 1 ? string.Empty : "s")} · {value.FragmentCount} fragment{(value.FragmentCount == 1 ? string.Empty : "s")} · {value.UpdatedText}";
         SelectedStackPath = value.LocalPath;
-        SelectedStackSafetyText = string.Empty;
+        _selectedLocalProfile.Apply(ToRegistryStackProfile(value.Item));
+        if (value.IsPublished)
+        {
+            HasSelectedStackStats = true;
+            SelectedStackStatsText = "Loading Registry stats...";
+            SelectedStackIsStarred = false;
+            SelectedStackStarActionText = "Star";
+        }
+        else
+        {
+            ClearSelectedStackStats();
+        }
+
         PopulateSelectedLocalDetails(value.Item, new Dictionary<string, Uri?>(StringComparer.OrdinalIgnoreCase));
         var selectionVersion = _selectionVersion;
         if (value.Item.Details?.Count > 0)
@@ -1082,6 +1190,29 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
 
         NotifySelectedDetailsChanged();
+    }
+
+    private void ClearSelectedStackStats()
+    {
+        HasSelectedStackStats = false;
+        SelectedStackStatsText = string.Empty;
+        SelectedStackIsStarred = false;
+        SelectedStackStarActionText = "Star";
+    }
+
+    private void ApplySelectedStackStats(RegistryStackStats? stats)
+    {
+        if (stats is null)
+        {
+            return;
+        }
+
+        HasSelectedStackStats = true;
+        SelectedStackStatsText = FormatStackStats(stats);
+        SelectedStackIsStarred = stats.IsStarred;
+        SelectedStackStarActionText = stats.IsStarred ? "Unstar" : "Star";
+        NotifySelectedDetailsChanged();
+        NotifyCommandStateChanged();
     }
 
     private void ApplySelectedStackManifest(SunderStackManifest manifest)
@@ -1100,7 +1231,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
 
         SelectedRequiredInputs.Clear();
-        SelectedStackSafetyText = string.Empty;
         NotifySelectedDetailsChanged();
         NotifyCommandStateChanged();
     }
@@ -1169,19 +1299,157 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         packages[packageId] = PackageIconUriResolver.Resolve(packageId, icon, _runtimeApiClient.CreatePackageAssetUri);
     }
 
+    private static async Task<IReadOnlyDictionary<string, StackPackageInfo>> LoadRegistryDetailPackageInfoAsync(
+        IRegistryApiClient registryClient,
+        IReadOnlyList<RegistryStackFragmentSummary> fragments,
+        string? bearerToken)
+    {
+        var packages = new Dictionary<string, StackPackageInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var packageId in fragments
+                     .Select(GetRegistryFragmentPackageId)
+                     .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var package = string.IsNullOrWhiteSpace(bearerToken)
+                    ? await registryClient.GetPackageAsync(packageId)
+                    : await registryClient.GetPackageAsync(packageId, bearerToken!);
+                if (package is null)
+                {
+                    continue;
+                }
+
+                packages[packageId] = new StackPackageInfo(
+                    string.IsNullOrWhiteSpace(package.Name) ? packageId : package.Name,
+                    null,
+                    ResolveRegistryPackageIconUri(registryClient.RegistryUrl, package.IconUrl));
+            }
+            catch
+            {
+                // Registry package metadata is decorative; keep package-id fallback details.
+            }
+        }
+
+        return packages;
+    }
+
+    private void PopulateRegistrySelectedDetails(
+        IReadOnlyList<RegistryStackFragmentSummary> fragments,
+        IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
+    {
+        DisposeRegistrySelectedDetails();
+        foreach (var packageGroup in fragments
+                     .GroupBy(GetRegistryFragmentPackageId, StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(group => ResolveRegistryPackageDisplayName(group.Key, packageInfo), StringComparer.OrdinalIgnoreCase))
+        {
+            var packageId = string.IsNullOrWhiteSpace(packageGroup.Key) ? "unknown" : packageGroup.Key;
+            packageInfo.TryGetValue(packageId, out var info);
+            var package = new LocalStackDetailPackage(
+                packageId,
+                string.IsNullOrWhiteSpace(info?.DisplayName) ? packageId : info.DisplayName,
+                BuildPackageGlyph(packageId),
+                packageGroup
+                    .Select(ToRegistryLocalDetailItem)
+                    .OrderBy(item => StackContentKindLabels.FormatGroupName(item.Kind), StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+                    .ToArray());
+            RegistrySelectedDetails.Add(new LocalStackDetailPackageViewModel(package, info?.IconUri));
+        }
+    }
+
+    private static LocalStackDetailItem ToRegistryLocalDetailItem(RegistryStackFragmentSummary fragment)
+    {
+        var itemId = string.IsNullOrWhiteSpace(fragment.SourceItemId) ? fragment.FragmentId : fragment.SourceItemId!;
+        var displayName = string.IsNullOrWhiteSpace(fragment.DisplayName) ? itemId : fragment.DisplayName;
+        var kind = StackContentKindLabels.InferKind(
+            fragment.Kind,
+            fragment.OwnerPackageId,
+            schemaId: fragment.SchemaId,
+            itemId: itemId,
+            displayName: displayName,
+            summary: fragment.Description);
+        return new LocalStackDetailItem(
+            itemId,
+            displayName,
+            BuildRegistryFragmentSummary(fragment),
+            (fragment.DisplayDetails ?? [])
+                .Select(detail => new LocalStackDetailValue(
+                    string.IsNullOrWhiteSpace(detail.Label) ? "Value" : detail.Label,
+                    string.IsNullOrWhiteSpace(detail.Value) ? "No preview value." : detail.Value,
+                    detail.Behavior ?? string.Empty))
+                .ToArray(),
+            kind);
+    }
+
+    private static string BuildRegistryFragmentSummary(RegistryStackFragmentSummary fragment)
+    {
+        var detailLabels = (fragment.DisplayDetails ?? [])
+            .Select(detail => detail.Label)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Take(3)
+            .ToArray();
+        if (detailLabels.Length > 0)
+        {
+            return string.Join(", ", detailLabels);
+        }
+
+        if (!string.IsNullOrWhiteSpace(fragment.Description))
+        {
+            return fragment.Description!;
+        }
+
+        return string.IsNullOrWhiteSpace(fragment.SchemaId) ? "Selected setup values" : fragment.SchemaId;
+    }
+
+    private static string GetRegistryFragmentPackageId(RegistryStackFragmentSummary fragment)
+        => string.IsNullOrWhiteSpace(fragment.OwnerPackageId) ? "unknown" : fragment.OwnerPackageId;
+
+    private static string ResolveRegistryPackageDisplayName(
+        string packageId,
+        IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
+        => packageInfo.TryGetValue(packageId, out var info) && !string.IsNullOrWhiteSpace(info.DisplayName)
+            ? info.DisplayName
+            : packageId;
+
+    private static Uri? ResolveRegistryPackageIconUri(Uri registryUrl, string? iconUrl)
+    {
+        if (string.IsNullOrWhiteSpace(iconUrl))
+        {
+            return null;
+        }
+
+        var trimmed = iconUrl.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri;
+        }
+
+        return Uri.TryCreate(registryUrl, trimmed, out var relativeUri) ? relativeUri : null;
+    }
+
+    private static string BuildPackageGlyph(string packageId)
+    {
+        var first = packageId.FirstOrDefault(char.IsLetterOrDigit);
+        return first == default ? "?" : char.ToUpperInvariant(first).ToString();
+    }
+
     private void ApplySelectedRegistryStackSummary(RegistryStackSearchItemViewModel? value)
     {
         RegistrySelectedPackages.Clear();
-        RegistrySelectedFragments.Clear();
+        DisposeRegistrySelectedDetails();
         RegistrySelectedRequiredInputs.Clear();
+        ApplyRegistryStackProfile(null);
+        ApplyRegistryAttributions(null, []);
 
         if (value is null)
         {
             SelectedRegistryStackTitle = "No Marketplace Stack selected";
             SelectedRegistryStackSubtitle = "Search Marketplace Stacks to inspect shared setup presets.";
             SelectedRegistryStackSummary = string.Empty;
-            SelectedRegistryStackMetadata = string.Empty;
-            SelectedRegistryStackSafetyText = string.Empty;
+            SelectedRegistryStackContentText = string.Empty;
+            SelectedRegistryStackUpdatedText = string.Empty;
+            ClearSelectedRegistryStackStats();
             NotifyRegistrySelectedDetailsChanged();
             return;
         }
@@ -1189,8 +1457,9 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         SelectedRegistryStackTitle = value.Name;
         SelectedRegistryStackSubtitle = value.StackId;
         SelectedRegistryStackSummary = value.Summary;
-        SelectedRegistryStackMetadata = $"{value.PackageCount} package{(value.PackageCount == 1 ? string.Empty : "s")} · {value.FragmentCount} setup fragment{(value.FragmentCount == 1 ? string.Empty : "s")} · {value.UpdatedText}";
-        SelectedRegistryStackSafetyText = "Reading Stack safety metadata...";
+        SelectedRegistryStackContentText = $"{value.PackageCount} package{(value.PackageCount == 1 ? string.Empty : "s")} · {value.FragmentCount} fragment{(value.FragmentCount == 1 ? string.Empty : "s")}";
+        SelectedRegistryStackUpdatedText = value.UpdatedText;
+        ApplySelectedRegistryStackStats(value.Stats);
         NotifyRegistrySelectedDetailsChanged();
     }
 
@@ -1204,7 +1473,10 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         try
         {
             using var registryClient = _registryClientFactory(registryUrl);
-            var details = await registryClient.GetStackAsync(stackId);
+            var token = _registryTokenProvider(registryUrl);
+            var details = token is not null && !string.IsNullOrWhiteSpace(token.Token)
+                ? await registryClient.GetStackAsync(stackId, token.Token)
+                : await registryClient.GetStackAsync(stackId);
             if (selectionVersion != _registrySelectionVersion)
             {
                 return;
@@ -1216,7 +1488,16 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            ApplySelectedRegistryStackDetails(details);
+            var packageInfo = await LoadRegistryDetailPackageInfoAsync(
+                registryClient,
+                details.Fragments,
+                token?.Token);
+            if (selectionVersion != _registrySelectionVersion)
+            {
+                return;
+            }
+
+            ApplySelectedRegistryStackDetails(details, packageInfo);
         }
         catch (Exception ex)
         {
@@ -1227,12 +1508,18 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void ApplySelectedRegistryStackDetails(RegistryStackDetails details)
+    private void ApplySelectedRegistryStackDetails(
+        RegistryStackDetails details,
+        IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
     {
         SelectedRegistryStackTitle = details.Name;
         SelectedRegistryStackSubtitle = details.StackId;
         SelectedRegistryStackSummary = string.IsNullOrWhiteSpace(details.Summary) ? string.Empty : details.Summary;
-        SelectedRegistryStackMetadata = $"{details.Packages.Count} package{(details.Packages.Count == 1 ? string.Empty : "s")} · {details.Fragments.Count} setup fragment{(details.Fragments.Count == 1 ? string.Empty : "s")} · Updated {details.UpdatedAtUtc.LocalDateTime:g}";
+        SelectedRegistryStackContentText = $"{details.Packages.Count} package{(details.Packages.Count == 1 ? string.Empty : "s")} · {details.Fragments.Count} fragment{(details.Fragments.Count == 1 ? string.Empty : "s")}";
+        SelectedRegistryStackUpdatedText = $"Updated {details.UpdatedAtUtc.LocalDateTime:g}";
+        ApplySelectedRegistryStackStats(details.Stats);
+        ApplyRegistryStackProfile(details.Profile);
+        ApplyRegistryAttributions(details.Creator, details.Maintainers ?? []);
 
         RegistrySelectedPackages.Clear();
         foreach (var package in details.Packages)
@@ -1240,20 +1527,69 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
             RegistrySelectedPackages.Add(new RegistryStackPackageRequirementViewModel(package));
         }
 
-        RegistrySelectedFragments.Clear();
-        foreach (var fragment in details.Fragments)
-        {
-            RegistrySelectedFragments.Add(new RegistryStackFragmentViewModel(fragment));
-        }
+        PopulateRegistrySelectedDetails(details.Fragments, packageInfo);
 
         RegistrySelectedRequiredInputs.Clear();
         foreach (var input in details.RequiredInputs)
         {
-            RegistrySelectedRequiredInputs.Add($"{input.Label} ({input.Kind})");
+            RegistrySelectedRequiredInputs.Add(input.Label);
         }
 
-        SelectedRegistryStackSafetyText = BuildRegistrySafetyText(details.Safety);
         NotifyRegistrySelectedDetailsChanged();
+    }
+
+    private void ApplyRegistryStackProfile(RegistryStackProfile? profile)
+    {
+        var shortDescription = _registryProfile.Apply(profile);
+        if (!string.IsNullOrWhiteSpace(shortDescription))
+        {
+            SelectedRegistryStackSummary = shortDescription;
+        }
+
+        NotifyRegistryProfileChanged();
+    }
+
+    private void ApplyRegistryAttributions(
+        RegistryUserAttribution? creator,
+        IReadOnlyList<RegistryUserAttribution> maintainers)
+    {
+        var creators = creator is null
+            ? Array.Empty<RegistryUserAttributionViewModel>()
+            : new[] { new RegistryUserAttributionViewModel(creator) };
+        var maintainerAttributions = maintainers
+            .Where(maintainer => creator is null || !maintainer.IsOwner)
+            .Select(maintainer => new RegistryUserAttributionViewModel(maintainer))
+            .ToArray();
+
+        RegistryCreators.ReplaceWith(creators);
+        RegistryMaintainers.ReplaceWith(maintainerAttributions);
+        RegistryAttributions.ReplaceWith(creators.Concat(maintainerAttributions));
+        OnPropertyChanged(nameof(HasRegistryAttributions));
+        OnPropertyChanged(nameof(HasRegistryCreators));
+        OnPropertyChanged(nameof(HasRegistryMaintainers));
+    }
+
+    private void ClearSelectedRegistryStackStats()
+    {
+        HasSelectedRegistryStackStats = false;
+        SelectedRegistryStackStatsText = string.Empty;
+        SelectedRegistryStackIsStarred = false;
+        SelectedRegistryStackStarActionText = "Star";
+    }
+
+    private void ApplySelectedRegistryStackStats(RegistryStackStats? stats)
+    {
+        if (stats is null)
+        {
+            return;
+        }
+
+        HasSelectedRegistryStackStats = true;
+        SelectedRegistryStackStatsText = FormatStackStats(stats);
+        SelectedRegistryStackIsStarred = stats.IsStarred;
+        SelectedRegistryStackStarActionText = stats.IsStarred ? "Unstar" : "Star";
+        NotifyRegistrySelectedDetailsChanged();
+        NotifyCommandStateChanged();
     }
 
     private async Task RefreshSelectedInstallPlanAsync(int selectionVersion)
@@ -1394,7 +1730,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
             StatusText = preview.Success
                 ? SelectedImportActions.Count == 0
-                    ? "No setup actions are needed for the selected fragments."
+                    ? "No actions are needed for the selected fragments."
                     : $"Previewed {SelectedImportActions.Count} setup action{(SelectedImportActions.Count == 1 ? string.Empty : "s")}."
                 : SelectedImportErrors.FirstOrDefault() ?? "Stack setup preview failed.";
             NotifySelectedDetailsChanged();
@@ -1438,8 +1774,8 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
         StatusText = result.Success
             ? result.PlanItems.Count == 0
-                ? "Stack package requirements are already installed. Setup fragment import will be enabled when package contributors are wired."
-                : $"Installed {result.PlanItems.Count} Stack package change{(result.PlanItems.Count == 1 ? string.Empty : "s")}. Setup fragment import will be enabled when package contributors are wired."
+                ? "Stack package requirements are already installed. Fragment import will be enabled when package contributors are wired."
+                : $"Installed {result.PlanItems.Count} Stack package change{(result.PlanItems.Count == 1 ? string.Empty : "s")}. Fragment import will be enabled when package contributors are wired."
             : result.Message;
         NotifySelectedDetailsChanged();
     }
@@ -1498,11 +1834,29 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
             SelectedImportErrors.Add(error);
         }
 
+        await NotifyStackImportAppliedAsync(result.AppliedContributions, CancellationToken.None);
+
         StatusText = result.Success
             ? $"Imported {result.ImportedItems.Count} Stack setup item{(result.ImportedItems.Count == 1 ? string.Empty : "s")}."
             : result.Errors.FirstOrDefault() ?? "Stack setup import failed.";
         NotifySelectedDetailsChanged();
         NotifyCommandStateChanged();
+    }
+
+    private async Task NotifyStackImportAppliedAsync(
+        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
+        CancellationToken cancellationToken)
+    {
+        if (appliedContributions.Count == 0)
+        {
+            return;
+        }
+
+        var warnings = await _notifyStackImportAppliedAsync(appliedContributions, cancellationToken);
+        foreach (var warning in warnings)
+        {
+            SelectedImportWarnings.Add(warning);
+        }
     }
 
     private bool TryResolveRegistryUrl(out Uri registryUrl)
@@ -1565,145 +1919,38 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         return true;
     }
 
-    private static string BuildSafetyText(SunderStackManifest manifest)
-    {
-        var flags = new List<string>();
-        AppendSafetyFlags(flags, "Stack", manifest.Safety);
-        foreach (var fragment in manifest.Fragments ?? [])
-        {
-            AppendSafetyFlags(flags, fragment.DisplayName ?? fragment.FragmentId ?? "Fragment", fragment.Safety);
-        }
-
-        return flags.Count == 0
-            ? "No sensitive content flags declared. Review package-provided fragments before import."
-            : string.Join(Environment.NewLine, flags);
-    }
-
-    private static string BuildRegistrySafetyText(RegistryStackSafety safety)
-    {
-        var flags = new List<string>();
-        AppendRegistrySafetyFlags(flags, "Stack", safety);
-        return flags.Count == 0
-            ? "No sensitive content flags declared. Review package-provided fragments before use."
-            : string.Join(Environment.NewLine, flags);
-    }
-
-    private static void AppendRegistrySafetyFlags(ICollection<string> flags, string label, RegistryStackSafety safety)
-    {
-        if (safety.ContainsSecrets)
-        {
-            flags.Add($"{label}: declares raw secrets.");
-        }
-
-        if (safety.ContainsSecretReferences)
-        {
-            flags.Add($"{label}: references secrets that must be supplied locally.");
-        }
-
-        if (safety.ContainsLocalPaths)
-        {
-            flags.Add($"{label}: contains local file paths.");
-        }
-
-        if (safety.ContainsPrivateText)
-        {
-            flags.Add($"{label}: contains private text.");
-        }
-
-        if (safety.ContainsExecutableCommands)
-        {
-            flags.Add($"{label}: contains executable commands.");
-        }
-
-        if (safety.ContainsNetworkEndpoints)
-        {
-            flags.Add($"{label}: contains network endpoints.");
-        }
-
-        if (safety.ContainsMachineSpecificValues)
-        {
-            flags.Add($"{label}: contains machine-specific values.");
-        }
-    }
-
-    private static void AppendSafetyFlags(ICollection<string> flags, string label, SunderStackSafetyManifest? safety)
-    {
-        if (safety is null)
-        {
-            return;
-        }
-
-        if (safety.ContainsSecrets == true)
-        {
-            flags.Add($"{label}: declares raw secrets.");
-        }
-
-        if (safety.ContainsSecretReferences == true)
-        {
-            flags.Add($"{label}: references secrets that must be supplied locally.");
-        }
-
-        if (safety.ContainsLocalPaths == true)
-        {
-            flags.Add($"{label}: contains local file paths.");
-        }
-
-        if (safety.ContainsPrivateText == true)
-        {
-            flags.Add($"{label}: contains private text.");
-        }
-
-        if (safety.ContainsExecutableCommands == true)
-        {
-            flags.Add($"{label}: contains executable commands.");
-        }
-
-        if (safety.ContainsNetworkEndpoints == true)
-        {
-            flags.Add($"{label}: contains network endpoints.");
-        }
-
-        if (safety.ContainsMachineSpecificValues == true)
-        {
-            flags.Add($"{label}: contains machine-specific values.");
-        }
-    }
-
     private static bool MatchesSearch(LocalStackLibraryItem item, string query)
         => string.IsNullOrWhiteSpace(query)
            || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
            || item.StackId.Contains(query, StringComparison.OrdinalIgnoreCase)
            || (item.Summary?.Contains(query, StringComparison.OrdinalIgnoreCase) == true);
 
-    private static string BuildStackFileName(string stackId)
-    {
-        var fileName = string.IsNullOrWhiteSpace(stackId)
-            ? "sunder-stack"
-            : string.Concat(stackId.Trim().Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.' ? char.ToLowerInvariant(character) : '-'));
-        return fileName.EndsWith(".sunderstack", StringComparison.OrdinalIgnoreCase)
-            ? fileName
-            : fileName + ".sunderstack";
-    }
+    private void QueueRegistrySearch(TimeSpan? delay = null)
+        => _registrySearchScheduler.Queue(delay);
 
-    private void ClearExportDiscovery()
-    {
-        ExportItems.Clear();
-        ExportWarnings.Clear();
-        ExportErrors.Clear();
-        NotifyExportStateChanged();
-    }
+    private void CancelQueuedRegistrySearch()
+        => _registrySearchScheduler.Cancel();
+
+    private static string FormatStackStats(RegistryStackStats stats)
+        => $"{FormatCount(stats.Stars, "star")} · {FormatCount(stats.TotalDownloads, "download")}";
+
+    private static string FormatCount(long count, string singular)
+        => $"{count:N0} {singular}{(count == 1 ? string.Empty : "s")}";
 
     private void NotifyRegistryStackStateChanged()
     {
         OnPropertyChanged(nameof(HasRegistryStacks));
         OnPropertyChanged(nameof(ShowNoRegistryStacks));
         OnPropertyChanged(nameof(CanSearchRegistryStacks));
+        OnPropertyChanged(nameof(CanCreateStack));
         OnPropertyChanged(nameof(CanImportSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedRegistryStack));
         OnPropertyChanged(nameof(CanDeleteSelectedRegistryStack));
+        OnPropertyChanged(nameof(CanToggleSelectedRegistryStackStar));
         SearchRegistryStacksCommand.NotifyCanExecuteChanged();
         ImportSelectedRegistryStackCommand.NotifyCanExecuteChanged();
         DeleteSelectedRegistryStackCommand.NotifyCanExecuteChanged();
+        ToggleSelectedRegistryStackStarCommand.NotifyCanExecuteChanged();
     }
 
     private void NotifyBrowserModeChanged()
@@ -1728,21 +1975,22 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(HasRegistrySelectedPackages));
         OnPropertyChanged(nameof(HasRegistrySelectedFragments));
         OnPropertyChanged(nameof(HasRegistrySelectedRequiredInputs));
+        OnPropertyChanged(nameof(ShowRegistryStackStats));
+        OnPropertyChanged(nameof(ShowSelectedRegistryStackStarAction));
+        NotifyRegistryProfileChanged();
     }
 
-    private void NotifyExportItemSelectionChanged()
+    private void NotifyRegistryProfileChanged()
     {
-        NotifyExportStateChanged();
-    }
-
-    private void NotifyExportStateChanged()
-    {
-        OnPropertyChanged(nameof(HasExportItems));
-        OnPropertyChanged(nameof(HasExportWarnings));
-        OnPropertyChanged(nameof(HasExportErrors));
-        OnPropertyChanged(nameof(ShowNoExportItems));
-        OnPropertyChanged(nameof(CanSaveCreatedStack));
-        SaveCreatedStackCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(HasRegistryReadme));
+        OnPropertyChanged(nameof(HasRegistryProfileLinks));
+        OnPropertyChanged(nameof(HasRegistryProfileMetadata));
+        OnPropertyChanged(nameof(HasRegistryProfileTags));
+        OnPropertyChanged(nameof(HasRegistryProfile));
+        OnPropertyChanged(nameof(HasRegistryProfileMedia));
+        OnPropertyChanged(nameof(HasRegistryAttributions));
+        OnPropertyChanged(nameof(HasRegistryCreators));
+        OnPropertyChanged(nameof(HasRegistryMaintainers));
     }
 
     private void NotifyImportRequiredInputChanged()
@@ -1761,12 +2009,24 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         SelectedLocalDetails.Clear();
     }
 
+    private void DisposeRegistrySelectedDetails()
+    {
+        foreach (var detail in RegistrySelectedDetails)
+        {
+            detail.Dispose();
+        }
+
+        RegistrySelectedDetails.Clear();
+    }
+
     private void NotifySelectionChanged()
     {
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(ShowSelectedDetails));
         OnPropertyChanged(nameof(ShowPublishSelectedStack));
         OnPropertyChanged(nameof(ShowUnpublishSelectedStack));
+        OnPropertyChanged(nameof(ShowSelectedStackStats));
+        OnPropertyChanged(nameof(ShowSelectedStackStarAction));
         OnPropertyChanged(nameof(ShowNoSelection));
         NotifyCommandStateChanged();
     }
@@ -1774,6 +2034,8 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private void NotifySelectedDetailsChanged()
     {
         OnPropertyChanged(nameof(HasSelectedSummary));
+        OnPropertyChanged(nameof(HasSelectedReadme));
+        OnPropertyChanged(nameof(HasSelectedProfileMedia));
         OnPropertyChanged(nameof(HasSelectedPackages));
         OnPropertyChanged(nameof(HasSelectedLocalDetails));
         OnPropertyChanged(nameof(HasSelectedFragments));
@@ -1791,6 +2053,8 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowSelectedImportPreview));
         OnPropertyChanged(nameof(ShowPublishSelectedStack));
         OnPropertyChanged(nameof(ShowUnpublishSelectedStack));
+        OnPropertyChanged(nameof(ShowSelectedStackStats));
+        OnPropertyChanged(nameof(ShowSelectedStackStarAction));
     }
 
     private void NotifyCommandStateChanged()
@@ -1800,28 +2064,24 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(CanSearchRegistryStacks));
         OnPropertyChanged(nameof(CanImportSelectedRegistryStack));
         OnPropertyChanged(nameof(CanUseSelectedRegistryStack));
+        OnPropertyChanged(nameof(CanUseSelectedStack));
         OnPropertyChanged(nameof(CanDeleteSelectedRegistryStack));
-        OnPropertyChanged(nameof(CanCreateStack));
-        OnPropertyChanged(nameof(CanRefreshStackExportItems));
-        OnPropertyChanged(nameof(CanSaveCreatedStack));
-        OnPropertyChanged(nameof(CanCancelCreateStack));
         OnPropertyChanged(nameof(CanExportSelectedStack));
         OnPropertyChanged(nameof(CanPublishSelectedStack));
         OnPropertyChanged(nameof(CanUnpublishSelectedStack));
+        OnPropertyChanged(nameof(CanToggleSelectedStackStar));
+        OnPropertyChanged(nameof(CanToggleSelectedRegistryStackStar));
         OnPropertyChanged(nameof(CanRemoveSelectedStack));
-        OnPropertyChanged(nameof(CanUseSelectedStack));
         RefreshCommand.NotifyCanExecuteChanged();
         ImportStackCommand.NotifyCanExecuteChanged();
         SearchRegistryStacksCommand.NotifyCanExecuteChanged();
         ImportSelectedRegistryStackCommand.NotifyCanExecuteChanged();
         DeleteSelectedRegistryStackCommand.NotifyCanExecuteChanged();
-        CreateStackCommand.NotifyCanExecuteChanged();
-        RefreshStackExportItemsCommand.NotifyCanExecuteChanged();
-        SaveCreatedStackCommand.NotifyCanExecuteChanged();
-        CancelCreateStackCommand.NotifyCanExecuteChanged();
         ExportSelectedStackCommand.NotifyCanExecuteChanged();
         PublishSelectedStackCommand.NotifyCanExecuteChanged();
         UnpublishSelectedStackCommand.NotifyCanExecuteChanged();
+        ToggleSelectedStackStarCommand.NotifyCanExecuteChanged();
+        ToggleSelectedRegistryStackStarCommand.NotifyCanExecuteChanged();
         RemoveSelectedStackCommand.NotifyCanExecuteChanged();
     }
 
@@ -1830,6 +2090,29 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
             .Where(fragment => fragment.IsSelected)
             .Select(fragment => fragment.FragmentId)
             .ToArray();
+
+    private static RegistryStackProfile ToRegistryStackProfile(LocalStackLibraryItem item)
+        => new(
+            item.StackId,
+            item.Summary,
+            item.ReadmeMarkdown,
+            WebsiteUrl: null,
+            SourceUrl: null,
+            IssueTrackerUrl: null,
+            License: null,
+            Tags: [],
+            Media: (item.Media ?? [])
+                .OrderBy(media => media.SortOrder)
+                .Select(media => new RegistryStackMedia(
+                    Guid.NewGuid(),
+                    media.FileName,
+                    media.ContentType,
+                    media.Size,
+                    media.AltText,
+                    media.SortOrder,
+                    new Uri(media.LocalPath).AbsoluteUri))
+                .ToArray(),
+            item.UpdatedAtUtc);
 
     private Dictionary<string, string> GetImportInputValues(bool includeEmptyValues = false)
     {
@@ -1873,6 +2156,8 @@ public sealed partial class RegistryStackSearchItemViewModel(RegistryStackSummar
 
     public int FragmentCount { get; } = stack.FragmentCount;
 
+    public RegistryStackStats? Stats { get; } = stack.Stats;
+
     public string UpdatedText { get; } = $"Updated {stack.UpdatedAtUtc.LocalDateTime:g}";
 
     public string CountText { get; } = $"{stack.PackageCount} package{(stack.PackageCount == 1 ? string.Empty : "s")} · {stack.FragmentCount} fragment{(stack.FragmentCount == 1 ? string.Empty : "s")}";
@@ -1907,23 +2192,6 @@ public sealed class RegistryStackPackageRequirementViewModel(RegistryStackPackag
 
         parts.Add(package.Required ? "required" : "optional");
         return string.Join(" · ", parts);
-    }
-}
-
-public sealed class RegistryStackFragmentViewModel(RegistryStackFragmentSummary fragment)
-{
-    public string FragmentId { get; } = fragment.FragmentId;
-
-    public string DisplayName { get; } = fragment.DisplayName;
-
-    public string Subtitle { get; } = BuildSubtitle(fragment);
-
-    public string Description { get; } = string.IsNullOrWhiteSpace(fragment.Description) ? "No description provided." : fragment.Description;
-
-    private static string BuildSubtitle(RegistryStackFragmentSummary fragment)
-    {
-        var selected = fragment.DefaultSelected ? "selected by default" : "off by default";
-        return $"{fragment.OwnerPackageId} · {fragment.SchemaId} v{fragment.SchemaVersion} · {selected}";
     }
 }
 
@@ -2058,7 +2326,7 @@ public sealed partial class LocalStackDetailValueViewModel(LocalStackDetailValue
 
     public string Value { get; } = value.Value;
 
-    public string ValuePreview { get; } = ShortenSingleLine(value.Value, 180);
+    public string ValuePreview { get; } = StackDisplayFormatters.ShortenSingleLine(value.Value, 180);
 
     public string Behavior { get; } = value.Behavior;
 
@@ -2083,45 +2351,13 @@ public sealed partial class LocalStackDetailValueViewModel(LocalStackDetailValue
         IsExpanded = !IsExpanded;
     }
 
-    private static string ShortenSingleLine(string value, int maxLength)
-    {
-        var normalized = string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (normalized.Length <= maxLength)
-        {
-            return normalized;
-        }
-
-        return normalized[..Math.Max(4, maxLength - 3)] + "...";
-    }
 }
 
 public sealed class StackPackageRequirementViewModel(SunderStackPackageRequirement package)
 {
     public string PackageId { get; } = package.PackageId ?? "unknown";
 
-    public string InstallText { get; } = BuildInstallText(package);
-
-    private static string BuildInstallText(SunderStackPackageRequirement package)
-    {
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(package.InstallTag))
-        {
-            parts.Add(package.InstallTag);
-        }
-
-        if (!string.IsNullOrWhiteSpace(package.MinimumVersion))
-        {
-            parts.Add($">= {package.MinimumVersion}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(package.CreatedWithVersion))
-        {
-            parts.Add($"created with {package.CreatedWithVersion}");
-        }
-
-        parts.Add(package.Required == true ? "required" : "optional");
-        return string.Join(" · ", parts);
-    }
+    public string InstallText { get; } = StackDisplayFormatters.PackageRequirementText(package);
 }
 
 public sealed class StackPackageInstallPlanItemViewModel(RegistryPackageInstallPlanItem item)
@@ -2163,15 +2399,9 @@ public sealed partial class StackRequiredInputValueViewModel(RuntimeStackRequire
 
     public string Label { get; } = input.Label;
 
-    public string Kind { get; } = input.Kind;
-
     public string ContributorId { get; } = input.ContributorId;
 
     public bool Required { get; } = input.Required;
-
-    public bool IsSecret { get; } = string.Equals(input.Kind, "Secret", StringComparison.OrdinalIgnoreCase);
-
-    public bool IsPlainText => !IsSecret;
 
     public string Description { get; } = string.IsNullOrWhiteSpace(input.Description) ? "Provide this value locally before import." : input.Description;
 
@@ -2186,35 +2416,6 @@ public sealed partial class StackRequiredInputValueViewModel(RuntimeStackRequire
     {
         OnPropertyChanged(nameof(IsMissingRequiredValue));
         valueChanged();
-    }
-}
-
-public sealed partial class StackExportItemViewModel(RuntimeStackExportItemDescriptor item, Action selectionChanged) : ViewModelBase
-{
-    public string ContributorId { get; } = item.ContributorId;
-
-    public string OwnerPackageId { get; } = item.OwnerPackageId;
-
-    public string ItemId { get; } = item.ItemId;
-
-    public string DisplayName { get; } = item.DisplayName;
-
-    public string Subtitle { get; } = BuildSubtitle(item);
-
-    public string Description { get; } = string.IsNullOrWhiteSpace(item.Description) ? "No description provided." : item.Description;
-
-    [ObservableProperty]
-    private bool _isSelected = item.DefaultSelected;
-
-    partial void OnIsSelectedChanged(bool value)
-    {
-        selectionChanged();
-    }
-
-    private static string BuildSubtitle(RuntimeStackExportItemDescriptor item)
-    {
-        var sensitivity = item.Sensitivities.Count == 0 ? "public" : string.Join(", ", item.Sensitivities);
-        return $"{item.OwnerPackageId} · {item.Kind} · {sensitivity}";
     }
 }
 

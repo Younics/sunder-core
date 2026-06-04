@@ -77,6 +77,19 @@ internal sealed class AppPackageExtensionCatalog : IPackageExtensionCatalog, IPa
         }
     }
 
+    public IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
+    {
+        lock (_syncRoot)
+        {
+            return _extensions.TryGetValue(extensionPoint.Id, out var contributions)
+                ? contributions
+                    .Where(contribution => contribution.Instance is TContract)
+                    .Select(contribution => new PackageExtensionContribution<TContract>(contribution.PackageId, (TContract)contribution.Instance))
+                    .ToArray()
+                : [];
+        }
+    }
+
     private sealed record AppPackageExtensionContribution(string PackageId, object Instance);
 
     private void RaiseChanged(PackageExtensionCatalogChangeReason reason, IReadOnlyList<PackageExtensionChange> changes)

@@ -138,7 +138,7 @@ internal sealed class ActivePackageSession
         return false;
     }
 
-    public IReadOnlyList<(string PackageId, TContract Contribution)> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
+    public IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
         => _extensionCatalog.GetExtensionContributions(extensionPoint);
 
     public string? TryResolvePackageAssetPath(string packageId, string assetPath)

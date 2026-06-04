@@ -423,7 +423,7 @@ public sealed class RegistryPackageInstallServiceTests
 
         public Uri RegistryUrl { get; } = new("http://registry.test/");
 
-        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<RegistryPackageSummary>>([]);
 
         public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)

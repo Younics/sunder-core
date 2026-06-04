@@ -52,6 +52,41 @@ internal sealed class MarketplacePackageProfileViewModel : IDisposable
             : profile.ShortDescription;
     }
 
+    public string? Apply(RegistryStackProfile? profile)
+    {
+        ReadmeMarkdownBuilder.Clear();
+        if (!string.IsNullOrWhiteSpace(profile?.ReadmeMarkdown))
+        {
+            ReadmeMarkdownBuilder.Append(profile.ReadmeMarkdown);
+        }
+
+        Links.Clear();
+        Metadata.Clear();
+        Tags.ReplaceWith(profile?.Tags
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(tag => tag.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? []);
+        DisposeMedia();
+        Media.ReplaceWith(profile?.Media
+            .OrderBy(media => media.SortOrder)
+            .Select(media => new RegistryPackageMediaItemViewModel(
+                new RegistryPackageMedia(
+                    media.MediaId,
+                    media.FileName,
+                    media.ContentType,
+                    media.Size,
+                    media.AltText,
+                    media.SortOrder,
+                    media.Url),
+                OpenImageGalleryAsync))
+            .ToArray() ?? []);
+
+        return string.IsNullOrWhiteSpace(profile?.ShortDescription)
+            ? null
+            : profile.ShortDescription;
+    }
+
     public void Dispose() => DisposeMedia();
 
     private async Task OpenImageGalleryAsync(RegistryPackageMediaItemViewModel media)

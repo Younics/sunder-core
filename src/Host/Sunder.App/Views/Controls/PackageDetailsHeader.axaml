@@ -8,7 +8,9 @@
              x:DataType="vm:PackagesWindowViewModel"
              mc:Ignorable="d">
   <Grid ColumnDefinitions="Auto,*"
-        ColumnSpacing="12">
+        RowDefinitions="Auto,Auto"
+        ColumnSpacing="12"
+        RowSpacing="10">
     <controls:PackageIconView Width="64"
                               Height="64"
                               VerticalAlignment="Top"
@@ -27,6 +29,31 @@
       <TextBlock Classes="page-title" Text="{Binding SelectedPackageTitle}" TextWrapping="Wrap" />
       <TextBlock Classes="caption" Text="{Binding SelectedPackageSubtitle}" TextWrapping="Wrap" />
       <TextBlock Classes="muted" Text="{Binding SelectedPackageSummary}" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <StackPanel Grid.Row="1"
+                Grid.ColumnSpan="2"
+                Orientation="Horizontal"
+                Spacing="10"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                IsVisible="{Binding ShowMarketplaceDetails}">
+      <TextBlock Classes="caption"
+                 Text="{Binding MarketplacePackageStatsText}"
+                 TextAlignment="Right"
+                 VerticalAlignment="Center"
+                 IsVisible="{Binding ShowMarketplacePackageStats}" />
+      <Button Classes="secondary-action star-action"
+              Classes.starred="{Binding SelectedMarketplacePackageIsStarred}"
+              Command="{Binding ToggleSelectedMarketplacePackageStarCommand}"
+              IsEnabled="{Binding CanToggleSelectedMarketplacePackageStar}"
+              IsVisible="{Binding ShowMarketplacePackageStarAction}"
+              ToolTip.Tip="{Binding MarketplacePackageStarActionText}">
+        <Path Width="16"
+              Height="16"
+              Classes="star-icon"
+              Data="{StaticResource Sunder.Icon.Star}" />
+      </Button>
     </StackPanel>
   </Grid>
 </UserControl>

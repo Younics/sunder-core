@@ -12,6 +12,7 @@ public partial class StacksWindow : Window
     private StacksWindowViewModel? ViewModel => DataContext as StacksWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
     private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private StacksWindowViewModel? _subscribedViewModel;
 
     public StacksWindow()
     {
@@ -22,6 +23,7 @@ public partial class StacksWindow : Window
             () => _stateController?.PersistWindowState(),
             OnLifecycleClosed);
         Opened += OnOpened;
+        DataContextChanged += OnDataContextChanged;
     }
 
     public StacksWindow(ShellStateService shellStateService, ShellState shellState)
@@ -77,17 +79,10 @@ public partial class StacksWindow : Window
 
     private async void ImportStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (ViewModel is null || !await ViewModel.ImportStackWithPickerAsync())
+        if (ViewModel is not null)
         {
-            return;
+            await ViewModel.ImportStackWithPickerAsync();
         }
-
-        await ShowUseStackWizardAsync();
-    }
-
-    private async void UseStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        await ShowUseStackWizardAsync();
     }
 
     private async void UseRegistryStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -97,6 +92,11 @@ public partial class StacksWindow : Window
             return;
         }
 
+        await ShowUseStackWizardAsync();
+    }
+
+    private async void UseLocalStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
         await ShowUseStackWizardAsync();
     }
 
@@ -126,7 +126,49 @@ public partial class StacksWindow : Window
 
     private void OnLifecycleClosed()
     {
+        SubscribeToViewModel(null);
         ViewModel?.Dispose();
         DataContext = null;
+    }
+
+    private void OnDataContextChanged(object? sender, EventArgs e) => SubscribeToViewModel(ViewModel);
+
+    private void SubscribeToViewModel(StacksWindowViewModel? viewModel)
+    {
+        if (ReferenceEquals(_subscribedViewModel, viewModel))
+        {
+            return;
+        }
+
+        if (_subscribedViewModel is not null)
+        {
+            _subscribedViewModel.LocalImageGalleryRequested -= ShowImageGalleryAsync;
+            _subscribedViewModel.RegistryImageGalleryRequested -= ShowRegistryImageGalleryAsync;
+        }
+
+        _subscribedViewModel = viewModel;
+        if (_subscribedViewModel is not null)
+        {
+            _subscribedViewModel.LocalImageGalleryRequested += ShowImageGalleryAsync;
+            _subscribedViewModel.RegistryImageGalleryRequested += ShowRegistryImageGalleryAsync;
+        }
+    }
+
+    private async Task ShowRegistryImageGalleryAsync(
+        IReadOnlyList<RegistryPackageMediaItemViewModel> media,
+        int selectedIndex)
+        => await ShowImageGalleryAsync(media, selectedIndex);
+
+    private async Task ShowImageGalleryAsync(
+        IReadOnlyList<RegistryPackageMediaItemViewModel> media,
+        int selectedIndex)
+    {
+        if (media.Count == 0)
+        {
+            return;
+        }
+
+        var galleryWindow = new PackageImageGalleryWindow(media, selectedIndex);
+        await galleryWindow.ShowDialog(this);
     }
 }

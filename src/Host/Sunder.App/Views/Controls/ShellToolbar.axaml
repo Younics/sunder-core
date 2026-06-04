@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Sunder.App.ViewModels"
              xmlns:controls="using:Sunder.App.Views.Controls"
+             xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
              x:Class="Sunder.App.Views.Controls.ShellToolbar"
              x:DataType="vm:MainWindowViewModel"
              mc:Ignorable="d">
@@ -17,8 +18,14 @@
         <Button.Content>
           <Border Classes="registry-avatar"
                   Background="{Binding RegistryAccountAvatarBrush}">
-            <TextBlock Classes="registry-avatar-text"
-                       Text="{Binding RegistryAccountAvatarText}" />
+            <Grid>
+              <TextBlock Classes="registry-avatar-text"
+                         Text="{Binding RegistryAccountAvatarText}" />
+              <Image Classes="registry-avatar-image"
+                     Width="22"
+                     Height="22"
+                     asyncImageLoader:ImageLoader.Source="{Binding RegistryAccountAvatarUrl}" />
+            </Grid>
           </Border>
         </Button.Content>
         <Button.Flyout>
@@ -37,8 +44,14 @@
                     ColumnSpacing="12">
                 <Border Classes="registry-avatar large"
                         Background="{Binding RegistryAccountAvatarBrush}">
-                  <TextBlock Classes="registry-avatar-text large"
-                             Text="{Binding RegistryAccountAvatarText}" />
+                  <Grid>
+                    <TextBlock Classes="registry-avatar-text large"
+                               Text="{Binding RegistryAccountAvatarText}" />
+                    <Image Classes="registry-avatar-image"
+                           Width="42"
+                           Height="42"
+                           asyncImageLoader:ImageLoader.Source="{Binding RegistryAccountAvatarUrl}" />
+                  </Grid>
                 </Border>
                 <StackPanel Grid.Column="1"
                             Spacing="3"
@@ -52,15 +65,20 @@
                 </StackPanel>
               </Grid>
 
-              <Grid ColumnDefinitions="*,Auto,Auto"
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto"
                     ColumnSpacing="8">
-                <Button Grid.Column="1"
+                <Button Grid.Column="0"
+                        Classes="secondary-action compact-action"
+                        Content="Open Hub"
+                        Command="{Binding OpenRegistryHubCommand}"
+                        IsEnabled="{Binding CanOpenRegistryHub}" />
+                <Button Grid.Column="2"
                         Classes="primary-action compact-action"
                         Content="Sign in"
                         Command="{Binding LoginRegistryCommand}"
                         IsVisible="{Binding ShowRegistrySignInButton}"
                         IsEnabled="{Binding CanManageRegistryAccount}" />
-                <Button Grid.Column="2"
+                <Button Grid.Column="3"
                         Classes="secondary-action compact-action danger-action"
                         Content="Sign out"
                         Command="{Binding LogoutRegistryCommand}"

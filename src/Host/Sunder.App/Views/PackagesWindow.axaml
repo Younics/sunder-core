@@ -28,6 +28,7 @@
 
   <Window.Styles>
     <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
+    <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
   </Window.Styles>
 
   <Grid RowDefinitions="52,*,Auto"
@@ -93,45 +94,66 @@
                 Padding="16">
           <Grid RowDefinitions="Auto,Auto,*"
                 RowSpacing="12">
-            <StackPanel Orientation="Horizontal"
-                        Spacing="8">
-              <Button Classes="secondary-action settings-nav-button"
-                      Classes.selected="{Binding IsMarketplaceMode}"
-                      Command="{Binding ShowMarketplaceCommand}"
-                      Content="Marketplace" />
-              <Button Classes="secondary-action settings-nav-button"
-                      Classes.selected="{Binding IsInstalledMode}"
-                      Command="{Binding ShowInstalledCommand}">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <TextBlock Text="Installed" />
-                  <Border Classes="notification-unread-pill"
-                          IsVisible="{Binding ShowUpdateAllPackages}">
-                    <TextBlock Text="{Binding AvailableUpdateCount}" />
-                  </Border>
-                </StackPanel>
-              </Button>
-            </StackPanel>
-
-            <Border Grid.Row="1"
-                    Classes="search-host">
-              <Grid ColumnDefinitions="*,Auto"
-                    ColumnSpacing="8"
-                    VerticalAlignment="Center">
-                <TextBox Classes="search-box"
-                         Text="{Binding SearchText}"
-                         PlaceholderText="{Binding SearchPlaceholder}" />
-                <Button Grid.Column="1"
-                        Classes="search-clear-button"
-                        Command="{Binding ClearSearchCommand}"
-                        IsVisible="{Binding HasSearchText}"
-                        ToolTip.Tip="Clear search">
-                  <Path Width="10"
-                        Height="10"
-                        Classes="icon-stroke"
-                        Data="{StaticResource Sunder.Icon.Close}" />
+            <Grid ColumnDefinitions="*,Auto"
+                  ColumnSpacing="8">
+              <StackPanel Orientation="Horizontal"
+                          Spacing="8">
+                <Button Classes="secondary-action settings-nav-button"
+                        Classes.selected="{Binding IsMarketplaceMode}"
+                        Command="{Binding ShowMarketplaceCommand}"
+                        Content="Marketplace" />
+                <Button Classes="secondary-action settings-nav-button"
+                        Classes.selected="{Binding IsInstalledMode}"
+                        Command="{Binding ShowInstalledCommand}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="Installed" />
+                    <Border Classes="notification-unread-pill"
+                            IsVisible="{Binding ShowUpdateAllPackages}">
+                      <TextBlock Text="{Binding AvailableUpdateCount}" />
+                    </Border>
+                  </StackPanel>
                 </Button>
-              </Grid>
-            </Border>
+              </StackPanel>
+              <Button Grid.Column="1"
+                      Classes="primary-action compact-action"
+                      Command="{Binding UpdateAllPackagesCommand}"
+                      Content="Update All"
+                      IsEnabled="{Binding CanUpdateAllPackages}"
+                      IsVisible="{Binding ShowHeaderUpdateAllPackages}" />
+            </Grid>
+
+            <StackPanel Grid.Row="1"
+                        Spacing="8">
+              <Border Classes="search-host">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="8"
+                      VerticalAlignment="Center">
+                  <TextBox Classes="search-box"
+                           Text="{Binding SearchText}"
+                           PlaceholderText="{Binding SearchPlaceholder}" />
+                  <Button Grid.Column="1"
+                          Classes="search-clear-button"
+                          Command="{Binding ClearSearchCommand}"
+                          IsVisible="{Binding HasSearchText}"
+                          ToolTip.Tip="Clear search">
+                    <Path Width="10"
+                          Height="10"
+                          Classes="icon-stroke"
+                          Data="{StaticResource Sunder.Icon.Close}" />
+                  </Button>
+                </Grid>
+              </Border>
+              <ComboBox ItemsSource="{Binding MarketplaceSortOptions}"
+                        SelectedItem="{Binding SelectedMarketplaceSortOption}"
+                        IsVisible="{Binding IsMarketplaceMode}"
+                        HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RegistrySearchSortOptionViewModel">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+            </StackPanel>
 
             <Grid Grid.Row="2">
               <ListBox Classes="package-list"
@@ -239,15 +261,53 @@
               Content="Install from disk"
               IsEnabled="{Binding CanInstallPackage}" />
 
-      <Button Grid.Column="2"
-              Classes="primary-action"
-              Command="{Binding UpdateAllPackagesCommand}"
-              Content="Update All"
-              IsEnabled="{Binding CanUpdateAllPackages}"
-              IsVisible="{Binding ShowUpdateAllPackages}" />
+      <StackPanel Grid.Column="2"
+                  Orientation="Horizontal"
+                  Spacing="12"
+                  HorizontalAlignment="Right">
+        <Button Classes="primary-action"
+                Command="{Binding InstallSelectedMarketplacePackageCommand}"
+                Content="Install"
+                IsEnabled="{Binding CanInstallSelectedMarketplacePackage}"
+                IsVisible="{Binding ShowMarketplaceInstallButton}" />
+        <Button Classes="secondary-action"
+                Command="{Binding UninstallSelectedPackageCommand}"
+                Content="Uninstall"
+                IsEnabled="{Binding CanUninstallSelectedPackage}"
+                IsVisible="{Binding ShowInstalledDetails}" />
+        <Button Classes="secondary-action"
+                Command="{Binding UninstallSelectedMarketplacePackageCommand}"
+                Content="Uninstall"
+                IsEnabled="{Binding CanUninstallSelectedMarketplacePackage}"
+                IsVisible="{Binding ShowMarketplaceUninstallButton}" />
+        <Button Classes="secondary-action"
+                Command="{Binding EnableSelectedPackageCommand}"
+                Content="Enable"
+                IsEnabled="{Binding CanEnableSelectedPackage}"
+                IsVisible="{Binding ShowEnableSelectedPackage}" />
+        <Button Classes="secondary-action"
+                Command="{Binding DisableSelectedPackageCommand}"
+                Content="Disable"
+                IsEnabled="{Binding CanDisableSelectedPackage}"
+                IsVisible="{Binding ShowDisableSelectedPackage}" />
+        <Button Classes="primary-action"
+                Command="{Binding UpdateSelectedInstalledPackageCommand}"
+                Content="Update"
+                IsEnabled="{Binding CanUpdateSelectedInstalledPackage}"
+                IsVisible="{Binding ShowUpdateSelectedInstalledPackage}" />
+        <Button Classes="primary-action"
+                Command="{Binding UpdateSelectedMarketplacePackageCommand}"
+                Content="Update"
+                IsEnabled="{Binding CanUpdateSelectedMarketplacePackage}"
+                IsVisible="{Binding ShowMarketplaceUpdateButton}" />
+        <Button Classes="secondary-action"
+                Command="{Binding CancelSelectedPackageOperationCommand}"
+                Content="Cancel"
+                IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
+      </StackPanel>
       <controls:BackgroundProcessMonitor Grid.Column="3"
-                                         HorizontalAlignment="Right"
-                                         DataContext="{Binding PackageProcesses}" />
+                                          HorizontalAlignment="Right"
+                                          DataContext="{Binding PackageProcesses}" />
     </Grid>
   </Grid>
 </Window>

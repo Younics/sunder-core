@@ -22,6 +22,7 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
         Summary = package.Summary;
         LatestVersion = package.LatestVersion;
         IsYanked = package.IsYanked;
+        Stats = package.Stats;
         InstalledVersion = installedVersion;
         Update = update;
         _onSelectAsync = onSelectAsync;
@@ -40,6 +41,9 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
     public string? LatestVersion { get; }
 
     public bool IsYanked { get; }
+
+    [ObservableProperty]
+    private RegistryPackageStats? _stats;
 
     public string LatestVersionText => LatestVersion ?? "No latest";
 

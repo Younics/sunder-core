@@ -183,7 +183,7 @@ internal sealed class PackageSessionState(
         }
     }
 
-    public IReadOnlyList<(string PackageId, TContract Contribution)> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
+    public IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
     {
         lock (_syncRoot)
         {

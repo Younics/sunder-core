@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Sunder.App.ViewModels"
         xmlns:controls="using:Sunder.App.Views.Controls"
+        xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia"
         x:Class="Sunder.App.Views.UseStackWizardWindow"
         x:DataType="vm:UseStackWizardViewModel"
         mc:Ignorable="d"
@@ -18,6 +19,19 @@
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
         Classes="secondary-window">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://LiveMarkdown.Avalonia/Defaults.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+
+  <Window.Styles>
+    <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
+    <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
+  </Window.Styles>
+
   <Grid RowDefinitions="52,*,Auto"
         Background="{DynamicResource Sunder.Brush.Background.App}">
     <controls:WindowTitleBar Grid.Row="0">
@@ -29,12 +43,8 @@
     </controls:WindowTitleBar>
 
     <Border Grid.Row="1"
-            Margin="20,12,20,0"
-            Classes="panel-surface"
-            Padding="0">
-      <Border Classes="secondary-panel-content-clip">
-        <Border Classes="workspace-surface"
-                Margin="16">
+            Classes="workspace-surface"
+            Margin="20,12,20,0">
           <ScrollViewer>
             <StackPanel Margin="22"
                         Spacing="18">
@@ -53,6 +63,50 @@
                            Text="{Binding StackMetadata}"
                            TextWrapping="Wrap" />
               </StackPanel>
+
+              <Border Classes="card-surface"
+                      IsVisible="{Binding HasStackProfileMedia}">
+                <StackPanel Spacing="8">
+                  <TextBlock Classes="section-title" Text="Images" />
+                  <ScrollViewer Classes="marketplace-image-strip-scroll"
+                                HorizontalScrollBarVisibility="Auto"
+                                VerticalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding StackProfileMedia}"
+                                  Margin="0,0,0,12">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <StackPanel Orientation="Horizontal" Spacing="12" />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
+                          <Button Classes="marketplace-image-thumb"
+                                  Command="{Binding SelectCommand}"
+                                  ToolTip.Tip="{Binding Caption}">
+                            <Grid>
+                              <Border Classes="marketplace-image-frame">
+                                <Image Source="{Binding Image}"
+                                       Stretch="UniformToFill" />
+                              </Border>
+                              <TextBlock Classes="caption marketplace-image-loading"
+                                         Text="Loading..."
+                                         IsVisible="{Binding IsImageLoading}" />
+                            </Grid>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </StackPanel>
+              </Border>
+
+              <Border Classes="card-surface"
+                      IsVisible="{Binding HasStackReadme}">
+                <StackPanel Spacing="8">
+                  <TextBlock Classes="section-title" Text="Overview" />
+                  <md:MarkdownRenderer MarkdownBuilder="{Binding StackReadmeMarkdownBuilder}" />
+                </StackPanel>
+              </Border>
 
               <StackPanel Spacing="8"
                           IsVisible="{Binding HasPackages}">
@@ -253,28 +307,18 @@
                       <Border Classes="marketplace-profile-row">
                         <Grid RowDefinitions="Auto,Auto,Auto"
                               RowSpacing="6">
-                          <Grid ColumnDefinitions="*,Auto"
-                                ColumnSpacing="10">
+                          <Grid>
                             <TextBlock Text="{Binding Label}"
                                        FontWeight="SemiBold" />
-                            <Border Grid.Column="1"
-                                    Classes="package-row-badge">
-                              <TextBlock Text="{Binding Kind}" />
-                            </Border>
                           </Grid>
                           <TextBlock Grid.Row="1"
                                      Classes="caption"
                                      Text="{Binding Description}"
                                      TextWrapping="Wrap" />
-                          <Grid Grid.Row="2">
-                            <TextBox Text="{Binding Value}"
-                                     PlaceholderText="{Binding Placeholder}"
-                                     IsVisible="{Binding IsPlainText}" />
-                            <TextBox Text="{Binding Value}"
-                                     PlaceholderText="{Binding Placeholder}"
-                                     PasswordChar="*"
-                                     IsVisible="{Binding IsSecret}" />
-                          </Grid>
+                          <TextBox Grid.Row="2"
+                                   Text="{Binding Value}"
+                                   PlaceholderText="{Binding Placeholder}"
+                                   PasswordChar="*" />
                         </Grid>
                       </Border>
                     </DataTemplate>
@@ -339,8 +383,6 @@
               </ItemsControl>
             </StackPanel>
           </ScrollViewer>
-        </Border>
-      </Border>
     </Border>
 
     <Grid Grid.Row="2"

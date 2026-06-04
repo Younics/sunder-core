@@ -10,16 +10,24 @@ public interface IRegistryApiClient : IDisposable
         string? query,
         int skip,
         int take,
+        RegistrySearchSort sort = RegistrySearchSort.Downloads,
         CancellationToken cancellationToken = default);
 
     Task<RegistryPackageDetails?> GetPackageAsync(
         string packageId,
         CancellationToken cancellationToken = default);
 
+    Task<RegistryPackageDetails?> GetPackageAsync(
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => GetPackageAsync(packageId, cancellationToken);
+
     Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(
         string? query,
         int skip,
         int take,
+        RegistrySearchSort sort = RegistrySearchSort.Downloads,
         CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<RegistryStackSummary>>([]);
 
@@ -27,6 +35,12 @@ public interface IRegistryApiClient : IDisposable
         string stackId,
         CancellationToken cancellationToken = default)
         => Task.FromResult<RegistryStackDetails?>(null);
+
+    Task<RegistryStackDetails?> GetStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => GetStackAsync(stackId, cancellationToken);
 
     Task<RegistryPackageVersionDetails?> GetVersionAsync(
         string packageId,
@@ -87,4 +101,28 @@ public interface IRegistryApiClient : IDisposable
         string bearerToken,
         CancellationToken cancellationToken = default)
         => Task.FromResult(new RegistryStackManagementOperationResponse(false, null, ["Registry Stack deletion is not supported by this client."]));
+
+    Task<RegistryStackStarResponse> StarStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryStackStarResponse(false, null, null, ["Registry Stack starring is not supported by this client."]));
+
+    Task<RegistryStackStarResponse> UnstarStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryStackStarResponse(false, null, null, ["Registry Stack starring is not supported by this client."]));
+
+    Task<RegistryPackageStarResponse> StarPackageAsync(
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryPackageStarResponse(false, null, null, ["Registry package starring is not supported by this client."]));
+
+    Task<RegistryPackageStarResponse> UnstarPackageAsync(
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new RegistryPackageStarResponse(false, null, null, ["Registry package starring is not supported by this client."]));
 }

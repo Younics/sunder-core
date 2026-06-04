@@ -2,6 +2,7 @@ using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.Protocol;
 
 namespace Sunder.App.Composition;
 
@@ -12,7 +13,9 @@ public sealed class StacksWindowFactory(
     ShellStateService shellStateService,
     ShellState shellState)
 {
-    internal StacksWindow Create(Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync)
+    internal StacksWindow Create(
+        Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
+        Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> notifyStackImportAppliedAsync)
     {
         var window = new StacksWindow(shellStateService, shellState);
         window.DataContext = new StacksWindowViewModel(
@@ -20,7 +23,8 @@ public sealed class StacksWindowFactory(
             new StackArchivePicker(window),
             runtimeApiClientFactory.CreateClient(),
             registryPackageInstallService,
-            applyPackageLifecycleChangesAsync);
+            applyPackageLifecycleChangesAsync,
+            notifyStackImportAppliedAsync);
         return window;
     }
 }

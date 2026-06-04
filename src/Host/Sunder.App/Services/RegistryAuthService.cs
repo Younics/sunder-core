@@ -1,15 +1,36 @@
+using Sunder.Protocol;
 using Sunder.Registry.Shared;
 
 namespace Sunder.App.Services;
 
 public sealed class RegistryAuthService(ExternalBrowserService browserService)
 {
+    public RegistryAuthState GetCachedStatus(Uri? registryUrl = null)
+    {
+        registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
+        var store = SunderAuthStore.Load();
+        var token = store.GetToken(registryUrl);
+        if (token is null)
+        {
+            return RegistryAuthState.SignedOut(registryUrl);
+        }
+
+        if (token.ExpiresAtUtc is not null && token.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            store.RemoveToken(registryUrl);
+            store.Save();
+            return RegistryAuthState.SignedOut(registryUrl, "Saved Registry token is expired.");
+        }
+
+        return RegistryAuthState.SignedIn(registryUrl, ToCachedUser(token), token.ExpiresAtUtc);
+    }
+
     public async Task<RegistryAuthState> GetStatusAsync(
         Uri? registryUrl = null,
         CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        var store = RegistryAuthStore.Load();
+        var store = SunderAuthStore.Load();
         var token = store.GetToken(registryUrl);
         if (token is null)
         {
@@ -32,6 +53,8 @@ public sealed class RegistryAuthService(ExternalBrowserService browserService)
             return RegistryAuthState.SignedOut(registryUrl, "Saved Registry token is invalid.");
         }
 
+        SaveToken(store, registryUrl, token.Token, token.UserId ?? user.UserId, token.ExpiresAtUtc, user);
+
         return RegistryAuthState.SignedIn(registryUrl, user, token.ExpiresAtUtc);
     }
 
@@ -44,11 +67,14 @@ public sealed class RegistryAuthService(ExternalBrowserService browserService)
         var flow = new RegistryBrowserAuthFlow(registryUrl, registryClient, browserService);
         var result = await flow.LoginAsync(cancellationToken);
 
-        var store = RegistryAuthStore.Load();
-        store.SetToken(registryUrl, result.Token, result.UserId, result.ExpiresAtUtc);
-        store.Save();
+        var store = SunderAuthStore.Load();
 
         var user = await registryClient.GetCurrentUserAsync(result.Token, cancellationToken);
+        if (user is not null)
+        {
+            SaveToken(store, registryUrl, result.Token, result.UserId ?? user.UserId, result.ExpiresAtUtc, user);
+        }
+
         return user is null
             ? RegistryAuthState.SignedOut(registryUrl, "Registry sign-in completed, but the token could not be verified.")
             : RegistryAuthState.SignedIn(registryUrl, user, result.ExpiresAtUtc);
@@ -57,11 +83,40 @@ public sealed class RegistryAuthService(ExternalBrowserService browserService)
     public RegistryAuthState Logout(Uri? registryUrl = null)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        var store = RegistryAuthStore.Load();
+        var store = SunderAuthStore.Load();
         store.RemoveToken(registryUrl);
         store.Save();
         return RegistryAuthState.SignedOut(registryUrl);
     }
+
+    private static void SaveToken(
+        SunderAuthStore store,
+        Uri registryUrl,
+        string token,
+        string? userId,
+        DateTimeOffset? expiresAtUtc,
+        RegistryCurrentUserResponse user)
+    {
+        store.SetToken(
+            registryUrl,
+            token,
+            userId,
+            expiresAtUtc,
+            user.Username,
+            user.DisplayName,
+            user.Email,
+            user.AvatarUrl,
+            DateTimeOffset.UtcNow);
+        store.Save();
+    }
+
+    private static RegistryCurrentUserResponse ToCachedUser(RegistryAuthToken token)
+        => new(
+            token.UserId ?? string.Empty,
+            token.DisplayName,
+            token.Email,
+            token.Username,
+            token.AvatarUrl);
 }
 
 public sealed record RegistryAuthState(

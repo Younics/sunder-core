@@ -30,54 +30,6 @@
       </Border>
     </Grid>
 
-    <Border Classes="card-surface">
-      <Grid ColumnDefinitions="*,Auto,Auto"
-            RowDefinitions="Auto,Auto,Auto"
-            ColumnSpacing="10">
-        <StackPanel Spacing="3">
-          <TextBlock Classes="section-title" Text="Marketplace Actions" />
-          <TextBlock Classes="caption" Text="Installs use the latest registry version and apply through the local runtime." TextWrapping="Wrap" />
-        </StackPanel>
-        <Button Grid.Column="1"
-                Classes="primary-action"
-                Command="{Binding InstallSelectedMarketplacePackageCommand}"
-                Content="Install"
-                IsEnabled="{Binding CanInstallSelectedMarketplacePackage}"
-                IsVisible="{Binding ShowMarketplaceInstallButton}" />
-        <Button Grid.Column="1"
-                Classes="secondary-action"
-                Command="{Binding UninstallSelectedMarketplacePackageCommand}"
-                Content="Uninstall"
-                IsEnabled="{Binding CanUninstallSelectedMarketplacePackage}"
-                IsVisible="{Binding ShowMarketplaceUninstallButton}" />
-        <Button Grid.Column="2"
-                Classes="primary-action"
-                Command="{Binding UpdateSelectedMarketplacePackageCommand}"
-                Content="Update"
-                IsEnabled="{Binding CanUpdateSelectedMarketplacePackage}"
-                IsVisible="{Binding ShowMarketplaceUpdateButton}" />
-        <Button Grid.Column="1"
-                Classes="secondary-action"
-                Command="{Binding CancelSelectedPackageOperationCommand}"
-                Content="Cancel"
-                IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
-        <TextBlock Grid.Row="1"
-                   Grid.ColumnSpan="3"
-                   Classes="caption"
-                   Text="{Binding SelectedPackageOperationStatusText}"
-                   IsVisible="{Binding ShowSelectedPackageOperationStatus}"
-                   TextWrapping="Wrap" />
-        <ProgressBar Grid.Row="2"
-                     Grid.ColumnSpan="3"
-                     Margin="0,5,0,0"
-                     Minimum="0"
-                     Maximum="100"
-                     Value="{Binding SelectedPackageOperationProgressPercent}"
-                     IsIndeterminate="{Binding SelectedPackageOperationIsIndeterminate}"
-                     IsVisible="{Binding ShowSelectedPackageOperationStatus}" />
-      </Grid>
-    </Border>
-
     <Border Classes="card-surface"
             IsVisible="{Binding HasMarketplaceProfileMedia}">
       <StackPanel Spacing="8">
@@ -181,6 +133,54 @@
               <DataTemplate x:DataType="x:String">
                 <Border Classes="marketplace-tag-chip">
                   <TextBlock Text="{Binding}" />
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <Border Classes="card-surface marketplace-profile-card"
+            IsVisible="{Binding HasMarketplaceAttributions}">
+      <StackPanel Spacing="12">
+        <StackPanel Spacing="2">
+          <TextBlock Classes="section-title" Text="People" />
+          <TextBlock Classes="caption" Text="Creator and maintainers shown by public profile name." />
+        </StackPanel>
+        <StackPanel Spacing="6"
+                    IsVisible="{Binding HasMarketplaceCreators}">
+          <TextBlock Classes="caption marketplace-people-heading" Text="Creator" />
+          <ItemsControl ItemsSource="{Binding MarketplaceCreators}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
+                <Border Classes="marketplace-person-chip creator">
+                  <TextBlock Classes="marketplace-person-chip-text"
+                             Text="{Binding DisplayName}" />
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+        <StackPanel Spacing="6"
+                    IsVisible="{Binding HasMarketplaceMaintainers}">
+          <TextBlock Classes="caption marketplace-people-heading" Text="Maintainers" />
+          <ItemsControl ItemsSource="{Binding MarketplaceMaintainers}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
+                <Border Classes="marketplace-person-chip">
+                  <TextBlock Classes="marketplace-person-chip-text"
+                             Text="{Binding DisplayName}" />
                 </Border>
               </DataTemplate>
             </ItemsControl.ItemTemplate>

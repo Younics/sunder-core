@@ -33,24 +33,31 @@ public sealed record RuntimeStackExportRequest(
     string? Summary,
     string OutputPath,
     IReadOnlyList<RuntimeStackExportSelection> SelectedItems,
-    RuntimeStackExportOptions Options);
+    string? ReadmeMarkdown = null,
+    IReadOnlyList<RuntimeStackMediaInput>? Media = null,
+    IReadOnlyList<string>? SelectedPackages = null);
+
+public sealed record RuntimeStackMediaInput(
+    string SourcePath,
+    string ArchivePath,
+    string FileName,
+    string ContentType,
+    string? AltText = null,
+    int SortOrder = 0);
 
 public sealed record RuntimeStackExportSelection(
     string ContributorId,
     string ItemId,
-    IReadOnlyList<RuntimeStackExportDetailSelection>? Details = null);
+    IReadOnlyList<RuntimeStackExportDetailSelection>? Details = null)
+{
+    public string? OwnerPackageId { get; init; }
+}
 
 public sealed record RuntimeStackExportDetailSelection(
     string DetailId,
     bool IsSelected = true,
     string? ValueOverride = null,
     string? SensitivityOverride = null);
-
-public sealed record RuntimeStackExportOptions(
-    bool IncludePrivateText = true,
-    bool IncludeMachineSpecificValues = false,
-    bool IncludeExecutableCommands = true,
-    bool IncludeNetworkEndpoints = true);
 
 public sealed record RuntimeStackExportResponse(
     bool Success,

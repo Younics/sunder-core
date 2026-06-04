@@ -127,11 +127,11 @@ internal static class Program
         CommandLine.EnsureNoExtraArguments(args, "Usage: sunder auth login");
         var flow = new CliBrowserAuthFlow(registryWebUrl, registryClient);
         var result = await flow.LoginAsync(cancellationToken);
-        var store = CliAuthStore.Load();
-        store.SetToken(registryClient.RegistryUrl, result.Token, result.UserId, result.ExpiresAtUtc);
-        store.Save();
+        var user = await registryClient.GetCurrentUserAsync(result.Token, cancellationToken);
+        var store = SunderAuthStore.Load();
+        SaveAuthToken(store, registryClient.RegistryUrl, result.Token, result.UserId ?? user?.UserId, result.ExpiresAtUtc, user);
 
-        ConsoleOutput.WriteSuccess($"Signed in to {registryClient.RegistryUrl} as {result.UserId ?? "registry user"}.");
+        ConsoleOutput.WriteSuccess($"Signed in to {registryClient.RegistryUrl} as {FormatRegistryUser(user)}.");
         if (result.ExpiresAtUtc is not null)
         {
             ConsoleOutput.WriteInfo($"CLI token expires {result.ExpiresAtUtc.Value.LocalDateTime:g}.");
@@ -143,7 +143,8 @@ internal static class Program
     private static async Task<int> AuthStatusAsync(List<string> args, RegistryClient registryClient, CancellationToken cancellationToken)
     {
         CommandLine.EnsureNoExtraArguments(args, "Usage: sunder auth status");
-        var token = CliAuthStore.Load().GetToken(registryClient.RegistryUrl);
+        var store = SunderAuthStore.Load();
+        var token = store.GetToken(registryClient.RegistryUrl);
         if (token is null)
         {
             ConsoleOutput.WriteInfo($"Not signed in to {registryClient.RegistryUrl}. Run 'sunder auth login'.");
@@ -157,7 +158,8 @@ internal static class Program
             return Failure;
         }
 
-        ConsoleOutput.WriteSuccess($"Signed in to {registryClient.RegistryUrl} as {user.DisplayName ?? user.UserId}.");
+        SaveAuthToken(store, registryClient.RegistryUrl, token.Token, token.UserId ?? user.UserId, token.ExpiresAtUtc, user);
+        ConsoleOutput.WriteSuccess($"Signed in to {registryClient.RegistryUrl} as {FormatRegistryUser(user)}.");
         if (token.ExpiresAtUtc is not null)
         {
             ConsoleOutput.WriteInfo($"CLI token expires {token.ExpiresAtUtc.Value.LocalDateTime:g}.");
@@ -166,10 +168,38 @@ internal static class Program
         return Success;
     }
 
+    private static string FormatRegistryUser(RegistryCurrentUserResponse? user)
+        => user is null
+            ? "registry user"
+            : string.IsNullOrWhiteSpace(user.Username)
+                ? user.DisplayName ?? "registry user"
+                : $"@{user.Username}";
+
+    private static void SaveAuthToken(
+        SunderAuthStore store,
+        Uri registryUrl,
+        string token,
+        string? userId,
+        DateTimeOffset? expiresAtUtc,
+        RegistryCurrentUserResponse? user)
+    {
+        store.SetToken(
+            registryUrl,
+            token,
+            userId,
+            expiresAtUtc,
+            user?.Username,
+            user?.DisplayName,
+            user?.Email,
+            user?.AvatarUrl,
+            user is null ? null : DateTimeOffset.UtcNow);
+        store.Save();
+    }
+
     private static int AuthLogout(List<string> args, RegistryClient registryClient)
     {
         CommandLine.EnsureNoExtraArguments(args, "Usage: sunder auth logout");
-        var store = CliAuthStore.Load();
+        var store = SunderAuthStore.Load();
         if (store.RemoveToken(registryClient.RegistryUrl))
         {
             store.Save();
@@ -1150,11 +1180,10 @@ internal static class Program
         {
             foreach (var input in stack.RequiredInputs)
             {
-                Console.WriteLine($"  {input.InputId} ({input.Kind}, {(input.Required ? "required" : "optional")})");
+                Console.WriteLine($"  {input.InputId} ({(input.Required ? "required" : "optional")})");
             }
         }
 
-        Console.WriteLine($"Safety: {BuildStackSafetyText(stack.Safety)}");
         Console.WriteLine($"Artifact SHA-256: {stack.Artifact.Sha256}");
         Console.WriteLine($"Artifact Size: {stack.Artifact.Size} bytes");
     }
@@ -1351,23 +1380,13 @@ internal static class Program
     {
         if (string.IsNullOrWhiteSpace(outputPath))
         {
-            return Path.GetFullPath(BuildStackFileName(stackId));
+            return Path.GetFullPath(SunderStackFormat.BuildStackFileName(stackId));
         }
 
         var fullPath = Path.GetFullPath(outputPath);
         return Directory.Exists(fullPath)
-            ? Path.Combine(fullPath, BuildStackFileName(stackId))
+            ? Path.Combine(fullPath, SunderStackFormat.BuildStackFileName(stackId))
             : fullPath;
-    }
-
-    private static string BuildStackFileName(string stackId)
-    {
-        var fileName = string.IsNullOrWhiteSpace(stackId)
-            ? "sunder-stack"
-            : string.Concat(stackId.Trim().Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.' ? char.ToLowerInvariant(character) : '-'));
-        return fileName.EndsWith(".sunderstack", StringComparison.OrdinalIgnoreCase)
-            ? fileName
-            : fileName + ".sunderstack";
     }
 
     private static string BuildStackPackageRequirementText(RegistryStackPackageRequirement package)
@@ -1392,19 +1411,6 @@ internal static class Program
         return string.Join(" - ", parts);
     }
 
-    private static string BuildStackSafetyText(RegistryStackSafety safety)
-    {
-        var flags = new List<string>();
-        if (safety.ContainsSecrets) flags.Add("raw secrets");
-        if (safety.ContainsSecretReferences) flags.Add("secret references");
-        if (safety.ContainsLocalPaths) flags.Add("local paths");
-        if (safety.ContainsPrivateText) flags.Add("private text");
-        if (safety.ContainsExecutableCommands) flags.Add("commands");
-        if (safety.ContainsNetworkEndpoints) flags.Add("network endpoints");
-        if (safety.ContainsMachineSpecificValues) flags.Add("machine-specific values");
-        return flags.Count == 0 ? "no sensitive content flags declared" : string.Join(", ", flags);
-    }
-
     private static string? ConsumeRegistryToken(List<string> args, RegistryClient registryClient)
     {
         var explicitToken = CommandLine.ConsumeOption(args, "--token")
@@ -1414,7 +1420,7 @@ internal static class Program
             return explicitToken;
         }
 
-        var savedToken = CliAuthStore.Load().GetToken(registryClient.RegistryUrl);
+        var savedToken = SunderAuthStore.Load().GetToken(registryClient.RegistryUrl);
         if (savedToken is null)
         {
             return null;

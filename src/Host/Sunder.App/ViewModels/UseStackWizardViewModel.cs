@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LiveMarkdown.Avalonia;
 using Sunder.App.Services;
 using Sunder.PackageManagement;
 using Sunder.Protocol;
@@ -14,9 +15,11 @@ public sealed partial class UseStackWizardViewModel(
     IRuntimeApiClient runtimeApiClient,
     RegistryPackageInstallService registryInstallService,
     Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
+    Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> notifyStackImportAppliedAsync,
     Func<Uri, IRegistryApiClient> registryClientFactory,
-    string registryUrlText) : ViewModelBase
+    string registryUrlText) : ViewModelBase, IDisposable
 {
+    private readonly MarketplacePackageProfileViewModel _stackProfile = BuildStackProfile(stack);
     private IReadOnlyList<SunderStackPackageRequirement> _packageRequirements = [];
     private bool _manifestLoaded;
     private bool _installPlanReady;
@@ -25,13 +28,23 @@ public sealed partial class UseStackWizardViewModel(
 
     public event Action<bool?>? CloseRequested;
 
+    public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? ImageGalleryRequested
+    {
+        add => _stackProfile.ImageGalleryRequested += value;
+        remove => _stackProfile.ImageGalleryRequested -= value;
+    }
+
     public string StackTitle { get; } = stack.Name;
 
     public string StackSubtitle { get; } = stack.StackId;
 
     public string StackSummary { get; } = string.IsNullOrWhiteSpace(stack.Summary) ? "No summary provided." : stack.Summary!;
 
-    public string StackMetadata { get; } = $"{stack.PackageCount} package{(stack.PackageCount == 1 ? string.Empty : "s")} - {stack.FragmentCount} setup fragment{(stack.FragmentCount == 1 ? string.Empty : "s")}";
+    public string StackMetadata { get; } = $"{stack.PackageCount} package{StackDisplayFormatters.Plural(stack.PackageCount)} - {stack.FragmentCount} fragment{StackDisplayFormatters.Plural(stack.FragmentCount)}";
+
+    public ObservableCollection<RegistryPackageMediaItemViewModel> StackProfileMedia => _stackProfile.Media;
+
+    public ObservableStringBuilder StackReadmeMarkdownBuilder => _stackProfile.ReadmeMarkdownBuilder;
 
     public ObservableCollection<UseStackPackageReviewViewModel> PackageRows { get; } = [];
 
@@ -57,7 +70,7 @@ public sealed partial class UseStackWizardViewModel(
                             && _manifestLoaded
                             && _installPlanReady
                             && !_installPlanHasErrors
-                            && HasSelectedSetupItems
+                            && HasApplicableContent
                             && !HasMissingRequiredInputs
                             && !HasImportErrors;
 
@@ -77,6 +90,10 @@ public sealed partial class UseStackWizardViewModel(
 
     public bool HasSelectedSetupItems => SetupPackageGroups.SelectMany(group => group.Items).Any(item => item.IsSelected);
 
+    public bool HasPackageRequirements => _packageRequirements.Count > 0;
+
+    public bool HasApplicableContent => HasPackageRequirements || HasSelectedSetupItems;
+
     public bool HasImportActions => ImportActions.Count > 0;
 
     public bool HasRequiredInputs => RequiredInputs.Count > 0;
@@ -88,6 +105,10 @@ public sealed partial class UseStackWizardViewModel(
     public bool HasImportErrors => ImportErrors.Count > 0;
 
     public bool HasImportedItems => ImportedItems.Count > 0;
+
+    public bool HasStackProfileMedia => _stackProfile.HasMedia;
+
+    public bool HasStackReadme => _stackProfile.HasReadme;
 
     [ObservableProperty]
     private bool _isBusy;
@@ -142,9 +163,9 @@ public sealed partial class UseStackWizardViewModel(
             return;
         }
 
-        if (!HasSelectedSetupItems)
+        if (!HasApplicableContent)
         {
-            StatusText = "Select at least one setup item before using this Stack.";
+            StatusText = "Select at least one package or setup item before using this Stack.";
             NotifyWizardStateChanged();
             return;
         }
@@ -250,8 +271,10 @@ public sealed partial class UseStackWizardViewModel(
                 ImportedItems.Add($"{imported.DisplayName} ({imported.Kind})");
             }
 
+            await NotifyStackImportAppliedAsync(result.AppliedContributions, CancellationToken.None);
+
             StatusText = result.Success
-                ? $"Imported {result.ImportedItems.Count} Stack setup item{Plural(result.ImportedItems.Count)}."
+                ? $"Imported {result.ImportedItems.Count} Stack setup item{StackDisplayFormatters.Plural(result.ImportedItems.Count)}."
                 : result.Errors.FirstOrDefault() ?? "Stack setup import failed.";
             if (result.Success)
             {
@@ -276,7 +299,7 @@ public sealed partial class UseStackWizardViewModel(
 
     private void ApplyManifest(
         SunderStackManifest manifest,
-        IReadOnlyDictionary<string, UseStackPackageInfo> packageInfo)
+        IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
     {
         _packageRequirements = manifest.Packages ?? [];
         PackageRows.Clear();
@@ -292,14 +315,30 @@ public sealed partial class UseStackWizardViewModel(
 
         _manifestLoaded = true;
         StatusText = SetupPackageGroups.SelectMany(group => group.Items).Any() == false
-            ? "This Stack has no setup fragments to import."
+            ? "This Stack has no fragments to import."
             : "Stack manifest loaded.";
         NotifyWizardStateChanged();
     }
 
+    private async Task NotifyStackImportAppliedAsync(
+        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
+        CancellationToken cancellationToken)
+    {
+        if (appliedContributions.Count == 0)
+        {
+            return;
+        }
+
+        var warnings = await notifyStackImportAppliedAsync(appliedContributions, cancellationToken);
+        foreach (var warning in warnings)
+        {
+            ImportWarnings.Add(warning);
+        }
+    }
+
     private void BuildSetupPackageGroups(
         SunderStackManifest manifest,
-        IReadOnlyDictionary<string, UseStackPackageInfo> packageInfo)
+        IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
     {
         SetupPackageGroups.Clear();
         var localDetails = stack.Details ?? LocalStackLibraryService.BuildDetailsFromManifest(manifest);
@@ -312,7 +351,7 @@ public sealed partial class UseStackWizardViewModel(
             var displayName = string.IsNullOrWhiteSpace(detailPackage?.DisplayName) || string.Equals(detailPackage.DisplayName, packageId, StringComparison.OrdinalIgnoreCase)
                 ? info?.DisplayName ?? packageId
                 : detailPackage!.DisplayName;
-            var glyph = !string.IsNullOrWhiteSpace(detailPackage?.Glyph) ? detailPackage!.Glyph : BuildPackageGlyph(info?.Icon, displayName, packageId);
+            var glyph = !string.IsNullOrWhiteSpace(detailPackage?.Glyph) ? detailPackage!.Glyph : StackDisplayFormatters.PackageGlyph(info?.Icon, displayName, packageId);
             var iconUri = info?.IconUri ?? (!string.IsNullOrWhiteSpace(detailPackage?.IconAssetPath)
                 ? runtimeApiClient.CreatePackageAssetUri(packageId, detailPackage!.IconAssetPath!)
                 : null);
@@ -335,8 +374,8 @@ public sealed partial class UseStackWizardViewModel(
         }
 
         return detailPackage.Items.FirstOrDefault(item => string.Equals(item.ItemId, fragment.FragmentId, StringComparison.OrdinalIgnoreCase))
-               ?? detailPackage.Items.FirstOrDefault(item => !string.IsNullOrWhiteSpace(fragment.SourceItemId)
-                                                            && string.Equals(item.ItemId, fragment.SourceItemId, StringComparison.OrdinalIgnoreCase))
+               ?? detailPackage.Items.FirstOrDefault(item => !string.IsNullOrWhiteSpace(fragment.Preview?.SourceItemId)
+                                                            && string.Equals(item.ItemId, fragment.Preview.SourceItemId, StringComparison.OrdinalIgnoreCase))
                ?? detailPackage.Items.FirstOrDefault(item => !string.IsNullOrWhiteSpace(fragment.DisplayName)
                                                             && string.Equals(item.DisplayName, fragment.DisplayName, StringComparison.OrdinalIgnoreCase));
     }
@@ -345,12 +384,10 @@ public sealed partial class UseStackWizardViewModel(
     {
         RequiredInputs.Clear();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var input in (manifest.RequiredInputs ?? []).Select(input => (Input: input, ContributorId: "stack"))
-                     .Concat((manifest.Fragments ?? []).SelectMany(fragment => (fragment.RequiredInputs ?? []).Select(input => (Input: input, ContributorId: fragment.ContributorId ?? fragment.OwnerPackageId ?? "stack")))))
+        foreach (var input in (manifest.Fragments ?? []).SelectMany(fragment => (fragment.RequiredInputs ?? []).Select(input => (Input: input, OwnerPackageId: fragment.OwnerPackageId, ContributorId: fragment.ContributorId ?? fragment.OwnerPackageId ?? "stack"))))
         {
             var inputId = input.Input.InputId ?? input.Input.Label ?? "input";
-            var kind = input.Input.Kind ?? "Text";
-            if (!seen.Add(inputId + ":" + kind))
+            if (!seen.Add(inputId))
             {
                 continue;
             }
@@ -359,10 +396,13 @@ public sealed partial class UseStackWizardViewModel(
                 new RuntimeStackRequiredInputDescriptor(
                     inputId,
                     input.ContributorId,
-                    kind,
                     input.Input.Label ?? inputId,
                     input.Input.Required != false,
-                    input.Input.Description),
+                    input.Input.Description,
+                    input.Input.DefaultValue)
+                {
+                    OwnerPackageId = input.OwnerPackageId,
+                },
                 null,
                 OnRequiredInputChanged));
         }
@@ -420,7 +460,7 @@ public sealed partial class UseStackWizardViewModel(
             StatusText = plan.Success
                 ? InstallPlanItems.Count == 0
                     ? "All Stack package requirements are already satisfied."
-                    : $"Stack package graph resolved {InstallPlanItems.Count} package change{Plural(InstallPlanItems.Count)}."
+                    : $"Stack package graph resolved {InstallPlanItems.Count} package change{StackDisplayFormatters.Plural(InstallPlanItems.Count)}."
                 : InstallPlanErrors.FirstOrDefault() ?? "Stack package graph resolution failed.";
         }
         catch (Exception ex)
@@ -446,7 +486,9 @@ public sealed partial class UseStackWizardViewModel(
         ImportErrors.Clear();
         if (!HasSelectedSetupItems)
         {
-            StatusText = "Select at least one setup item to preview actions.";
+            StatusText = HasPackageRequirements
+                ? "No Stack setup actions are needed for package-only requirements."
+                : "Select at least one setup item to preview actions.";
             NotifyWizardStateChanged();
             return;
         }
@@ -496,8 +538,8 @@ public sealed partial class UseStackWizardViewModel(
 
             StatusText = preview.Success
                 ? ImportActions.Count == 0
-                    ? "No setup actions are needed for the selected fragments."
-                    : $"Previewed {ImportActions.Count} setup action{Plural(ImportActions.Count)}."
+                    ? "No actions are needed for the selected fragments."
+                    : $"Previewed {ImportActions.Count} setup action{StackDisplayFormatters.Plural(ImportActions.Count)}."
                 : ImportErrors.FirstOrDefault() ?? "Stack setup preview failed.";
         }
         catch (Exception ex)
@@ -527,7 +569,7 @@ public sealed partial class UseStackWizardViewModel(
         }
 
         StatusText = result.Success
-            ? $"Installed {result.PlanItems.Count} Stack package change{Plural(result.PlanItems.Count)}."
+            ? $"Installed {result.PlanItems.Count} Stack package change{StackDisplayFormatters.Plural(result.PlanItems.Count)}."
             : result.Message;
     }
 
@@ -540,64 +582,8 @@ public sealed partial class UseStackWizardViewModel(
         }
     }
 
-    private async Task<IReadOnlyDictionary<string, UseStackPackageInfo>> LoadPackageInfoAsync(CancellationToken cancellationToken)
-    {
-        var packages = new Dictionary<string, UseStackPackageInfo>(StringComparer.OrdinalIgnoreCase);
-
-        async Task AddInstalledAsync()
-        {
-            foreach (var package in await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken))
-            {
-                AddPackageInfo(packages, package.PackageId, package.Name, package.Icon);
-            }
-        }
-
-        async Task AddSessionAsync()
-        {
-            foreach (var package in await runtimeApiClient.GetSessionPackagesAsync(cancellationToken))
-            {
-                AddPackageInfo(packages, package.PackageId, package.DisplayName, package.Icon);
-            }
-        }
-
-        async Task AddActiveAsync()
-        {
-            foreach (var package in await runtimeApiClient.GetActivePackagesAsync(cancellationToken))
-            {
-                AddPackageInfo(packages, package.PackageId, package.DisplayName, package.Icon);
-            }
-        }
-
-        try
-        {
-            await AddInstalledAsync();
-            await AddSessionAsync();
-            await AddActiveAsync();
-        }
-        catch
-        {
-            // Package metadata is decorative in the confirmation view.
-        }
-
-        return packages;
-    }
-
-    private void AddPackageInfo(
-        IDictionary<string, UseStackPackageInfo> packages,
-        string packageId,
-        string displayName,
-        PackageIconDescriptor? icon)
-    {
-        if (string.IsNullOrWhiteSpace(packageId))
-        {
-            return;
-        }
-
-        packages[packageId] = new UseStackPackageInfo(
-            string.IsNullOrWhiteSpace(displayName) ? packageId : displayName,
-            icon,
-            PackageIconUriResolver.Resolve(packageId, icon, runtimeApiClient.CreatePackageAssetUri));
-    }
+    private Task<IReadOnlyDictionary<string, StackPackageInfo>> LoadPackageInfoAsync(CancellationToken cancellationToken)
+        => new StackPackageInfoProvider(runtimeApiClient).LoadAsync(cancellationToken);
 
     private void OnSetupItemSelectionChanged()
     {
@@ -659,41 +645,63 @@ public sealed partial class UseStackWizardViewModel(
         OnPropertyChanged(nameof(HasSetupPackageGroups));
         OnPropertyChanged(nameof(HasSetupItems));
         OnPropertyChanged(nameof(HasSelectedSetupItems));
+        OnPropertyChanged(nameof(HasPackageRequirements));
+        OnPropertyChanged(nameof(HasApplicableContent));
         OnPropertyChanged(nameof(HasImportActions));
         OnPropertyChanged(nameof(HasRequiredInputs));
         OnPropertyChanged(nameof(HasMissingRequiredInputs));
         OnPropertyChanged(nameof(HasImportWarnings));
         OnPropertyChanged(nameof(HasImportErrors));
         OnPropertyChanged(nameof(HasImportedItems));
+        OnPropertyChanged(nameof(HasStackProfileMedia));
+        OnPropertyChanged(nameof(HasStackReadme));
         ApplyCommand.NotifyCanExecuteChanged();
     }
 
-    private static string Plural(int count) => count == 1 ? string.Empty : "s";
-
-    private static string BuildPackageGlyph(PackageIconDescriptor? icon, string displayName, string packageId)
+    public void Dispose()
     {
-        if (!string.IsNullOrWhiteSpace(icon?.Glyph))
-        {
-            return icon.Glyph!;
-        }
-
-        var source = string.IsNullOrWhiteSpace(displayName) ? packageId : displayName;
-        var first = source.FirstOrDefault(char.IsLetterOrDigit);
-        return first == default ? "?" : char.ToUpperInvariant(first).ToString();
+        _stackProfile.Dispose();
+        GC.SuppressFinalize(this);
     }
+
+    private static MarketplacePackageProfileViewModel BuildStackProfile(LocalStackLibraryItem stack)
+    {
+        var profile = new MarketplacePackageProfileViewModel();
+        profile.Apply(new RegistryStackProfile(
+            stack.StackId,
+            stack.Summary,
+            stack.ReadmeMarkdown,
+            WebsiteUrl: null,
+            SourceUrl: null,
+            IssueTrackerUrl: null,
+            License: null,
+            Tags: [],
+            Media: (stack.Media ?? [])
+                .OrderBy(media => media.SortOrder)
+                .Select(media => new RegistryStackMedia(
+                    Guid.NewGuid(),
+                    media.FileName,
+                    media.ContentType,
+                    media.Size,
+                    media.AltText,
+                    media.SortOrder,
+                    new Uri(media.LocalPath).AbsoluteUri))
+                .ToArray(),
+            stack.UpdatedAtUtc));
+        return profile;
+    }
+
 }
 
-public sealed record UseStackPackageInfo(string DisplayName, PackageIconDescriptor? Icon, Uri? IconUri);
-
-public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageRequirement package, UseStackPackageInfo? packageInfo) : PackageIconItemViewModel(packageInfo?.IconUri)
+public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageRequirement package, StackPackageInfo? packageInfo) : PackageIconItemViewModel(packageInfo?.IconUri)
 {
     public string PackageId { get; } = package.PackageId ?? "unknown";
 
     public string DisplayName { get; } = packageInfo?.DisplayName ?? package.PackageId ?? "Unknown package";
 
-    public string Glyph { get; } = BuildPackageGlyph(packageInfo?.Icon, packageInfo?.DisplayName ?? package.PackageId ?? "Package", package.PackageId ?? "package");
+    public string Glyph { get; } = StackDisplayFormatters.PackageGlyph(packageInfo?.Icon, packageInfo?.DisplayName ?? package.PackageId ?? "Package", package.PackageId ?? "package");
 
-    public string RequirementText { get; } = BuildRequirementText(package);
+    public string RequirementText { get; } = StackDisplayFormatters.PackageRequirementText(package);
 
     [ObservableProperty]
     private string _statusText = "Checking";
@@ -711,39 +719,6 @@ public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageReq
                         : $"Installed {item.Version}";
     }
 
-    private static string BuildRequirementText(SunderStackPackageRequirement package)
-    {
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(package.InstallTag))
-        {
-            parts.Add(package.InstallTag);
-        }
-
-        if (!string.IsNullOrWhiteSpace(package.MinimumVersion))
-        {
-            parts.Add($">= {package.MinimumVersion}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(package.CreatedWithVersion))
-        {
-            parts.Add($"created with {package.CreatedWithVersion}");
-        }
-
-        parts.Add(package.Required == true ? "required" : "optional");
-        return string.Join(" - ", parts);
-    }
-
-    private static string BuildPackageGlyph(PackageIconDescriptor? icon, string displayName, string packageId)
-    {
-        if (!string.IsNullOrWhiteSpace(icon?.Glyph))
-        {
-            return icon.Glyph!;
-        }
-
-        var source = string.IsNullOrWhiteSpace(displayName) ? packageId : displayName;
-        var first = source.FirstOrDefault(char.IsLetterOrDigit);
-        return first == default ? "?" : char.ToUpperInvariant(first).ToString();
-    }
 }
 
 public sealed partial class UseStackSetupPackageGroupViewModel(
@@ -807,10 +782,10 @@ public sealed partial class UseStackSetupItemViewModel : ViewModelBase
         Summary = details?.Summary ?? BuildSummary(fragment);
         Description = string.IsNullOrWhiteSpace(fragment.Description) ? string.Empty : fragment.Description!;
         Kind = StackContentKindLabels.InferKind(
-            fragment.Kind ?? details?.Kind,
+            fragment.Preview?.Kind ?? details?.Kind,
             fragment.OwnerPackageId,
             fragment.SchemaId,
-            fragment.SourceItemId ?? fragment.FragmentId,
+            fragment.Preview?.SourceItemId ?? fragment.FragmentId,
             DisplayName,
             Summary);
         Details = (details?.Values ?? [])
@@ -869,15 +844,9 @@ public sealed partial class UseStackRequiredInputValueViewModel(RuntimeStackRequ
 
     public string Label { get; } = input.Label;
 
-    public string Kind { get; } = input.Kind;
-
     public string ContributorId { get; } = input.ContributorId;
 
     public bool Required { get; } = input.Required;
-
-    public bool IsSecret { get; } = string.Equals(input.Kind, "Secret", StringComparison.OrdinalIgnoreCase);
-
-    public bool IsPlainText => !IsSecret;
 
     public string Description { get; } = string.IsNullOrWhiteSpace(input.Description) ? "Provide this value locally before import." : input.Description;
 
@@ -885,9 +854,7 @@ public sealed partial class UseStackRequiredInputValueViewModel(RuntimeStackRequ
 
     public bool IsMissingRequiredValue => Required && string.IsNullOrWhiteSpace(Value);
 
-    public string ReviewValue => IsSecret
-        ? string.IsNullOrWhiteSpace(Value) ? "Not provided" : "Provided locally"
-        : string.IsNullOrWhiteSpace(Value) ? "Not provided" : Value;
+    public string ReviewValue => string.IsNullOrWhiteSpace(Value) ? "Not provided" : "Provided locally";
 
     [ObservableProperty]
     private string _value = currentValue ?? input.DefaultValue ?? string.Empty;

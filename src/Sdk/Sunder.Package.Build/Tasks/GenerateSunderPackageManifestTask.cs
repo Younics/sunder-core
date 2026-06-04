@@ -353,6 +353,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
                 capabilities.Add(SunderSdkCapabilities.BackgroundProcessesV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageExtensionCatalog"):
+            case ("Sunder.Sdk.Abstractions", "PackageExtensionContribution`1"):
             case ("Sunder.Sdk.Abstractions", "PackageExtensionPoint`1"):
                 capabilities.Add(SunderSdkCapabilities.ExtensionsV1);
                 break;
@@ -412,6 +413,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
                 capabilities.Add(SunderSdkCapabilities.PackageSessionsV1);
                 break;
             case ("Sunder.Sdk.Stacks", "IPackageStackContributor"):
+            case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
             case ("Sunder.Sdk.Stacks", "SunderStackExtensionPoints"):
                 capabilities.Add(SunderSdkCapabilities.StacksV1);
                 capabilities.Add(SunderSdkCapabilities.StackContributionsV1);

@@ -104,6 +104,21 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
                 return;
             }
 
+            if (uri.IsFile)
+            {
+                await using var fileStream = File.OpenRead(uri.LocalPath);
+                if (fileStream.Length > MaxMediaImageBytes)
+                {
+                    await ClearImageAsync(cancellationToken);
+                    return;
+                }
+
+                bitmap = new Bitmap(fileStream);
+                await ApplyLoadedBitmapAsync(bitmap, cancellationToken);
+                bitmap = null;
+                return;
+            }
+
             var download = await BoundedImageContentLoader
                 .LoadAsync(ImageHttpClient, ImageLoadSemaphore, uri, MaxMediaImageBytes, cancellationToken)
                 .ConfigureAwait(false);

@@ -29,9 +29,10 @@ public sealed class RegistryApiClient : IRegistryApiClient
         string? query,
         int skip,
         int take,
+        RegistrySearchSort sort = RegistrySearchSort.Downloads,
         CancellationToken cancellationToken = default)
     {
-        var path = $"api/packages?skip={skip}&take={take}";
+        var path = $"api/packages?skip={skip}&take={take}&sort={FormatSort(sort)}";
         if (!string.IsNullOrWhiteSpace(query))
         {
             path += $"&query={Uri.EscapeDataString(query.Trim())}";
@@ -47,13 +48,23 @@ public sealed class RegistryApiClient : IRegistryApiClient
             CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}"),
             cancellationToken);
 
+    public Task<RegistryPackageDetails?> GetPackageAsync(
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => GetFromJsonOrNullAsync<RegistryPackageDetails>(
+            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}"),
+            cancellationToken,
+            bearerToken);
+
     public async Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(
         string? query,
         int skip,
         int take,
+        RegistrySearchSort sort = RegistrySearchSort.Downloads,
         CancellationToken cancellationToken = default)
     {
-        var path = $"api/stacks?skip={skip}&take={take}";
+        var path = $"api/stacks?skip={skip}&take={take}&sort={FormatSort(sort)}";
         if (!string.IsNullOrWhiteSpace(query))
         {
             path += $"&query={Uri.EscapeDataString(query.Trim())}";
@@ -68,6 +79,15 @@ public sealed class RegistryApiClient : IRegistryApiClient
         => GetFromJsonOrNullAsync<RegistryStackDetails>(
             CreateRequestUri($"api/stacks/{Uri.EscapeDataString(stackId)}"),
             cancellationToken);
+
+    public Task<RegistryStackDetails?> GetStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => GetFromJsonOrNullAsync<RegistryStackDetails>(
+            CreateRequestUri($"api/stacks/{Uri.EscapeDataString(stackId)}"),
+            cancellationToken,
+            bearerToken);
 
     public Task<RegistryPackageVersionDetails?> GetVersionAsync(
         string packageId,
@@ -126,7 +146,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
         string bearerToken,
         CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, CreateRequestUri("api/cli-auth/me"));
+        using var request = new HttpRequestMessage(HttpMethod.Get, CreateRequestUri("api/me"));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
@@ -286,14 +306,107 @@ public sealed class RegistryApiClient : IRegistryApiClient
             };
     }
 
+    public async Task<RegistryStackStarResponse> StarStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => await SendStackStarAsync(HttpMethod.Put, stackId, bearerToken, cancellationToken);
+
+    public async Task<RegistryStackStarResponse> UnstarStackAsync(
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => await SendStackStarAsync(HttpMethod.Delete, stackId, bearerToken, cancellationToken);
+
+    public async Task<RegistryPackageStarResponse> StarPackageAsync(
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => await SendPackageStarAsync(HttpMethod.Put, packageId, bearerToken, cancellationToken);
+
+    public async Task<RegistryPackageStarResponse> UnstarPackageAsync(
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken = default)
+        => await SendPackageStarAsync(HttpMethod.Delete, packageId, bearerToken, cancellationToken);
+
+    private async Task<RegistryPackageStarResponse> SendPackageStarAsync(
+        HttpMethod method,
+        string packageId,
+        string bearerToken,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            method,
+            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/star"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<RegistryPackageStarResponse>(cancellationToken: cancellationToken);
+        if (result is not null)
+        {
+            return result;
+        }
+
+        return response.IsSuccessStatusCode
+            ? new RegistryPackageStarResponse(false, null, null, ["Registry did not return a package star response."])
+            : new RegistryPackageStarResponse(false, null, null, [response.ReasonPhrase ?? "Registry package star update failed."])
+            {
+                Forbidden = response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized,
+            };
+    }
+
+    private async Task<RegistryStackStarResponse> SendStackStarAsync(
+        HttpMethod method,
+        string stackId,
+        string bearerToken,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            method,
+            CreateRequestUri($"api/stacks/{Uri.EscapeDataString(stackId)}/star"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<RegistryStackStarResponse>(cancellationToken: cancellationToken);
+        if (result is not null)
+        {
+            return result;
+        }
+
+        return response.IsSuccessStatusCode
+            ? new RegistryStackStarResponse(false, null, null, ["Registry did not return a Stack star response."])
+            : new RegistryStackStarResponse(false, null, null, [response.ReasonPhrase ?? "Registry Stack star update failed."])
+            {
+                Forbidden = response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized,
+            };
+    }
+
     private Uri CreateRequestUri(string path)
         => Uri.TryCreate(path, UriKind.Absolute, out var absoluteUri)
             ? absoluteUri
             : new Uri(RegistryUrl, path);
 
-    private async Task<T?> GetFromJsonOrNullAsync<T>(Uri uri, CancellationToken cancellationToken)
+    private static string FormatSort(RegistrySearchSort sort)
+        => sort switch
+        {
+            RegistrySearchSort.Downloads => "downloads",
+            RegistrySearchSort.Stars => "stars",
+            _ => "updated",
+        };
+
+    private async Task<T?> GetFromJsonOrNullAsync<T>(
+        Uri uri,
+        CancellationToken cancellationToken,
+        string? bearerToken = null)
     {
-        using var response = await _httpClient.GetAsync(uri, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        }
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return default;

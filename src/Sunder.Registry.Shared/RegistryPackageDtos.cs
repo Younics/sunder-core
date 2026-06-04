@@ -1,5 +1,19 @@
 namespace Sunder.Registry.Shared;
 
+public enum RegistrySearchSort
+{
+    Updated,
+    Downloads,
+    Stars,
+}
+
+public sealed record RegistryUserAttribution(
+    string? Username,
+    string? DisplayName,
+    DateTimeOffset? AddedAtUtc = null,
+    bool IsOwner = false,
+    string? AvatarUrl = null);
+
 public sealed record RegistryPackageSummary(
     string PackageId,
     string Name,
@@ -8,7 +22,9 @@ public sealed record RegistryPackageSummary(
     string? IconUrl,
     bool IsYanked,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    RegistryPackageStats? Stats = null,
+    RegistryUserAttribution? Creator = null);
 
 public sealed record RegistryPackageSearchResult(
     IReadOnlyList<RegistryPackageSummary> Items,
@@ -27,7 +43,9 @@ public sealed record RegistryPackageDetails(
     DateTimeOffset UpdatedAtUtc,
     RegistryPackageProfile? Profile = null,
     RegistryPackageStats? Stats = null,
-    IReadOnlyList<RegistryPackageDependent>? Dependents = null);
+    IReadOnlyList<RegistryPackageDependent>? Dependents = null,
+    RegistryUserAttribution? Creator = null,
+    IReadOnlyList<RegistryUserAttribution>? Maintainers = null);
 
 public sealed record RegistryPackageVersionSummary(
     string Version,
@@ -75,7 +93,9 @@ public sealed record RegistryPackageStats(
     long TotalDownloads,
     long WeeklyDownloads,
     long TotalViews,
-    IReadOnlyList<RegistryPackageDownloadPoint> DailyDownloads);
+    IReadOnlyList<RegistryPackageDownloadPoint> DailyDownloads,
+    long Stars = 0,
+    bool IsStarred = false);
 
 public sealed record RegistryPackageViewResponse(long Views);
 
@@ -212,7 +232,8 @@ public sealed record RegistryPackageMaintainer(
     DateTimeOffset AddedAtUtc,
     string? Username = null,
     string? DisplayName = null,
-    string? Email = null);
+    string? Email = null,
+    string? AvatarUrl = null);
 
 public sealed record RegistryPackageMaintainersResponse(
     string PackageId,
@@ -223,6 +244,15 @@ public sealed record RegistryAddPackageMaintainerRequest(string UserId);
 public sealed record RegistryPackageMaintainerOperationResponse(
     bool Success,
     string? Message,
+    IReadOnlyList<string> Errors)
+{
+    public bool Forbidden { get; init; }
+}
+
+public sealed record RegistryPackageStarResponse(
+    bool Success,
+    string? Message,
+    RegistryPackageStats? Stats,
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
@@ -257,9 +287,10 @@ public sealed record RegistryStackSummary(
     string? Summary,
     int PackageCount,
     int FragmentCount,
-    RegistryStackSafety Safety,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    RegistryStackStats? Stats = null,
+    RegistryUserAttribution? Creator = null);
 
 public sealed record RegistryStackSearchResult(
     IReadOnlyList<RegistryStackSummary> Items,
@@ -274,17 +305,37 @@ public sealed record RegistryStackDetails(
     IReadOnlyList<RegistryStackPackageRequirement> Packages,
     IReadOnlyList<RegistryStackFragmentSummary> Fragments,
     IReadOnlyList<RegistryStackRequiredInput> RequiredInputs,
-    RegistryStackSafety Safety,
     RegistryStackArtifact Artifact,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    RegistryStackStats? Stats = null,
+    RegistryStackProfile? Profile = null,
+    RegistryUserAttribution? Creator = null,
+    IReadOnlyList<RegistryUserAttribution>? Maintainers = null);
+
+public sealed record RegistryStackStats(
+    long TotalDownloads,
+    long Stars,
+    bool IsStarred,
+    long WeeklyDownloads = 0,
+    IReadOnlyList<RegistryStackDownloadPoint>? DailyDownloads = null,
+    long TotalViews = 0);
+
+public sealed record RegistryStackViewResponse(long Views);
+
+/// <summary>Download count for a single calendar day, used to plot the Stack downloads chart.</summary>
+public sealed record RegistryStackDownloadPoint(
+    DateOnly Date,
+    long Count);
 
 public sealed record RegistryStackPackageRequirement(
     string PackageId,
     string InstallTag,
     string? CreatedWithVersion,
     string? MinimumVersion,
-    bool Required);
+    bool Required,
+    string? Name = null,
+    string? IconUrl = null);
 
 public sealed record RegistryStackFragmentSummary(
     string FragmentId,
@@ -294,28 +345,65 @@ public sealed record RegistryStackFragmentSummary(
     int SchemaVersion,
     string DisplayName,
     string? Description,
-    bool DefaultSelected);
+    bool DefaultSelected,
+    string? SourceItemId = null,
+    string? Kind = null,
+    IReadOnlyList<RegistryStackFragmentDetail>? DisplayDetails = null);
+
+public sealed record RegistryStackFragmentDetail(
+    string Label,
+    string Value,
+    string? Behavior);
 
 public sealed record RegistryStackRequiredInput(
     string InputId,
-    string Kind,
     string Label,
     string? Description,
     bool Required);
-
-public sealed record RegistryStackSafety(
-    bool ContainsSecrets,
-    bool ContainsSecretReferences,
-    bool ContainsLocalPaths,
-    bool ContainsPrivateText,
-    bool ContainsExecutableCommands,
-    bool ContainsNetworkEndpoints,
-    bool ContainsMachineSpecificValues);
 
 public sealed record RegistryStackArtifact(
     string Sha256,
     long Size,
     string DownloadUrl);
+
+public sealed record RegistryStackProfile(
+    string StackId,
+    string? ShortDescription,
+    string? ReadmeMarkdown,
+    string? WebsiteUrl,
+    string? SourceUrl,
+    string? IssueTrackerUrl,
+    string? License,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<RegistryStackMedia> Media,
+    DateTimeOffset? UpdatedAtUtc);
+
+public sealed record RegistryStackMedia(
+    Guid MediaId,
+    string FileName,
+    string ContentType,
+    long Size,
+    string? AltText,
+    int SortOrder,
+    string Url);
+
+public sealed record RegistryUpdateStackProfileRequest(
+    string? ShortDescription,
+    string? ReadmeMarkdown,
+    string? WebsiteUrl,
+    string? SourceUrl,
+    string? IssueTrackerUrl,
+    string? License,
+    IReadOnlyList<string>? Tags);
+
+public sealed record RegistryStackProfileOperationResponse(
+    bool Success,
+    string? Message,
+    RegistryStackProfile? Profile,
+    IReadOnlyList<string> Errors)
+{
+    public bool Forbidden { get; init; }
+}
 
 public sealed record RegistryPublishLocalStackRequest(string StackPath);
 
@@ -337,17 +425,59 @@ public sealed record RegistryStackManagementOperationResponse(
     public bool Forbidden { get; init; }
 }
 
+public sealed record RegistryStackStarResponse(
+    bool Success,
+    string? Message,
+    RegistryStackStats? Stats,
+    IReadOnlyList<string> Errors)
+{
+    public bool Forbidden { get; init; }
+}
+
+public sealed record RegistryStackMaintainer(
+    string UserId,
+    bool IsOwner,
+    DateTimeOffset AddedAtUtc,
+    string? Username = null,
+    string? DisplayName = null,
+    string? Email = null,
+    string? AvatarUrl = null);
+
+public sealed record RegistryStackMaintainersResponse(
+    string StackId,
+    IReadOnlyList<RegistryStackMaintainer> Maintainers);
+
+public sealed record RegistryAddStackMaintainerRequest(string UserId);
+
+public sealed record RegistryStackMaintainerOperationResponse(
+    bool Success,
+    string? Message,
+    IReadOnlyList<string> Errors)
+{
+    public bool Forbidden { get; init; }
+}
+
 public sealed record RegistryCurrentUserResponse(
     string UserId,
     string? DisplayName,
-    string? Email);
+    string? Email,
+    string? Username = null,
+    string? AvatarUrl = null,
+    bool RequiresUsername = false);
+
+public sealed record RegistryUpdateCurrentUserProfileRequest(
+    string? Username,
+    string? DisplayName,
+    string? Email,
+    string? AvatarUrl);
 
 public sealed record RegistryUserProfileSummary(
     string UserId,
     string? Username,
     string? DisplayName,
     string? Email,
-    DateTimeOffset LastSeenAtUtc);
+    DateTimeOffset LastSeenAtUtc,
+    string? AvatarUrl = null);
 
 public sealed record RegistryUserPackageSummary(
     string PackageId,
@@ -360,7 +490,10 @@ public sealed record RegistryUserPackageSummary(
     int YankedVersionCount,
     int DeprecatedVersionCount,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    RegistryUserAttribution? Creator = null,
+    RegistryPackageStats? Stats = null,
+    bool IsYanked = false);
 
 public sealed record RegistryUserPackageDetails(
     string PackageId,

@@ -269,6 +269,32 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task MarketplaceSortOption_WhenChanged_SearchesWithSelectedSort()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.Mode = PackageWindowMode.Marketplace;
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        viewModel.SelectedMarketplaceSortOption = viewModel.MarketplaceSortOptions.Single(option => option.Sort == RegistrySearchSort.Stars);
+
+        await WaitForConditionAsync(() => registryClient.SearchSorts.Count == 2);
+
+        Assert.Collection(
+            registryClient.SearchSorts,
+            sort => Assert.Equal(RegistrySearchSort.Downloads, sort),
+            sort => Assert.Equal(RegistrySearchSort.Stars, sort));
+    }
+
+    [Fact]
     public async Task ApplyLaunchRequestAsync_WhenPackageInstallLink_SelectsMarketplacePackageWithoutInstalling()
     {
         var registryClient = new FakeRegistryApiClient
@@ -480,6 +506,43 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task MarketplacePackage_CanToggleStar()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            PackageDetails = (packageId, _) => Task.FromResult<RegistryPackageDetails?>(new RegistryPackageDetails(
+                packageId,
+                ToDisplayName(packageId),
+                null,
+                "1.0.0",
+                null,
+                [new RegistryPackageVersionSummary("1.0.0", false, null, DateTimeOffset.UtcNow)],
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                Stats: new RegistryPackageStats(4, 0, 0, [], Stars: 1, IsStarred: false))),
+            StarPackageResponse = new RegistryPackageStarResponse(true, "Starred package.", new RegistryPackageStats(4, 0, 0, [], Stars: 2, IsStarred: true), []),
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            CreateNotificationCenter(),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40),
+            registryUrl => new RegistryAuthToken(registryUrl.ToString(), "token-123", "owner", DateTimeOffset.UtcNow.AddHours(1)));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await viewModel.ToggleSelectedMarketplacePackageStarCommand.ExecuteAsync(null);
+
+        Assert.Equal("Starred package.", viewModel.StatusText);
+        Assert.Equal("4 downloads · 2 stars", viewModel.MarketplacePackageStatsText);
+        Assert.Equal("Unstar", viewModel.MarketplacePackageStarActionText);
+        Assert.True(viewModel.SelectedMarketplacePackageIsStarred);
+        Assert.Equal("sunder.package.agent", registryClient.LastStarPackageId);
+        Assert.Equal("token-123", registryClient.LastStarPackageToken);
+    }
+
+    [Fact]
     public async Task InstallSelectedMarketplacePackageCommand_InstallsSelectedVersion()
     {
         var registryClient = new FakeRegistryApiClient
@@ -617,7 +680,8 @@ public sealed class PackagesWindowViewModelTests
         FakeRuntimeApiClient runtimeClient,
         NotificationCenterService notificationCenter,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
-        TimeSpan? marketplaceSearchThrottleDelay = null
+        TimeSpan? marketplaceSearchThrottleDelay = null,
+        Func<Uri, RegistryAuthToken?>? tokenProvider = null
     )
     {
         var viewModel = new PackagesWindowViewModel(
@@ -625,6 +689,7 @@ public sealed class PackagesWindowViewModelTests
             new FakePackageArchivePicker(),
             notificationCenter: notificationCenter,
             registryClientFactory: registryClientFactory,
+            registryTokenProvider: tokenProvider,
             marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay
         )
         {
@@ -717,6 +782,7 @@ public sealed class PackagesWindowViewModelTests
     {
         private readonly object _gate = new();
         private readonly List<string?> _searchQueries = [];
+        private readonly List<RegistrySearchSort> _searchSorts = [];
 
         public Uri RegistryUrl { get; } = new("https://registry.example/");
 
@@ -731,6 +797,17 @@ public sealed class PackagesWindowViewModelTests
             }
         }
 
+        public IReadOnlyList<RegistrySearchSort> SearchSorts
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _searchSorts.ToArray();
+                }
+            }
+        }
+
         public Func<string?, IReadOnlyList<RegistryPackageSummary>> SearchResults { get; init; } = _ => [];
 
         public Func<string, CancellationToken, Task<RegistryPackageDetails?>> PackageDetails { get; init; } =
@@ -738,12 +815,25 @@ public sealed class PackagesWindowViewModelTests
 
         public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
 
+        public RegistryPackageStarResponse StarPackageResponse { get; init; } = new(true, "Starred package.", new RegistryPackageStats(0, 0, 0, [], Stars: 1, IsStarred: true), []);
+
+        public RegistryPackageStarResponse UnstarPackageResponse { get; init; } = new(true, "Unstarred package.", new RegistryPackageStats(0, 0, 0, [], Stars: 0, IsStarred: false), []);
+
         public RegistryResolveInstallPlanRequest? LastInstallPlanRequest { get; private set; }
+
+        public string? LastStarPackageId { get; private set; }
+
+        public string? LastStarPackageToken { get; private set; }
+
+        public string? LastUnstarPackageId { get; private set; }
+
+        public string? LastUnstarPackageToken { get; private set; }
 
         public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(
             string? query,
             int skip,
             int take,
+            RegistrySearchSort sort = RegistrySearchSort.Downloads,
             CancellationToken cancellationToken = default
         )
         {
@@ -751,6 +841,7 @@ public sealed class PackagesWindowViewModelTests
             lock (_gate)
             {
                 _searchQueries.Add(query);
+                _searchSorts.Add(sort);
             }
 
             var results = SearchResults(query)
@@ -774,6 +865,26 @@ public sealed class PackagesWindowViewModelTests
             string version,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
+
+        public Task<RegistryPackageStarResponse> StarPackageAsync(
+            string packageId,
+            string bearerToken,
+            CancellationToken cancellationToken = default)
+        {
+            LastStarPackageId = packageId;
+            LastStarPackageToken = bearerToken;
+            return Task.FromResult(StarPackageResponse);
+        }
+
+        public Task<RegistryPackageStarResponse> UnstarPackageAsync(
+            string packageId,
+            string bearerToken,
+            CancellationToken cancellationToken = default)
+        {
+            LastUnstarPackageId = packageId;
+            LastUnstarPackageToken = bearerToken;
+            return Task.FromResult(UnstarPackageResponse);
+        }
 
         public Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(
             RegistryResolveUpdatesRequest request,

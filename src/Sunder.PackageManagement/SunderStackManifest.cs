@@ -7,6 +7,12 @@ public sealed class SunderStackManifest
     [JsonPropertyName("schemaVersion")]
     public int? SchemaVersion { get; init; }
 
+    [JsonPropertyName("minReaderVersion")]
+    public int? MinReaderVersion { get; init; }
+
+    [JsonPropertyName("features")]
+    public IReadOnlyList<string>? Features { get; init; }
+
     [JsonPropertyName("stackId")]
     public string? StackId { get; init; }
 
@@ -15,6 +21,9 @@ public sealed class SunderStackManifest
 
     [JsonPropertyName("summary")]
     public string? Summary { get; init; }
+
+    [JsonPropertyName("readmeMarkdown")]
+    public string? ReadmeMarkdown { get; init; }
 
     [JsonPropertyName("createdAtUtc")]
     public DateTimeOffset? CreatedAtUtc { get; init; }
@@ -28,11 +37,30 @@ public sealed class SunderStackManifest
     [JsonPropertyName("fragments")]
     public IReadOnlyList<SunderStackFragmentManifest>? Fragments { get; init; }
 
-    [JsonPropertyName("requiredInputs")]
-    public IReadOnlyList<SunderStackRequiredInputManifest>? RequiredInputs { get; init; }
+    [JsonPropertyName("media")]
+    public IReadOnlyList<SunderStackMediaManifest>? Media { get; init; }
 
-    [JsonPropertyName("safety")]
-    public SunderStackSafetyManifest? Safety { get; init; }
+}
+
+public sealed class SunderStackMediaManifest
+{
+    [JsonPropertyName("path")]
+    public string? Path { get; init; }
+
+    [JsonPropertyName("fileName")]
+    public string? FileName { get; init; }
+
+    [JsonPropertyName("contentType")]
+    public string? ContentType { get; init; }
+
+    [JsonPropertyName("size")]
+    public long? Size { get; init; }
+
+    [JsonPropertyName("altText")]
+    public string? AltText { get; init; }
+
+    [JsonPropertyName("sortOrder")]
+    public int? SortOrder { get; init; }
 }
 
 public sealed class SunderStackPackageRequirement
@@ -70,14 +98,8 @@ public sealed class SunderStackFragmentManifest
     [JsonPropertyName("schemaVersion")]
     public int? SchemaVersion { get; init; }
 
-    [JsonPropertyName("kind")]
-    public string? Kind { get; init; }
-
     [JsonPropertyName("displayName")]
     public string? DisplayName { get; init; }
-
-    [JsonPropertyName("sourceItemId")]
-    public string? SourceItemId { get; init; }
 
     [JsonPropertyName("description")]
     public string? Description { get; init; }
@@ -88,17 +110,23 @@ public sealed class SunderStackFragmentManifest
     [JsonPropertyName("payloadPath")]
     public string? PayloadPath { get; init; }
 
-    [JsonPropertyName("requiresPackages")]
-    public IReadOnlyList<string>? RequiresPackages { get; init; }
-
     [JsonPropertyName("requiredInputs")]
     public IReadOnlyList<SunderStackRequiredInputManifest>? RequiredInputs { get; init; }
 
+    [JsonPropertyName("preview")]
+    public SunderStackFragmentPreview? Preview { get; init; }
+}
+
+public sealed class SunderStackFragmentPreview
+{
+    [JsonPropertyName("sourceItemId")]
+    public string? SourceItemId { get; init; }
+
+    [JsonPropertyName("kind")]
+    public string? Kind { get; init; }
+
     [JsonPropertyName("displayDetails")]
     public IReadOnlyList<SunderStackFragmentDisplayDetail>? DisplayDetails { get; init; }
-
-    [JsonPropertyName("safety")]
-    public SunderStackSafetyManifest? Safety { get; init; }
 }
 
 public sealed class SunderStackFragmentDisplayDetail
@@ -118,39 +146,15 @@ public sealed class SunderStackRequiredInputManifest
     [JsonPropertyName("inputId")]
     public string? InputId { get; init; }
 
-    [JsonPropertyName("kind")]
-    public string? Kind { get; init; }
-
     [JsonPropertyName("label")]
     public string? Label { get; init; }
 
     [JsonPropertyName("description")]
     public string? Description { get; init; }
 
+    [JsonPropertyName("defaultValue")]
+    public string? DefaultValue { get; init; }
+
     [JsonPropertyName("required")]
     public bool? Required { get; init; }
-}
-
-public sealed class SunderStackSafetyManifest
-{
-    [JsonPropertyName("containsSecrets")]
-    public bool? ContainsSecrets { get; init; }
-
-    [JsonPropertyName("containsSecretReferences")]
-    public bool? ContainsSecretReferences { get; init; }
-
-    [JsonPropertyName("containsLocalPaths")]
-    public bool? ContainsLocalPaths { get; init; }
-
-    [JsonPropertyName("containsPrivateText")]
-    public bool? ContainsPrivateText { get; init; }
-
-    [JsonPropertyName("containsExecutableCommands")]
-    public bool? ContainsExecutableCommands { get; init; }
-
-    [JsonPropertyName("containsNetworkEndpoints")]
-    public bool? ContainsNetworkEndpoints { get; init; }
-
-    [JsonPropertyName("containsMachineSpecificValues")]
-    public bool? ContainsMachineSpecificValues { get; init; }
 }

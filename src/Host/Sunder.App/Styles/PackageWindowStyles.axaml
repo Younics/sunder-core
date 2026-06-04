@@ -121,6 +121,35 @@
     <Setter Property="FontWeight" Value="SemiBold" />
   </Style>
 
+  <Style Selector="Border.marketplace-person-chip">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
+    <Setter Property="Margin" Value="0,0,8,8" />
+    <Setter Property="Padding" Value="10,6" />
+  </Style>
+
+  <Style Selector="Border.marketplace-person-chip.creator">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
+  <Style Selector="TextBlock.marketplace-people-heading">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.marketplace-person-chip-text">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Border.marketplace-person-chip.creator TextBlock.marketplace-person-chip-text">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
   <Style Selector="Button.marketplace-image-thumb">
     <Setter Property="Width" Value="148" />
     <Setter Property="Height" Value="100" />

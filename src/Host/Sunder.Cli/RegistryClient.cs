@@ -297,7 +297,7 @@ internal sealed class RegistryClient : IDisposable
 
     public async Task<RegistryCurrentUserResponse?> GetCurrentUserAsync(string bearerToken, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "api/cli-auth/me");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/me");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)

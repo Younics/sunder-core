@@ -775,34 +775,37 @@ internal sealed class RuntimePackageSessionService
                 return new RuntimeStackImportPreviewResponse(false, [], [], [], loadResult.Warnings, loadResult.Errors);
             }
 
-            var contributors = GetStackContributors();
+            var contributors = GetStackContributorRegistrations();
             var actions = new List<RuntimeStackImportActionDescriptor>();
             var requiredInputs = new List<RuntimeStackRequiredInputDescriptor>();
             var conflicts = new List<RuntimeStackImportConflictDescriptor>();
             var warnings = loadResult.Warnings.ToList();
             var errors = new List<string>();
 
-            foreach (var group in loadResult.Fragments.GroupBy(fragment => fragment.ContributorId, StringComparer.OrdinalIgnoreCase))
+            foreach (var group in loadResult.Fragments.GroupBy(
+                         fragment => BuildStackContributorKey(fragment.OwnerPackageId, fragment.ContributorId),
+                         StringComparer.OrdinalIgnoreCase))
             {
+                var firstFragment = group.First();
                 if (!contributors.TryGetValue(group.Key, out var contributor))
                 {
-                    errors.Add($"No active Stack contributor '{group.Key}' is available. Install and enable its package before importing this Stack.");
+                    errors.Add($"No active Stack contributor '{firstFragment.ContributorId}' from package '{firstFragment.OwnerPackageId}' is available. Install and enable its package before importing this Stack.");
                     continue;
                 }
 
                 try
                 {
-                    var preview = await contributor.PreviewImportAsync(
+                    var preview = await contributor.Contributor.PreviewImportAsync(
                         new StackImportPreviewRequest(group.ToArray(), request.InputValues, request.IdRemaps),
                         cancellationToken);
-                    actions.AddRange(preview.Actions.Select(action => ToProtocolAction(contributor.ContributorId, action)));
-                    requiredInputs.AddRange(preview.RequiredInputs.Select(input => ToProtocolRequiredInput(contributor.ContributorId, input)));
-                    conflicts.AddRange(preview.Conflicts.Select(conflict => ToProtocolConflict(contributor.ContributorId, conflict)));
+                    actions.AddRange(preview.Actions.Select(action => ToProtocolAction(contributor.PackageId, contributor.Contributor.ContributorId, action)));
+                    requiredInputs.AddRange(preview.RequiredInputs.Select(input => ToProtocolRequiredInput(contributor.PackageId, contributor.Contributor.ContributorId, input)));
+                    conflicts.AddRange(preview.Conflicts.Select(conflict => ToProtocolConflict(contributor.PackageId, contributor.Contributor.ContributorId, conflict)));
                     warnings.AddRange(preview.Warnings);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    errors.Add($"Stack contributor '{contributor.ContributorId}' preview failed: {ex.Message}");
+                    errors.Add($"Stack contributor '{contributor.Contributor.ContributorId}' from package '{contributor.PackageId}' preview failed: {ex.Message}");
                 }
             }
 
@@ -879,36 +882,39 @@ internal sealed class RuntimePackageSessionService
             return new RuntimeStackExportResponse(false, null, [], ["Stack output path is required."]);
         }
 
-        if (request.SelectedItems.Count == 0)
+        var selectedPackageRequirements = BuildSelectedPackageRequirements(request.SelectedPackages ?? []);
+        if (request.SelectedItems.Count == 0 && selectedPackageRequirements.Count == 0)
         {
-            return new RuntimeStackExportResponse(false, null, [], ["Select at least one setup item to export."]);
+            return new RuntimeStackExportResponse(false, null, [], ["Select at least one package or setup item to export."]);
         }
 
-        var contributors = _sessionState
-            .GetExtensionContributions(SunderStackExtensionPoints.StackContributors)
-            .Where(contribution => !string.IsNullOrWhiteSpace(contribution.Contribution.ContributorId))
-            .GroupBy(contribution => contribution.Contribution.ContributorId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var fragments = new List<StackFragmentExport>();
+        var contributors = GetStackContributorRegistrations();
+        var fragments = new List<OwnedStackFragmentExport>();
         var fragmentDisplayMetadata = new Dictionary<string, StackFragmentDisplayMetadata>(StringComparer.OrdinalIgnoreCase);
-        var packageRequirements = new List<StackPackageRequirement>();
+        var packageRequirements = new List<StackPackageRequirement>(selectedPackageRequirements);
         var warnings = new List<string>();
         var errors = new List<string>();
-        var exportOptions = new StackExportOptions(
-            request.Options.IncludePrivateText,
-            request.Options.IncludeMachineSpecificValues,
-            request.Options.IncludeExecutableCommands,
-            request.Options.IncludeNetworkEndpoints);
-
-        foreach (var group in request.SelectedItems.GroupBy(item => item.ContributorId, StringComparer.OrdinalIgnoreCase))
+        foreach (var group in request.SelectedItems.GroupBy(
+                     item => BuildStackContributorKey(item.OwnerPackageId, item.ContributorId),
+                     StringComparer.OrdinalIgnoreCase))
         {
-            if (!contributors.TryGetValue(group.Key, out var registration))
+            var selectedItem = group.First();
+            var contributorId = selectedItem.ContributorId;
+            var ownerPackageId = selectedItem.OwnerPackageId;
+            if (string.IsNullOrWhiteSpace(ownerPackageId))
             {
-                errors.Add($"No active Stack contributor '{group.Key}' is available for export.");
+                errors.Add($"Stack contributor '{contributorId}' selection is missing owner package id.");
                 continue;
             }
 
-            var (packageId, contributor) = registration;
+            if (!contributors.TryGetValue(group.Key, out var registration))
+            {
+                errors.Add($"No active Stack contributor '{contributorId}' from package '{ownerPackageId}' is available for export.");
+                continue;
+            }
+
+            var packageId = registration.PackageId;
+            var contributor = registration.Contributor;
 
             try
             {
@@ -931,10 +937,10 @@ internal sealed class RuntimePackageSessionService
                 var contribution = await contributor.ExportAsync(
                     new StackExportRequest(
                         itemSelections.Select(item => item.ItemId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                        exportOptions,
                         itemSelections),
                     cancellationToken);
-                fragments.AddRange(contribution.Fragments);
+                packageRequirements.Add(BuildPackageRequirement(packageId));
+                fragments.AddRange(contribution.Fragments.Select(fragment => new OwnedStackFragmentExport(packageId, fragment)));
                 foreach (var fragment in contribution.Fragments)
                 {
                     var sourceItemId = string.IsNullOrWhiteSpace(fragment.SourceItemId)
@@ -961,19 +967,6 @@ internal sealed class RuntimePackageSessionService
             return new RuntimeStackExportResponse(false, null, warnings, errors);
         }
 
-        var secretFragments = fragments
-            .Where(fragment => fragment.Safety.ContainsSecrets)
-            .Select(fragment => fragment.DisplayName)
-            .ToArray();
-        if (secretFragments.Length > 0)
-        {
-            return new RuntimeStackExportResponse(
-                false,
-                null,
-                warnings,
-                ["Stack export cannot include raw secrets. Remove or redact secret values from: " + string.Join(", ", secretFragments)]);
-        }
-
         if (fragments.Count == 0 && packageRequirements.Count == 0)
         {
             return new RuntimeStackExportResponse(false, null, warnings, ["Selected setup items did not produce Stack content."]);
@@ -983,8 +976,9 @@ internal sealed class RuntimePackageSessionService
         try
         {
             var payloadFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var fragment in fragments)
+            foreach (var ownedFragment in fragments)
             {
+                var fragment = ownedFragment.Fragment;
                 var payloadPath = Path.Combine(stagingPath, "fragments", fragment.FragmentId + ".json");
                 Directory.CreateDirectory(Path.GetDirectoryName(payloadPath)!);
                 await File.WriteAllTextAsync(payloadPath, fragment.JsonPayload, cancellationToken);
@@ -996,21 +990,28 @@ internal sealed class RuntimePackageSessionService
                 }
             }
 
+            var media = BuildStackMediaManifest(request.Media ?? [], payloadFiles, errors);
+            if (errors.Count > 0)
+            {
+                return new RuntimeStackExportResponse(false, null, warnings, errors);
+            }
+
             var now = DateTimeOffset.UtcNow;
             var manifest = new SunderStackManifest
             {
-                SchemaVersion = 1,
+                SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
+                MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
                 StackId = request.StackId,
                 Name = request.Name,
                 Summary = request.Summary,
+                ReadmeMarkdown = string.IsNullOrWhiteSpace(request.ReadmeMarkdown) ? null : request.ReadmeMarkdown,
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
-                Packages = BuildPackageRequirements(packageRequirements.Concat(fragments.SelectMany(fragment => fragment.RequiresPackages ?? []))),
-                Fragments = fragments.Select(fragment => ToManifestFragment(
-                    fragment,
-                    fragmentDisplayMetadata.TryGetValue(fragment.FragmentId, out var metadata) ? metadata : null)).ToArray(),
-                RequiredInputs = fragments.SelectMany(fragment => fragment.RequiredInputs ?? []).Select(ToManifestRequiredInput).ToArray(),
-                Safety = BuildAggregateSafety(fragments.Select(fragment => fragment.Safety)),
+                Packages = BuildPackageRequirements(packageRequirements),
+                Fragments = fragments.Select(ownedFragment => ToManifestFragment(
+                    ownedFragment,
+                    fragmentDisplayMetadata.TryGetValue(ownedFragment.Fragment.FragmentId, out var metadata) ? metadata : null)).ToArray(),
+                Media = media.Count == 0 ? null : media,
             };
 
             await SunderStackArchiveWriter.WriteAsync(manifest, request.OutputPath, payloadFiles, cancellationToken);
@@ -1037,6 +1038,57 @@ internal sealed class RuntimePackageSessionService
         }
     }
 
+    private static IReadOnlyList<SunderStackMediaManifest> BuildStackMediaManifest(
+        IReadOnlyList<RuntimeStackMediaInput> media,
+        IDictionary<string, string> payloadFiles,
+        ICollection<string> errors)
+    {
+        if (media.Count == 0)
+        {
+            return [];
+        }
+
+        var manifests = new List<SunderStackMediaManifest>();
+        var seenArchivePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in media)
+        {
+            var archivePath = item.ArchivePath.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(item.SourcePath) || !File.Exists(item.SourcePath))
+            {
+                errors.Add($"Stack media source file '{item.SourcePath}' was not found.");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(archivePath)
+                || !archivePath.StartsWith(SunderStackFormat.MediaPayloadRoot, StringComparison.OrdinalIgnoreCase)
+                || archivePath.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(static segment => segment == ".."))
+            {
+                errors.Add($"Stack media archive path '{item.ArchivePath}' must be under {SunderStackFormat.MediaPayloadRoot}.");
+                continue;
+            }
+
+            if (!seenArchivePaths.Add(archivePath))
+            {
+                errors.Add($"Stack media archive path '{archivePath}' is used more than once.");
+                continue;
+            }
+
+            var fileInfo = new FileInfo(item.SourcePath);
+            payloadFiles[archivePath] = item.SourcePath;
+            manifests.Add(new SunderStackMediaManifest
+            {
+                Path = archivePath,
+                FileName = string.IsNullOrWhiteSpace(item.FileName) ? Path.GetFileName(item.SourcePath) : Path.GetFileName(item.FileName),
+                ContentType = string.IsNullOrWhiteSpace(item.ContentType) ? "application/octet-stream" : item.ContentType,
+                Size = fileInfo.Length,
+                AltText = string.IsNullOrWhiteSpace(item.AltText) ? null : item.AltText.Trim(),
+                SortOrder = item.SortOrder,
+            });
+        }
+
+        return manifests;
+    }
+
     public async Task<RuntimeStackImportResponse> ImportStackAsync(
         RuntimeStackImportRequest request,
         CancellationToken cancellationToken = default)
@@ -1050,26 +1102,43 @@ internal sealed class RuntimePackageSessionService
                 return new RuntimeStackImportResponse(false, [], request.IdRemaps, loadResult.Warnings, loadResult.Errors);
             }
 
-            var contributors = GetStackContributors();
+            var contributors = GetStackContributorRegistrations();
             var importedItems = new List<RuntimeStackImportedItemDescriptor>();
+            var appliedContributions = new List<RuntimeStackImportAppliedContributionDescriptor>();
             var idRemaps = new Dictionary<string, string>(request.IdRemaps, StringComparer.OrdinalIgnoreCase);
             var warnings = loadResult.Warnings.ToList();
             var errors = new List<string>();
 
-            foreach (var group in loadResult.Fragments.GroupBy(fragment => fragment.ContributorId, StringComparer.OrdinalIgnoreCase))
+            foreach (var group in loadResult.Fragments.GroupBy(
+                         fragment => BuildStackContributorKey(fragment.OwnerPackageId, fragment.ContributorId),
+                         StringComparer.OrdinalIgnoreCase))
             {
+                var firstFragment = group.First();
                 if (!contributors.TryGetValue(group.Key, out var contributor))
                 {
-                    errors.Add($"No active Stack contributor '{group.Key}' is available. Install and enable its package before importing this Stack.");
+                    errors.Add($"No active Stack contributor '{firstFragment.ContributorId}' from package '{firstFragment.OwnerPackageId}' is available. Install and enable its package before importing this Stack.");
                     continue;
                 }
 
                 try
                 {
-                    var result = await contributor.ImportAsync(
-                        new StackImportRequest(group.ToArray(), request.InputValues, idRemaps, request.SelectedActionIds),
+                    var fragments = group.ToArray();
+                    var result = await contributor.Contributor.ImportAsync(
+                        new StackImportRequest(fragments, request.InputValues, idRemaps, request.SelectedActionIds),
                         cancellationToken);
-                    importedItems.AddRange(result.ImportedItems.Select(item => ToProtocolImportedItem(contributor.ContributorId, item)));
+                    var protocolImportedItems = result.ImportedItems
+                        .Select(item => ToProtocolImportedItem(contributor.PackageId, contributor.Contributor.ContributorId, item))
+                        .ToArray();
+                    importedItems.AddRange(protocolImportedItems);
+                    if (protocolImportedItems.Length > 0)
+                    {
+                        appliedContributions.Add(new RuntimeStackImportAppliedContributionDescriptor(
+                            contributor.PackageId,
+                            contributor.Contributor.ContributorId,
+                            fragments.Select(fragment => fragment.FragmentId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                            protocolImportedItems));
+                    }
+
                     foreach (var (key, value) in result.IdRemaps)
                     {
                         idRemaps[key] = value;
@@ -1080,11 +1149,14 @@ internal sealed class RuntimePackageSessionService
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    errors.Add($"Stack contributor '{contributor.ContributorId}' import failed: {ex.Message}");
+                    errors.Add($"Stack contributor '{contributor.Contributor.ContributorId}' from package '{contributor.PackageId}' import failed: {ex.Message}");
                 }
             }
 
-            return new RuntimeStackImportResponse(errors.Count == 0, importedItems, idRemaps, warnings, errors);
+            return new RuntimeStackImportResponse(errors.Count == 0, importedItems, idRemaps, warnings, errors)
+            {
+                AppliedContributions = appliedContributions,
+            };
         }
         finally
         {
@@ -1863,13 +1935,46 @@ internal sealed class RuntimePackageSessionService
     private ActiveLoadedPackage? GetLoadedPackage(string packageId)
         => _sessionState.GetLoadedPackage(packageId);
 
-    private Dictionary<string, IPackageStackContributor> GetStackContributors()
+    private IReadOnlyList<StackPackageRequirement> BuildSelectedPackageRequirements(IReadOnlyList<string> selectedPackageIds)
+        => selectedPackageIds
+            .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
+            .Select(packageId => packageId.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(packageId =>
+            {
+                var loadedPackage = GetLoadedPackage(packageId);
+                return new StackPackageRequirement(
+                    packageId,
+                    CreatedWithVersion: loadedPackage?.Descriptor.Version);
+            })
+            .ToArray();
+
+    private StackPackageRequirement BuildPackageRequirement(string packageId)
+    {
+        var loadedPackage = GetLoadedPackage(packageId);
+        return new StackPackageRequirement(
+            packageId,
+            CreatedWithVersion: loadedPackage?.Descriptor.Version,
+            MinimumVersion: "1.0.0");
+    }
+
+    private Dictionary<string, StackContributorRegistration> GetStackContributorRegistrations()
         => _sessionState
             .GetExtensionContributions(SunderStackExtensionPoints.StackContributors)
-            .Select(contribution => contribution.Contribution)
-            .Where(contributor => !string.IsNullOrWhiteSpace(contributor.ContributorId))
-            .GroupBy(contributor => contributor.ContributorId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            .Where(contribution => !string.IsNullOrWhiteSpace(contribution.PackageId)
+                                   && !string.IsNullOrWhiteSpace(contribution.Contribution.ContributorId))
+            .GroupBy(
+                contribution => BuildStackContributorKey(contribution.PackageId, contribution.Contribution.ContributorId),
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => new StackContributorRegistration(group.First().PackageId, group.First().Contribution),
+                StringComparer.OrdinalIgnoreCase);
+
+    private static string BuildStackContributorKey(string? ownerPackageId, string contributorId)
+        => string.IsNullOrWhiteSpace(ownerPackageId)
+            ? string.Empty
+            : ownerPackageId.Trim() + "\u001f" + contributorId.Trim();
 
     private static async Task<StackFragmentLoadResult> LoadStackFragmentsAsync(
         string stackPath,
@@ -1927,7 +2032,7 @@ internal sealed class RuntimePackageSessionService
         return new StackFragmentLoadResult(true, fragments, validation.Warnings, []);
     }
 
-    private static IReadOnlyList<StackPayloadFile> ResolveFragmentFiles(string stagingPath, string fragmentId)
+    private static IReadOnlyList<StackImportPayloadFile> ResolveFragmentFiles(string stagingPath, string fragmentId)
     {
         var fragmentFilesPath = Path.Combine(stagingPath, "payload", "files", fragmentId);
         if (!Directory.Exists(fragmentFilesPath))
@@ -1936,23 +2041,35 @@ internal sealed class RuntimePackageSessionService
         }
 
         return Directory.EnumerateFiles(fragmentFilesPath, "*", SearchOption.AllDirectories)
-            .Select(path => new StackPayloadFile(
+            .Select(path => new StackImportPayloadFile(
                 Path.GetRelativePath(fragmentFilesPath, path).Replace('\\', '/'),
                 path))
             .ToArray();
     }
 
-    private static RuntimeStackImportActionDescriptor ToProtocolAction(string contributorId, StackImportAction action)
-        => new(action.ActionId, contributorId, action.DisplayName, action.Kind.ToString(), action.DefaultSelected, action.Description);
+    private static RuntimeStackImportActionDescriptor ToProtocolAction(string ownerPackageId, string contributorId, StackImportAction action)
+        => new(action.ActionId, contributorId, action.DisplayName, action.Kind.ToString(), action.DefaultSelected, action.Description)
+        {
+            OwnerPackageId = ownerPackageId,
+        };
 
-    private static RuntimeStackRequiredInputDescriptor ToProtocolRequiredInput(string contributorId, StackRequiredInputDescriptor input)
-        => new(input.InputId, contributorId, input.Kind.ToString(), input.Label, input.Required, input.Description, input.DefaultValue);
+    private static RuntimeStackRequiredInputDescriptor ToProtocolRequiredInput(string ownerPackageId, string contributorId, StackRequiredInputDescriptor input)
+        => new(input.InputId, contributorId, input.Label, input.Required, input.Description, input.DefaultValue)
+        {
+            OwnerPackageId = ownerPackageId,
+        };
 
-    private static RuntimeStackImportConflictDescriptor ToProtocolConflict(string contributorId, StackImportConflict conflict)
-        => new(conflict.ConflictId, contributorId, conflict.Message, conflict.Severity.ToString(), conflict.FragmentId);
+    private static RuntimeStackImportConflictDescriptor ToProtocolConflict(string ownerPackageId, string contributorId, StackImportConflict conflict)
+        => new(conflict.ConflictId, contributorId, conflict.Message, conflict.Severity.ToString(), conflict.FragmentId)
+        {
+            OwnerPackageId = ownerPackageId,
+        };
 
-    private static RuntimeStackImportedItemDescriptor ToProtocolImportedItem(string contributorId, StackImportedItem item)
-        => new(item.ItemId, contributorId, item.DisplayName, item.Kind);
+    private static RuntimeStackImportedItemDescriptor ToProtocolImportedItem(string ownerPackageId, string contributorId, StackImportedItem item)
+        => new(item.ItemId, contributorId, item.DisplayName, item.Kind)
+        {
+            OwnerPackageId = ownerPackageId,
+        };
 
     private static IReadOnlyList<SunderStackPackageRequirement> BuildPackageRequirements(IEnumerable<StackPackageRequirement> requirements)
         => requirements
@@ -1972,6 +2089,14 @@ internal sealed class RuntimePackageSessionService
             })
             .OrderBy(requirement => requirement.PackageId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private sealed record StackContributorRegistration(
+        string PackageId,
+        IPackageStackContributor Contributor);
+
+    private sealed record OwnedStackFragmentExport(
+        string OwnerPackageId,
+        StackFragmentExport Fragment);
 
     private sealed record StackFragmentDisplayMetadata(
         string? SourceItemId,
@@ -2041,67 +2166,41 @@ internal sealed class RuntimePackageSessionService
         IReadOnlyList<StackFragmentExport> fragments)
         => itemSelections.Count == 1 && fragments.Count == 1 ? itemSelections[0].ItemId : null;
 
-    private static SunderStackFragmentManifest ToManifestFragment(StackFragmentExport fragment, StackFragmentDisplayMetadata? displayMetadata)
-        => new()
+    private static SunderStackFragmentManifest ToManifestFragment(OwnedStackFragmentExport ownedFragment, StackFragmentDisplayMetadata? displayMetadata)
+    {
+        var fragment = ownedFragment.Fragment;
+        return new()
         {
             FragmentId = fragment.FragmentId,
-            OwnerPackageId = fragment.OwnerPackageId,
+            OwnerPackageId = ownedFragment.OwnerPackageId,
             ContributorId = fragment.ContributorId,
             SchemaId = fragment.SchemaId,
             SchemaVersion = fragment.SchemaVersion,
-            Kind = displayMetadata?.Kind,
             DisplayName = fragment.DisplayName,
-            SourceItemId = displayMetadata?.SourceItemId,
             Description = fragment.Description,
             DefaultSelected = fragment.DefaultSelected,
             PayloadPath = $"payload/fragments/{fragment.FragmentId}.json",
-            RequiresPackages = (fragment.RequiresPackages ?? [])
-                .Select(requirement => requirement.PackageId)
-                .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
             RequiredInputs = (fragment.RequiredInputs ?? []).Select(ToManifestRequiredInput).ToArray(),
-            DisplayDetails = displayMetadata?.DisplayDetails,
-            Safety = ToManifestSafety(fragment.Safety),
+            Preview = displayMetadata is null
+                ? null
+                : new SunderStackFragmentPreview
+                {
+                    SourceItemId = displayMetadata.SourceItemId,
+                    Kind = displayMetadata.Kind,
+                    DisplayDetails = displayMetadata.DisplayDetails,
+                },
         };
+    }
 
     private static SunderStackRequiredInputManifest ToManifestRequiredInput(StackRequiredInputDescriptor input)
         => new()
         {
             InputId = input.InputId,
-            Kind = input.Kind.ToString(),
             Label = input.Label,
             Description = input.Description,
+            DefaultValue = input.DefaultValue,
             Required = input.Required,
         };
-
-    private static SunderStackSafetyManifest ToManifestSafety(StackSafetyDescriptor safety)
-        => new()
-        {
-            ContainsSecrets = safety.ContainsSecrets,
-            ContainsSecretReferences = safety.ContainsSecretReferences,
-            ContainsLocalPaths = safety.ContainsLocalPaths,
-            ContainsPrivateText = safety.ContainsPrivateText,
-            ContainsExecutableCommands = safety.ContainsExecutableCommands,
-            ContainsNetworkEndpoints = safety.ContainsNetworkEndpoints,
-            ContainsMachineSpecificValues = safety.ContainsMachineSpecificValues,
-        };
-
-    private static SunderStackSafetyManifest BuildAggregateSafety(IEnumerable<StackSafetyDescriptor> safetyItems)
-    {
-        var items = safetyItems.ToArray();
-        return new SunderStackSafetyManifest
-        {
-            ContainsSecrets = items.Any(item => item.ContainsSecrets),
-            ContainsSecretReferences = items.Any(item => item.ContainsSecretReferences),
-            ContainsLocalPaths = items.Any(item => item.ContainsLocalPaths),
-            ContainsPrivateText = items.Any(item => item.ContainsPrivateText),
-            ContainsExecutableCommands = items.Any(item => item.ContainsExecutableCommands),
-            ContainsNetworkEndpoints = items.Any(item => item.ContainsNetworkEndpoints),
-            ContainsMachineSpecificValues = items.Any(item => item.ContainsMachineSpecificValues),
-        };
-    }
 
     private static string CreateStackStagingPath()
         => Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "runtime", Guid.NewGuid().ToString("N"));

@@ -1,0 +1,215 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        x:Class="Sunder.App.Views.AboutSunderWindow"
+        mc:Ignorable="d"
+        Width="560"
+        Height="720"
+        MinWidth="480"
+        MinHeight="640"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="About Sunder"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        ShowInTaskbar="False"
+        Classes="secondary-window">
+  <Window.Styles>
+    <Style Selector="Border.about-hero-card">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Shell.Glass.Panel}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Shell.Glass.Border.Strong}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Large}" />
+      <Setter Property="Padding" Value="26" />
+      <Setter Property="BoxShadow" Value="{DynamicResource Sunder.Shadow.PackagePanel}" />
+    </Style>
+
+    <Style Selector="TextBlock.about-title">
+      <Setter Property="FontSize" Value="34" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+      <Setter Property="LetterSpacing" Value="-1.2" />
+    </Style>
+
+    <Style Selector="Border.about-description-card">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+      <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <Style Selector="TextBlock.about-description">
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+      <Setter Property="LineHeight" Value="22" />
+    </Style>
+
+    <Style Selector="TextBlock.about-tagline">
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="LineHeight" Value="20" />
+      <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="Border.about-link-card">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Popover}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+      <Setter Property="Padding" Value="14" />
+      <Setter Property="MinHeight" Value="122" />
+    </Style>
+
+    <Style Selector="Border.about-younics-card">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+      <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <Style Selector="Border.about-younics-logo-panel">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Background.App}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
+      <Setter Property="Padding" Value="12" />
+    </Style>
+
+    <Style Selector="HyperlinkButton.about-link">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style Selector="HyperlinkButton.about-link:pointerover">
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    </Style>
+
+    <Style Selector="Button.about-link-button">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="Padding" Value="10,6" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style Selector="Button.about-link-button:pointerover">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="52,*"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="About Sunder" />
+      </controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
+
+    <Border Grid.Row="1"
+            Margin="18,10,18,18"
+            Classes="about-hero-card">
+      <StackPanel Spacing="18">
+        <StackPanel HorizontalAlignment="Center"
+                    Width="420"
+                    Spacing="10">
+          <Image Source="avares://Sunder.App/Assets/Images/logo.png"
+                 Width="96"
+                 Height="96"
+                 HorizontalAlignment="Center"
+                 RenderOptions.BitmapInterpolationMode="HighQuality"
+                 Stretch="Uniform" />
+          <TextBlock Classes="about-title"
+                     HorizontalAlignment="Center"
+                     Text="Sunder" />
+          <TextBlock Classes="about-tagline"
+                      HorizontalAlignment="Center"
+                     Text="Your highly customizable local workspace for packages, agents, tools, and reusable Stacks."
+                     TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Border Classes="about-description-card">
+          <TextBlock Classes="about-description"
+                     Text="Shape a workspace around the way you work: install package UIs, run agents and tools, compose reusable Stacks, and keep everything under your control on your machine."
+                     TextWrapping="Wrap" />
+        </Border>
+
+        <Grid ColumnDefinitions="*,*"
+              ColumnSpacing="12">
+          <Border Classes="about-link-card">
+            <Grid RowDefinitions="Auto,*,Auto"
+                  RowSpacing="7">
+              <TextBlock Classes="section-title" Text="Sunder" />
+              <TextBlock Grid.Row="1"
+                         Classes="caption"
+                          Text="Product site and documentation."
+                          TextWrapping="Wrap" />
+              <Button Grid.Row="2"
+                      Classes="about-link-button"
+                      Content="Visit sunderapp.io"
+                      Click="SunderSiteButton_OnClick" />
+            </Grid>
+          </Border>
+
+          <Border Grid.Column="1"
+                  Classes="about-link-card">
+            <Grid RowDefinitions="Auto,*,Auto"
+                  RowSpacing="7">
+              <TextBlock Classes="section-title" Text="Sunder Hub" />
+              <TextBlock Grid.Row="1"
+                         Classes="caption"
+                          Text="Marketplace for packages and Stacks."
+                          TextWrapping="Wrap" />
+              <Button Grid.Row="2"
+                      Classes="about-link-button"
+                      Content="Open Sunder Hub"
+                      Click="SunderHubButton_OnClick" />
+            </Grid>
+          </Border>
+        </Grid>
+
+        <Border Classes="about-younics-card">
+          <Grid ColumnDefinitions="140,*"
+                ColumnSpacing="16">
+            <Border Classes="about-younics-logo-panel"
+                    VerticalAlignment="Stretch">
+              <Image Width="112"
+                     Source="avares://Sunder.App/Assets/Images/younics.png"
+                     RenderOptions.BitmapInterpolationMode="HighQuality"
+                     Stretch="Uniform"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center" />
+            </Border>
+            <StackPanel Grid.Column="1"
+                        Spacing="7"
+                        VerticalAlignment="Center">
+              <TextBlock Classes="section-title" Text="Backed by Younics" />
+              <TextBlock Classes="caption"
+                         Text="Younics supports Sunder's product and ecosystem development."
+                         TextWrapping="Wrap" />
+              <Button Classes="about-link-button"
+                      Content="Visit younics.com"
+                      Click="YounicsButton_OnClick" />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>
