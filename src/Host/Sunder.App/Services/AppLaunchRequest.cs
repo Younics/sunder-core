@@ -103,11 +103,6 @@ public static class AppLaunchRequestParser
             return new AppLaunchRequest(AppLaunchRequestKind.PackageDetails, PackageId: packageId, RegistryUrl: registryUrl);
         }
 
-        if (segments.Count == 2 && string.Equals(segments[1], "install", StringComparison.OrdinalIgnoreCase))
-        {
-            return new AppLaunchRequest(AppLaunchRequestKind.PackageInstall, PackageId: packageId, RegistryUrl: registryUrl);
-        }
-
         return AppLaunchRequest.Invalid($"Unsupported Sunder package link path '{uri.AbsolutePath}'.");
     }
 
@@ -128,11 +123,6 @@ public static class AppLaunchRequestParser
         if (segments.Count == 1)
         {
             return new AppLaunchRequest(AppLaunchRequestKind.StackDetails, StackId: stackId, RegistryUrl: registryUrl);
-        }
-
-        if (segments.Count == 2 && string.Equals(segments[1], "use", StringComparison.OrdinalIgnoreCase))
-        {
-            return new AppLaunchRequest(AppLaunchRequestKind.StackUse, StackId: stackId, RegistryUrl: registryUrl);
         }
 
         return AppLaunchRequest.Invalid($"Unsupported Sunder Stack link path '{uri.AbsolutePath}'.");

@@ -24,12 +24,12 @@ public sealed class AppSingleInstanceCoordinatorTests
         Assert.False(secondary.IsPrimary);
 
         var forwarded = await secondary.TryForwardLaunchArgumentsAsync(
-            ["sunder://stacks/sunder.stack.demo/use"],
+            ["sunder://stacks/sunder.stack.demo"],
             TimeSpan.FromSeconds(5));
 
         Assert.True(forwarded);
         var request = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(AppLaunchRequestKind.StackUse, request.Kind);
+        Assert.Equal(AppLaunchRequestKind.StackDetails, request.Kind);
         Assert.Equal("sunder.stack.demo", request.StackId);
     }
 }

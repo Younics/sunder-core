@@ -820,7 +820,7 @@ internal static class Program
         WriteStackDetails(stack);
         Console.WriteLine();
         ConsoleOutput.WriteInfo("Open this link in Sunder App to review and use the Stack:");
-        Console.WriteLine(BuildStackUseLink(stack.StackId));
+        Console.WriteLine(BuildStackShowLink(stack.StackId));
         ConsoleOutput.WriteInfo("Sunder App will preview package installs, required inputs, and setup actions before import.");
         return Success;
     }
@@ -1142,7 +1142,7 @@ internal static class Program
 
         Console.WriteLine($"Created: {stack.CreatedAtUtc.LocalDateTime:g}");
         Console.WriteLine($"Updated: {stack.UpdatedAtUtc.LocalDateTime:g}");
-        Console.WriteLine($"Use Link: {BuildStackUseLink(stack.StackId)}");
+        Console.WriteLine($"Show Link: {BuildStackShowLink(stack.StackId)}");
 
         Console.WriteLine("Packages:");
         if (stack.Packages.Count == 0)
@@ -1337,7 +1337,7 @@ internal static class Program
 
         if (result.Success && !string.IsNullOrWhiteSpace(result.StackId))
         {
-            ConsoleOutput.WriteInfo($"Use link: {BuildStackUseLink(result.StackId)}");
+            ConsoleOutput.WriteInfo($"Show link: {BuildStackShowLink(result.StackId)}");
         }
 
         return result.Success ? Success : Failure;
@@ -1373,8 +1373,8 @@ internal static class Program
         return result.Success ? Success : Failure;
     }
 
-    private static string BuildStackUseLink(string stackId)
-        => $"sunder://stacks/{Uri.EscapeDataString(stackId)}/use";
+    private static string BuildStackShowLink(string stackId)
+        => $"sunder://stacks/{Uri.EscapeDataString(stackId)}";
 
     private static string ResolveStackOutputPath(string? outputPath, string stackId)
     {

@@ -261,6 +261,39 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task ApplyLaunchRequestAsync_WhenStackDetailsLink_SelectsExactMarketplaceStackWithoutImporting()
+    {
+        var root = CreateTempDirectory();
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults =
+            [
+                CreateRegistryStackSummary("team-stack-tools", "Team Stack Tools"),
+                CreateRegistryStackSummary("team-stack", "Team Stack"),
+            ],
+            StackDetailsFactory = (stackId, _) => Task.FromResult<RegistryStackDetails?>(
+                CreateRegistryStackDetails(
+                    stackId,
+                    string.Equals(stackId, "team-stack", StringComparison.OrdinalIgnoreCase) ? "Team Stack" : "Team Stack Tools")),
+        };
+        using var viewModel = CreateViewModel(root, registryClient);
+
+        await viewModel.ApplyLaunchRequestAsync(new AppLaunchRequest(
+            AppLaunchRequestKind.StackDetails,
+            StackId: "team-stack",
+            RegistryUrl: new Uri("https://registry.example/")));
+        await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded && viewModel.SelectedRegistryStack?.StackId == "team-stack");
+
+        Assert.True(viewModel.IsMarketplaceMode);
+        Assert.Equal("team-stack", viewModel.RegistrySearchText);
+        Assert.Collection(viewModel.RegistryStacks, stack => Assert.Equal("team-stack", stack.StackId));
+        Assert.Equal("Team Stack", viewModel.SelectedRegistryStackTitle);
+        Assert.Empty(viewModel.Stacks);
+        Assert.Null(registryClient.LastDownloadedStackId);
+        Assert.Collection(registryClient.StackSearchQueries, query => Assert.Equal("team-stack", query));
+    }
+
+    [Fact]
     public async Task ImportSelectedRegistryStackCommand_DownloadsAndImportsLocalStack()
     {
         var root = CreateTempDirectory();

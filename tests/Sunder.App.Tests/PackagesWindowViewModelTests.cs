@@ -318,12 +318,12 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
-    public async Task ApplyLaunchRequestAsync_WhenPackageInstallLink_SelectsMarketplacePackageWithoutInstalling()
+    public async Task ApplyLaunchRequestAsync_WhenPackageDetailsLink_SelectsExactMarketplacePackageWithoutInstalling()
     {
         var registryClient = new FakeRegistryApiClient
         {
             SearchResults = query => string.Equals(query, "sunder.package.agent", StringComparison.OrdinalIgnoreCase)
-                ? [CreateRegistryPackage("sunder.package.agent")]
+                ? [CreateRegistryPackage("sunder.package.agent.tools"), CreateRegistryPackage("sunder.package.agent")]
                 : [],
         };
         using var viewModel = CreateViewModel(
@@ -334,15 +334,16 @@ public sealed class PackagesWindowViewModelTests
             marketplaceDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
 
         await viewModel.ApplyLaunchRequestAsync(new AppLaunchRequest(
-            AppLaunchRequestKind.PackageInstall,
+            AppLaunchRequestKind.PackageDetails,
             PackageId: "sunder.package.agent",
             RegistryUrl: new Uri("https://registry.example/")));
 
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
         Assert.Equal("sunder.package.agent", viewModel.SearchText);
         Assert.Equal("sunder.package.agent", viewModel.SelectedMarketplacePackage?.PackageId);
+        Assert.Collection(viewModel.MarketplacePackages, package => Assert.Equal("sunder.package.agent", package.PackageId));
         Assert.True(viewModel.ShowMarketplaceInstallButton);
-        Assert.Contains("Review sunder.package.agent", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Loaded sunder.package.agent", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
         Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("sunder.package.agent", query));
     }
 

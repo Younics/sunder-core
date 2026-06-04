@@ -54,6 +54,21 @@ internal sealed class MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalo
         Packages.ReplaceWith(packages);
     }
 
+    public void KeepOnlyPackage(RegistryPackageSearchItemViewModel package)
+    {
+        for (var index = Packages.Count - 1; index >= 0; index--)
+        {
+            var item = Packages[index];
+            if (ReferenceEquals(item, package))
+            {
+                continue;
+            }
+
+            Packages.RemoveAt(index);
+            item.Dispose();
+        }
+    }
+
     public void ReplaceVersions(IReadOnlyList<RegistryPackageVersionItemViewModel> versions)
     {
         Versions.ReplaceWith(versions);

@@ -539,10 +539,17 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             string.Equals(package.PackageId, request.PackageId, StringComparison.OrdinalIgnoreCase));
         if (selectedPackage is null)
         {
+            _marketplace.ReplacePackages([]);
+            OnPropertyChanged(nameof(HasMarketplacePackages));
+            OnPropertyChanged(nameof(ShowNoMarketplacePackages));
+            ClearMarketplaceSelection();
             StatusText = $"Package '{request.PackageId}' was not found in the Registry.";
             return;
         }
 
+        _marketplace.KeepOnlyPackage(selectedPackage);
+        OnPropertyChanged(nameof(HasMarketplacePackages));
+        OnPropertyChanged(nameof(ShowNoMarketplacePackages));
         await SelectMarketplacePackageAsync(selectedPackage, cancellationToken);
         StatusText = request.Kind == AppLaunchRequestKind.PackageInstall
             ? $"Review {selectedPackage.PackageId} before installing."

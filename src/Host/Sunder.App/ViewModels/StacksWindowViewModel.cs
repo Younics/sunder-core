@@ -600,7 +600,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 break;
             case AppLaunchRequestKind.StackDetails:
             case AppLaunchRequestKind.StackUse:
-                await SelectLinkedStackAsync(request, cancellationToken);
+                await ShowLinkedRegistryStackAsync(request, cancellationToken);
                 break;
         }
     }
@@ -1087,34 +1087,61 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async Task SelectLinkedStackAsync(AppLaunchRequest request, CancellationToken cancellationToken)
+    private async Task ShowLinkedRegistryStackAsync(AppLaunchRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.StackId))
         {
             return;
         }
 
-        if (_allStacks.Count == 0)
+        if (request.RegistryUrl is not null)
         {
-            await RefreshAsync();
+            RegistryUrlText = request.RegistryUrl.ToString();
         }
 
-        RebuildStackList(request.StackId);
-        if (SelectedStack is not null)
+        BrowserMode = StackBrowserMode.Marketplace;
+        RegistrySearchText = request.StackId;
+        CancelQueuedRegistrySearch();
+        if (!TryResolveRegistryUrlForRegistryAction(out _))
         {
-            StatusText = request.Kind == AppLaunchRequestKind.StackUse
-                ? $"Opened '{SelectedStack.Name}' from Stack use link. Review it before use."
-                : $"Opened '{SelectedStack.Name}' from Stack link.";
+            RegistryStacks.Clear();
+            SelectedRegistryStack = null;
+            NotifyRegistryStackStateChanged();
             return;
         }
 
-        var registryUrl = request.RegistryUrl ?? (TryResolveRegistryUrlForRegistryAction(out var configuredRegistryUrl) ? configuredRegistryUrl : null);
-        if (registryUrl is null)
+        await SearchRegistryStacksCoreAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var selectedStack = RegistryStacks.FirstOrDefault(stack =>
+            string.Equals(stack.StackId, request.StackId, StringComparison.OrdinalIgnoreCase));
+        if (selectedStack is null)
         {
+            RegistryStacks.Clear();
+            SelectedRegistryStack = null;
+            NotifyRegistryStackStateChanged();
+            StatusText = $"Registry Stack '{request.StackId}' was not found.";
             return;
         }
 
-        await ImportRegistryStackAsync(request.StackId, registryUrl, request.Kind, cancellationToken);
+        KeepOnlyRegistryStack(selectedStack);
+        SelectedRegistryStack = selectedStack;
+        StatusText = $"Loaded {selectedStack.StackId}.";
+    }
+
+    private void KeepOnlyRegistryStack(RegistryStackSearchItemViewModel stack)
+    {
+        for (var index = RegistryStacks.Count - 1; index >= 0; index--)
+        {
+            if (ReferenceEquals(RegistryStacks[index], stack))
+            {
+                continue;
+            }
+
+            RegistryStacks.RemoveAt(index);
+        }
+
+        NotifyRegistryStackStateChanged();
     }
 
     private async Task<LocalStackLibraryItem?> ImportRegistryStackAsync(
