@@ -1,15 +1,17 @@
+using Sunder.Package.Format;
+
 namespace Sunder.App.ViewModels;
 
 internal static class RegistryPackageVersionOrdering
 {
-    public static Version? TryParse(string value)
-        => Version.TryParse(value.Split('-', '+')[0], out var version) ? version : null;
+    public static SemanticVersion? TryParse(string value)
+        => SemanticVersion.TryParse(value, out var version) ? version : null;
 
-    public static IComparer<Version?> Comparer { get; } = new NullableVersionComparer();
+    public static IComparer<SemanticVersion?> Comparer { get; } = new NullableVersionComparer();
 
-    private sealed class NullableVersionComparer : IComparer<Version?>
+    private sealed class NullableVersionComparer : IComparer<SemanticVersion?>
     {
-        public int Compare(Version? x, Version? y)
+        public int Compare(SemanticVersion? x, SemanticVersion? y)
         {
             if (x is null && y is null)
             {
@@ -26,7 +28,7 @@ internal static class RegistryPackageVersionOrdering
                 return 1;
             }
 
-            return x.CompareTo(y);
+            return x.Value.CompareTo(y.Value);
         }
     }
 }

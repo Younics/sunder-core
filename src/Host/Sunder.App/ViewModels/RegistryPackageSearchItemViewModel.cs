@@ -1,6 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 

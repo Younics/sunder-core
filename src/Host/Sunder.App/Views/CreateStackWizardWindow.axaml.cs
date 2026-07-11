@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Sunder.App.Services;
 using Sunder.App.ViewModels;
 
 namespace Sunder.App.Views;
@@ -8,6 +9,8 @@ namespace Sunder.App.Views;
 public partial class CreateStackWizardWindow : Window
 {
     private CreateStackWizardViewModel? _subscribedViewModel;
+    private readonly OwnedTaskObserver _tasks = new(nameof(CreateStackWizardWindow));
+    private readonly CancellationTokenSource _lifetime = new();
 
     private CreateStackWizardViewModel? ViewModel => DataContext as CreateStackWizardViewModel;
 
@@ -19,11 +22,11 @@ public partial class CreateStackWizardWindow : Window
         DataContextChanged += OnDataContextChanged;
     }
 
-    private async void OnOpened(object? sender, EventArgs e)
+    private void OnOpened(object? sender, EventArgs e)
     {
         if (ViewModel is not null)
         {
-            await ViewModel.InitializeAsync();
+            _tasks.Observe(ViewModel.InitializeAsync(_lifetime.Token), "initializing Create Stack wizard");
         }
     }
 
@@ -50,6 +53,8 @@ public partial class CreateStackWizardWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _lifetime.Cancel();
+        _tasks.Dispose();
         if (_subscribedViewModel is not null)
         {
             _subscribedViewModel.CloseRequested -= ViewModel_OnCloseRequested;
@@ -59,6 +64,7 @@ public partial class CreateStackWizardWindow : Window
         }
 
         DataContext = null;
+        _lifetime.Dispose();
     }
 
     private void ViewModel_OnCloseRequested(bool? result)

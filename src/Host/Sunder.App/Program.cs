@@ -15,7 +15,7 @@ sealed class Program
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
     [STAThread]
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         var velopackApp = VelopackApp.Build()
             .OnFirstRun(_ => RegisterShellAssociationsForCurrentUser());
@@ -29,7 +29,8 @@ sealed class Program
 
         velopackApp.Run();
         StartupOptions = AppStartupOptionsParser.Parse(args);
-        if (TryForwardLaunchToPrimaryInstance(args))
+        AppLocalState.EnsureInitializedForStartup();
+        if (await TryForwardLaunchToPrimaryInstanceAsync(args))
         {
             return;
         }
@@ -37,7 +38,7 @@ sealed class Program
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
-    private static bool TryForwardLaunchToPrimaryInstance(string[] args)
+    private static async Task<bool> TryForwardLaunchToPrimaryInstanceAsync(string[] args)
     {
         try
         {
@@ -48,7 +49,7 @@ sealed class Program
                 return false;
             }
 
-            var forwarded = SingleInstanceCoordinator.TryForwardLaunchArgumentsAsync(args).GetAwaiter().GetResult();
+            var forwarded = await SingleInstanceCoordinator.TryForwardLaunchArgumentsAsync(args);
             if (!forwarded)
             {
                 AppSessionLog.WriteInfo("Another Sunder instance is running, but the launch request could not be forwarded.");

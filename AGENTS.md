@@ -7,31 +7,35 @@ This repository contains the public Sunder core projects: the desktop app, local
 - `src/Host/Sunder.App` -- Avalonia desktop shell, package UI activation, marketplace/install UX.
 - `src/Host/Sunder.Runtime.Host` -- local installed package state, package validation/install/update/uninstall, runtime activation, local HTTP API.
 - `src/Host/Sunder.Cli` -- thin command-line client over Registry and runtime APIs.
-- `src/Host/Sunder.Protocol` -- host-neutral DTOs for app/CLI/runtime communication.
+- `src/Host/Sunder.Runtime.Contracts` -- host-neutral DTOs for app/CLI/runtime communication.
 - `src/Sdk/Sunder.Sdk` -- public package author contracts and abstractions.
+- `src/Sdk/Sunder.Sdk.Avalonia` -- optional Avalonia package UI contracts and Sunder theme resources.
 - `src/Sdk/Sunder.Package.Build` -- MSBuild targets/tasks for generated manifests, `sunder-dev`, and `.sunderpkg` archives.
 - `src/Sdk/Sunder.Package.Templates` -- `dotnet new sunder-package` template.
-- `src/Sunder.PackageManagement` -- shared package archive inspection and validation used by core and private Registry code.
-- `src/Sunder.Registry.Shared` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
+- `src/Sunder.Package.Format` -- shared package archive inspection and validation used by core and private Registry code.
+- `src/Sunder.Registry.Contracts` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
 
 ## Boundaries
 
 - `Sunder.App` owns Avalonia shell UI, app-side package activation, package view caching, package icon loading, and app-side faults.
-- `Sunder.Runtime.Host` owns installed package records, package validation/install/update/uninstall, runtime activation, configuration/secrets/auth callbacks, and runtime faults.
+- `Sunder.Runtime.Host` owns installed package records, Registry credentials and authenticated calls, package validation/install/update/uninstall, runtime activation, configuration/secrets/auth callbacks, and runtime faults.
 - `Sunder.Cli` should stay a thin client over Registry and runtime APIs.
+- `Sunder.Runtime.Contracts` contains dependency-free DTOs only; do not put host implementation or persistence code there.
 - `Sunder.Sdk` contains package author contracts only; do not put host implementation details there.
 - `Sunder.Package.Build` owns build-time package output behavior; do not duplicate manifest/dev-output/archive logic elsewhere.
-- `Sunder.PackageManagement` owns archive validation and inspection.
+- `Sunder.Package.Format` owns archive validation and inspection.
 
 ## Public NuGet Surface
 
 The public developer packages are:
 
 - `Sunder.Sdk`
+- `Sunder.Sdk.Avalonia`
+- `Sunder.Sdk.Stacks`
 - `Sunder.Package.Build`
 - `Sunder.Package.Templates`
 
-Do not publish `Sunder.Protocol`, `Sunder.PackageManagement`, or `Sunder.Registry.Shared` as public NuGet packages unless there is a concrete external-consumer requirement.
+Do not publish `Sunder.Runtime.Contracts`, `Sunder.Package.Format`, or `Sunder.Registry.Contracts` as public NuGet packages unless there is a concrete external-consumer requirement.
 
 ## Avalonia Guidance
 
@@ -54,6 +58,6 @@ Useful targeted tests:
 
 - `dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore`
 - `dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore`
-- `dotnet test tests/Sunder.PackageManagement.Tests/Sunder.PackageManagement.Tests.csproj --no-restore`
+- `dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore`
 
 If a running app/runtime locks normal build outputs on Windows, build the affected project to alternate output and intermediate paths.

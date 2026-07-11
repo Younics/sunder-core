@@ -1,0 +1,36 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.StackImportPreview"
+             x:DataType="controls:StackImportPreview"
+             x:Name="Root">
+  <StackPanel Spacing="8">
+    <TextBlock Text="Import Preview" FontWeight="SemiBold" />
+    <ItemsControl ItemsSource="{Binding Actions, ElementName=Root}"
+                  ItemTemplate="{Binding ActionTemplate, ElementName=Root}"
+                  IsVisible="{Binding HasActions, ElementName=Root}" />
+    <controls:StackRequiredInputs Items="{Binding RequiredInputs, ElementName=Root}"
+                                  ItemTemplate="{Binding RequiredInputTemplate, ElementName=Root}"
+                                  IsVisible="{Binding HasRequiredInputs, ElementName=Root}" />
+    <ItemsControl ItemsSource="{Binding Warnings, ElementName=Root}"
+                  IsVisible="{Binding HasWarnings, ElementName=Root}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <Border Classes="settings-note-card" Margin="0,0,0,6">
+            <TextBlock Classes="muted" Text="{Binding}" TextWrapping="Wrap" />
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <ItemsControl ItemsSource="{Binding Errors, ElementName=Root}"
+                  IsVisible="{Binding HasErrors, ElementName=Root}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <Border Classes="settings-note-card" Margin="0,0,0,6">
+            <TextBlock Classes="runtime-error-text" Text="{Binding}" TextWrapping="Wrap" />
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </StackPanel>
+</UserControl>

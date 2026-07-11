@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "items": [
+    {
+      "packageId": "sunder.package.sample",
+      "currentVersion": null,
+      "version": "1.2.3",
+      "isUpdate": false,
+      "deprecatedMessage": null,
+      "dependsOn": [],
+      "artifact": {
+        "sha256": "abc123",
+        "size": 42,
+        "downloadUrl": "/api/v1/packages/sunder.package.sample/versions/1.2.3/download"
+      },
+      "compatibility": {
+        "sdkApiVersion": 1,
+        "sdkPackageVersion": "0.8.0",
+        "requiredCapabilities": [
+          "core.v1"
+        ],
+        "targetFramework": "net10.0",
+        "manifestFormatVersion": 1,
+        "archiveFormatVersion": 1
+      }
+    }
+  ],
+  "warnings": [],
+  "errors": [],
+  "conflicts": []
+}

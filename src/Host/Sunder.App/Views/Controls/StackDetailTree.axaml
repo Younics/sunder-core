@@ -1,0 +1,149 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.StackDetailTree"
+             x:DataType="controls:StackDetailTree"
+             x:Name="Root">
+                    <ItemsControl ItemsSource="{Binding Items, ElementName=Root}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:LocalStackDetailPackageViewModel">
+                          <Border Classes="stack-wizard-card package"
+                                  Margin="0,0,0,10">
+                            <Grid RowDefinitions="Auto,Auto"
+                                  RowSpacing="10">
+                              <Grid ColumnDefinitions="Auto,*,Auto"
+                                    ColumnSpacing="12">
+                                <controls:PackageIconView Width="34"
+                                                          Height="34"
+                                                          IconImage="{Binding IconImage}"
+                                                          HasIconImage="{Binding HasIconImage}"
+                                                          Glyph="{Binding Glyph}"
+                                                          ShowFallbackContainer="{Binding ShowGlyphFallback}"
+                                                          GlyphFontSize="14"
+                                                          GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
+                                <StackPanel Grid.Column="1"
+                                            Spacing="2"
+                                            VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding DisplayName}"
+                                             FontWeight="SemiBold"
+                                             TextWrapping="Wrap" />
+                                  <TextBlock Classes="caption"
+                                             Text="{Binding PackageId}"
+                                             TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        Classes="stack-card-toggle"
+                                        Command="{Binding ToggleExpandedCommand}"
+                                        Content="{Binding ExpandActionText}" />
+                              </Grid>
+
+                              <StackPanel Grid.Row="1"
+                                          Spacing="8"
+                                          IsVisible="{Binding IsExpanded}">
+                                <ItemsControl ItemsSource="{Binding ItemGroups}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:LocalStackDetailKindGroupViewModel">
+                                      <StackPanel Spacing="8"
+                                                  Margin="0,0,0,8">
+                                        <Grid ColumnDefinitions="*,Auto"
+                                              ColumnSpacing="10">
+                                          <TextBlock Text="{Binding DisplayName}"
+                                                     FontWeight="SemiBold"
+                                                     TextWrapping="Wrap" />
+                                          <Border Grid.Column="1"
+                                                  Classes="stack-chip">
+                                            <TextBlock Text="{Binding CountText}" />
+                                          </Border>
+                                        </Grid>
+                                        <ItemsControl ItemsSource="{Binding Items}">
+                                          <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:LocalStackDetailItemViewModel">
+                                              <Border Classes="stack-wizard-item-card"
+                                                      Margin="0,0,0,8">
+                                                <Grid RowDefinitions="Auto,Auto"
+                                                      RowSpacing="10">
+                                                  <Grid ColumnDefinitions="*,Auto"
+                                                        ColumnSpacing="12">
+                                                    <StackPanel Spacing="4">
+                                                      <TextBlock Text="{Binding DisplayName}"
+                                                                 FontWeight="SemiBold"
+                                                                 TextWrapping="Wrap" />
+                                                      <TextBlock Classes="caption"
+                                                                 Text="{Binding Summary}"
+                                                                 TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1"
+                                                            Classes="stack-card-toggle"
+                                                            Command="{Binding ToggleExpandedCommand}"
+                                                            Content="{Binding ExpandActionText}" />
+                                                  </Grid>
+
+                                                  <Border Grid.Row="1"
+                                                          Classes="stack-wizard-item-details"
+                                                          IsVisible="{Binding IsExpanded}">
+                                                    <StackPanel Spacing="10">
+                                                      <StackPanel Spacing="2">
+                                                        <TextBlock Text="Values included"
+                                                                   FontWeight="SemiBold" />
+                                                        <TextBlock Classes="caption"
+                                                                   Text="{Binding DetailCountText}" />
+                                                      </StackPanel>
+                                                      <ItemsControl ItemsSource="{Binding Values}"
+                                                                    IsVisible="{Binding HasValues}">
+                                                        <ItemsControl.ItemTemplate>
+                                                          <DataTemplate x:DataType="vm:LocalStackDetailValueViewModel">
+                                                            <Border Classes="stack-export-detail-row"
+                                                                    Margin="0,0,0,8">
+                                                              <Grid RowDefinitions="Auto,Auto,Auto"
+                                                                    RowSpacing="6">
+                                                                <Grid ColumnDefinitions="*,Auto"
+                                                                      ColumnSpacing="10">
+                                                                  <StackPanel Orientation="Horizontal"
+                                                                              Spacing="8">
+                                                                    <TextBlock Text="{Binding Label}"
+                                                                               FontWeight="SemiBold"
+                                                                               TextWrapping="Wrap" />
+                                                                    <Border Classes="stack-chip safety"
+                                                                            IsVisible="{Binding HasBehavior}">
+                                                                      <TextBlock Text="{Binding Behavior}" />
+                                                                    </Border>
+                                                                  </StackPanel>
+                                                                  <Button Grid.Column="1"
+                                                                          Classes="stack-card-toggle"
+                                                                          Command="{Binding ToggleExpandedCommand}"
+                                                                          Content="{Binding ExpandActionText}" />
+                                                                </Grid>
+                                                                <TextBlock Grid.Row="1"
+                                                                           Classes="muted"
+                                                                           Text="{Binding ValuePreview}"
+                                                                           TextWrapping="Wrap"
+                                                                           IsVisible="{Binding IsCollapsed}" />
+                                                                <TextBlock Grid.Row="2"
+                                                                           Classes="muted"
+                                                                           Text="{Binding Value}"
+                                                                           TextWrapping="Wrap"
+                                                                           IsVisible="{Binding IsExpanded}" />
+                                                              </Grid>
+                                                            </Border>
+                                                          </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                      </ItemsControl>
+                                                    </StackPanel>
+                                                  </Border>
+                                                </Grid>
+                                              </Border>
+                                            </DataTemplate>
+                                          </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                      </StackPanel>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </StackPanel>
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+</UserControl>

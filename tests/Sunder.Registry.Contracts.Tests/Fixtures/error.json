@@ -1,0 +1,15 @@
+{
+  "type": "https://registry.sunder.dev/problems/registry.v1.request.invalid",
+  "title": "Invalid request",
+  "status": 400,
+  "detail": "The request could not be accepted.",
+  "instance": "/api/v1/packages",
+  "code": "registry.v1.request.invalid",
+  "traceId": "00-trace-01",
+  "correlationId": "correlation-123",
+  "errors": {
+    "packageId": [
+      "Package id is required."
+    ]
+  }
+}

@@ -46,6 +46,11 @@ internal sealed class AppPackageUnloadCoordinator(
             removeLoadContext(loadContext);
             AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId);
         }
+
+        if (packageInfo is not null)
+        {
+            AppPackageSourcePreparer.TryDeleteDirectory(packageInfo.Folder);
+        }
     }
 
     public async Task UnloadPackageAsync(string packageId, AppLoadedPackageHandle handle)
@@ -64,6 +69,7 @@ internal sealed class AppPackageUnloadCoordinator(
         removePackageResourceAssemblies?.Invoke(packageId);
         sharedAssemblyRegistry.RemoveProbeDirectories([Path.Combine(handle.Folder, "lib")]);
         AppPackageResourceDisposer.TryUnloadLoadContext(handle.LoadContext, packageId);
+        AppPackageSourcePreparer.TryDeleteDirectory(handle.Folder);
     }
 
     public async Task DisposeLegacyOwnedInstancesAsync(

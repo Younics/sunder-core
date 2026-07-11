@@ -1,7 +1,7 @@
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Features.Shell.Lifecycle;
 

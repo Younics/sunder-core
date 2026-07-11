@@ -1,5 +1,5 @@
 using System.Reflection;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -15,7 +15,7 @@ internal sealed class AppPackageLoadCoordinator(
 {
     public async Task LoadPackageAsync(
         ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
+        PackageUiSnapshotDescriptor source,
         CancellationToken cancellationToken)
     {
         var prepareResult = await PreparePackageAsync(package, source, cancellationToken);
@@ -35,7 +35,7 @@ internal sealed class AppPackageLoadCoordinator(
 
     public async Task<AppPackagePrepareResult> PreparePackageAsync(
         ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
+        PackageUiSnapshotDescriptor source,
         CancellationToken cancellationToken)
     {
         var sourceLoadResult = await sourceLoader.LoadAsync(package, source, cancellationToken);

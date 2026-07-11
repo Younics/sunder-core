@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 
@@ -17,10 +17,10 @@ internal sealed class AppPackageServiceProviderFactory(
     public ServiceProvider Create(
         ActivePackageDescriptor package,
         AppPackageContext packageContext,
-        ISunderPackageModule module)
+        ISunderAppPackageModule? module)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IPackageContext>(packageContext);
+        services.AddSingleton<IPackageContext>(_ => packageContext);
         services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
@@ -36,7 +36,7 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<IPackageNotificationService>(notificationCenter is null
             ? NullPackageNotificationService.Instance
             : new AppPackageNotificationService(notificationCenter, package.PackageId, package.DisplayName));
-        module.ConfigureServices(services, packageContext);
+        module?.ConfigureAppServices(services, packageContext);
         return services.BuildServiceProvider();
     }
 }

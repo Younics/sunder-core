@@ -5,13 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.3" />
-    <PackageReference Include="Sunder.Sdk" Version="*" />
-    <PackageReference Include="Sunder.Package.Build" Version="*" PrivateAssets="all" />
+    <PackageReference Include="Sunder.Sdk" Version="1.0.0" />
+    <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,6 +19,12 @@
                       Condition="Exists('Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="**\*.Contracts\**\*.cs" />
+  </ItemGroup>
+
   <Import Project="HostContracts.PackageReferences.props" />
+  <Import Project="Avalonia.PackageReferences.props" Condition="Exists('Avalonia.PackageReferences.props')" />
+  <Import Project="Stacks.PackageReferences.props" Condition="Exists('Stacks.PackageReferences.props')" />
 
 </Project>

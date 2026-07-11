@@ -13,6 +13,7 @@
     <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue.svg"></a>
     <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4.svg">
     <a href="https://www.nuget.org/packages/Sunder.Sdk"><img alt="Sunder.Sdk NuGet" src="https://img.shields.io/nuget/v/Sunder.Sdk?label=Sunder.Sdk"></a>
+    <a href="https://www.nuget.org/packages/Sunder.Sdk.Stacks"><img alt="Sunder.Sdk.Stacks NuGet" src="https://img.shields.io/nuget/v/Sunder.Sdk.Stacks?label=Stacks"></a>
     <a href="https://www.nuget.org/packages/Sunder.Package.Build"><img alt="Sunder.Package.Build NuGet" src="https://img.shields.io/nuget/v/Sunder.Package.Build?label=Sunder.Package.Build"></a>
     <a href="https://www.nuget.org/packages/Sunder.Package.Templates"><img alt="Sunder.Package.Templates NuGet" src="https://img.shields.io/nuget/v/Sunder.Package.Templates?label=Templates"></a>
   </p>
@@ -85,14 +86,16 @@ Sunder.Cli <-> Registry API / Runtime API
 | Area | Project | Responsibility |
 | --- | --- | --- |
 | Desktop app | `src/Host/Sunder.App` | Avalonia shell, package UI activation, marketplace/install UX |
-| Runtime host | `src/Host/Sunder.Runtime.Host` | Local package state, validation, install/update/uninstall, runtime activation, local HTTP API |
+| Runtime host | `src/Host/Sunder.Runtime.Host` | Registry credentials and package orchestration, local package state, runtime activation, local HTTP API |
 | CLI | `src/Host/Sunder.Cli` | Registry and runtime commands |
-| Protocol | `src/Host/Sunder.Protocol` | Host-neutral DTOs for app/CLI/runtime communication |
+| Runtime contracts | `src/Host/Sunder.Runtime.Contracts` | Host-neutral DTOs for app/CLI/runtime communication |
 | SDK | `src/Sdk/Sunder.Sdk` | Public package author contracts |
+| Avalonia SDK | `src/Sdk/Sunder.Sdk.Avalonia` | Optional Avalonia UI contracts and theme resources |
+| Stack SDK | `src/Sdk/Sunder.Sdk.Stacks` | Optional public Stack import/export and contribution contracts |
 | Build tooling | `src/Sdk/Sunder.Package.Build` | Manifest generation, dev output, `.sunderpkg` archives |
 | Templates | `src/Sdk/Sunder.Package.Templates` | `dotnet new sunder-package` template |
-| Package management | `src/Sunder.PackageManagement` | `.sunderpkg` archive inspection and validation |
-| Registry contracts | `src/Sunder.Registry.Shared` | Public Registry API DTO contracts |
+| Package format | `src/Sunder.Package.Format` | `.sunderpkg` archive inspection and validation |
+| Registry contracts | `src/Sunder.Registry.Contracts` | Public Registry API DTO contracts |
 
 ## Public Package Author Surface
 
@@ -100,11 +103,13 @@ These are the public NuGet packages intended for package authors:
 
 | Package | Purpose |
 | --- | --- |
-| [`Sunder.Sdk`](https://www.nuget.org/packages/Sunder.Sdk) | Runtime package contracts, package module API, host services, theme keys, and extension APIs. |
+| [`Sunder.Sdk`](https://www.nuget.org/packages/Sunder.Sdk) | Headless Runtime package roles, host services, configuration, background services, and extension APIs. |
+| [`Sunder.Sdk.Avalonia`](https://www.nuget.org/packages/Sunder.Sdk.Avalonia) | App package roles, Avalonia views/settings/workspaces, and Sunder theme resources. |
+| [`Sunder.Sdk.Stacks`](https://www.nuget.org/packages/Sunder.Sdk.Stacks) | Optional Stack import/export models and Stack contributor contracts. |
 | [`Sunder.Package.Build`](https://www.nuget.org/packages/Sunder.Package.Build) | Build-time targets and tasks for Sunder manifests, dev output, and archives. |
 | [`Sunder.Package.Templates`](https://www.nuget.org/packages/Sunder.Package.Templates) | `dotnet new sunder-package` project template. |
 
-`Sunder.Protocol`, `Sunder.PackageManagement`, and `Sunder.Registry.Shared` are source projects used by Sunder, but they are not the public package-author SDK surface.
+`Sunder.Runtime.Contracts`, `Sunder.Package.Format`, and `Sunder.Registry.Contracts` are source projects used by Sunder, but they are not the public package-author SDK surface.
 
 ## Build From Source
 
@@ -120,7 +125,7 @@ Most projects target `.NET 10`.
 ```powershell
 dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
 dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
-dotnet test tests/Sunder.PackageManagement.Tests/Sunder.PackageManagement.Tests.csproj --no-restore
+dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
 dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
 ```
 
@@ -144,7 +149,7 @@ Release automation is tag-driven:
 | `app/v*` | Sunder desktop app |
 | `host/v*` | Sunder runtime host |
 | `cli/v*` | Sunder CLI |
-| `sdk/v*` | SDK, build tooling, and templates |
+| `sdk/v*` | SDK contract packages, build tooling, and templates |
 
 ## Contributing
 

@@ -4,6 +4,8 @@ namespace Sunder.App.Models;
 
 public sealed class ShellState
 {
+    public long Revision { get; set; }
+
     public const int CurrentLayoutVersion = 2;
     public const double DefaultLeftPanelWidth = 360;
     public const double DefaultRightPanelWidth = 360;

@@ -341,38 +341,7 @@
 
                   <Border Classes="card-surface"
                           IsVisible="{Binding HasSelectedProfileMedia}">
-                    <StackPanel Spacing="8">
-                      <TextBlock Classes="section-title" Text="Images" />
-                      <ScrollViewer Classes="marketplace-image-strip-scroll"
-                                    HorizontalScrollBarVisibility="Auto"
-                                    VerticalScrollBarVisibility="Disabled">
-                        <ItemsControl ItemsSource="{Binding SelectedStackProfileMedia}"
-                                      Margin="0,0,0,12">
-                          <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                              <StackPanel Orientation="Horizontal" Spacing="12" />
-                            </ItemsPanelTemplate>
-                          </ItemsControl.ItemsPanel>
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
-                              <Button Classes="marketplace-image-thumb"
-                                      Command="{Binding SelectCommand}"
-                                      ToolTip.Tip="{Binding Caption}">
-                                <Grid>
-                                  <Border Classes="marketplace-image-frame">
-                                    <Image Source="{Binding Image}"
-                                           Stretch="UniformToFill" />
-                                  </Border>
-                                  <TextBlock Classes="caption marketplace-image-loading"
-                                             Text="Loading..."
-                                             IsVisible="{Binding IsImageLoading}" />
-                                </Grid>
-                              </Button>
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </ScrollViewer>
-                    </StackPanel>
+                    <controls:MarketplaceMediaStrip Items="{Binding SelectedStackProfileMedia}" />
                   </Border>
 
                   <Border Classes="card-surface"
@@ -385,147 +354,7 @@
 
                   <StackPanel Spacing="8"
                               IsVisible="{Binding HasSelectedLocalDetails}">
-                    <ItemsControl ItemsSource="{Binding SelectedLocalDetails}">
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:LocalStackDetailPackageViewModel">
-                          <Border Classes="stack-wizard-card package"
-                                  Margin="0,0,0,10">
-                            <Grid RowDefinitions="Auto,Auto"
-                                  RowSpacing="10">
-                              <Grid ColumnDefinitions="Auto,*,Auto"
-                                    ColumnSpacing="12">
-                                <controls:PackageIconView Width="34"
-                                                          Height="34"
-                                                          IconImage="{Binding IconImage}"
-                                                          HasIconImage="{Binding HasIconImage}"
-                                                          Glyph="{Binding Glyph}"
-                                                          ShowFallbackContainer="{Binding ShowGlyphFallback}"
-                                                          GlyphFontSize="14"
-                                                          GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
-                                <StackPanel Grid.Column="1"
-                                            Spacing="2"
-                                            VerticalAlignment="Center">
-                                  <TextBlock Text="{Binding DisplayName}"
-                                             FontWeight="SemiBold"
-                                             TextWrapping="Wrap" />
-                                  <TextBlock Classes="caption"
-                                             Text="{Binding PackageId}"
-                                             TextWrapping="Wrap" />
-                                </StackPanel>
-                                <Button Grid.Column="2"
-                                        Classes="stack-card-toggle"
-                                        Command="{Binding ToggleExpandedCommand}"
-                                        Content="{Binding ExpandActionText}" />
-                              </Grid>
-
-                              <StackPanel Grid.Row="1"
-                                          Spacing="8"
-                                          IsVisible="{Binding IsExpanded}">
-                                <ItemsControl ItemsSource="{Binding ItemGroups}">
-                                  <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:LocalStackDetailKindGroupViewModel">
-                                      <StackPanel Spacing="8"
-                                                  Margin="0,0,0,8">
-                                        <Grid ColumnDefinitions="*,Auto"
-                                              ColumnSpacing="10">
-                                          <TextBlock Text="{Binding DisplayName}"
-                                                     FontWeight="SemiBold"
-                                                     TextWrapping="Wrap" />
-                                          <Border Grid.Column="1"
-                                                  Classes="stack-chip">
-                                            <TextBlock Text="{Binding CountText}" />
-                                          </Border>
-                                        </Grid>
-                                        <ItemsControl ItemsSource="{Binding Items}">
-                                          <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:LocalStackDetailItemViewModel">
-                                              <Border Classes="stack-wizard-item-card"
-                                                      Margin="0,0,0,8">
-                                                <Grid RowDefinitions="Auto,Auto"
-                                                      RowSpacing="10">
-                                                  <Grid ColumnDefinitions="*,Auto"
-                                                        ColumnSpacing="12">
-                                                    <StackPanel Spacing="4">
-                                                      <TextBlock Text="{Binding DisplayName}"
-                                                                 FontWeight="SemiBold"
-                                                                 TextWrapping="Wrap" />
-                                                      <TextBlock Classes="caption"
-                                                                 Text="{Binding Summary}"
-                                                                 TextWrapping="Wrap" />
-                                                    </StackPanel>
-                                                    <Button Grid.Column="1"
-                                                            Classes="stack-card-toggle"
-                                                            Command="{Binding ToggleExpandedCommand}"
-                                                            Content="{Binding ExpandActionText}" />
-                                                  </Grid>
-
-                                                  <Border Grid.Row="1"
-                                                          Classes="stack-wizard-item-details"
-                                                          IsVisible="{Binding IsExpanded}">
-                                                    <StackPanel Spacing="10">
-                                                      <StackPanel Spacing="2">
-                                                        <TextBlock Text="Values included"
-                                                                   FontWeight="SemiBold" />
-                                                        <TextBlock Classes="caption"
-                                                                   Text="{Binding DetailCountText}" />
-                                                      </StackPanel>
-                                                      <ItemsControl ItemsSource="{Binding Values}"
-                                                                    IsVisible="{Binding HasValues}">
-                                                        <ItemsControl.ItemTemplate>
-                                                          <DataTemplate x:DataType="vm:LocalStackDetailValueViewModel">
-                                                            <Border Classes="stack-export-detail-row"
-                                                                    Margin="0,0,0,8">
-                                                              <Grid RowDefinitions="Auto,Auto,Auto"
-                                                                    RowSpacing="6">
-                                                                <Grid ColumnDefinitions="*,Auto"
-                                                                      ColumnSpacing="10">
-                                                                  <StackPanel Orientation="Horizontal"
-                                                                              Spacing="8">
-                                                                    <TextBlock Text="{Binding Label}"
-                                                                               FontWeight="SemiBold"
-                                                                               TextWrapping="Wrap" />
-                                                                    <Border Classes="stack-chip safety"
-                                                                            IsVisible="{Binding HasBehavior}">
-                                                                      <TextBlock Text="{Binding Behavior}" />
-                                                                    </Border>
-                                                                  </StackPanel>
-                                                                  <Button Grid.Column="1"
-                                                                          Classes="stack-card-toggle"
-                                                                          Command="{Binding ToggleExpandedCommand}"
-                                                                          Content="{Binding ExpandActionText}" />
-                                                                </Grid>
-                                                                <TextBlock Grid.Row="1"
-                                                                           Classes="muted"
-                                                                           Text="{Binding ValuePreview}"
-                                                                           TextWrapping="Wrap"
-                                                                           IsVisible="{Binding IsCollapsed}" />
-                                                                <TextBlock Grid.Row="2"
-                                                                           Classes="muted"
-                                                                           Text="{Binding Value}"
-                                                                           TextWrapping="Wrap"
-                                                                           IsVisible="{Binding IsExpanded}" />
-                                                              </Grid>
-                                                            </Border>
-                                                          </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                      </ItemsControl>
-                                                    </StackPanel>
-                                                  </Border>
-                                                </Grid>
-                                              </Border>
-                                            </DataTemplate>
-                                          </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                      </StackPanel>
-                                    </DataTemplate>
-                                  </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                              </StackPanel>
-                            </Grid>
-                          </Border>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <controls:StackDetailTree Items="{Binding SelectedLocalDetails}" />
                   </StackPanel>
 
                   <StackPanel Spacing="8"
@@ -551,6 +380,74 @@
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
                   </StackPanel>
+
+                  <controls:StackInstallPlan Items="{Binding SelectedInstallPlanItems}"
+                                             Warnings="{Binding SelectedInstallPlanWarnings}"
+                                             Errors="{Binding SelectedInstallPlanErrors}"
+                                             HasItems="{Binding HasSelectedInstallPlanItems}"
+                                             HasWarnings="{Binding HasSelectedInstallPlanWarnings}"
+                                             HasErrors="{Binding HasSelectedInstallPlanErrors}"
+                                             ShowNoChanges="{Binding ShowNoSelectedInstallPlanChanges}"
+                                             IsVisible="{Binding ShowSelectedInstallPlan}">
+                    <controls:StackInstallPlan.ItemTemplate>
+                      <DataTemplate x:DataType="vm:StackPackageInstallPlanItemViewModel">
+                        <Border Classes="marketplace-profile-row" Margin="0,0,0,6">
+                          <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                              <TextBlock Text="{Binding PackageId}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                              <Border Grid.Column="1" Classes="stack-chip">
+                                <TextBlock Text="{Binding VersionText}" />
+                              </Border>
+                            </Grid>
+                            <TextBlock Classes="caption" Text="{Binding DependencyText}" TextWrapping="Wrap" />
+                            <TextBlock Classes="runtime-error-text"
+                                       Text="{Binding DeprecatedMessage}"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding HasDeprecatedMessage}" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </controls:StackInstallPlan.ItemTemplate>
+                  </controls:StackInstallPlan>
+
+                  <controls:StackImportPreview Actions="{Binding SelectedImportActions}"
+                                               RequiredInputs="{Binding SelectedImportRequiredInputs}"
+                                               Warnings="{Binding SelectedImportWarnings}"
+                                               Errors="{Binding SelectedImportErrors}"
+                                               HasActions="{Binding HasSelectedImportActions}"
+                                               HasRequiredInputs="{Binding HasSelectedImportRequiredInputs}"
+                                               HasWarnings="{Binding HasSelectedImportWarnings}"
+                                               HasErrors="{Binding HasSelectedImportErrors}"
+                                               IsVisible="{Binding ShowSelectedImportPreview}">
+                    <controls:StackImportPreview.ActionTemplate>
+                      <DataTemplate x:DataType="vm:StackImportActionViewModel">
+                        <Border Classes="marketplace-profile-row" Margin="0,0,0,6">
+                          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                            <CheckBox IsChecked="{Binding IsSelected}" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Spacing="4">
+                              <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                              <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
+                              <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
+                            </StackPanel>
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </controls:StackImportPreview.ActionTemplate>
+                    <controls:StackImportPreview.RequiredInputTemplate>
+                      <DataTemplate x:DataType="vm:StackRequiredInputValueViewModel">
+                        <Border Classes="marketplace-profile-row">
+                          <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
+                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                            <TextBlock Grid.Row="1" Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" />
+                            <TextBox Grid.Row="2"
+                                     Text="{Binding Value}"
+                                     PlaceholderText="{Binding Placeholder}"
+                                     PasswordChar="*" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </controls:StackImportPreview.RequiredInputTemplate>
+                  </controls:StackImportPreview>
 
                 </StackPanel>
 
@@ -645,38 +542,7 @@
 
                   <Border Classes="card-surface"
                           IsVisible="{Binding HasRegistryProfileMedia}">
-                    <StackPanel Spacing="8">
-                      <TextBlock Classes="section-title" Text="Images" />
-                      <ScrollViewer Classes="marketplace-image-strip-scroll"
-                                    HorizontalScrollBarVisibility="Auto"
-                                    VerticalScrollBarVisibility="Disabled">
-                        <ItemsControl ItemsSource="{Binding RegistryProfileMedia}"
-                                      Margin="0,0,0,12">
-                          <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                              <StackPanel Orientation="Horizontal" Spacing="12" />
-                            </ItemsPanelTemplate>
-                          </ItemsControl.ItemsPanel>
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
-                              <Button Classes="marketplace-image-thumb"
-                                      Command="{Binding SelectCommand}"
-                                      ToolTip.Tip="{Binding Caption}">
-                                <Grid>
-                                  <Border Classes="marketplace-image-frame">
-                                    <Image Source="{Binding Image}"
-                                           Stretch="UniformToFill" />
-                                  </Border>
-                                  <TextBlock Classes="caption marketplace-image-loading"
-                                             Text="Loading..."
-                                             IsVisible="{Binding IsImageLoading}" />
-                                </Grid>
-                              </Button>
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </ScrollViewer>
-                    </StackPanel>
+                    <controls:MarketplaceMediaStrip Items="{Binding RegistryProfileMedia}" />
                   </Border>
 
                   <Border Classes="card-surface"
@@ -687,218 +553,20 @@
                     </StackPanel>
                   </Border>
 
-                  <Border Classes="card-surface marketplace-profile-card"
-                          IsVisible="{Binding HasRegistryProfile}">
-                    <StackPanel Spacing="12">
-                      <StackPanel Spacing="2">
-                        <TextBlock Classes="section-title" Text="Profile" />
-                        <TextBlock Classes="caption" Text="Project links and Stack metadata." />
-                      </StackPanel>
-
-                      <ItemsControl ItemsSource="{Binding RegistryProfileLinks}"
-                                    IsVisible="{Binding HasRegistryProfileLinks}">
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="vm:RegistryPackageProfileLinkViewModel">
-                            <Border Classes="marketplace-profile-row marketplace-profile-link-row">
-                              <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
-                                <TextBlock Classes="caption marketplace-profile-label"
-                                           Text="{Binding Label}" />
-                                <HyperlinkButton Grid.Column="1"
-                                                 Classes="marketplace-profile-link"
-                                                 NavigateUri="{Binding NavigateUri}">
-                                  <TextBlock Text="{Binding DisplayUrl}"
-                                             TextWrapping="Wrap" />
-                                </HyperlinkButton>
-                              </Grid>
-                            </Border>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
-
-                      <ItemsControl ItemsSource="{Binding RegistryProfileMetadata}"
-                                    IsVisible="{Binding HasRegistryProfileMetadata}">
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="vm:RegistryPackageProfileMetadataItemViewModel">
-                            <Border Classes="marketplace-profile-row">
-                              <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
-                                <TextBlock Classes="caption marketplace-profile-label"
-                                           Text="{Binding Label}" />
-                                <TextBlock Grid.Column="1"
-                                           Classes="marketplace-profile-value"
-                                           Text="{Binding Value}"
-                                           TextWrapping="Wrap" />
-                              </Grid>
-                            </Border>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
-
-                      <StackPanel Spacing="6"
-                                  IsVisible="{Binding HasRegistryProfileTags}">
-                        <TextBlock Classes="caption marketplace-profile-label" Text="Tags" />
-                        <ItemsControl ItemsSource="{Binding RegistryProfileTags}">
-                          <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                              <WrapPanel />
-                            </ItemsPanelTemplate>
-                          </ItemsControl.ItemsPanel>
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="x:String">
-                              <Border Classes="marketplace-tag-chip">
-                                <TextBlock Text="{Binding}" />
-                              </Border>
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </StackPanel>
-                    </StackPanel>
-                  </Border>
+                  <controls:MarketplaceProfileCard Description="Project links and Stack metadata."
+                                                   Links="{Binding RegistryProfileLinks}"
+                                                   Metadata="{Binding RegistryProfileMetadata}"
+                                                   Tags="{Binding RegistryProfileTags}"
+                                                   HasLinks="{Binding HasRegistryProfileLinks}"
+                                                   HasMetadata="{Binding HasRegistryProfileMetadata}"
+                                                   HasTags="{Binding HasRegistryProfileTags}"
+                                                   IsVisible="{Binding HasRegistryProfile}" />
 
                   <StackPanel Spacing="8"
                               IsVisible="{Binding HasRegistrySelectedFragments}">
                     <TextBlock Text="Fragments"
                                FontWeight="SemiBold" />
-                    <ItemsControl ItemsSource="{Binding RegistrySelectedDetails}">
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:LocalStackDetailPackageViewModel">
-                          <Border Classes="stack-wizard-card package"
-                                  Margin="0,0,0,10">
-                            <Grid RowDefinitions="Auto,Auto"
-                                  RowSpacing="10">
-                              <Grid ColumnDefinitions="Auto,*,Auto"
-                                    ColumnSpacing="12">
-                                <controls:PackageIconView Width="34"
-                                                          Height="34"
-                                                          IconImage="{Binding IconImage}"
-                                                          HasIconImage="{Binding HasIconImage}"
-                                                          Glyph="{Binding Glyph}"
-                                                          ShowFallbackContainer="{Binding ShowGlyphFallback}"
-                                                          GlyphFontSize="14"
-                                                          GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
-                                <StackPanel Grid.Column="1"
-                                            Spacing="2"
-                                            VerticalAlignment="Center">
-                                  <TextBlock Text="{Binding DisplayName}"
-                                             FontWeight="SemiBold"
-                                             TextWrapping="Wrap" />
-                                  <TextBlock Classes="caption"
-                                             Text="{Binding PackageId}"
-                                             TextWrapping="Wrap" />
-                                </StackPanel>
-                                <Button Grid.Column="2"
-                                        Classes="stack-card-toggle"
-                                        Command="{Binding ToggleExpandedCommand}"
-                                        Content="{Binding ExpandActionText}" />
-                              </Grid>
-
-                              <StackPanel Grid.Row="1"
-                                          Spacing="8"
-                                          IsVisible="{Binding IsExpanded}">
-                                <ItemsControl ItemsSource="{Binding ItemGroups}">
-                                  <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:LocalStackDetailKindGroupViewModel">
-                                      <StackPanel Spacing="8"
-                                                  Margin="0,0,0,8">
-                                        <Grid ColumnDefinitions="*,Auto"
-                                              ColumnSpacing="10">
-                                          <TextBlock Text="{Binding DisplayName}"
-                                                     FontWeight="SemiBold"
-                                                     TextWrapping="Wrap" />
-                                          <Border Grid.Column="1"
-                                                  Classes="stack-chip">
-                                            <TextBlock Text="{Binding CountText}" />
-                                          </Border>
-                                        </Grid>
-                                        <ItemsControl ItemsSource="{Binding Items}">
-                                          <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:LocalStackDetailItemViewModel">
-                                              <Border Classes="stack-wizard-item-card"
-                                                      Margin="0,0,0,8">
-                                                <Grid RowDefinitions="Auto,Auto"
-                                                      RowSpacing="10">
-                                                  <Grid ColumnDefinitions="*,Auto"
-                                                        ColumnSpacing="12">
-                                                    <StackPanel Spacing="4">
-                                                      <TextBlock Text="{Binding DisplayName}"
-                                                                 FontWeight="SemiBold"
-                                                                 TextWrapping="Wrap" />
-                                                      <TextBlock Classes="caption"
-                                                                 Text="{Binding Summary}"
-                                                                 TextWrapping="Wrap" />
-                                                    </StackPanel>
-                                                    <Button Grid.Column="1"
-                                                            Classes="stack-card-toggle"
-                                                            Command="{Binding ToggleExpandedCommand}"
-                                                            Content="{Binding ExpandActionText}" />
-                                                  </Grid>
-
-                                                  <Border Grid.Row="1"
-                                                          Classes="stack-wizard-item-details"
-                                                          IsVisible="{Binding IsExpanded}">
-                                                    <StackPanel Spacing="10">
-                                                      <StackPanel Spacing="2">
-                                                        <TextBlock Text="Values included"
-                                                                   FontWeight="SemiBold" />
-                                                        <TextBlock Classes="caption"
-                                                                   Text="{Binding DetailCountText}" />
-                                                      </StackPanel>
-                                                      <ItemsControl ItemsSource="{Binding Values}"
-                                                                    IsVisible="{Binding HasValues}">
-                                                        <ItemsControl.ItemTemplate>
-                                                          <DataTemplate x:DataType="vm:LocalStackDetailValueViewModel">
-                                                            <Border Classes="stack-export-detail-row"
-                                                                    Margin="0,0,0,8">
-                                                              <Grid RowDefinitions="Auto,Auto,Auto"
-                                                                    RowSpacing="6">
-                                                                <Grid ColumnDefinitions="*,Auto"
-                                                                      ColumnSpacing="10">
-                                                                  <StackPanel Orientation="Horizontal"
-                                                                              Spacing="8">
-                                                                    <TextBlock Text="{Binding Label}"
-                                                                               FontWeight="SemiBold"
-                                                                               TextWrapping="Wrap" />
-                                                                    <Border Classes="stack-chip safety"
-                                                                            IsVisible="{Binding HasBehavior}">
-                                                                      <TextBlock Text="{Binding Behavior}" />
-                                                                    </Border>
-                                                                  </StackPanel>
-                                                                  <Button Grid.Column="1"
-                                                                          Classes="stack-card-toggle"
-                                                                          Command="{Binding ToggleExpandedCommand}"
-                                                                          Content="{Binding ExpandActionText}" />
-                                                                </Grid>
-                                                                <TextBlock Grid.Row="1"
-                                                                           Classes="muted"
-                                                                           Text="{Binding ValuePreview}"
-                                                                           TextWrapping="Wrap"
-                                                                           IsVisible="{Binding IsCollapsed}" />
-                                                                <TextBlock Grid.Row="2"
-                                                                           Classes="muted"
-                                                                           Text="{Binding Value}"
-                                                                           TextWrapping="Wrap"
-                                                                           IsVisible="{Binding IsExpanded}" />
-                                                              </Grid>
-                                                            </Border>
-                                                          </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                      </ItemsControl>
-                                                    </StackPanel>
-                                                  </Border>
-                                                </Grid>
-                                              </Border>
-                                            </DataTemplate>
-                                          </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                      </StackPanel>
-                                    </DataTemplate>
-                                  </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                              </StackPanel>
-                            </Grid>
-                          </Border>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <controls:StackDetailTree Items="{Binding RegistrySelectedDetails}" />
                   </StackPanel>
 
                   <Border Classes="card-surface marketplace-profile-card"
@@ -949,12 +617,9 @@
                     </StackPanel>
                   </Border>
 
-                  <StackPanel Spacing="8"
-                              IsVisible="{Binding HasRegistrySelectedRequiredInputs}">
-                    <TextBlock Text="Required Inputs"
-                               FontWeight="SemiBold" />
-                    <ItemsControl ItemsSource="{Binding RegistrySelectedRequiredInputs}">
-                      <ItemsControl.ItemTemplate>
+                  <controls:StackRequiredInputs Items="{Binding RegistrySelectedRequiredInputs}"
+                                                IsVisible="{Binding HasRegistrySelectedRequiredInputs}">
+                    <controls:StackRequiredInputs.ItemTemplate>
                         <DataTemplate>
                           <Border Classes="marketplace-profile-row">
                             <TextBlock Classes="caption"
@@ -962,9 +627,8 @@
                                        TextWrapping="Wrap" />
                           </Border>
                         </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                  </StackPanel>
+                    </controls:StackRequiredInputs.ItemTemplate>
+                  </controls:StackRequiredInputs>
                   </StackPanel>
 
                 </StackPanel>

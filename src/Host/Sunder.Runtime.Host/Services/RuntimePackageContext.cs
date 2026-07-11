@@ -1,30 +1,34 @@
 using Microsoft.Extensions.Logging;
+using Sunder.Runtime.Host.Infrastructure.Logging;
+using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Logging;
-using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimePackageContext : IPackageContext
 {
-    public RuntimePackageContext(string packageId, string version, string installPath)
+    public RuntimePackageContext(string packageId, string version, string installPath, string packageDataRootPath)
     {
         PackageId = packageId;
-        Version = Version.TryParse(version, out var parsedVersion) ? parsedVersion : new Version(0, 0);
+        Version = version;
         InstallPath = installPath;
-        Storage = new LocalPackageStorageContext(packageId);
+        LocalStorage = new LocalPackageStorageContext(packageId, packageDataRootPath);
+        Storage = LocalStorage;
         Configuration = new PackageStateConfiguration(Storage.State);
-        SecretsStore = new JsonPackageSecretsStore(Path.Combine(Storage.DataRootPath, "secrets.json"));
-        Logging = new FilePackageLogging(Storage.LogsRootPath, PackageId, Version);
+        SecretsStore = new JsonPackageSecretsStore(Path.Combine(LocalStorage.DataRootPath, "secrets.json"));
+        Logging = new FilePackageLogging(LocalStorage.LogsRootPath, PackageId, Version);
     }
 
     public string PackageId { get; }
 
-    public Version Version { get; }
+    public string Version { get; }
 
     public string InstallPath { get; }
 
     public IPackageStorageContext Storage { get; }
+
+    internal LocalPackageStorageContext LocalStorage { get; }
 
     public IPackageConfiguration Configuration { get; }
 

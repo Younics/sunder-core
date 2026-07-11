@@ -14,10 +14,12 @@ Primary Sunder Core projects:
 | Runtime host | `src/Host/Sunder.Runtime.Host` | Local package state, package install/update/uninstall, runtime activation, local HTTP API |
 | CLI | `src/Host/Sunder.Cli` | Registry browse/install/publish commands and runtime package commands |
 | SDK | `src/Sdk/Sunder.Sdk` | Public package contracts, package module API, package context, theme keys |
+| Stack SDK | `src/Sdk/Sunder.Sdk.Stacks` | Optional public Stack import/export and contributor contracts |
+| Avalonia SDK | `src/Sdk/Sunder.Sdk.Avalonia` | Optional App role, Avalonia contribution contracts, and themes |
 | Build tooling | `src/Sdk/Sunder.Package.Build` | MSBuild targets/tasks for manifests, dev output, and `.sunderpkg` archives |
 | Templates | `src/Sdk/Sunder.Package.Templates` | `dotnet new sunder-package` template |
-| Package management | `src/Sunder.PackageManagement` | Shared `.sunderpkg` archive inspection and validation |
-| Registry contracts | `src/Sunder.Registry.Shared` | Public DTOs and API contracts used by CLI/app/web/server |
+| Package format | `src/Sunder.Package.Format` | Shared `.sunderpkg` archive inspection and validation |
+| Registry contracts | `src/Sunder.Registry.Contracts` | Public DTOs and API contracts used by CLI/app/web/server |
 
 First-party Agent packages live in the separate public `Younics/sunder-agent-package` repository. Registry implementation projects live in the separate private `Younics/sunder-registry` repository.
 
@@ -48,6 +50,8 @@ Important related concepts:
 - runtime services and background services
 - package configuration, secrets, auth callbacks, and runtime faults
 - package asset serving for active or installed packages
+- dev-package watching, debounce/stability checks, and generation-fenced reloads
+- package-log discovery, bounded parsing, snapshots, and live streaming
 
 `Sunder.App` owns:
 
@@ -58,7 +62,7 @@ Important related concepts:
 - desktop notifications and app-side fault reporting
 - visual theme resources and app branding
 
-Development packages are loaded through both sides. The runtime host validates and activates runtime contributions, then the app activates app-side views and settings contributions for packages reported as active.
+Development packages are coordinated by Runtime. Runtime validates and activates runtime contributions, owns directory watching and reload transactions, and publishes bounded sequence-based lifecycle events. The App observes session generations and activates app-side views/settings from authenticated UI snapshots without reading dev package or package-log directories.
 
 ## Registry Boundary
 

@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -15,8 +17,8 @@ public sealed class RuntimeApiClientTests
         {
             Content = JsonContent.Create(new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow)),
         });
-        using var httpClient = new HttpClient(handler);
-        using var runtimeApiClient = new RuntimeApiClient(() => new Uri("http://127.0.0.1:5275/"), httpClient);
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");
+        using var runtimeApiClient = new RuntimeApiClient(() => connection, handler);
 
         var status = await runtimeApiClient.GetSystemStatusAsync();
 
@@ -24,20 +26,52 @@ public sealed class RuntimeApiClientTests
         Assert.Equal("Runtime", status.Name);
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Get, request.Method);
-        Assert.Equal(new Uri("http://127.0.0.1:5275/api/system"), request.RequestUri);
+        Assert.Equal(new Uri("http://127.0.0.1:5275/api/v1/system"), request.RequestUri);
+        Assert.Equal("Bearer", request.AuthorizationScheme);
+        Assert.True(request.HasAuthorizationParameter);
     }
 
     [Fact]
-    public async Task Dispose_DoesNotDisposeInjectedHttpClient()
+    public async Task Request_WhenConnectionIsMissing_FailsBeforeSending()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
-        using var httpClient = new HttpClient(handler);
-        var runtimeApiClient = new RuntimeApiClient(() => new Uri("http://127.0.0.1:5275/"), httpClient);
+        using var runtimeApiClient = new RuntimeApiClient(() => null, handler);
 
-        runtimeApiClient.Dispose();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runtimeApiClient.GetSystemStatusAsync());
 
-        using var response = await httpClient.GetAsync(new Uri("http://127.0.0.1:5275/health"));
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task StreamRuntimeEventsAsync_ParsesSseAndSendsReconnectSequence()
+    {
+        var runtimeEvent = new RuntimeEventDescriptor(
+            43,
+            DateTimeOffset.UtcNow,
+            RuntimeEventKind.SessionGenerationChanged,
+            8,
+            RuntimeOperationPhase.Idle,
+            ["test.package"]);
+        var content = $"id: 43\nevent: runtime\ndata: {JsonSerializer.Serialize(runtimeEvent, new JsonSerializerOptions(JsonSerializerDefaults.Web))}\n\n";
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(content),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");
+        using var runtimeApiClient = new RuntimeApiClient(() => connection, handler);
+
+        var received = new List<RuntimeEventDescriptor>();
+        await foreach (var streamedEvent in runtimeApiClient.StreamRuntimeEventsAsync(42))
+        {
+            received.Add(streamedEvent);
+        }
+
+        var receivedEvent = Assert.Single(received);
+        Assert.Equal(43, receivedEvent.SequenceId);
+        Assert.Equal(8, receivedEvent.SessionGeneration);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("42", request.LastEventId);
+        Assert.Equal("Bearer", request.AuthorizationScheme);
     }
 
     private sealed class RecordingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
@@ -48,10 +82,20 @@ public sealed class RuntimeApiClientTests
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            _requests.Add(new RecordedRequest(request.Method, request.RequestUri));
+            _requests.Add(new RecordedRequest(
+                request.Method,
+                request.RequestUri,
+                request.Headers.Authorization?.Scheme,
+                !string.IsNullOrWhiteSpace(request.Headers.Authorization?.Parameter),
+                request.Headers.TryGetValues("Last-Event-ID", out var values) ? values.SingleOrDefault() : null));
             return Task.FromResult(send(request));
         }
     }
 
-    private sealed record RecordedRequest(HttpMethod Method, Uri? RequestUri);
+    private sealed record RecordedRequest(
+        HttpMethod Method,
+        Uri? RequestUri,
+        string? AuthorizationScheme,
+        bool HasAuthorizationParameter,
+        string? LastEventId);
 }

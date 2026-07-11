@@ -14,7 +14,7 @@ public sealed class PackagesWindowFactory(
 {
     internal PackagesWindow Create(
         Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
-        Func<IReadOnlyList<Sunder.Protocol.ActivePackageDescriptor>, IReadOnlyList<Sunder.Protocol.PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
+        Func<IReadOnlyList<Sunder.Runtime.Contracts.ActivePackageDescriptor>, IReadOnlyList<Sunder.Runtime.Contracts.PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
         PackageOperationService packageOperationService,
         Action<double, double>? persistBackgroundProcessPopoverSize)
     {

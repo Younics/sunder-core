@@ -17,7 +17,7 @@ public partial class App : Application
     private readonly AppPackageResourceAssemblyRegistry _packageResourceAssemblyRegistry = new();
     private ServiceProvider? _serviceProvider;
     private WindowLauncher? _windowLauncher;
-    private DevPackageHotReloadSession? _devPackageHotReloadSession;
+    private RuntimeEventSubscriptionService? _runtimeEventSubscription;
     private AboutSunderWindow? _aboutSunderWindow;
 
     public override void Initialize()
@@ -76,7 +76,7 @@ public partial class App : Application
         );
         _packageViewHostService = startup.PackageViewHostService;
         _windowLauncher = startup.WindowLauncher;
-        _devPackageHotReloadSession = startup.DevPackageHotReloadSession;
+        _runtimeEventSubscription = startup.RuntimeEventSubscription;
         var mainWindow = startup.MainWindow;
         var mainWindowViewModel = startup.MainWindowViewModel;
 
@@ -240,9 +240,12 @@ public partial class App : Application
     {
         var windowLauncher = _windowLauncher;
         _windowLauncher = null;
-        var devPackageHotReloadSession = _devPackageHotReloadSession;
-        _devPackageHotReloadSession = null;
-        devPackageHotReloadSession?.Dispose();
+        var runtimeEventSubscription = _runtimeEventSubscription;
+        _runtimeEventSubscription = null;
+        if (runtimeEventSubscription is not null)
+        {
+            await runtimeEventSubscription.DisposeAsync();
+        }
 
         if (windowLauncher is not null)
         {

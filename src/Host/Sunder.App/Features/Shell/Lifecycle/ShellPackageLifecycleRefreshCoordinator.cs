@@ -1,8 +1,7 @@
 using Avalonia;
-using Avalonia.Threading;
 using Sunder.App.Features.Shell.Panels;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Features.Shell.Lifecycle;
 
@@ -10,9 +9,11 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
     AppPackageLifecycleCoordinator packageLifecycleCoordinator,
     ShellPackageLifecyclePresenter packageLifecyclePresenter,
     ShellDeferredHostedViewActivator deferredHostedViewActivator,
-    Func<bool> isDisposed)
+    Func<bool> isDisposed,
+    IUiDispatcher? uiDispatcher = null)
 {
     private readonly AppPackageLifecycleGate _packageLifecycleGate = new(nameof(ShellPackageLifecycleRefreshCoordinator));
+    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
 
     public async Task ApplyPackageLifecycleChangesAsync(
         IReadOnlyCollection<string>? impactedPackageIds = null,
@@ -30,7 +31,7 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
         await ApplyPackageLifecycleChangesToShellAsync(activePackages, impactedPackageIds, deferHostedViewCreation).ConfigureAwait(false);
         if (deferHostedViewCreation)
         {
-            _ = deferredHostedViewActivator.ActivateAfterLifecycleAsync(cancellationToken);
+            await deferredHostedViewActivator.ActivateAfterLifecycleAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -39,14 +40,13 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
         IReadOnlyCollection<string>? impactedPackageIds,
         bool deferHostedViewCreation)
     {
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess() || Application.Current is null)
         {
             packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation);
             return;
         }
 
-        await Dispatcher.UIThread.InvokeAsync(
-            () => packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation),
-            DispatcherPriority.Normal);
+        await _uiDispatcher.InvokeAsync(
+            () => packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation));
     }
 }

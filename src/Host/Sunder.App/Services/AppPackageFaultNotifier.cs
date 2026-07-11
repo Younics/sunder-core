@@ -1,14 +1,15 @@
 using Avalonia;
-using Avalonia.Threading;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageFaultNotifier(
     PackageRuntimeFaultReporter? faultReporter,
-    IPackageNotificationService? notificationService)
+    IPackageNotificationService? notificationService,
+    IUiDispatcher? uiDispatcher = null)
 {
+    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     public event EventHandler<PackageViewHostFaultEventArgs>? PackageFaulted;
 
     public async Task NotifyPackageDisabledAsync(
@@ -27,15 +28,13 @@ internal sealed class AppPackageFaultNotifier(
         await PublishPackageDisabledNotificationAsync(packageId, message).ConfigureAwait(false);
 
         var args = new PackageViewHostFaultEventArgs(packageId, message, origin);
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess() || Application.Current is null)
         {
             PackageFaulted?.Invoke(sender, args);
             return;
         }
 
-        await Dispatcher.UIThread.InvokeAsync(
-            () => PackageFaulted?.Invoke(sender, args),
-            DispatcherPriority.Normal);
+        await _uiDispatcher.InvokeAsync(() => PackageFaulted?.Invoke(sender, args));
     }
 
     private async ValueTask PublishPackageDisabledNotificationAsync(string packageId, string message)

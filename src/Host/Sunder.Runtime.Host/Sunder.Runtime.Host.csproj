@@ -7,9 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
-    <ProjectReference Include="..\..\Sunder.PackageManagement\Sunder.PackageManagement.csproj" />
+    <ProjectReference Include="..\..\Sdk\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
+    <ProjectReference Include="..\..\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+    <ProjectReference Include="..\..\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

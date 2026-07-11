@@ -22,6 +22,20 @@
       "description": "The package name shown in Sunder.",
       "replaces": "Sunder Package Template"
     },
+    "withAvalonia": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": false,
+      "description": "Add the Avalonia SDK and a default App package view.",
+      "replaces": "SUNDER_WITH_AVALONIA"
+    },
+    "withStacks": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": false,
+      "description": "Add the Stack SDK and a runtime Stack contributor example.",
+      "replaces": "SUNDER_WITH_STACKS"
+    },
     "withContracts": {
       "type": "parameter",
       "datatype": "bool",
@@ -92,6 +106,19 @@
       "condition": "(!createInPlace)",
       "modifiers": [
         {
+          "condition": "(!withAvalonia)",
+          "exclude": [
+            "Sunder.Package.Template/Avalonia.PackageReferences.props"
+          ]
+        },
+        {
+          "condition": "(!withStacks)",
+          "exclude": [
+            "Sunder.Package.Template/StackSupport.cs",
+            "Sunder.Package.Template/Stacks.PackageReferences.props"
+          ]
+        },
+        {
           "condition": "(!withContracts)",
           "exclude": [
             "Sunder.Package.Template.Contracts/**/*"
@@ -134,7 +161,7 @@
           }
         },
         {
-          "condition": "(noDefaultView && !withHostDependency && withHostContracts != true)",
+          "condition": "((noDefaultView || !withAvalonia) && !withHostDependency && withHostContracts != true)",
           "exclude": [
             "Sunder.Package.Template/PackageViews/**/*",
             "Sunder.Package.Template/PackageModule.with-view.cs"
@@ -144,7 +171,7 @@
           }
         },
         {
-          "condition": "(!noDefaultView && !withHostDependency && withHostContracts != true)",
+          "condition": "(!noDefaultView && withAvalonia && !withHostDependency && withHostContracts != true)",
           "exclude": [
             "Sunder.Package.Template/PackageModule.no-view.cs"
           ],
@@ -153,7 +180,7 @@
           }
         },
         {
-          "condition": "(noDefaultView && (withHostDependency || withHostContracts == true))",
+          "condition": "((noDefaultView || !withAvalonia) && (withHostDependency || withHostContracts == true))",
           "exclude": [
             "Sunder.Package.Template/PackageViews/**/*",
             "Sunder.Package.Template/PackageModule.with-view.cs"
@@ -163,7 +190,7 @@
           }
         },
         {
-          "condition": "(!noDefaultView && (withHostDependency || withHostContracts == true))",
+          "condition": "(!noDefaultView && withAvalonia && (withHostDependency || withHostContracts == true))",
           "exclude": [
             "Sunder.Package.Template/PackageModule.no-view.cs"
           ],
@@ -178,6 +205,19 @@
       "source": "Sunder.Package.Template/",
       "target": "./",
       "modifiers": [
+        {
+          "condition": "(!withAvalonia)",
+          "exclude": [
+            "Avalonia.PackageReferences.props"
+          ]
+        },
+        {
+          "condition": "(!withStacks)",
+          "exclude": [
+            "StackSupport.cs",
+            "Stacks.PackageReferences.props"
+          ]
+        },
         {
           "condition": "(!withHostDependency && withHostContracts != true)",
           "exclude": [
@@ -215,7 +255,7 @@
           }
         },
         {
-          "condition": "(noDefaultView && !withHostDependency && withHostContracts != true)",
+          "condition": "((noDefaultView || !withAvalonia) && !withHostDependency && withHostContracts != true)",
           "exclude": [
             "PackageViews/**/*",
             "PackageModule.with-view.cs"
@@ -225,7 +265,7 @@
           }
         },
         {
-          "condition": "(!noDefaultView && !withHostDependency && withHostContracts != true)",
+          "condition": "(!noDefaultView && withAvalonia && !withHostDependency && withHostContracts != true)",
           "exclude": [
             "PackageModule.no-view.cs"
           ],
@@ -234,7 +274,7 @@
           }
         },
         {
-          "condition": "(noDefaultView && (withHostDependency || withHostContracts == true))",
+          "condition": "((noDefaultView || !withAvalonia) && (withHostDependency || withHostContracts == true))",
           "exclude": [
             "PackageViews/**/*",
             "PackageModule.with-view.cs"
@@ -244,7 +284,7 @@
           }
         },
         {
-          "condition": "(!noDefaultView && (withHostDependency || withHostContracts == true))",
+          "condition": "(!noDefaultView && withAvalonia && (withHostDependency || withHostContracts == true))",
           "exclude": [
             "PackageModule.no-view.cs"
           ],

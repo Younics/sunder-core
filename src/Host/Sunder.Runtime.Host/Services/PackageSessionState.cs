@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
@@ -11,6 +11,7 @@ internal sealed class PackageSessionState(
 {
     private readonly object _syncRoot = new();
     private ActivePackageSession _activeSession = ActivePackageSession.Empty;
+    private long _generation;
 
     public IReadOnlyList<ActivePackageDescriptor> GetActivePackages()
     {
@@ -36,7 +37,7 @@ internal sealed class PackageSessionState(
         }
     }
 
-    public IReadOnlyList<PackageSourceDescriptor> GetActivePackageSources()
+    public IReadOnlyList<RuntimePackageSource> GetActivePackageSources()
     {
         lock (_syncRoot)
         {
@@ -59,6 +60,11 @@ internal sealed class PackageSessionState(
         ActiveLoadedPackage? packageToDeactivate;
         lock (_syncRoot)
         {
+            if (request.GenerationId != _generation)
+            {
+                return false;
+            }
+
             var disabled = _activeSession.MarkPackageFailed(packageId, request.Origin, request.Message, out packageToDeactivate);
             if (!disabled)
             {
@@ -118,27 +124,39 @@ internal sealed class PackageSessionState(
         return warnings;
     }
 
-    public void PublishSession(ActivePackageSession session)
+    public long PublishSession(ActivePackageSession session)
     {
         lock (_syncRoot)
         {
             _activeSession = session;
+            _generation++;
             clearAuthSessions();
+            return _generation;
         }
     }
 
-    public void HandlePackageFault(string packageId, PackageFailureOrigin origin, Exception exception, string action)
+    public bool HandlePackageFault(
+        string packageId,
+        long generation,
+        PackageFailureOrigin origin,
+        Exception exception,
+        string action)
     {
         ActiveLoadedPackage? packageToDeactivate;
         lock (_syncRoot)
         {
-            _activeSession.MarkPackageFailed(packageId, origin, exception.Message, out packageToDeactivate);
+            if (generation != _generation
+                || !_activeSession.MarkPackageFailed(packageId, origin, exception.Message, out packageToDeactivate))
+            {
+                return false;
+            }
 
             removePackageAuthSessions(packageId);
         }
 
         QueuePackageDeactivation(packageId, packageToDeactivate);
         logger.LogError(exception, "Failed to {Action} for package {PackageId}; package disabled for current session", action, packageId);
+        return true;
     }
 
     public bool DisableInstalledPackage(string packageId)
@@ -180,6 +198,27 @@ internal sealed class PackageSessionState(
         lock (_syncRoot)
         {
             return _activeSession.TryGetLoadedPackage(packageId, out var loadedPackage) ? loadedPackage : null;
+        }
+    }
+
+    public (ActiveLoadedPackage? Package, long Generation) GetLoadedPackageLease(string packageId)
+    {
+        lock (_syncRoot)
+        {
+            return (
+                _activeSession.TryGetLoadedPackage(packageId, out var loadedPackage) ? loadedPackage : null,
+                _generation);
+        }
+    }
+
+    public long Generation
+    {
+        get
+        {
+            lock (_syncRoot)
+            {
+                return _generation;
+            }
         }
     }
 

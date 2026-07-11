@@ -28,7 +28,7 @@ internal sealed class ShellPanelContentPresenter(
 
         panel.Title = packageView.Title.ToUpperInvariant();
         panel.Subtitle = $"{packageView.PackageDisplayName} · {packageView.PackageId} · v{packageView.PackageVersion}";
-        panel.Summary = packageView.Readiness == Sunder.Protocol.PackageReadinessState.Ready
+        panel.Summary = packageView.Readiness == Sunder.Runtime.Contracts.PackageReadinessState.Ready
             ? $"{ShellPlacementCatalog.ToDisplayName(placement).ToUpperInvariant()} PACKAGE ACTIVE"
             : $"PACKAGE {packageView.Readiness.ToString().ToUpperInvariant()}";
         AddCommonViewLines(panel.Lines, packageView);

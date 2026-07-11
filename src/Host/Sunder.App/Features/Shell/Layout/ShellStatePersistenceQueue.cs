@@ -8,6 +8,7 @@ internal sealed class ShellStatePersistenceQueue(
     Func<ShellState> createSnapshot,
     TimeSpan saveDelay) : IDisposable
 {
+    private readonly OwnedTaskObserver _tasks = new(nameof(ShellStatePersistenceQueue));
     private CancellationTokenSource? _pendingSaveCts;
     private bool _disposed;
 
@@ -22,7 +23,7 @@ internal sealed class ShellStatePersistenceQueue(
         var cancellationTokenSource = new CancellationTokenSource();
         _pendingSaveCts = cancellationTokenSource;
         var snapshot = createSnapshot();
-        _ = SaveAfterDelayAsync(snapshot, cancellationTokenSource);
+        _tasks.Observe(SaveAfterDelayAsync(snapshot, cancellationTokenSource), "persisting shell state");
     }
 
     public void SaveImmediately()
@@ -35,6 +36,7 @@ internal sealed class ShellStatePersistenceQueue(
     {
         _disposed = true;
         CancelPendingSave();
+        _tasks.Dispose();
     }
 
     private async Task SaveAfterDelayAsync(ShellState snapshot, CancellationTokenSource cancellationTokenSource)

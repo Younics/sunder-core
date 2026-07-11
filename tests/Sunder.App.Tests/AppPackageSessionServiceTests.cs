@@ -1,5 +1,5 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Xunit;
 using SdkPackageSessionLoadRequest = Sunder.Sdk.Abstractions.PackageSessionLoadRequest;
@@ -10,7 +10,7 @@ namespace Sunder.App.Tests;
 public sealed class AppPackageSessionServiceTests
 {
     [Fact]
-    public async Task LoadPackageAsync_ForDevSource_StagesPreflightsCommitsAndAppliesInOrder()
+    public async Task LoadPackageAsync_ForDevSource_RejectsRemoteFolderInput()
     {
         var folder = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var events = new List<string>();
@@ -29,20 +29,19 @@ public sealed class AppPackageSessionServiceTests
                 events.Add("preflight:" + string.Join(",", impactedPackageIds));
                 Assert.False(runtimeClient.CommitCalled);
                 Assert.Contains(activePackages, package => package.PackageId == "agent");
-                Assert.Contains(packageSources, source => source.PackageId == "agent" && source.Kind == PackageSourceKind.Dev);
+                Assert.Contains(packageSources, source => source.PackageId == "agent" && source.SourceKind == PackageSourceKind.Dev);
                 return Task.CompletedTask;
             });
 
-        var status = await service.LoadPackageAsync(new SdkPackageSessionLoadRequest(SdkPackageSessionSourceKind.Dev, folder));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.LoadPackageAsync(new SdkPackageSessionLoadRequest(SdkPackageSessionSourceKind.Dev, folder)));
 
-        Assert.Equal("agent", status.PackageId);
-        Assert.Equal(SdkPackageSessionSourceKind.Dev, status.ActiveSourceKind);
-        Assert.Equal(PackageLifecycleOverlayOwner.Sdk, runtimeClient.StageRequest?.OverlayOwner);
-        Assert.Equal(["stage", "preflight:agent", "commit", "apply:agent", "status"], events);
+        Assert.Contains("Runtime startup", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(events);
     }
 
     [Fact]
-    public async Task LoadPackageAsync_WhenDevPreflightFails_DiscardsStageWithoutCommitting()
+    public async Task LoadPackageAsync_WhenDevFolderIsRemote_DoesNotStageOrCommit()
     {
         var folder = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var events = new List<string>();
@@ -56,10 +55,10 @@ public sealed class AppPackageSessionServiceTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await service.LoadPackageAsync(new SdkPackageSessionLoadRequest(SdkPackageSessionSourceKind.Dev, folder)));
 
-        Assert.Equal("preflight failed", exception.Message);
+        Assert.Contains("Runtime startup", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(runtimeClient.CommitCalled);
-        Assert.True(runtimeClient.DiscardCalled);
-        Assert.Equal(["stage", "discard"], events);
+        Assert.False(runtimeClient.DiscardCalled);
+        Assert.Empty(events);
     }
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
@@ -74,9 +73,9 @@ public sealed class AppPackageSessionServiceTests
             new("agent", "Agent", "1.0.0", null, true, PackageReadinessState.Ready, []),
         ];
 
-        private readonly PackageSourceDescriptor[] _packageSources =
+        private readonly PackageUiSnapshotDescriptor[] _packageSources =
         [
-            new("agent", PackageSourceKind.Dev, folder),
+            RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder),
         ];
 
         public bool CommitCalled { get; private set; }
@@ -97,16 +96,16 @@ public sealed class AppPackageSessionServiceTests
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<PackageSourceDescriptor>>(_packageSources);
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>(_packageSources);
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
 
-        public Task<Sunder.Protocol.PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
+        public Task<Sunder.Runtime.Contracts.PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
         {
             events.Add("status");
-            return Task.FromResult<Sunder.Protocol.PackageSessionStatus?>(new Sunder.Protocol.PackageSessionStatus(
+            return Task.FromResult<Sunder.Runtime.Contracts.PackageSessionStatus?>(new Sunder.Runtime.Contracts.PackageSessionStatus(
                 packageId,
                 "Agent",
                 "1.0.0",

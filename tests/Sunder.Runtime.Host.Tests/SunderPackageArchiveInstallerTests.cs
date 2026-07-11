@@ -2,8 +2,8 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sunder.PackageManagement;
-using Sunder.Protocol;
+using Sunder.Package.Format;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
 
@@ -17,10 +17,10 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
 
-        var result = await installer.InstallFromPathAsync(archivePath);
+        var result = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archivePath));
 
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
         var installedPackages = await store.ListAsync();
@@ -36,7 +36,7 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var archivePath = Path.Combine(root, "unsafe.sunderpkg");
         using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
         {
@@ -45,10 +45,10 @@ public sealed class SunderPackageArchiveInstallerTests
             writer.Write("unsafe");
         }
 
-        var result = await installer.InstallFromPathAsync(archivePath);
+        var result = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archivePath));
 
         Assert.False(result.Success);
-        Assert.Contains("unsafe path", result.Errors[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unsafe", result.Errors[0], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -57,10 +57,10 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var archivePath = CreatePackageArchive(root, "test.package", "1.0.0", corruptHash: true);
 
-        var result = await installer.InstallFromPathAsync(archivePath);
+        var result = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archivePath));
 
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error => error.Contains("SHA-256 mismatch", StringComparison.OrdinalIgnoreCase));
@@ -72,12 +72,15 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var transfers = new RuntimeContentTransferStore(paths);
+        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer, transferStore: transfers);
         var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
+        await using var archive = File.OpenRead(archivePath);
+        var upload = await transfers.CreateUploadAsync(RuntimeUploadKind.Package, archive, archive.Length, null, Path.GetFileName(archivePath), "application/vnd.sunder.package", 0, CancellationToken.None);
 
         var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
-            new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: archivePath),
+            new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
         ]));
 
         Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
@@ -98,15 +101,15 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var originalArchivePath = CreatePackageArchive(root, "test.package", "1.0.0");
         var upgradedArchivePath = CreatePackageArchive(root, "test.package", "1.1.0");
 
-        var installResult = await installer.InstallFromPathAsync(originalArchivePath);
+        var installResult = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: originalArchivePath));
         Assert.True(installResult.Success, string.Join(Environment.NewLine, installResult.Errors));
         var originalInstallPath = Assert.Single(await store.ListAsync()).InstallPath;
 
-        var upgradeResult = await installer.UpgradeFromPathAsync("test.package", upgradedArchivePath);
+        var upgradeResult = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Upgrade, "test.package", upgradedArchivePath));
 
         Assert.True(upgradeResult.Success, string.Join(Environment.NewLine, upgradeResult.Errors));
         var installedPackage = Assert.Single(await store.ListAsync());
@@ -121,10 +124,10 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
 
-        var result = await installer.UpgradeFromPathAsync("other.package", archivePath);
+        var result = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Upgrade, "other.package", archivePath));
 
         Assert.False(result.Success);
         Assert.Contains("does not match", result.Errors[0], StringComparison.OrdinalIgnoreCase);
@@ -136,15 +139,15 @@ public sealed class SunderPackageArchiveInstallerTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var originalArchivePath = CreatePackageArchive(root, "test.package", "1.0.0");
         var reinstallArchivePath = CreatePackageArchive(root, "test.package", "1.0.0");
 
-        var installResult = await installer.InstallFromPathAsync(originalArchivePath);
+        var installResult = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: originalArchivePath));
         Assert.True(installResult.Success, string.Join(Environment.NewLine, installResult.Errors));
         var originalInstallPath = Assert.Single(await store.ListAsync()).InstallPath;
 
-        var result = await installer.UpgradeFromPathAsync("test.package", reinstallArchivePath);
+        var result = await ExecuteAsync(paths, store, installer, new PackageStoreMutation(PackageStoreMutationKind.Upgrade, "test.package", reinstallArchivePath));
 
         Assert.False(result.Success);
         Assert.Contains("already installed", result.Errors[0], StringComparison.OrdinalIgnoreCase);
@@ -166,6 +169,9 @@ public sealed class SunderPackageArchiveInstallerTests
             Name = "Test Package",
             Version = version,
             EntryAssembly = "Test.Package.dll",
+            SdkApiVersion = 1,
+            SdkPackageVersion = "1.0.0",
+            RequiredSdkCapabilities = ["core.v1"],
         }));
 
         var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "lib", "Test.Package.dll");
@@ -182,6 +188,17 @@ public sealed class SunderPackageArchiveInstallerTests
         var archivePath = Path.Combine(root, $"{packageId}.{version}.{Guid.NewGuid():N}.sunderpkg");
         ZipFile.CreateFromDirectory(sourceRoot, archivePath);
         return archivePath;
+    }
+
+    private static async Task<PackageOperationResult> ExecuteAsync(
+        RuntimePackagePaths paths,
+        InstalledPackageStore store,
+        SunderPackageArchiveInstaller installer,
+        PackageStoreMutation mutation)
+    {
+        var coordinator = new PackageStoreCoordinator(paths, store, installer);
+        await coordinator.InitializeAsync();
+        return await coordinator.ExecuteAsync([mutation]);
     }
 
     private static SunderPackageContentIndexEntry CreateIndexEntry(string sourceRoot, string path, bool corruptHash)

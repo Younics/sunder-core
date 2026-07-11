@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using Avalonia.Threading;
 using Sunder.App.Composition;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Services;
@@ -14,7 +13,7 @@ public sealed record ShellStartupResult(
     MainWindowViewModel MainWindowViewModel,
     PackageViewHostService PackageViewHostService,
     WindowLauncher WindowLauncher,
-    DevPackageHotReloadSession? DevPackageHotReloadSession);
+    RuntimeEventSubscriptionService RuntimeEventSubscription);
 
 public sealed class ShellStartupCoordinator
 {
@@ -25,6 +24,7 @@ public sealed class ShellStartupCoordinator
     private readonly RuntimeHostProcessManager _runtimeHostProcessManager;
     private readonly NotificationCenterService _notificationCenter;
     private readonly DeveloperLogService _developerLog;
+    private readonly RuntimeEventSubscriptionService _runtimeEventSubscription;
     private readonly CliInstallationService _cliInstallationService;
     private readonly SunderUpdateService _updateService;
     private readonly PackageUpdateStartupCheckService _packageUpdateStartupCheckService;
@@ -35,6 +35,8 @@ public sealed class ShellStartupCoordinator
     private readonly PackageViewHostServiceFactory _packageViewHostServiceFactory;
     private readonly WindowLauncherFactory _windowLauncherFactory;
     private readonly MainWindowFactory _mainWindowFactory;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly OwnedTaskObserver _tasks = new(nameof(ShellStartupCoordinator));
 
     public ShellStartupCoordinator(
         ShellStateService shellStateService,
@@ -44,6 +46,7 @@ public sealed class ShellStartupCoordinator
         RuntimeHostProcessManager runtimeHostProcessManager,
         NotificationCenterService notificationCenter,
         DeveloperLogService developerLog,
+        RuntimeEventSubscriptionService runtimeEventSubscription,
         CliInstallationService cliInstallationService,
         SunderUpdateService updateService,
         PackageUpdateStartupCheckService packageUpdateStartupCheckService,
@@ -53,7 +56,8 @@ public sealed class ShellStartupCoordinator
         IShellCompositionService shellCompositionService,
         PackageViewHostServiceFactory packageViewHostServiceFactory,
         WindowLauncherFactory windowLauncherFactory,
-        MainWindowFactory mainWindowFactory)
+        MainWindowFactory mainWindowFactory,
+        IUiDispatcher uiDispatcher)
     {
         _shellStateService = shellStateService;
         _shellState = shellState;
@@ -62,6 +66,7 @@ public sealed class ShellStartupCoordinator
         _runtimeHostProcessManager = runtimeHostProcessManager;
         _notificationCenter = notificationCenter;
         _developerLog = developerLog;
+        _runtimeEventSubscription = runtimeEventSubscription;
         _cliInstallationService = cliInstallationService;
         _updateService = updateService;
         _packageUpdateStartupCheckService = packageUpdateStartupCheckService;
@@ -72,6 +77,7 @@ public sealed class ShellStartupCoordinator
         _packageViewHostServiceFactory = packageViewHostServiceFactory;
         _windowLauncherFactory = windowLauncherFactory;
         _mainWindowFactory = mainWindowFactory;
+        _uiDispatcher = uiDispatcher;
     }
 
     public async Task<ShellStartupResult> StartAsync(
@@ -81,7 +87,7 @@ public sealed class ShellStartupCoordinator
         var shellStateService = _shellStateService;
         var shellState = _shellState;
         IReadOnlyList<ActivePackageDescriptor> activePackages = [];
-        IReadOnlyList<PackageSourceDescriptor> packageSources = [];
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources = [];
         var warnings = new List<string>();
         var errors = startupOptions.ParseErrors.ToList();
         SystemStatusResponse? systemStatus = null;
@@ -99,7 +105,7 @@ public sealed class ShellStartupCoordinator
 
         await SetProgressAsync(loadingViewModel, "Loading theme...", 96);
 
-        var themeManager = await Dispatcher.UIThread.InvokeAsync(() =>
+        var themeManager = await _uiDispatcher.InvokeAsync(() =>
         {
             var manager = _themeManager;
             manager.Initialize();
@@ -128,13 +134,10 @@ public sealed class ShellStartupCoordinator
                 {
                     await SetProgressAsync(loadingViewModel, "Loading dev packages...", 248).ConfigureAwait(false);
 
-                    var loadResult = await runtimeApiClient.LoadPackageLifecycleAsync(new PackageLifecycleLoadRequest(
-                        startupOptions.DevPackageFolders
-                            .Select(folder => new PackageSessionLoadRequest(PackageSourceKind.Dev, folder))
-                            .ToArray(),
-                        PackageLifecycleOverlayOwner.Startup)).ConfigureAwait(false);
+                    var loadResult = await runtimeApiClient.LoadPackageLifecycleAsync(
+                        new PackageLifecycleLoadRequest(Array.Empty<string>(), PackageLifecycleOverlayOwner.Startup)).ConfigureAwait(false);
                     activePackages = loadResult.ActivePackages;
-                    packageSources = loadResult.PackageSources;
+                    packageSources = loadResult.PackageUiSnapshots;
                     warnings.AddRange(loadResult.Warnings);
                     errors.AddRange(loadResult.Errors);
                     LogStartupPhase("runtime dev packages", phaseStopwatch);
@@ -143,7 +146,7 @@ public sealed class ShellStartupCoordinator
                 {
                     await SetProgressAsync(loadingViewModel, "Loading active packages...", 248).ConfigureAwait(false);
                     activePackages = await runtimeApiClient.GetActivePackagesAsync().ConfigureAwait(false);
-                    packageSources = await runtimeApiClient.GetActivePackageSourcesAsync().ConfigureAwait(false);
+                    packageSources = await runtimeApiClient.GetActivePackageUiSnapshotsAsync().ConfigureAwait(false);
                     LogStartupPhase("runtime active packages", phaseStopwatch);
                 }
             }
@@ -187,7 +190,7 @@ public sealed class ShellStartupCoordinator
             developerLog.Enable();
         }
 
-        var result = await Dispatcher.UIThread.InvokeAsync(() =>
+        var result = await _uiDispatcher.InvokeAsync(() =>
         {
             themeManager.ApplyTheme(shellSnapshot.State.ThemeId);
 
@@ -201,44 +204,40 @@ public sealed class ShellStartupCoordinator
                 systemStatus,
                 deferInitialHostedViews: true);
 
-            return new ShellStartupResult(mainWindow, mainWindowViewModel, packageViewHostService, windowLauncher, DevPackageHotReloadSession: null);
+            return new ShellStartupResult(mainWindow, mainWindowViewModel, packageViewHostService, windowLauncher, _runtimeEventSubscription);
         });
         LogStartupPhase("main window creation", phaseStopwatch);
-        DevPackageHotReloadSession? devPackageHotReloadSession = null;
         if (startupOptions.DevPackageFolders.Count > 0)
         {
             developerLog.Info("dev", $"Developer mode enabled for {startupOptions.DevPackageFolders.Count} dev package folder(s).");
-            if (startupOptions.WatchDevPackages)
-            {
-                devPackageHotReloadSession = new DevPackageHotReloadSession(
-                    startupOptions.DevPackageFolders,
-                    runtimeApiClientFactory,
-                    result.WindowLauncher,
-                    developerLog,
-                    notificationCenter);
-                devPackageHotReloadSession.Start();
-            }
         }
 
+        var initialGeneration = packageSources.Count == 0 ? 0 : packageSources.Max(source => source.SessionGeneration);
+        await result.RuntimeEventSubscription.StartAsync(
+            result.WindowLauncher,
+            initialGeneration,
+            packageSources.Select(source => source.PackageId).ToArray(),
+            startupOptions.DevPackageFolders.Count > 0 && startupOptions.WatchDevPackages).ConfigureAwait(false);
+
         AppSessionLog.WriteInfo($"Sunder startup composition completed in {startupStopwatch.ElapsedMilliseconds} ms.");
-        _ = result.MainWindowViewModel.CheckForAppUpdatesOnStartupAsync();
+        _tasks.Observe(result.MainWindowViewModel.CheckForAppUpdatesOnStartupAsync(), "checking for app updates");
         _packageUpdateStartupCheckService.EnqueueStartupCheck();
 
-        return result with { DevPackageHotReloadSession = devPackageHotReloadSession };
+        return result;
     }
 
-    private static async Task SetProgressAsync(
+    private async Task SetProgressAsync(
         LoadingWindowViewModel loadingViewModel,
         string statusMessage,
         double progressWidth)
     {
-        if (Dispatcher.UIThread.CheckAccess())
+        if (_uiDispatcher.CheckAccess())
         {
             ApplyProgress(loadingViewModel, statusMessage, progressWidth);
             return;
         }
 
-        await Dispatcher.UIThread.InvokeAsync(() => ApplyProgress(loadingViewModel, statusMessage, progressWidth));
+        await _uiDispatcher.InvokeAsync(() => ApplyProgress(loadingViewModel, statusMessage, progressWidth));
     }
 
     private static void ApplyProgress(
@@ -250,10 +249,10 @@ public sealed class ShellStartupCoordinator
         loadingViewModel.ProgressWidth = progressWidth;
     }
 
-    private static void LogStartupPhase(string phaseName, Stopwatch phaseStopwatch)
+    private void LogStartupPhase(string phaseName, Stopwatch phaseStopwatch)
     {
         AppSessionLog.WriteInfo(
-            $"Sunder startup phase '{phaseName}' completed in {phaseStopwatch.ElapsedMilliseconds} ms. UI thread: {Dispatcher.UIThread.CheckAccess()}.");
+            $"Sunder startup phase '{phaseName}' completed in {phaseStopwatch.ElapsedMilliseconds} ms. UI thread: {_uiDispatcher.CheckAccess()}.");
         phaseStopwatch.Restart();
     }
 

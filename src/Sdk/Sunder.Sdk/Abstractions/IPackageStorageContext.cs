@@ -2,16 +2,21 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Abstractions;
 
+/// <summary>Groups host-owned storage capabilities for one package activation and host role.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StorageV1)]
 public interface IPackageStorageContext
 {
-    string DataRootPath { get; }
-
-    string CacheRootPath { get; }
-
-    string LogsRootPath { get; }
-
+    /// <summary>Gets the package file store.</summary>
     IPackageFileStore Files { get; }
 
+    /// <summary>Gets the package key/value store.</summary>
     IPackageKeyValueStore State { get; }
+
+    /// <summary>
+    /// Gets the package-scoped local workspace lease owned by the current host role.
+    /// This capability is intended only for APIs that require local paths, including SQLite,
+    /// process working directories, container mounts, and atomic directory trees.
+    /// It is unavailable during package preflight and on non-local Runtime transports.
+    /// </summary>
+    IPackageLocalWorkspaceLease LocalWorkspace { get; }
 }

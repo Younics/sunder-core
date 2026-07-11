@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -7,94 +7,79 @@ internal static class InstalledPackageEndpoints
 {
     public static IEndpointRouteBuilder MapInstalledPackageEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/api/packages");
+        var group = endpoints.MapGroup("/packages");
 
         group.MapGet(
             "installed",
-            async (RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.GetInstalledPackagesAsync(cancellationToken)));
+            async (InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
+                Results.Ok(await installedPackages.GetInstalledAsync(cancellationToken)));
 
         group.MapGet(
             "{packageId}/assets/{**assetPath}",
-            async (string packageId, string assetPath, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, string assetPath, RuntimePackageUiService packageUi, CancellationToken cancellationToken) =>
             {
-                var assetFilePath = await packageSessionService.TryResolvePackageAssetPathAsync(packageId, assetPath, cancellationToken);
+                var assetFilePath = await packageUi.TryResolveAssetPathAsync(packageId, assetPath, cancellationToken);
                 var contentType = assetFilePath is null ? null : ResolveImageContentType(assetFilePath);
                 return contentType is null
-                    ? Results.NotFound()
+                    ? throw new RuntimeNotFoundException($"Package asset '{assetPath}' was not found.")
                     : Results.File(assetFilePath!, contentType);
             });
 
         group.MapPost(
-            "install/local",
-            async (PackageInstallFromPathRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-            {
-                var result = await packageSessionService.InstallPackageFromPathAsync(request.PackagePath, request.ApplyRuntimeSession, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
-            });
-
-        group.MapPost(
-            "install/local-batch",
-            async (PackageInstallBatchFromPathRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-            {
-                var result = await packageSessionService.InstallPackagesFromPathsAsync(request, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
-            });
-
-        group.MapPost(
-            "{packageId}/upgrade/local",
-            async (string packageId, PackageUpgradeFromPathRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-            {
-                var result = await packageSessionService.UpgradePackageFromPathAsync(packageId, request, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
-            });
-
-        group.MapPost(
             "{packageId}/enable",
-            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.SetInstalledPackageEnabledAsync(packageId, isEnabled: true, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await installedPackages.SetEnabledAsync(packageId, enabled: true, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
             });
 
         group.MapPost(
             "{packageId}/disable",
-            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.SetInstalledPackageEnabledAsync(packageId, isEnabled: false, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await installedPackages.SetEnabledAsync(packageId, enabled: false, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
             });
 
         group.MapDelete(
             "{packageId}",
-            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.UninstallPackageAsync(packageId, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await installedPackages.UninstallAsync(packageId, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
             });
 
         group.MapPost(
             "store/stage",
-            async (PackageStoreStageRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (PackageStoreStageRequest request, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.StagePackageStoreChangesAsync(request, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await installedPackages.StageAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.OperationResult.Message, packageValidation: true);
+                return Results.Ok(result);
             });
 
         group.MapPost(
             "store/stage/{stageId}/commit",
-            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string stageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.CommitPackageStoreStageAsync(stageId, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await installedPackages.CommitStageAsync(stageId, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
             });
 
         group.MapDelete(
             "store/stage/{stageId}",
-            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string stageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var discarded = await packageSessionService.DiscardPackageStoreStageAsync(stageId, cancellationToken);
-                return discarded ? Results.NoContent() : Results.NotFound();
+                var discarded = await installedPackages.DiscardStageAsync(stageId, cancellationToken);
+                if (!discarded)
+                {
+                    throw new RuntimeNotFoundException($"Package store stage '{stageId}' was not found.");
+                }
+                return Results.NoContent();
             });
 
         return endpoints;

@@ -2,7 +2,7 @@ using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
@@ -12,20 +12,24 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
     private static readonly HttpClient ImageHttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
     private static readonly SemaphoreSlim ImageLoadSemaphore = new(2, 2);
     private readonly Func<RegistryPackageMediaItemViewModel, Task> _onSelectAsync;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly OwnedTaskObserver _tasks = new(nameof(RegistryPackageMediaItemViewModel));
     private readonly CancellationTokenSource _disposeCts = new();
     private Task? _loadTask;
     private bool _disposed;
 
     public RegistryPackageMediaItemViewModel(
         RegistryPackageMedia media,
-        Func<RegistryPackageMediaItemViewModel, Task> onSelectAsync)
+        Func<RegistryPackageMediaItemViewModel, Task> onSelectAsync,
+        IUiDispatcher? uiDispatcher = null)
     {
         Url = media.Url;
         Caption = media.AltText ?? media.FileName;
         FileName = media.FileName;
         Size = media.Size;
         _onSelectAsync = onSelectAsync;
-        _ = EnsureImageLoadedAsync();
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        _tasks.Observe(EnsureImageLoadedAsync(), "loading marketplace media");
     }
 
     public string Url { get; }
@@ -70,6 +74,7 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
 
         _disposed = true;
         _disposeCts.Cancel();
+        _tasks.Dispose();
         Image?.Dispose();
         Image = null;
         if (_loadTask?.IsCompleted == false)
@@ -149,7 +154,7 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
 
     private Task ApplyLoadedBitmapAsync(Bitmap bitmap, CancellationToken cancellationToken)
     {
-        return UiThread.InvokeAsync(() =>
+        return _uiDispatcher.InvokeAsync(() =>
         {
             if (_disposed || cancellationToken.IsCancellationRequested)
             {
@@ -164,7 +169,7 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
 
     private Task ClearImageAsync(CancellationToken cancellationToken)
     {
-        return UiThread.InvokeAsync(() =>
+        return _uiDispatcher.InvokeAsync(() =>
         {
             if (_disposed || cancellationToken.IsCancellationRequested)
             {
@@ -183,7 +188,7 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
             return Task.CompletedTask;
         }
 
-        return UiThread.InvokeAsync(() =>
+        return _uiDispatcher.InvokeAsync(() =>
         {
             if (!_disposed)
             {

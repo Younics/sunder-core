@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Models;
@@ -19,6 +18,8 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
     private readonly BackgroundProcessIndicator _indicator;
     private readonly string _emptyText;
     private readonly Action<double, double>? _persistPopoverSize;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly OwnedTaskObserver _tasks = new(nameof(BackgroundProcessMonitorViewModel));
     private bool _disposed;
 
     public BackgroundProcessMonitorViewModel(
@@ -27,12 +28,14 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
         string emptyText = "No active processes.",
         double popoverWidth = 500,
         double popoverHeight = 360,
-        Action<double, double>? persistPopoverSize = null)
+        Action<double, double>? persistPopoverSize = null,
+        IUiDispatcher? uiDispatcher = null)
     {
         _backgroundProcesses = backgroundProcesses;
         _indicator = indicator;
         _emptyText = emptyText;
         _persistPopoverSize = persistPopoverSize;
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         PopoverWidth = ClampPopoverWidth(popoverWidth);
         PopoverHeight = ClampPopoverHeight(popoverHeight);
         _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
@@ -41,6 +44,7 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
 
     private BackgroundProcessMonitorViewModel()
     {
+        _uiDispatcher = AvaloniaUiDispatcher.Instance;
         _indicator = BackgroundProcessIndicator.Hidden;
         _emptyText = "No active processes.";
         FooterStatusText = _emptyText;
@@ -106,6 +110,7 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
         }
 
         Processes.Clear();
+        _tasks.Dispose();
     }
 
     public void ResizePopover(double deltaWidth, double deltaHeight)
@@ -124,19 +129,19 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
             return;
         }
 
-        if (Dispatcher.UIThread.CheckAccess())
+        if (_uiDispatcher.CheckAccess())
         {
             Refresh();
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        _tasks.Observe(_uiDispatcher.InvokeAsync(() =>
         {
             if (!_disposed)
             {
                 Refresh();
             }
-        }, DispatcherPriority.Background);
+        }), "refreshing background process presentation");
     }
 
     public void Refresh()

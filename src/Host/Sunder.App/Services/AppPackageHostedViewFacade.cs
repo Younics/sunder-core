@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -41,4 +42,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     public Control? GetOrCreateSettingsView(string packageId)
         => viewRegistry.GetOrCreateSettingsView(packageId, isPackageDisabled, reportHostedViewFailure);
+
+    public IReadOnlyList<PackageViewDescriptor> GetPackageViewDescriptors(string packageId)
+        => viewRegistry.GetPackageViewDescriptors(packageId);
 }

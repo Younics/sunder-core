@@ -4,7 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.Views.Controls;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.ViewModels;

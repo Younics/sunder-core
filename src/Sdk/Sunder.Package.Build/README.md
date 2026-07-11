@@ -14,12 +14,13 @@ Typical package project reference:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk" Version="*" />
-  <PackageReference Include="Sunder.Package.Build" Version="*" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Sdk" Version="1.0.0" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
 </ItemGroup>
 ```
 
 Use `PrivateAssets="all"` because this package is build tooling for the package project. It should not flow as a runtime dependency of your package.
+The NuGet package exposes no compile or runtime assembly asset; its task assembly and private dependencies live only under `tasks/net10.0` and are loaded by `buildTransitive/Sunder.Package.Build.targets`.
 
 ## What It Does
 
@@ -37,7 +38,7 @@ Package authors do not maintain `sunder-package.json` by hand.
 
 ## Expected Project Shape
 
-A runtime package project should declare package metadata in C# and include exactly one public `ISunderPackageModule` implementation.
+A package project should declare package metadata in C# and expose a Runtime role, an App role, or both. Each role permits at most one public implementation.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -55,13 +56,13 @@ using Sunder.Sdk.Abstractions;
 
 namespace MyCompany.Package;
 
-public sealed class PackageModule : ISunderPackageModule
+public sealed class PackageModule : ISunderRuntimePackageModule
 {
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
     }
 }

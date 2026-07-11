@@ -1,5 +1,4 @@
 using Avalonia;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Features.Shell.Hotbar;
@@ -11,7 +10,7 @@ using Sunder.App.Features.Shell.Panels;
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.ViewModels;
@@ -39,6 +38,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly ShellSelectionPresenter _selectionPresenter = new();
     private readonly ShellItemViewModelFactory _shellItemFactory;
     private readonly ShellState _shellState;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly OwnedTaskObserver _tasks = new(nameof(MainWindowViewModel));
     private readonly Dictionary<string, ShellPackageView> _viewsById;
     private readonly IReadOnlyList<string> _startupWarnings;
     private readonly IReadOnlyList<string> _startupErrors;
@@ -64,11 +65,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IShellCompositionService? shellCompositionService = null,
         DeveloperLogService? developerLog = null,
         RegistryAuthService? registryAuthService = null,
-        ExternalBrowserService? externalBrowserService = null)
+        ExternalBrowserService? externalBrowserService = null,
+        IUiDispatcher? uiDispatcher = null)
     {
         _windowLauncher = windowLauncher;
         _registryAuthService = registryAuthService;
         _externalBrowserService = externalBrowserService;
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         var effectivePackageLifecycleCoordinator = packageLifecycleCoordinator ?? new AppPackageLifecycleCoordinator(packageViewHostService, runtimeApiClientFactory);
         var effectiveShellCompositionService = shellCompositionService ?? new ShellCompositionService();
         _appUpdatePrompt = new AppUpdatePromptViewModel(new AppUpdatePromptCoordinator(updateService ?? new SunderUpdateService()));
@@ -97,7 +100,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             initialSystemStatus,
             _startupErrors,
             _layoutStateCoordinator.PersistPreferredRuntimeUrl);
-        _notificationTray = new NotificationTrayViewModel(notificationCenter);
+        _notificationTray = new NotificationTrayViewModel(notificationCenter, _uiDispatcher);
         BackgroundProcesses = backgroundProcessQueue is null
             ? BackgroundProcessMonitorViewModel.Empty
             : new BackgroundProcessMonitorViewModel(
@@ -106,7 +109,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 "No visible processes.",
                 _shellState.BackgroundProcessPopoverWidth,
                 _shellState.BackgroundProcessPopoverHeight,
-                _layoutStateCoordinator.PersistBackgroundProcessPopoverSize);
+                _layoutStateCoordinator.PersistBackgroundProcessPopoverSize,
+                _uiDispatcher);
 
         _shellLayout = new ShellLayoutPresenter(
             MovePackageView,
@@ -143,7 +147,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             () => _disposed,
             GetPanel,
             ApplyPanelContent,
-            NotifyLayoutStateChanged);
+            NotifyLayoutStateChanged,
+            _uiDispatcher);
         _packageLifecyclePresenter = new ShellPackageLifecyclePresenter(
             effectiveShellCompositionService,
             _viewsById,
@@ -159,7 +164,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             effectivePackageLifecycleCoordinator,
             _packageLifecyclePresenter,
             _deferredHostedViewActivator,
-            () => _disposed);
+            () => _disposed,
+            _uiDispatcher);
         _subscriptionScope = new MainWindowSubscriptionScope(
             this,
             _windowLauncher,
@@ -187,7 +193,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         RebuildRailCollections(createHostedViews: !deferInitialHostedViews);
         PersistShellState();
-        _ = RefreshRegistryAccountAsync();
+        _tasks.Observe(RefreshRegistryAccountAsync(), "refreshing the Registry account");
     }
 
     public PackageIconBarViewModel LeftTopBar => _shellLayout.LeftTopBar;
@@ -277,15 +283,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public void CommitLayoutState() => PersistShellState();
 
-    private static void RunOnUiThread(Action action)
+    private void RunOnUiThread(Action action)
     {
-        if (Dispatcher.UIThread.CheckAccess())
+        if (_uiDispatcher.CheckAccess())
         {
             action();
             return;
         }
 
-        Dispatcher.UIThread.Post(action, DispatcherPriority.Background);
+        _tasks.Observe(_uiDispatcher.InvokeAsync(action), "updating shell presentation");
     }
 
     public void Dispose()
@@ -296,6 +302,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
+        _tasks.Dispose();
+        _hotbarCoordinator.Dispose();
         _subscriptionScope.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -313,7 +321,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         => await _deferredHostedViewActivator.ActivateInitialHostedViewsAsync(cancellationToken);
 
     public void ActivatePackageView(string viewId)
-        => _ = OpenPackageViewPanelAsync(viewId);
+        => _tasks.Observe(OpenPackageViewPanelAsync(viewId).AsTask(), "opening a package view");
 
     public IReadOnlyList<PackageHotbarView> ListHotbarViews()
         => PackageHotbarProjector.Project(GetOrderedViewsForPlacement, placement => ShellSelectionState.GetSelectedViewId(_shellState, placement));
@@ -396,9 +404,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private void OnPackageFaulted(object? sender, PackageViewHostFaultEventArgs e)
     {
-        if (!Dispatcher.UIThread.CheckAccess() && Application.Current is not null)
+        if (!_uiDispatcher.CheckAccess() && Application.Current is not null)
         {
-            Dispatcher.UIThread.Post(() => OnPackageFaulted(sender, e));
+            _tasks.Observe(_uiDispatcher.InvokeAsync(() => OnPackageFaulted(sender, e)), "presenting a package fault");
             return;
         }
 

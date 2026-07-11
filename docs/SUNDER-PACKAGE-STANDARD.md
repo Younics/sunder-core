@@ -1,6 +1,6 @@
 # Sunder Package Standard
 
-This document describes the current Sunder package standard implemented by `Sunder.Sdk`, `Sunder.Package.Build`, `Sunder.PackageManagement`, `Sunder.Runtime.Host`, and the Registry.
+This document describes the current Sunder package standard implemented by `Sunder.Sdk`, optional SDK contract packages such as `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks`, `Sunder.Package.Build`, `Sunder.Package.Format`, `Sunder.Runtime.Host`, and the Registry.
 
 See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for Host/SDK/package versioning rules.
 
@@ -32,7 +32,19 @@ Rules:
 - Do not rename a package id after publishing.
 - Keep `name` short and human-facing.
 - Use `summary` for one sentence of package description.
-- Use SemVer-compatible package versions such as `1.0.0` or `1.2.0-beta.1`.
+- Use strict SemVer 2.0 package versions such as `1.0.0`, `1.2.0-beta.1`, or `1.2.0+build.7`.
+
+## Versions And Ranges
+
+Package versions and `sdkPackageVersion` use strict SemVer 2.0. Core numbers and numeric prerelease identifiers cannot contain leading zeroes. Prerelease precedence follows SemVer identifier rules; build metadata is preserved in formatting and value identity but does not affect precedence.
+
+V1 dependency ranges intentionally support only:
+
+- one exact version, such as `1.2.3`;
+- one comparison using `<`, `<=`, `>`, `>=`, or `=`, such as `>=1.2.3`;
+- space-conjoined comparisons, such as `>=1.2.3 <2.0.0`.
+
+Wildcards, comma conjunctions, hyphen ranges, caret/tilde ranges, unions, and whitespace between an operator and version are rejected. Build tooling formats accepted ranges with one ASCII space between comparisons.
 
 ## Metadata Attributes
 
@@ -117,16 +129,17 @@ Required fields:
 - `manifestVersion`: manifest format version, currently `1`.
 - `id`: stable package id.
 - `name`: user-facing package name.
-- `version`: SemVer-compatible package version.
+- `version`: strict SemVer 2.0 package version.
 - `entryAssembly`: package entry assembly file name.
+- `sdkApiVersion`: SDK activation generation, exactly `1` for a V1 manifest.
+- `sdkPackageVersion`: strict SemVer 2.0 version of the referenced SDK package/build.
+- `requiredSdkCapabilities`: non-empty, distinct V1-form capability ids.
 
 Additional generated fields:
 
 - `summary`: package description, omitted when not declared.
 - `icon`: package icon asset path, omitted when not declared.
 - `dependsOn`: runtime package dependency list, omitted when no dependencies are declared.
-- `sdkApiVersion`: SDK activation generation, currently `1`. Current build tooling emits this; runtime treats missing metadata as legacy API `1`.
-- `sdkPackageVersion`: referenced Sunder SDK package/build version, emitted when available.
 - `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`. Current build tooling always seeds `core.v1`, `packaging.v1`, and `contributions.v1`.
 - `sdkVersion`: SDK version metadata when supplied by build properties.
 - `targetFramework`: package target framework, emitted when available.
@@ -148,38 +161,42 @@ Fields not used by the current generated manifest:
 
 The generated manifest records the entry assembly, not the module type.
 
-Runtime discovery rules:
+Host discovery rules:
 
 - The package entry assembly is loaded from package `lib` output.
-- The runtime finds public, non-abstract types implementing `ISunderPackageModule`.
-- Exactly one package module type must be discoverable.
+- Runtime finds at most one public, non-abstract `ISunderRuntimePackageModule`; App finds at most one `ISunderAppPackageModule`.
+- A single module class may implement both roles, but each host invokes only its own role.
 - The module type must have a public parameterless constructor.
-- Zero or multiple module types fail validation/activation.
+- A missing role is valid; multiple implementations of the same role fail activation in that host.
 
 Current module API:
 
 ```csharp
-public interface ISunderPackageModule
+public interface ISunderRuntimePackageModule
 {
-    void ConfigureServices(IServiceCollection services, IPackageContext context);
+    void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context);
 
-    void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services);
+    void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services);
 }
 ```
 
 ## Contributions
 
-Package contributions are registered in `RegisterContributions`.
+Runtime contributions are registered through `ISunderRuntimeContributionRegistry`; App extensions use `ISunderAppContributionRegistry`. `Sunder.Sdk.Avalonia` adds `IAvaloniaPackageContributionRegistry` and Control/workspace/view/settings registration extensions.
 
-Current contribution registry capabilities:
+Runtime registry capabilities:
+
+- `RegisterBackgroundService<TService>()`
+- `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
+- `RegisterConfigurationSchema(PackageConfigurationSchema schema)`
+
+App registry capabilities:
 
 - `RegisterPackageView<TView>(PackageViewRegistration registration)`
 - `RegisterPackageViewFactory<TFactory>(PackageViewRegistration registration)`
 - `RegisterSettingsView<TView>()`
 - `RegisterSettingsViewFactory<TFactory>()`
-- `RegisterBackgroundService<TService>()`
 - `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
-- `RegisterConfigurationSchema(PackageConfigurationSchema schema)`
 
 `IPackageExtensionCatalog` lets packages discover active extension contributions. Hosts that support live package activation also implement `IPackageExtensionCatalogMonitor`; its `Changed` event includes a revision, lifecycle reason, and per-extension-point additions/removals.
 
@@ -199,11 +216,10 @@ Package icon paths are relative package asset paths. The template uses `assets/i
 
 Rules:
 
-- Icon paths must be relative.
-- Icon paths must not contain parent directory traversal.
+- Icon paths must use the portable archive path grammar described below.
 - Icon files must exist at build time when `Icon` is declared.
 - The build maps source `Assets/**` into output `assets/**`.
-- The runtime serves active package assets through `/api/packages/{packageId}/assets/{assetPath}`.
+- The runtime serves active package assets through authenticated `/api/v1/packages/{packageId}/assets/{assetPath}` endpoints.
 - The app loads PNG/SVG/raster package icons directly and falls back to the first character of the package name.
 - Icon load failures are written to `AppSessionLog`; they are not shown as package UI errors.
 
@@ -242,7 +258,7 @@ Build behavior:
 - Package `.deps.json`, `.runtimeconfig.json`, and `.pdb` files are copied to `lib` when present.
 - Native runtime assets under build output `runtimes` are copied under `lib/runtimes`.
 - Source files under `Assets` are copied to `assets`.
-- Host boundary assemblies such as `Sunder.Sdk` and core Avalonia assemblies are excluded from private package output.
+- Host boundary assemblies such as `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`, and core Avalonia assemblies are excluded from private package output.
 
 ## Package Archive
 
@@ -265,8 +281,25 @@ Current archive behavior:
 - `manifest/sunder-package.json` is copied from generated package metadata.
 - `manifest/content-index.json` records every package file except itself.
 - Content index entries include path, SHA-256 hash, size, and role.
+- Writers emit files in ordinal path order with fixed ZIP timestamps so identical inputs produce identical archives.
 - Current archives do not contain signature files.
-- Current validation rejects unsafe archive paths, missing manifest/index files, missing entry assemblies, missing icons, hash mismatches, size mismatches, duplicate indexed paths, and unindexed files.
+- Relative archive paths use `/`, visible ASCII, non-empty segments, and no `.` or `..` segments. Rooted, drive, UNC, backslash, control/NUL, Windows-reserved, trailing-dot/space, and platform-dependent character forms are rejected.
+- Validation rejects duplicate normalized paths, case collisions, directory/file collisions, ZIP symbolic-link/reparse entries, links in extracted trees, missing manifest/index files, missing entry assemblies, missing icons, malformed or non-lowercase SHA-256 values, negative or mismatched sizes, and unindexed files.
+- Package and Stack extraction is streamed to a temporary sibling directory and atomically published only after extraction completes. Owning validation/install/publish callers remove completed staging directories when validation or later work fails.
+
+Default package and Stack extraction limits:
+
+| Limit | Default |
+| --- | ---: |
+| ZIP entries | 4,096 |
+| Uncompressed bytes per entry | 256 MiB |
+| Total uncompressed bytes | 1 GiB |
+| Compression ratio per entry | 200:1 |
+| Relative path length | 240 characters |
+| Relative path depth | 32 segments |
+| Each manifest/content-index JSON document | 1 MiB |
+
+All extraction operations honor cancellation before and during streamed reads/writes.
 
 ## Install And Update
 

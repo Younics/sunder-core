@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 using LiveMarkdown.Avalonia;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 

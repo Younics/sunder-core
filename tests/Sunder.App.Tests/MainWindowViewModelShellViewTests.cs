@@ -9,8 +9,9 @@ using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
 using Sunder.App.Views.Controls;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Avalonia;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
 using static Sunder.App.Tests.TestSupport.TestPaths;
 using Xunit;
@@ -268,7 +269,7 @@ public sealed class MainWindowViewModelShellViewTests
         var packageViewHostService = CreatePackageViewHostService();
         await packageViewHostService.ApplyPackageDeltaAsync(
             [CreateActiveAgentPackage()],
-            [new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder)]);
+            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]);
         using var harness = CreateHarness(rootPath, new EmptyRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
         var hostedBoundary = Assert.IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView);
@@ -386,7 +387,7 @@ public sealed class MainWindowViewModelShellViewTests
     {
         var rootPath = CreateTempDirectory();
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        var packageSource = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var packageSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var runtimeApiClientFactory = new MutableRuntimeApiClientFactory
         {
             ActivePackages = [CreateActiveAgentPackage()],
@@ -424,7 +425,7 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [],
             getActivePackagesAsync: gatedRuntime.GetActivePackagesAsync,
-            getActivePackageSourcesAsync: gatedRuntime.GetActivePackageSourcesAsync);
+            getActivePackageSourcesAsync: gatedRuntime.GetActivePackageUiSnapshotsAsync);
         using var harness = CreateHarness(runtimeApiClientFactory);
 
         var firstRefresh = harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
@@ -687,7 +688,7 @@ public sealed class MainWindowViewModelShellViewTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
             [CreateActiveAgentPackage()],
-            [new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder)]);
+            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]);
         var packageViewHostService = CreatePackageViewHostService();
         return CreateHarness(rootPath, runtimeApiClientFactory, packageViewHostService, packageViewHostService);
     }
@@ -779,12 +780,12 @@ public sealed class MainWindowViewModelShellViewTests
     private static PackageViewHostService CreatePackageViewHostService()
         => new(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder: null);
+            sessionFolder: null,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
     private static PackageViewHostService CreateRegisteredPackageViewHostService(params (string PackageId, string ViewId)[] registrations)
     {
@@ -797,12 +798,14 @@ public sealed class MainWindowViewModelShellViewTests
 
         foreach (var registration in registrations)
         {
-            registry.RegisterPackageView<DisposablePackageView>(registration.PackageId, registration.ViewId, serviceProvider);
+            registry.RegisterPackageView<DisposablePackageView>(
+                registration.PackageId,
+                new PackageViewRegistration(registration.ViewId, registration.ViewId),
+                serviceProvider);
         }
 
         return new PackageViewHostService(
             registry,
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
@@ -929,18 +932,18 @@ public sealed class MainWindowViewModelShellViewTests
     {
         public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; set; } = [];
 
-        public IReadOnlyList<PackageSourceDescriptor> PackageSources { get; set; } = [];
+        public IReadOnlyList<PackageUiSnapshotDescriptor> PackageSources { get; set; } = [];
 
         public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(ActivePackages, PackageSources);
     }
 
     private sealed class StaticRuntimeApiClientFactory(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
         Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
         Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<PackageSourceDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClientFactory
+        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClientFactory
     {
         public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(
             activePackages,
@@ -953,11 +956,11 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class StaticRuntimeApiClient(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
         Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
         Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<PackageSourceDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClient
+        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClient
     {
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
             => getSystemStatusAsync?.Invoke(cancellationToken) ?? Task.FromResult<SystemStatusResponse?>(null);
@@ -971,7 +974,7 @@ public sealed class MainWindowViewModelShellViewTests
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
             => getActivePackageSourcesAsync?.Invoke(cancellationToken) ?? Task.FromResult(packageSources);
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
@@ -1060,10 +1063,10 @@ public sealed class MainWindowViewModelShellViewTests
             return [];
         }
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken)
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<PackageSourceDescriptor>>([]);
+            return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
         }
 
         public void ReleaseNextActivePackageCall()
@@ -1098,45 +1101,37 @@ public sealed class MainWindowViewModelShellViewTests
     }
 }
 
-public sealed class ShellLifecycleTestPackageModule : ISunderPackageModule
+public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 {
     public const string SkipViewMarkerFileName = "skip-view";
 
     public const string ThrowAfterViewMarkerFileName = "throw-after-view";
 
-    public const string RegisterBackgroundServiceMarkerFileName = "register-background-service";
-
-    public const string ThrowOnBackgroundStartMarkerFileName = "throw-background-start";
-
     public const string RequirePackageSessionServiceMarkerFileName = "require-package-session-service";
-
-    public const string BackgroundServiceStartedFileName = "background-service-started";
-
-    public const string BackgroundServiceStoppedFileName = "background-service-stopped";
 
     public const string PackageSessionServiceResolvedFileName = "package-session-service-resolved";
 
     private string? _packageFolder;
 
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
         _packageFolder = context.InstallPath;
-        if (HasMarker(RegisterBackgroundServiceMarkerFileName) || HasMarker(ThrowOnBackgroundStartMarkerFileName))
-        {
-            services.AddSingleton(new ShellLifecycleTestBackgroundService(context.InstallPath));
-        }
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
-        if (HasMarker(RegisterBackgroundServiceMarkerFileName) || HasMarker(ThrowOnBackgroundStartMarkerFileName))
-        {
-            registry.RegisterBackgroundService<ShellLifecycleTestBackgroundService>();
-        }
-
         if (!HasMarker(SkipViewMarkerFileName))
         {
             registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration("agent.chat", "Chat"));
+            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration(
+                "agent.workspaces",
+                "Workspaces",
+                defaultPlacement: PackageViewPlacement.RightTop));
+            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration(
+                "agent.subsessions",
+                "Subsessions",
+                defaultPlacement: PackageViewPlacement.LeftTop,
+                showInHotbarByDefault: false));
         }
 
         if (HasMarker(ThrowAfterViewMarkerFileName))
@@ -1154,28 +1149,6 @@ public sealed class ShellLifecycleTestPackageModule : ISunderPackageModule
     private bool HasMarker(string fileName)
         => !string.IsNullOrWhiteSpace(_packageFolder)
            && File.Exists(Path.Combine(_packageFolder, fileName));
-}
-
-public sealed class ShellLifecycleTestBackgroundService(string packageFolder) : IPackageBackgroundService
-{
-    public Task StartAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        File.WriteAllText(Path.Combine(packageFolder, ShellLifecycleTestPackageModule.BackgroundServiceStartedFileName), string.Empty);
-        if (File.Exists(Path.Combine(packageFolder, ShellLifecycleTestPackageModule.ThrowOnBackgroundStartMarkerFileName)))
-        {
-            throw new InvalidOperationException("Test package requested background service start failure.");
-        }
-
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        File.WriteAllText(Path.Combine(packageFolder, ShellLifecycleTestPackageModule.BackgroundServiceStoppedFileName), string.Empty);
-        return Task.CompletedTask;
-    }
 }
 
 public sealed class ShellLifecycleThreadAffinedPackageView : Control, IDisposable

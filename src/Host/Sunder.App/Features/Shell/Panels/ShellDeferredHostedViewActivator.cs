@@ -1,4 +1,3 @@
-using Avalonia.Threading;
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
@@ -11,8 +10,10 @@ internal sealed class ShellDeferredHostedViewActivator(
     Func<bool> isDisposed,
     Func<RailPlacement, ShellPanelViewModel> getPanel,
     Action<RailPlacement, string?, bool> applyPanelContent,
-    Action notifyLayoutStateChanged)
+    Action notifyLayoutStateChanged,
+    IUiDispatcher? uiDispatcher = null)
 {
+    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     public async Task ActivateInitialHostedViewsAsync(CancellationToken cancellationToken = default)
     {
         foreach (var (placement, viewId) in ShellSelectionState.GetDeferredActivationSelections(shellState))
@@ -23,9 +24,7 @@ internal sealed class ShellDeferredHostedViewActivator(
                 continue;
             }
 
-            await Dispatcher.UIThread.InvokeAsync(
-                () => ActivateHostedView(placement, viewId),
-                DispatcherPriority.Background);
+            await _uiDispatcher.InvokeAsync(() => ActivateHostedView(placement, viewId));
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         }
     }

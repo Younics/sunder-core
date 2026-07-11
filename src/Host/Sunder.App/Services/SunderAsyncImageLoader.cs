@@ -140,11 +140,7 @@ internal sealed class SunderAsyncImageLoader(string cacheFolder)
     }
 
     private static string GetCacheFolder()
-        => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Sunder",
-            "cache",
-            "images");
+        => AppLocalState.GetPath("cache", "images");
 
     private static string DescribeUrl(string url)
         => Uri.TryCreate(url, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host)

@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -6,11 +6,11 @@ internal sealed class AppPackageDeltaPlan
 {
     private readonly Dictionary<string, ActivePackageDescriptor> _activePackagesById;
     private readonly HashSet<string> _forceReloadPackages;
-    private readonly Dictionary<string, PackageSourceDescriptor> _sourcesByPackageId;
+    private readonly Dictionary<string, PackageUiSnapshotDescriptor> _sourcesByPackageId;
 
     public AppPackageDeltaPlan(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds)
     {
         _forceReloadPackages = forceReloadPackageIds is null
@@ -25,12 +25,12 @@ internal sealed class AppPackageDeltaPlan
     public bool IsPackageInactive(string packageId)
         => !_activePackagesById.ContainsKey(packageId);
 
-    public bool TryGetSource(ActivePackageDescriptor activePackage, out PackageSourceDescriptor source)
+    public bool TryGetSource(ActivePackageDescriptor activePackage, out PackageUiSnapshotDescriptor source)
         => _sourcesByPackageId.TryGetValue(activePackage.PackageId, out source!);
 
     public AppPackageDeltaAction GetAction(
         ActivePackageDescriptor activePackage,
-        PackageSourceDescriptor source,
+        PackageUiSnapshotDescriptor source,
         AppLoadedPackageHandle? loadedPackage,
         bool isPackageDisabled)
     {
@@ -55,10 +55,11 @@ internal sealed class AppPackageDeltaPlan
     private static bool IsSameLoadedPackage(
         AppLoadedPackageHandle loadedPackage,
         ActivePackageDescriptor activePackage,
-        PackageSourceDescriptor source)
+        PackageUiSnapshotDescriptor source)
         => string.Equals(loadedPackage.Package.Version, activePackage.Version, StringComparison.OrdinalIgnoreCase)
-           && loadedPackage.Source.Kind == source.Kind
-           && string.Equals(loadedPackage.Source.Folder, source.Folder, StringComparison.OrdinalIgnoreCase);
+           && loadedPackage.Source.SourceKind == source.SourceKind
+           && string.Equals(loadedPackage.Source.ContentHash, source.ContentHash, StringComparison.OrdinalIgnoreCase)
+           && loadedPackage.Source.SessionGeneration == source.SessionGeneration;
 }
 
 internal enum AppPackageDeltaAction

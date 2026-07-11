@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -18,18 +18,18 @@ internal sealed class PackageConfigurationService
         ActiveLoadedPackage loadedPackage,
         CancellationToken cancellationToken = default)
     {
-        var keys = await loadedPackage.StateStore.ListKeysAsync(cancellationToken: cancellationToken);
-        var secretKeys = loadedPackage.ConfigurationSchema?.Sections
+        var secretFieldsByKey = loadedPackage.ConfigurationSchema?.Sections
             .SelectMany(section => section.Fields)
             .Where(field => field.Kind == PackageConfigurationFieldKind.Secret)
-            .Select(field => field.Key)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase)
-            ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(field => field.Key, StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, PackageConfigurationFieldDescriptor>(StringComparer.OrdinalIgnoreCase);
+
+        await MigrateLegacySecretsAsync(loadedPackage, secretFieldsByKey, cancellationToken);
 
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in keys)
+        foreach (var key in await loadedPackage.StateStore.ListKeysAsync(cancellationToken: cancellationToken))
         {
-            if (secretKeys.Contains(key))
+            if (secretFieldsByKey.ContainsKey(key))
             {
                 continue;
             }
@@ -37,7 +37,10 @@ internal sealed class PackageConfigurationService
             values[key] = await loadedPackage.StateStore.GetValueAsync(key, cancellationToken);
         }
 
-        return new PackageConfigurationValuesResponse(loadedPackage.Descriptor.PackageId, values, loadedPackage.SecretKeys);
+        return new PackageConfigurationValuesResponse(
+            loadedPackage.Descriptor.PackageId,
+            values,
+            await loadedPackage.SecretsStore.ListKeysAsync(cancellationToken));
     }
 
     public async Task<bool> SaveConfigurationValuesAsync(
@@ -53,6 +56,13 @@ internal sealed class PackageConfigurationService
         var fieldsByKey = loadedPackage.ConfigurationSchema.Sections
             .SelectMany(section => section.Fields)
             .ToDictionary(field => field.Key, StringComparer.OrdinalIgnoreCase);
+
+        await MigrateLegacySecretsAsync(
+            loadedPackage,
+            fieldsByKey
+                .Where(pair => pair.Value.Kind == PackageConfigurationFieldKind.Secret)
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
+            cancellationToken);
 
         var allowedKeys = fieldsByKey.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -76,16 +86,16 @@ internal sealed class PackageConfigurationService
 
             if (field.Kind == PackageConfigurationFieldKind.Secret)
             {
-                await loadedPackage.StateStore.DeleteValueAsync(pair.Key, cancellationToken);
-
                 if (pair.Value is null)
                 {
-                    loadedPackage.SecretsStore.DeleteSecret(pair.Key);
+                    await loadedPackage.SecretsStore.DeleteSecretAsync(pair.Key, cancellationToken);
                 }
                 else if (!string.IsNullOrWhiteSpace(pair.Value))
                 {
-                    loadedPackage.SecretsStore.SetSecret(pair.Key, pair.Value);
+                    await loadedPackage.SecretsStore.SetSecretAsync(pair.Key, pair.Value, cancellationToken);
                 }
+
+                await loadedPackage.StateStore.DeleteValueAsync(pair.Key, cancellationToken);
 
                 continue;
             }
@@ -101,5 +111,40 @@ internal sealed class PackageConfigurationService
         }
 
         return true;
+    }
+
+    private static async Task MigrateLegacySecretsAsync(
+        ActiveLoadedPackage loadedPackage,
+        IReadOnlyDictionary<string, PackageConfigurationFieldDescriptor> secretFieldsByKey,
+        CancellationToken cancellationToken)
+    {
+        if (secretFieldsByKey.Count == 0)
+        {
+            return;
+        }
+
+        var storedSecretKeys = (await loadedPackage.SecretsStore.ListKeysAsync(cancellationToken))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var stateKey in await loadedPackage.StateStore.ListKeysAsync(cancellationToken: cancellationToken))
+        {
+            if (!secretFieldsByKey.TryGetValue(stateKey, out var field))
+            {
+                continue;
+            }
+
+            var legacyValue = await loadedPackage.StateStore.GetValueAsync(stateKey, cancellationToken);
+            if (legacyValue is null)
+            {
+                continue;
+            }
+
+            if (!storedSecretKeys.Contains(field.Key))
+            {
+                await loadedPackage.SecretsStore.SetSecretAsync(field.Key, legacyValue, cancellationToken);
+                storedSecretKeys.Add(field.Key);
+            }
+
+            await loadedPackage.StateStore.DeleteValueAsync(stateKey, cancellationToken);
+        }
     }
 }

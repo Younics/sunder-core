@@ -1,5 +1,6 @@
 namespace Sunder.Sdk.Compatibility;
 
+/// <summary>Associates a public contract or member with a required V1 host capability.</summary>
 [AttributeUsage(
     AttributeTargets.Class
     | AttributeTargets.Interface
@@ -14,5 +15,6 @@ namespace Sunder.Sdk.Compatibility;
     Inherited = false)]
 public sealed class SunderSdkCapabilityAttribute(string capability) : Attribute
 {
+    /// <summary>Gets the lowercase capability identifier.</summary>
     public string Capability { get; } = capability;
 }

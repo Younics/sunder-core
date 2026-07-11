@@ -3,8 +3,9 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-public sealed class AppPackageShellViewService : IPackageShellViewService
+public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = null) : IPackageShellViewService
 {
+    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     private MainWindowViewModel? _viewModel;
     private PackageHotbarView[] _hotbarViews = [];
 
@@ -86,7 +87,7 @@ public sealed class AppPackageShellViewService : IPackageShellViewService
             return false;
         }
 
-        return await UiThread.InvokeAsync(async () => await action(viewModel));
+        return await _uiDispatcher.InvokeAsync(async () => await action(viewModel));
     }
 
     private void OnShellViewStateChanged()

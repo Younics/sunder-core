@@ -7,6 +7,7 @@ internal static class AppPackageSessionDirectories
     private static readonly string SessionRootPath = Path.Combine(
         Path.GetTempPath(),
         "Sunder.App",
+        "V1",
         "package-sessions");
 
     public static string CreateSessionFolder()

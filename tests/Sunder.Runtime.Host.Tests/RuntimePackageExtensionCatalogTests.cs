@@ -40,7 +40,7 @@ public sealed class RuntimePackageExtensionCatalogTests
     {
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
         var catalog = new RuntimePackageExtensionCatalog();
-        var registry = new CollectingPackageContributionRegistry(serviceProvider, catalog, "test.package");
+        var registry = new RuntimePackageContributionRegistry(serviceProvider, catalog, "test.package");
         var contribution = new TestContribution("registered");
 
         registry.RegisterExtension(TestPoint, contribution);

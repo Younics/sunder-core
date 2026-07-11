@@ -1,6 +1,6 @@
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
 using Xunit;
@@ -315,8 +315,8 @@ public sealed class SettingsWindowViewModelTests
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<PackageSourceDescriptor>>([]);
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);

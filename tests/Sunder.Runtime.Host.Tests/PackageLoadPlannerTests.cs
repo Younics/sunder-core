@@ -1,5 +1,5 @@
 using Sunder.Runtime.Host.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -65,7 +65,7 @@ public sealed class PackageLoadPlannerTests
     private static PreparedRuntimePackage CreatePackage(string packageId, IReadOnlyList<string>? dependencies = null)
         => new(
             SourceFolder: "/source/" + packageId,
-            Source: new PackageSourceDescriptor(packageId, PackageSourceKind.Dev, "/source/" + packageId),
+            Source: new RuntimePackageSource(packageId, PackageSourceKind.Dev, "/source/" + packageId),
             ShadowFolder: "/shadow/" + packageId,
             LibraryFolder: "/shadow/" + packageId + "/lib",
             packageId,

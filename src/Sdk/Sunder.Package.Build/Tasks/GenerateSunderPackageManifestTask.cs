@@ -6,20 +6,18 @@ using System.Runtime.Loader;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
+using Sunder.Package.Format;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Packaging;
 
 namespace Sunder.Package.Build.Tasks;
 
-public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilities.Task
+internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
 {
     private static readonly OpCode[] SingleByteOpCodes = new OpCode[0x100];
     private static readonly OpCode[] MultiByteOpCodes = new OpCode[0x100];
-    private static readonly Regex PackageIdRegex = new("^[a-z0-9]+(\\.[a-z0-9]+)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex SemVerRegex = new("^\\d+\\.\\d+\\.\\d+([-.+][0-9A-Za-z.-]+)?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -28,7 +26,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         WriteIndented = true,
     };
 
-    static GenerateSunderPackageManifestTask()
+    static PackageManifestGenerator()
     {
         foreach (var field in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
         {
@@ -93,20 +91,22 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             return false;
         }
 
-        var manifest = new GeneratedSunderPackageManifest(
-            ManifestVersion: 1,
-            Id: metadata.Id,
-            Name: metadata.Name,
-            Summary: string.IsNullOrWhiteSpace(metadata.Summary) ? null : metadata.Summary,
-            Version: PackageVersion,
-            EntryAssembly: EntryAssembly,
-            Icon: string.IsNullOrWhiteSpace(metadata.Icon) ? null : NormalizePath(metadata.Icon),
-            DependsOn: metadata.Dependencies.Count == 0 ? null : metadata.Dependencies,
-            SdkApiVersion: ResolveSdkApiVersion(),
-            SdkPackageVersion: ResolveSdkPackageVersion(),
-            RequiredSdkCapabilities: metadata.RequiredSdkCapabilities.Count == 0 ? null : metadata.RequiredSdkCapabilities,
-            SdkVersion: string.IsNullOrWhiteSpace(SdkVersion) ? null : SdkVersion,
-            TargetFramework: string.IsNullOrWhiteSpace(TargetFramework) ? null : TargetFramework);
+        var manifest = new SunderPackageManifest
+        {
+            ManifestVersion = 1,
+            Id = metadata.Id,
+            Name = metadata.Name,
+            Summary = string.IsNullOrWhiteSpace(metadata.Summary) ? null : metadata.Summary,
+            Version = PackageVersion,
+            EntryAssembly = EntryAssembly,
+            Icon = string.IsNullOrWhiteSpace(metadata.Icon) ? null : NormalizePath(metadata.Icon),
+            DependsOn = metadata.Dependencies.Count == 0 ? null : metadata.Dependencies,
+            SdkApiVersion = ResolveSdkApiVersion(),
+            SdkPackageVersion = ResolveSdkPackageVersion(),
+            RequiredSdkCapabilities = metadata.RequiredSdkCapabilities.Count == 0 ? null : metadata.RequiredSdkCapabilities,
+            SdkVersion = string.IsNullOrWhiteSpace(SdkVersion) ? null : SdkVersion,
+            TargetFramework = string.IsNullOrWhiteSpace(TargetFramework) ? null : TargetFramework,
+        };
 
         var manifestDirectory = Path.GetDirectoryName(ManifestOutputPath);
         if (!string.IsNullOrWhiteSpace(manifestDirectory))
@@ -114,7 +114,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             Directory.CreateDirectory(manifestDirectory);
         }
 
-        File.WriteAllText(ManifestOutputPath, JsonSerializer.Serialize(manifest, JsonOptions) + Environment.NewLine);
+        PackageManifestSerializer.Write(ManifestOutputPath, manifest, JsonOptions);
         Log.LogMessage(MessageImportance.High, $"Generated Sunder package manifest at {ManifestOutputPath}");
         return !Log.HasLoggedErrors;
     }
@@ -146,9 +146,11 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             var packageAttribute = packageAttributes[0];
             var dependencies = attributes
                 .Where(attribute => attribute.AttributeType.FullName == typeof(SunderPackageDependencyAttribute).FullName)
-                .Select(attribute => new GeneratedSunderPackageDependency(
-                    PackageId: GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.PackageId)) ?? string.Empty,
-                    VersionRange: ExpandPackageVersionProperties(GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.VersionRange)) ?? string.Empty)))
+                .Select(attribute => new SunderPackageDependencyManifest
+                {
+                    PackageId = GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.PackageId)) ?? string.Empty,
+                    VersionRange = ExpandPackageVersionProperties(GetNamedString(attribute, nameof(SunderPackageDependencyAttribute.VersionRange)) ?? string.Empty),
+                })
                 .ToArray();
 
             return new SunderPackageMetadata(
@@ -187,12 +189,12 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             return SunderSdkApiVersions.Current;
         }
 
-        if (int.TryParse(SdkApiVersion, out var apiVersion) && apiVersion > 0)
+        if (int.TryParse(SdkApiVersion, out var apiVersion) && apiVersion == SunderSdkApiVersions.V1)
         {
             return apiVersion;
         }
 
-        Log.LogError($"Sunder SDK API version '{SdkApiVersion}' must be a positive integer.");
+        Log.LogError($"Sunder SDK API version '{SdkApiVersion}' must be {SunderSdkApiVersions.V1} for the V1 manifest.");
         return SunderSdkApiVersions.Current;
     }
 
@@ -212,15 +214,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     private string ResolveNextPackageMajorVersion()
     {
-        var normalized = PackageVersion.Trim();
-        var suffixIndex = normalized.IndexOfAny(['-', '+']);
-        if (suffixIndex >= 0)
-        {
-            normalized = normalized[..suffixIndex];
-        }
-
-        return Version.TryParse(normalized, out var version)
-            ? (version.Major + 1).ToString()
+        return SemanticVersion.TryParse(PackageVersion, out var version)
+            ? version.NextMajor().Major
             : string.Empty;
     }
 
@@ -321,7 +316,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
         switch (@namespace, name)
         {
-            case ("Sunder.Sdk.Abstractions", "ISunderPackageModule"):
+            case ("Sunder.Sdk.Abstractions", "ISunderRuntimePackageModule"):
+            case ("Sunder.Sdk.Abstractions", "ISunderAppPackageModule"):
             case ("Sunder.Sdk.Abstractions", "IPackageContext"):
                 capabilities.Add(SunderSdkCapabilities.CoreV1);
                 break;
@@ -329,14 +325,16 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             case ("Sunder.Sdk.Packaging", "SunderPackageDependencyAttribute"):
                 capabilities.Add(SunderSdkCapabilities.PackagingV1);
                 break;
-            case ("Sunder.Sdk.Abstractions", "IPackageContributionRegistry"):
+            case ("Sunder.Sdk.Abstractions", "ISunderRuntimeContributionRegistry"):
+            case ("Sunder.Sdk.Abstractions", "ISunderAppContributionRegistry"):
+            case ("Sunder.Sdk.Avalonia", "IAvaloniaPackageContributionRegistry"):
                 capabilities.Add(SunderSdkCapabilities.ContributionsV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "PackageViewRegistration"):
             case ("Sunder.Sdk.Abstractions", "PackageViewPlacement"):
                 capabilities.Add(SunderSdkCapabilities.ViewsV1);
                 break;
-            case ("Sunder.Sdk.Abstractions", "IPackageWorkspaceFactory"):
+            case ("Sunder.Sdk.Avalonia", "IPackageWorkspaceFactory"):
                 capabilities.Add(SunderSdkCapabilities.WorkspacesV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageBackgroundService"):
@@ -429,7 +427,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             case ("Sunder.Sdk.Authentication", _):
                 capabilities.Add(SunderSdkCapabilities.AuthV1);
                 break;
-            case ("Sunder.Sdk.Theming", "SunderThemeKeys"):
+            case ("Sunder.Sdk.Avalonia.Theming", "SunderThemeKeys"):
                 capabilities.Add(SunderSdkCapabilities.ThemingV1);
                 break;
         }
@@ -443,8 +441,11 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         }
 
         var typeReference = metadata.GetTypeReference((TypeReferenceHandle)parent);
-        return metadata.GetString(typeReference.Namespace) == "Sunder.Sdk.Abstractions"
-            && metadata.GetString(typeReference.Name) == "IPackageContributionRegistry";
+        var typeNamespace = metadata.GetString(typeReference.Namespace);
+        var typeName = metadata.GetString(typeReference.Name);
+        return (typeNamespace == "Sunder.Sdk.Abstractions" && typeName == "ISunderRuntimeContributionRegistry")
+            || (typeNamespace == "Sunder.Sdk.Abstractions" && typeName == "ISunderAppContributionRegistry")
+            || (typeNamespace == "Sunder.Sdk.Avalonia" && typeName == "IAvaloniaPackageContributionRegistry");
     }
 
     private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
@@ -552,7 +553,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         var capabilityMember = member is MethodInfo { IsGenericMethod: true } methodInfo
             ? methodInfo.GetGenericMethodDefinition()
             : member;
-        if (capabilityMember.Module.Assembly == typeof(SunderPackageAttribute).Assembly)
+        if (IsSdkContractAssembly(capabilityMember.Module.Assembly))
         {
             AddMemberCapabilities(capabilityMember, capabilities);
         }
@@ -584,7 +585,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         }
 
         var capabilitySourceType = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
-        if (capabilitySourceType.Assembly == typeof(SunderPackageAttribute).Assembly)
+        if (IsSdkContractAssembly(capabilitySourceType.Assembly))
         {
             AddMemberCapabilities(capabilitySourceType, capabilities);
         }
@@ -616,9 +617,18 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         }
     }
 
+    private static bool IsSdkContractAssembly(Assembly assembly)
+        => IsSdkContractAssemblyName(assembly.GetName().Name);
+
+    private static bool IsSdkContractAssemblyName(string? assemblyName)
+        => assemblyName?.Equals("Sunder.Sdk", StringComparison.OrdinalIgnoreCase) == true
+           || assemblyName?.StartsWith("Sunder.Sdk.", StringComparison.OrdinalIgnoreCase) == true;
+
     private static void AddKnownSdkMemberCapabilities(MemberInfo member, ISet<string> capabilities)
     {
-        if (member.DeclaringType?.FullName != "Sunder.Sdk.Abstractions.IPackageContributionRegistry")
+        if (member.DeclaringType?.FullName is not ("Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry"
+            or "Sunder.Sdk.Abstractions.ISunderAppContributionRegistry"
+            or "Sunder.Sdk.Avalonia.IAvaloniaPackageContributionRegistry"))
         {
             return;
         }
@@ -792,14 +802,24 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             Log.LogError("Sunder package metadata must include Name.");
         }
 
-        if (string.IsNullOrWhiteSpace(PackageVersion) || !SemVerRegex.IsMatch(PackageVersion))
+        if (!SemanticVersion.TryParse(PackageVersion, out _))
         {
-            Log.LogError($"Sunder package version '{PackageVersion}' must be SemVer-compatible.");
+            Log.LogError($"Sunder package version '{PackageVersion}' must be strict SemVer 2.0.");
         }
 
         if (string.IsNullOrWhiteSpace(EntryAssembly))
         {
             Log.LogError("Sunder package entry assembly name is required.");
+        }
+        else
+        {
+            ValidateRelativePath(EntryAssembly, "package entry assembly");
+        }
+
+        if (!string.IsNullOrWhiteSpace(SdkApiVersion)
+            && (!int.TryParse(SdkApiVersion, out var sdkApiVersion) || sdkApiVersion != SunderSdkApiVersions.V1))
+        {
+            Log.LogError($"Sunder SDK API version '{SdkApiVersion}' must be {SunderSdkApiVersions.V1} for the V1 manifest.");
         }
 
         if (!string.IsNullOrWhiteSpace(metadata.Icon))
@@ -814,15 +834,30 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         var seenDependencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var dependency in metadata.Dependencies)
         {
-            ValidatePackageId(dependency.PackageId, "dependency package id");
-            if (!seenDependencies.Add(dependency.PackageId))
+            var packageId = dependency.PackageId ?? string.Empty;
+            ValidatePackageId(packageId, "dependency package id");
+            if (!seenDependencies.Add(packageId))
             {
-                Log.LogError($"Sunder package dependency '{dependency.PackageId}' is declared more than once.");
+                Log.LogError($"Sunder package dependency '{packageId}' is declared more than once.");
             }
 
-            if (string.IsNullOrWhiteSpace(dependency.VersionRange))
+            if (!PackageVersionRange.TryParse(dependency.VersionRange, out _))
             {
-                Log.LogError($"Sunder package dependency '{dependency.PackageId}' must include VersionRange.");
+                Log.LogError($"Sunder package dependency '{packageId}' has unsupported VersionRange '{dependency.VersionRange}'.");
+            }
+        }
+
+        var sdkPackageVersion = ResolveSdkPackageVersion();
+        if (!SemanticVersion.TryParse(sdkPackageVersion, out _))
+        {
+            Log.LogError($"Sunder SDK package version '{sdkPackageVersion}' must be strict SemVer 2.0.");
+        }
+
+        foreach (var capability in metadata.RequiredSdkCapabilities)
+        {
+            if (!SunderPackageFormat.IsSdkCapabilityId(capability))
+            {
+                Log.LogError($"Sunder SDK capability '{capability}' is not a valid V1 capability id.");
             }
         }
 
@@ -831,7 +866,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     private void ValidatePackageId(string packageId, string label)
     {
-        if (string.IsNullOrWhiteSpace(packageId) || !PackageIdRegex.IsMatch(packageId))
+        if (!PackageId.TryParse(packageId, out _))
         {
             Log.LogError($"Sunder {label} '{packageId}' must use lowercase dot-separated ASCII identifiers.");
         }
@@ -839,16 +874,9 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     private void ValidateRelativePath(string path, string label)
     {
-        if (Path.IsPathRooted(path))
+        if (!ArchiveRelativePath.TryParse(path, int.MaxValue, int.MaxValue, out _, out var error))
         {
-            Log.LogError($"Sunder {label} path '{path}' must be relative.");
-            return;
-        }
-
-        var normalizedSegments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (normalizedSegments.Any(static segment => segment == ".."))
-        {
-            Log.LogError($"Sunder {label} path '{path}' must not contain parent directory traversal.");
+            Log.LogError($"Sunder {label} path '{path}' is unsafe: {error}.");
         }
     }
 
@@ -884,25 +912,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         string Name,
         string? Summary,
         string? Icon,
-        IReadOnlyList<GeneratedSunderPackageDependency> Dependencies,
+        IReadOnlyList<SunderPackageDependencyManifest> Dependencies,
         IReadOnlyList<string> RequiredSdkCapabilities);
-
-    private sealed record GeneratedSunderPackageManifest(
-        int ManifestVersion,
-        string Id,
-        string Name,
-        string? Summary,
-        string Version,
-        string EntryAssembly,
-        string? Icon,
-        IReadOnlyList<GeneratedSunderPackageDependency>? DependsOn,
-        int SdkApiVersion,
-        string? SdkPackageVersion,
-        IReadOnlyList<string>? RequiredSdkCapabilities,
-        string? SdkVersion,
-        string? TargetFramework);
-
-    private sealed record GeneratedSunderPackageDependency(string PackageId, string VersionRange);
 
     private sealed class PackageMetadataLoadContext(string assemblyDirectory) : AssemblyLoadContext(isCollectible: true)
     {
@@ -928,7 +939,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
                 return LoadFromAssemblyPath(candidatePath);
             }
 
-            var taskDirectory = Path.GetDirectoryName(typeof(GenerateSunderPackageManifestTask).Assembly.Location);
+            var taskDirectory = Path.GetDirectoryName(typeof(PackageManifestGenerator).Assembly.Location);
             if (!string.IsNullOrWhiteSpace(taskDirectory))
             {
                 candidatePath = Path.Combine(taskDirectory, assemblyName.Name + ".dll");
@@ -942,7 +953,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         }
 
         private static bool IsSdkSharedAssembly(string assemblyName)
-            => assemblyName.Equals(typeof(SunderPackageAttribute).Assembly.GetName().Name, StringComparison.OrdinalIgnoreCase)
+            => IsSdkContractAssemblyName(assemblyName)
                || assemblyName.Equals("Microsoft.Extensions.DependencyInjection.Abstractions", StringComparison.OrdinalIgnoreCase)
                || assemblyName.Equals("Microsoft.Extensions.DependencyInjection", StringComparison.OrdinalIgnoreCase)
                || assemblyName.Equals("Microsoft.Extensions.Logging.Abstractions", StringComparison.OrdinalIgnoreCase)
@@ -961,7 +972,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
                 }
             }
 
-            var taskDirectory = Path.GetDirectoryName(typeof(GenerateSunderPackageManifestTask).Assembly.Location);
+            var taskDirectory = Path.GetDirectoryName(typeof(PackageManifestGenerator).Assembly.Location);
             if (!string.IsNullOrWhiteSpace(taskDirectory))
             {
                 var candidatePath = Path.Combine(taskDirectory, assemblyName.Name + ".dll");

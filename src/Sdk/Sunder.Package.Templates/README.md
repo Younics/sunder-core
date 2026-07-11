@@ -2,7 +2,7 @@
 
 `Sunder.Package.Templates` provides the `dotnet new sunder-package` template for creating Sunder runtime package projects.
 
-The template scaffolds a package project that references `Sunder.Sdk`, `Sunder.Package.Build`, and Avalonia, declares package metadata, includes a package module, and can optionally include a starter Avalonia view, public contracts project, runtime host dependency, and typed host contracts reference.
+The template scaffolds a headless package project with exact V1 SDK/build references, package metadata, separate Runtime/App role examples, and async package storage usage. Avalonia, Stacks, public contracts, runtime host dependencies, and typed host contracts are explicit opt-ins.
 
 ## Install
 
@@ -20,7 +20,7 @@ dotnet new install Sunder.Package.Templates::<version>
 
 ## Create A Package
 
-Create a standard package with a default shell view:
+Create a headless Runtime package:
 
 ```powershell
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
@@ -32,10 +32,10 @@ Create package files directly in the specified output folder:
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --createInPlace --output .\MyPackage
 ```
 
-Create a package with no default view:
+Create a package with an Avalonia App view:
 
 ```powershell
-dotnet new sunder-package --name MyHeadlessPackage --packageId my.company.headless --packageName "My Headless Package" --noDefaultView
+dotnet new sunder-package --name MyUiPackage --packageId my.company.ui --packageName "My UI Package" --withAvalonia
 ```
 
 Create a package that exposes public contracts:
@@ -62,9 +62,10 @@ dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedex
 | --- | --- |
 | `--packageId <id>` | Required runtime package id written into generated metadata. |
 | `--packageName <name>` | Required display name written into generated metadata and starter view. |
+| `--withAvalonia` | Adds Avalonia, `Sunder.Sdk.Avalonia`, and a default App package view. |
+| `--withStacks` | Adds `Sunder.Sdk.Stacks` and a Runtime Stack contributor example. |
 | `--withContracts` | Adds a `*.Contracts` project for public extension points. |
 | `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder. |
-| `--noDefaultView` | Omits the default shell-visible package view files. |
 | `--withHostDependency` | Adds runtime dependency metadata for another package. |
 | `--hostPackageId <id>` | Required with `--withHostDependency` or `--withHostContracts`; runtime package id that this package depends on. |
 | `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub. |
@@ -82,10 +83,7 @@ MyPackage/
   PackageModule.cs
   Assets/
     icon.png
-  PackageViews/
-    DefaultPackageView.axaml
-    DefaultPackageView.axaml.cs
-    DefaultPackageViewModel.cs
+  PackageRuntimeState.cs
 ```
 
 Without `--createInPlace`, the template keeps the project under a child `MyPackage/` folder in the selected output. With `--createInPlace`, the project files above are written directly into the selected output folder.
@@ -94,9 +92,10 @@ Generated package projects reference:
 
 - `Sunder.Sdk`
 - `Sunder.Package.Build`
-- Avalonia
+- `Sunder.Sdk.Avalonia` and Avalonia only with `--withAvalonia`
+- `Sunder.Sdk.Stacks` only with `--withStacks`
 
-Generated projects use NuGet floating versions for `Sunder.Sdk` and `Sunder.Package.Build`, so restores resolve the latest stable Sunder SDK/build tooling from the configured package sources.
+Generated projects use exact `1.0.0` versions for all Sunder SDK and build packages.
 
 Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder.Package.Build` generates `sunder-package.json` during build.
 

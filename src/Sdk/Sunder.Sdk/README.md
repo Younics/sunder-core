@@ -1,8 +1,19 @@
 # Sunder.Sdk
 
+`Sunder.Sdk` contains package-author contracts only. Runtime Host owns package state persistence,
+configuration, encrypted secrets, storage allocation, platform credential integration, and persistent
+package logs. App activation receives Runtime-backed package capabilities and never creates those
+resources locally.
+
+Package storage keys are opaque, case-sensitive tokens. Missing values are represented by `null`, and
+key lists are stable ordinally sorted snapshots. Package file paths are relative capability paths;
+absolute paths and parent traversal are rejected by Runtime.
+
 `Sunder.Sdk` contains the public contracts used to build Sunder runtime packages.
 
-Use this package when you want to create a package that can be loaded by the Sunder runtime, contribute Avalonia views to the Sunder shell, register background services, queue background processes, expose typed extension points, or consume package-scoped storage, configuration, secrets, logging, and theme resources.
+Avalonia view/settings/workspace contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`.
+
+Use this package for explicit Runtime/App lifecycle roles, background services, typed extension points, and package-scoped storage, configuration, secrets, and logging. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings, workspaces, and theme resources.
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
@@ -10,6 +21,18 @@ SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK re
 
 ```powershell
 dotnet add package Sunder.Sdk
+```
+
+App/UI packages also install:
+
+```powershell
+dotnet add package Sunder.Sdk.Avalonia
+```
+
+Stack-contributing packages also install the coordinated Stack contracts package:
+
+```powershell
+dotnet add package Sunder.Sdk.Stacks
 ```
 
 Most runtime packages should also reference `Sunder.Package.Build` so builds generate the Sunder manifest, development output, and distributable archive:
@@ -27,14 +50,14 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 
 ## Package Shape
 
-A Sunder runtime package is a .NET assembly that declares package metadata and exposes exactly one public module implementing `ISunderPackageModule`.
+A Sunder package is a .NET assembly that declares package metadata and may expose one `ISunderRuntimePackageModule`, one `ISunderAppPackageModule`, or a single class implementing both roles.
 
 Typical package projects:
 
 - Target `net10.0`.
 - Reference `Sunder.Sdk`.
 - Reference `Sunder.Package.Build` with `PrivateAssets="all"`.
-- Reference Avalonia packages when they provide UI.
+- Reference `Sunder.Sdk.Avalonia` and Avalonia packages only when they register Avalonia UI behavior.
 - Do not reference `Sunder.App` or `Sunder.Runtime.Host`.
 
 ## Package Metadata
@@ -87,37 +110,31 @@ using Sunder.Sdk.Abstractions;
 
 namespace MyCompany.Package;
 
-public sealed class PackageModule : ISunderPackageModule
+public sealed class PackageModule : ISunderRuntimePackageModule
 {
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
-        services.AddTransient<MyViewModel>();
+        services.AddSingleton<MyRuntimeService>();
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
-        registry.RegisterPackageView<MyView>(new PackageViewRegistration(
-            id: "my.company.package.default",
-            name: "My Package",
-            icon: "assets/icon.png",
-            defaultPlacement: PackageViewPlacement.Middle));
+        registry.RegisterBackgroundService<MyRuntimeService>();
     }
 }
 ```
 
-Use `ConfigureServices` for dependency injection setup. Use `RegisterContributions` for shell-visible and runtime-visible package contributions.
+Runtime and App roles have separate service providers and explicit `ConfigureRuntimeServices`/`ConfigureAppServices` and contribution methods. A host never invokes the other host's role.
 
 ## Contributions
 
-`IPackageContributionRegistry` currently supports:
+`ISunderRuntimeContributionRegistry` supports background services, Runtime extensions, and configuration schemas. Base `ISunderAppContributionRegistry` supports App extensions; `Sunder.Sdk.Avalonia` adds:
 
 - `RegisterPackageView<TView>(PackageViewRegistration registration)`
 - `RegisterPackageViewFactory<TFactory>(PackageViewRegistration registration)`
 - `RegisterSettingsView<TView>()`
 - `RegisterSettingsViewFactory<TFactory>()`
-- `RegisterBackgroundService<TService>()`
 - `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
-- `RegisterConfigurationSchema(PackageConfigurationSchema schema)`
 
 Package views are Avalonia controls registered by code. Use stable view ids scoped under your package id.
 
@@ -133,7 +150,7 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 `IPackageContext` gives your module access to host-provided package services:
 
 - `PackageId`
-- `Version`
+- `Version` (the canonical SemVer 2.0 string from the package manifest)
 - `InstallPath`
 - `Storage`
 - `Configuration`
@@ -212,7 +229,7 @@ Register callback handlers in `ConfigureServices`. Auth-capable packages can reg
 
 ## Theme Resources
 
-Package UI can use semantic Sunder theme keys from `Sunder.Sdk.Theming.SunderThemeKeys`. These keys let package UI match the active Sunder shell theme without referencing app internals.
+Package UI can use semantic Sunder theme keys from `Sunder.Sdk.Avalonia.Theming.SunderThemeKeys`. These keys let package UI match the active Sunder shell theme without referencing app internals.
 
 Common resource keys include:
 

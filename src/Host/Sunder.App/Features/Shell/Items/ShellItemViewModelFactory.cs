@@ -20,7 +20,7 @@ internal sealed class ShellItemViewModelFactory(IRuntimeApiClientFactory runtime
             onSelect);
     }
 
-    public Uri? CreatePackageIconUri(string packageId, Sunder.Protocol.PackageIconDescriptor? icon)
+    public Uri? CreatePackageIconUri(string packageId, Sunder.Runtime.Contracts.PackageIconDescriptor? icon)
     {
         return PackageIconUriResolver.Resolve(packageId, icon, (resolvedPackageId, assetPath) =>
         {

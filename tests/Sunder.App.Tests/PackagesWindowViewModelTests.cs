@@ -1,8 +1,8 @@
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
@@ -168,7 +168,10 @@ public sealed class PackagesWindowViewModelTests
             Updates = [CreateUpdate("sunder.package.agent", "1.0.0", "1.1.0")],
         };
         using var viewModel = CreateViewModel(
-            new FakeRuntimeApiClient([CreateInstalledPackage("sunder.package.agent", isEnabled: true)]),
+            new FakeRuntimeApiClient([CreateInstalledPackage("sunder.package.agent", isEnabled: true)])
+            {
+                RegistryUpdates = registryClient.Updates,
+            },
             CreateNotificationCenter(),
             _ => registryClient);
         viewModel.RegistryUrlText = "https://registry.example/";
@@ -236,7 +239,7 @@ public sealed class PackagesWindowViewModelTests
     public void MarketplacePackages_UseRegistryIconUrlWhenAvailable()
     {
         var iconUri = new Uri(
-            "http://127.0.0.1:1/api/packages/sunder.package.agent/versions/1.0.0/icon"
+            "http://127.0.0.1:1/api/v1/packages/sunder.package.agent/versions/1.0.0/icon"
         );
         using var package = new RegistryPackageSearchItemViewModel(
             new RegistryPackageSummary(
@@ -267,8 +270,9 @@ public sealed class PackagesWindowViewModelTests
         {
             SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
         };
+        var runtimeClient = new FakeRuntimeApiClient([]);
         using var viewModel = CreateViewModel(
-            new FakeRuntimeApiClient([]),
+            runtimeClient,
             CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40)
@@ -627,12 +631,13 @@ public sealed class PackagesWindowViewModelTests
                 Stats: new RegistryPackageStats(4, 0, 0, [], Stars: 1, IsStarred: false))),
             StarPackageResponse = new RegistryPackageStarResponse(true, "Starred package.", new RegistryPackageStats(4, 0, 0, [], Stars: 2, IsStarred: true), []),
         };
+        var runtimeClient = new FakeRuntimeApiClient([]);
         using var viewModel = CreateViewModel(
-            new FakeRuntimeApiClient([]),
+            runtimeClient,
             CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40),
-            registryUrl => new RegistryAuthToken(registryUrl.ToString(), "token-123", "owner", DateTimeOffset.UtcNow.AddHours(1)));
+            registryUrl => new object());
         viewModel.RegistryUrlText = "https://registry.example/";
 
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
@@ -642,8 +647,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.Equal("4 downloads · 2 stars", viewModel.MarketplacePackageStatsText);
         Assert.Equal("Unstar", viewModel.MarketplacePackageStarActionText);
         Assert.True(viewModel.SelectedMarketplacePackageIsStarred);
-        Assert.Equal("sunder.package.agent", registryClient.LastStarPackageId);
-        Assert.Equal("token-123", registryClient.LastStarPackageToken);
+        Assert.Equal("sunder.package.agent", runtimeClient.LastRegistryStarRequest?.ResourceId);
     }
 
     [Fact]
@@ -672,8 +676,9 @@ public sealed class PackagesWindowViewModelTests
                 [],
                 []),
         };
+        var runtimeClient = new FakeRuntimeApiClient([]);
         using var viewModel = CreateViewModel(
-            new FakeRuntimeApiClient([]),
+            runtimeClient,
             CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40));
@@ -683,10 +688,10 @@ public sealed class PackagesWindowViewModelTests
         viewModel.MarketplaceVersions.Single(version => version.Version == "1.5.0").SelectCommand.Execute(null);
         await viewModel.InstallSelectedMarketplacePackageCommand.ExecuteAsync(null);
 
-        Assert.NotNull(registryClient.LastInstallPlanRequest);
-        Assert.Equal("sunder.package.agent", registryClient.LastInstallPlanRequest.PackageId);
-        Assert.Equal("1.5.0", registryClient.LastInstallPlanRequest.Version);
-        Assert.Null(registryClient.LastInstallPlanRequest.Tag);
+        Assert.NotNull(runtimeClient.LastRegistryPackageRequest);
+        Assert.Equal("sunder.package.agent", runtimeClient.LastRegistryPackageRequest.PackageId);
+        Assert.Equal("1.5.0", runtimeClient.LastRegistryPackageRequest.Version);
+        Assert.Null(runtimeClient.LastRegistryPackageRequest.Tag);
     }
 
     [Fact]
@@ -785,7 +790,7 @@ public sealed class PackagesWindowViewModelTests
         NotificationCenterService notificationCenter,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
-        Func<Uri, RegistryAuthToken?>? tokenProvider = null,
+        Func<Uri, object?>? tokenProvider = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null
     )
     {
@@ -794,7 +799,6 @@ public sealed class PackagesWindowViewModelTests
             new FakePackageArchivePicker(),
             notificationCenter: notificationCenter,
             registryClientFactory: registryClientFactory,
-            registryTokenProvider: tokenProvider,
             marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay,
             marketplaceDetailSpinnerDelay: marketplaceDetailSpinnerDelay
         )
@@ -1052,6 +1056,32 @@ public sealed class PackagesWindowViewModelTests
 
         public string? RegistryInstallPackageId { get; init; }
 
+        public RuntimeRegistryPackageRequest? LastRegistryPackageRequest { get; private set; }
+
+        public RuntimeRegistryStarRequest? LastRegistryStarRequest { get; private set; }
+
+        public IReadOnlyList<RegistryPackageUpdate> RegistryUpdates { get; init; } = [];
+
+        public Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RegistryResolveInstallPlanResponse(
+                true,
+                RegistryUpdates.Select(update => new RegistryPackageInstallPlanItem(update.PackageId, update.CurrentVersion, update.AvailableVersion, true, update.DeprecatedMessage, [], update.Artifact)).ToArray(),
+                [],
+                [],
+                []));
+
+        public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
+        {
+            LastRegistryPackageRequest = request;
+            return Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Installed package.", true, false, [], [], [request.PackageId], []));
+        }
+
+        public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
+        {
+            LastRegistryStarRequest = request;
+            return Task.FromResult(new RegistryPackageStarResponse(true, "Starred package.", new RegistryPackageStats(4, 0, 0, [], 2, true), []));
+        }
+
         public void AddInstalledPackage(InstalledPackageDescriptor package)
         {
             _installedPackages.RemoveAll(existing =>
@@ -1074,9 +1104,9 @@ public sealed class PackagesWindowViewModelTests
             CancellationToken cancellationToken = default
         ) => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
             CancellationToken cancellationToken = default
-        ) => Task.FromResult<IReadOnlyList<PackageSourceDescriptor>>([]);
+        ) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(
             CancellationToken cancellationToken = default
@@ -1183,7 +1213,7 @@ public sealed class PackagesWindowViewModelTests
                     ImpactedPackageIds = impactedPackageIds,
                 },
                 impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, ToDisplayName(packageId), "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
-                impactedPackageIds.Select(packageId => new PackageSourceDescriptor(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
+                impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
         }
 
         public Task<PackageOperationResult> CommitPackageStoreStageAsync(
@@ -1300,6 +1330,6 @@ public sealed class PackagesWindowViewModelTests
         private string GetMutationPackageId(PackageStoreMutationRequest mutation)
             => !string.IsNullOrWhiteSpace(mutation.PackageId)
                 ? mutation.PackageId
-                : RegistryInstallPackageId ?? Path.GetFileNameWithoutExtension(mutation.PackagePath ?? string.Empty);
+                : RegistryInstallPackageId ?? Path.GetFileNameWithoutExtension(mutation.UploadId ?? string.Empty);
     }
 }

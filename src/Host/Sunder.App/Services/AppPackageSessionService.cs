@@ -1,5 +1,4 @@
-using System.Collections.Concurrent;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using SdkPackageSessionLoadRequest = Sunder.Sdk.Abstractions.PackageSessionLoadRequest;
 using SdkPackageSessionSourceKind = Sunder.Sdk.Abstractions.PackageSessionSourceKind;
@@ -9,16 +8,15 @@ namespace Sunder.App.Services;
 
 public sealed class AppPackageSessionService(
     IRuntimeApiClientFactory runtimeApiClientFactory,
-    DeveloperLogService developerLog) : IPackageSessionService, IDisposable
+    DeveloperLogService? developerLog = null) : IPackageSessionService, IDisposable
 {
-    private readonly ConcurrentDictionary<string, DevPackageSessionWatch> _watches = new(StringComparer.OrdinalIgnoreCase);
     private Func<IReadOnlyList<string>, CancellationToken, Task>? _applyPackageLifecycleChangesAsync;
-    private Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
+    private Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
     private bool _disposed;
 
     public void Attach(
         Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
-        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync)
+        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync)
     {
         _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync;
         _preflightPackageLifecycleChangesAsync = preflightPackageLifecycleChangesAsync;
@@ -48,11 +46,6 @@ public sealed class AppPackageSessionService(
         if (string.IsNullOrWhiteSpace(packageId))
         {
             return false;
-        }
-
-        if (sourceKind == SdkPackageSessionSourceKind.Dev)
-        {
-            StopWatch(packageId);
         }
 
         using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
@@ -86,18 +79,13 @@ public sealed class AppPackageSessionService(
 
     public void Dispose()
     {
+        _ = developerLog;
         if (_disposed)
         {
             return;
         }
 
         _disposed = true;
-        foreach (var watch in _watches.Values)
-        {
-            watch.Dispose();
-        }
-
-        _watches.Clear();
     }
 
     private async Task<SdkPackageSessionStatus> LoadPackageCoreAsync(
@@ -112,18 +100,6 @@ public sealed class AppPackageSessionService(
             ? await LoadDevPackageLifecycleAsync(runtimeApiClient, request, cancellationToken).ConfigureAwait(false)
             : await LoadPackageSessionAsync(runtimeApiClient, request, cancellationToken).ConfigureAwait(false);
 
-        if (updateWatch && request.SourceKind == SdkPackageSessionSourceKind.Dev)
-        {
-            if (request.Watch)
-            {
-                StartWatch(status.PackageId, request.Source);
-            }
-            else
-            {
-                StopWatch(status.PackageId);
-            }
-        }
-
         return status;
     }
 
@@ -133,10 +109,9 @@ public sealed class AppPackageSessionService(
         CancellationToken cancellationToken)
     {
         var result = await runtimeApiClient.LoadPackageSessionAsync(
-            new Sunder.Protocol.PackageSessionLoadRequest(
+            new Sunder.Runtime.Contracts.PackageSessionLoadRequest(
                 ToProtocolSourceKind(request.SourceKind),
-                request.Source,
-                request.Watch),
+                request.Source),
             cancellationToken).ConfigureAwait(false);
 
         if (!result.Success)
@@ -150,54 +125,12 @@ public sealed class AppPackageSessionService(
                ?? throw new InvalidOperationException("Runtime did not return package session status after loading the package.");
     }
 
-    private async Task<SdkPackageSessionStatus> LoadDevPackageLifecycleAsync(
+    private Task<SdkPackageSessionStatus> LoadDevPackageLifecycleAsync(
         IRuntimeApiClient runtimeApiClient,
         SdkPackageSessionLoadRequest request,
         CancellationToken cancellationToken)
-    {
-        var packageSource = new Sunder.Protocol.PackageSessionLoadRequest(
-            PackageSourceKind.Dev,
-            request.Source,
-            request.Watch);
-        var stage = await runtimeApiClient.StagePackageLifecycleAsync(
-            new PackageLifecycleStageRequest([packageSource], PackageLifecycleOverlayOwner.Sdk),
-            cancellationToken).ConfigureAwait(false);
-        if (!stage.Success || stage.StageId is null)
-        {
-            var message = stage.Errors.FirstOrDefault() ?? "Package lifecycle stage failed.";
-            throw new InvalidOperationException(message);
-        }
-
-        var committed = false;
-        try
-        {
-            await PreflightLifecycleChangesAsync(stage.ActivePackages, stage.PackageSources, stage.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
-            var commit = await runtimeApiClient.CommitPackageLifecycleStageAsync(stage.StageId, cancellationToken).ConfigureAwait(false);
-            committed = true;
-            if (!commit.Success)
-            {
-                var message = commit.Errors.FirstOrDefault() ?? commit.Message ?? "Package lifecycle commit failed.";
-                throw new InvalidOperationException(message);
-            }
-
-            await ApplyLifecycleChangesAsync(commit.ImpactedPackageIds, cancellationToken).ConfigureAwait(false);
-            var packageId = ResolveLoadedDevPackageId(request.Source, commit.PackageSources, commit.ImpactedPackageIds);
-            var status = packageId is null
-                ? null
-                : await runtimeApiClient.GetPackageSessionStatusAsync(packageId, cancellationToken).ConfigureAwait(false);
-            return ToSdkStatus(status)
-                   ?? throw new InvalidOperationException("Runtime did not return package session status after loading the package.");
-        }
-        catch
-        {
-            if (!committed)
-            {
-                await runtimeApiClient.DiscardPackageLifecycleStageAsync(stage.StageId, CancellationToken.None).ConfigureAwait(false);
-            }
-
-            throw;
-        }
-    }
+        => Task.FromException<SdkPackageSessionStatus>(new InvalidOperationException(
+            "Dev package folders must be supplied to Runtime startup with --dev-package; remote path loading is not supported."));
 
     private async Task ApplyLifecycleChangesAsync(
         IReadOnlyList<string> impactedPackageIds,
@@ -211,78 +144,6 @@ public sealed class AppPackageSessionService(
         var applyPackageLifecycleChangesAsync = _applyPackageLifecycleChangesAsync
             ?? throw new InvalidOperationException("Package session service is not attached to the running shell yet.");
         await applyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task PreflightLifecycleChangesAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
-        IReadOnlyList<string> impactedPackageIds,
-        CancellationToken cancellationToken)
-    {
-        if (impactedPackageIds.Count == 0)
-        {
-            return;
-        }
-
-        var preflightPackageLifecycleChangesAsync = _preflightPackageLifecycleChangesAsync
-            ?? throw new InvalidOperationException("Package session service is not attached to the running shell yet.");
-        await preflightPackageLifecycleChangesAsync(activePackages, packageSources, impactedPackageIds, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static string? ResolveLoadedDevPackageId(
-        string folder,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
-        IReadOnlyList<string> impactedPackageIds)
-    {
-        var normalizedFolder = Path.GetFullPath(folder);
-        var source = packageSources.FirstOrDefault(source =>
-            source.Kind == PackageSourceKind.Dev
-            && string.Equals(Path.GetFullPath(source.Folder), normalizedFolder, StringComparison.OrdinalIgnoreCase));
-        return source?.PackageId ?? impactedPackageIds.FirstOrDefault();
-    }
-
-    private void StartWatch(string packageId, string folder)
-    {
-        StopWatch(packageId);
-        var watch = new DevPackageSessionWatch(
-            packageId,
-            Path.GetFullPath(folder),
-            ReloadWatchedDevPackageAsync,
-            developerLog);
-        if (!_watches.TryAdd(packageId, watch))
-        {
-            watch.Dispose();
-            return;
-        }
-
-        watch.Start();
-    }
-
-    private void StopWatch(string packageId)
-    {
-        if (_watches.TryRemove(packageId, out var watch))
-        {
-            watch.Dispose();
-        }
-    }
-
-    private async Task ReloadWatchedDevPackageAsync(string packageId, string folder, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await LoadPackageCoreAsync(
-                new SdkPackageSessionLoadRequest(SdkPackageSessionSourceKind.Dev, folder, Watch: true),
-                updateWatch: false,
-                cancellationToken).ConfigureAwait(false);
-            developerLog.Info("package.session", $"Reloaded dev package '{packageId}'.");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            developerLog.Error("package.session", $"Failed to reload dev package '{packageId}': {ex.Message}");
-        }
     }
 
     private void ThrowIfDisposed()
@@ -304,7 +165,7 @@ public sealed class AppPackageSessionService(
             _ => SdkPackageSessionSourceKind.Installed,
         };
 
-    private static SdkPackageSessionStatus? ToSdkStatus(Sunder.Protocol.PackageSessionStatus? status)
+    private static SdkPackageSessionStatus? ToSdkStatus(Sunder.Runtime.Contracts.PackageSessionStatus? status)
         => status is null
             ? null
             : new SdkPackageSessionStatus(
@@ -317,197 +178,4 @@ public sealed class AppPackageSessionService(
                 status.OverridesInstalledPackage,
                 status.ErrorMessage);
 
-    private sealed class DevPackageSessionWatch(
-        string packageId,
-        string folder,
-        Func<string, string, CancellationToken, Task> reloadAsync,
-        DeveloperLogService developerLog) : IDisposable
-    {
-        private readonly object _gate = new();
-        private FileSystemWatcher? _folderWatcher;
-        private FileSystemWatcher? _parentWatcher;
-        private CancellationTokenSource? _pendingReload;
-        private bool _disposed;
-
-        public void Start()
-        {
-            lock (_gate)
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _folderWatcher = CreateFolderWatcher(folder);
-                _parentWatcher = CreateParentWatcher(folder);
-            }
-
-            developerLog.Info("package.session", $"Watching dev package '{packageId}' at {folder}.");
-        }
-
-        public void Dispose()
-        {
-            CancellationTokenSource? pendingReload;
-            lock (_gate)
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _disposed = true;
-                pendingReload = _pendingReload;
-                _pendingReload = null;
-                _folderWatcher?.Dispose();
-                _parentWatcher?.Dispose();
-            }
-
-            pendingReload?.Cancel();
-        }
-
-        private FileSystemWatcher? CreateFolderWatcher(string path)
-        {
-            if (!Directory.Exists(path))
-            {
-                return null;
-            }
-
-            var watcher = new FileSystemWatcher(path)
-            {
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
-            };
-            Attach(watcher);
-            watcher.EnableRaisingEvents = true;
-            return watcher;
-        }
-
-        private FileSystemWatcher? CreateParentWatcher(string path)
-        {
-            var parent = Path.GetDirectoryName(path);
-            if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
-            {
-                return null;
-            }
-
-            var watcher = new FileSystemWatcher(parent)
-            {
-                IncludeSubdirectories = false,
-                Filter = Path.GetFileName(path),
-                NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
-            };
-            Attach(watcher);
-            watcher.EnableRaisingEvents = true;
-            return watcher;
-        }
-
-        private void Attach(FileSystemWatcher watcher)
-        {
-            watcher.Changed += OnChanged;
-            watcher.Created += OnChanged;
-            watcher.Deleted += OnChanged;
-            watcher.Renamed += OnRenamed;
-            watcher.Error += OnError;
-        }
-
-        private void OnChanged(object sender, FileSystemEventArgs e)
-        {
-            if (DevPackageWatchSupport.ShouldIgnorePath(e.FullPath))
-            {
-                return;
-            }
-
-            QueueReload();
-        }
-
-        private void OnRenamed(object sender, RenamedEventArgs e)
-        {
-            if (DevPackageWatchSupport.ShouldIgnorePath(e.FullPath) && DevPackageWatchSupport.ShouldIgnorePath(e.OldFullPath))
-            {
-                return;
-            }
-
-            QueueReload();
-        }
-
-        private void OnError(object sender, ErrorEventArgs e)
-        {
-            developerLog.Warning("package.session", $"Dev package watcher for '{packageId}' reported an error: {e.GetException().Message}");
-            QueueReload();
-        }
-
-        private void QueueReload()
-        {
-            CancellationTokenSource reload;
-            lock (_gate)
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _pendingReload?.Cancel();
-                _pendingReload = new CancellationTokenSource();
-                reload = _pendingReload;
-            }
-
-            _ = Task.Run(async () =>
-            {
-                var reloadToken = reload.Token;
-                try
-                {
-                    await Task.Delay(DevPackageWatchSupport.DebounceDelay, reloadToken).ConfigureAwait(false);
-                    RefreshFolderWatcher();
-                    if (!await DevPackageWatchSupport.WaitForStableFoldersAsync(
-                            [folder],
-                            Task.Delay,
-                            reloadToken,
-                            requireLibraryFolder: true,
-                            onLoadabilityRetry: RefreshFolderWatcher).ConfigureAwait(false))
-                    {
-                        developerLog.Warning("package.session", $"Dev package '{packageId}' output was not stable yet; waiting for another file change.");
-                        return;
-                    }
-
-                    RefreshFolderWatcher();
-                    await reloadAsync(packageId, folder, reloadToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (reloadToken.IsCancellationRequested)
-                {
-                }
-                finally
-                {
-                    lock (_gate)
-                    {
-                        if (ReferenceEquals(_pendingReload, reload))
-                        {
-                            _pendingReload = null;
-                        }
-                    }
-
-                    reload.Dispose();
-                }
-            });
-        }
-
-        private void RefreshFolderWatcher()
-        {
-            lock (_gate)
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                if (!Directory.Exists(folder))
-                {
-                    _folderWatcher?.Dispose();
-                    _folderWatcher = null;
-                    return;
-                }
-
-                _folderWatcher ??= CreateFolderWatcher(folder);
-            }
-        }
-    }
 }

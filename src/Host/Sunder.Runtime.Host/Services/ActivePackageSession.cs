@@ -1,13 +1,13 @@
 using Microsoft.Extensions.Logging;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed record ActiveLoadedPackage(
     ActivePackageDescriptor Descriptor,
-    PackageSourceDescriptor Source,
+    RuntimePackageSource Source,
     PackageConfigurationSchemaDescriptor? ConfigurationSchema,
     IPackageKeyValueStore StateStore,
     JsonPackageSecretsStore SecretsStore,
@@ -17,8 +17,6 @@ internal sealed record ActiveLoadedPackage(
     IServiceProvider ServiceProvider,
     RuntimePackageLoadContext LoadContext)
 {
-    public IReadOnlyList<string> SecretKeys => SecretsStore.ListKeys();
-
     public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
         => CallbackHandlers.TryGetValue(callbackHandlerId, out var handler) ? handler : null;
 }
@@ -81,7 +79,10 @@ internal sealed class ActivePackageSession
         }
         catch
         {
-            foreach (var group in startedServices.GroupBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase))
+            foreach (var group in startedServices
+                         .AsEnumerable()
+                         .Reverse()
+                         .GroupBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase))
             {
                 await PackageSessionLifecycle.StopBackgroundServicesAsync(group.Select(x => x.BackgroundService).ToArray(), group.Key, logger);
             }
@@ -102,7 +103,7 @@ internal sealed class ActivePackageSession
             .ToArray();
     }
 
-    public IReadOnlyList<PackageSourceDescriptor> GetActivePackageSources()
+    public IReadOnlyList<RuntimePackageSource> GetActivePackageSources()
         => _loadedPackageMap.Values
             .Where(package => IsPackageEnabled(package.Descriptor.PackageId))
             .Select(package => package.Source)
@@ -151,8 +152,8 @@ internal sealed class ActivePackageSession
 
         return package.Source.Kind switch
         {
-            PackageSourceKind.Dev => PackageAssetPathResolver.TryResolveDevAssetPath(package.Source.Folder, assetPath),
-            PackageSourceKind.Installed => PackageAssetPathResolver.TryResolveInstalledAssetPath(package.Source.Folder, assetPath),
+            PackageSourceKind.Dev => PackageAssetPathResolver.TryResolveDevAssetPath(package.Source.SourceFolder, assetPath),
+            PackageSourceKind.Installed => PackageAssetPathResolver.TryResolveInstalledAssetPath(package.Source.SourceFolder, assetPath),
             _ => null,
         };
     }
@@ -227,9 +228,9 @@ internal sealed class ActivePackageSession
             return;
         }
 
-        foreach (var package in _loadedPackageMap.Values)
+        foreach (var package in _loadedPackageMap.Values.Reverse())
         {
-            foreach (var backgroundService in package.BackgroundServices)
+            foreach (var backgroundService in package.BackgroundServices.Reverse())
             {
                 try
                 {
@@ -249,7 +250,7 @@ internal sealed class ActivePackageSession
     {
         List<Exception>? disposeErrors = null;
 
-        foreach (var package in _loadedPackageMap.Values)
+        foreach (var package in _loadedPackageMap.Values.Reverse())
         {
             try
             {
@@ -284,11 +285,26 @@ internal sealed class ActivePackageSession
 
         SharedAssemblyRegistry?.Dispose();
 
-        // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
+        TryDeleteSessionFolder();
 
         if (disposeErrors is { Count: > 0 })
         {
             throw new AggregateException(disposeErrors);
+        }
+    }
+
+    private void TryDeleteSessionFolder()
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(SessionFolder) && Directory.Exists(SessionFolder))
+            {
+                Directory.Delete(SessionFolder, recursive: true);
+            }
+        }
+        catch
+        {
+            // Native library finalizers may retain a shadow temporarily; stale-session GC retries later.
         }
     }
 

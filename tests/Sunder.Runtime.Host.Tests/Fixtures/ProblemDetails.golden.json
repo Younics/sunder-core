@@ -1,0 +1,12 @@
+[
+  { "code": "runtime.v1.validation", "title": "Request validation failed", "status": 400 },
+  { "code": "runtime.v1.authentication", "title": "Authentication required", "status": 401 },
+  { "code": "runtime.v1.conflict", "title": "Runtime state conflict", "status": 409 },
+  { "code": "runtime.v1.stale-generation", "title": "Stale Runtime generation", "status": 409 },
+  { "code": "runtime.v1.not-found", "title": "Runtime resource not found", "status": 404 },
+  { "code": "runtime.v1.unavailable", "title": "Runtime service unavailable", "status": 503 },
+  { "code": "runtime.v1.cancellation", "title": "Runtime operation cancelled", "status": 499 },
+  { "code": "runtime.v1.upload-limit", "title": "Upload limit exceeded", "status": 413 },
+  { "code": "runtime.v1.package-validation", "title": "Package validation failed", "status": 422 },
+  { "code": "runtime.v1.internal", "title": "Internal Runtime error", "status": 500 }
+]

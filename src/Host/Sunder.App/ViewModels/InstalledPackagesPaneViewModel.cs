@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 

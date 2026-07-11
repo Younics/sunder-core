@@ -1,5 +1,6 @@
 using System.Diagnostics;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
@@ -14,36 +15,87 @@ if (startupOptions.WaitForDebugger)
 }
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSingleton<RuntimePackagePaths>();
-builder.Services.AddSingleton<InstalledPackageStore>();
-builder.Services.AddSingleton<SunderPackageArchiveInstaller>();
-builder.Services.AddSingleton<RuntimePackageSessionService>();
-builder.Services.AddSingleton<PackageAuthCallbackServer>();
-
-var app = builder.Build();
-
-var startedAtUtc = DateTimeOffset.UtcNow;
-
-app.MapSystemEndpoints(startedAtUtc)
-    .MapPackageSessionEndpoints()
-    .MapPackageConfigurationEndpoints()
-    .MapPackageAuthEndpoints()
-    .MapPackageFaultEndpoints()
-    .MapInstalledPackageEndpoints()
-    .MapStackEndpoints();
-
-var packageSessionService = app.Services.GetRequiredService<RuntimePackageSessionService>();
-if (startupOptions.DevPackageFolders.Count > 0)
+if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
 {
-    await packageSessionService.LoadPackageLifecycleAsync(new PackageLifecycleLoadRequest(
-        startupOptions.DevPackageFolders
-            .Select(folder => new PackageSessionLoadRequest(PackageSourceKind.Dev, folder))
-            .ToArray(),
-        PackageLifecycleOverlayOwner.Startup));
-}
-else
-{
-    await packageSessionService.LoadInstalledPackagesAsync();
+    throw new InvalidOperationException(
+        "Configured Kestrel endpoints are not supported by the local Runtime. Configure one loopback URL with --urls or ASPNETCORE_URLS instead.");
 }
 
-app.Run();
+var listenUrls = RuntimeListenUrlValidator.ParseAndValidate(
+    builder.Configuration["urls"],
+    startupOptions.DevelopmentAllowNonLoopbackRuntimeListen);
+builder.WebHost.UseUrls(listenUrls.ToArray());
+
+var packagePaths = new RuntimePackagePaths();
+RuntimeLocalState.Validate(packagePaths.RootPath);
+using var runtimeRootLease = RuntimeRootLease.Acquire(packagePaths);
+RuntimeLocalState.EnsureInitialized(packagePaths.RootPath);
+
+var bearerToken = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_BEARER_TOKEN");
+Environment.SetEnvironmentVariable("SUNDER_RUNTIME_BEARER_TOKEN", null);
+if (string.IsNullOrWhiteSpace(bearerToken))
+{
+    bearerToken = RuntimeBearerToken.Create();
+}
+
+var connectionInfoPath = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_CONNECTION_FILE");
+Environment.SetEnvironmentVariable("SUNDER_RUNTIME_CONNECTION_FILE", null);
+var connectionInfo = new RuntimeConnectionInfo(new Uri(listenUrls[0]), bearerToken);
+RuntimeConnectionInfoStore.Save(connectionInfo, connectionInfoPath);
+
+try
+{
+    builder.Services.AddRuntimeHostServices(
+        packagePaths,
+        new RuntimeBearerTokenValidator(bearerToken));
+
+    var app = builder.Build();
+    app.UseMiddleware<RuntimeProblemDetailsMiddleware>();
+    app.UseMiddleware<RuntimeBearerAuthenticationMiddleware>();
+
+    var startedAtUtc = DateTimeOffset.UtcNow;
+    var api = app.MapGroup("/api/v1");
+    api.MapSystemEndpoints(startedAtUtc)
+        .MapPackageSessionEndpoints()
+        .MapContentTransferEndpoints()
+        .MapPackageDataEndpoints()
+        .MapPackageConfigurationEndpoints()
+        .MapPackageAuthEndpoints()
+        .MapPackageFaultEndpoints()
+        .MapInstalledPackageEndpoints()
+        .MapStackEndpoints()
+        .MapRuntimeStreamEndpoints();
+    api.MapRegistryEndpoints();
+
+    var packageSessionService = app.Services.GetRequiredService<PackageSessionLifecycleService>();
+    var installedPackageService = app.Services.GetRequiredService<InstalledPackageLifecycleService>();
+    var devPackageWatchService = app.Services.GetRequiredService<DevPackageWatchService>();
+    var packageLogStreamService = app.Services.GetRequiredService<PackageLogStreamService>();
+    var runtimeEventStreamService = app.Services.GetRequiredService<RuntimeEventStreamService>();
+    try
+    {
+        packageLogStreamService.Start();
+        await installedPackageService.InitializeAsync();
+        if (startupOptions.DevPackageFolders.Count > 0)
+        {
+            await packageSessionService.LoadStartupDevPackagesAsync(startupOptions.DevPackageFolders);
+        }
+        else
+        {
+            await installedPackageService.LoadInstalledPackagesAsync();
+        }
+
+        await app.RunAsync();
+    }
+    finally
+    {
+        await devPackageWatchService.DisposeAsync();
+        await installedPackageService.ShutdownAsync(packageSessionService);
+        await packageLogStreamService.DisposeAsync();
+        runtimeEventStreamService.Complete();
+    }
+}
+finally
+{
+    RuntimeConnectionInfoStore.DeleteIfMatches(connectionInfo, connectionInfoPath);
+}

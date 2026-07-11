@@ -1,6 +1,6 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
@@ -63,19 +63,14 @@ internal sealed class PackagesInstalledCatalog(
 
         try
         {
-            if (!registryClientProvider.TryCreate(out var registryClient, out _))
-            {
-                return;
-            }
-
-            using (registryClient)
-            {
-                var response = await registryClient.ResolveUpdatesAsync(
-                    new RegistryResolveUpdatesRequest(
-                        _installedPackages.Select(package => new RegistryInstalledPackage(package.PackageId, package.Version)).ToArray()),
-                    cancellationToken).ConfigureAwait(false);
-                _availableUpdates.AddRange(response.Updates);
-            }
+            var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
+                new RuntimeRegistryPackageBatchRequest(
+                    registryUrl.AbsoluteUri,
+                    _installedPackages.Select(package => new RegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray()),
+                cancellationToken).ConfigureAwait(false);
+            _availableUpdates.AddRange(plan.Items
+                .Where(item => item.CurrentVersion is not null && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase))
+                .Select(item => new RegistryPackageUpdate(item.PackageId, item.CurrentVersion!, item.Version, item.DeprecatedMessage, item.Artifact)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

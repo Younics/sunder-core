@@ -1,5 +1,5 @@
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 

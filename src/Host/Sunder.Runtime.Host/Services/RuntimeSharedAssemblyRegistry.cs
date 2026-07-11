@@ -1,9 +1,9 @@
 using System.Reflection;
 using System.Runtime.Loader;
-using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -11,12 +11,10 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
 {
     private readonly Dictionary<string, Assembly> _hostSharedAssemblies = new(StringComparer.OrdinalIgnoreCase)
     {
-        [typeof(Control).Assembly.GetName().Name!] = typeof(Control).Assembly,
-        [typeof(Avalonia.AvaloniaObject).Assembly.GetName().Name!] = typeof(Avalonia.AvaloniaObject).Assembly,
-        [typeof(Avalonia.Markup.Xaml.AvaloniaXamlLoader).Assembly.GetName().Name!] = typeof(Avalonia.Markup.Xaml.AvaloniaXamlLoader).Assembly,
         [typeof(IServiceCollection).Assembly.GetName().Name!] = typeof(IServiceCollection).Assembly,
         [typeof(ILoggerFactory).Assembly.GetName().Name!] = typeof(ILoggerFactory).Assembly,
-        [typeof(ISunderPackageModule).Assembly.GetName().Name!] = typeof(ISunderPackageModule).Assembly,
+        [typeof(ISunderRuntimePackageModule).Assembly.GetName().Name!] = typeof(ISunderRuntimePackageModule).Assembly,
+        [typeof(IPackageStackContributor).Assembly.GetName().Name!] = typeof(IPackageStackContributor).Assembly,
     };
 
     private readonly Dictionary<string, Assembly> _packageSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
@@ -28,16 +26,6 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
     {
         _sharedAssemblyLoadContext = new SharedPackageAssemblyLoadContext(ResolveHostSharedAssembly);
 
-        RegisterOptionalHostAssembly("Avalonia");
-        RegisterOptionalHostAssembly("Avalonia.Markup");
-        RegisterOptionalHostAssembly("Avalonia.Dialogs");
-        RegisterOptionalHostAssembly("Avalonia.Remote.Protocol");
-        RegisterOptionalHostAssembly("Avalonia.Metal");
-        RegisterOptionalHostAssembly("Avalonia.OpenGL");
-        RegisterOptionalHostAssembly("Avalonia.Vulkan");
-        RegisterOptionalHostAssembly("Avalonia.MicroCom");
-        RegisterOptionalHostAssembly("MicroCom.Runtime");
-
         var candidateAssemblies = IndexCandidateAssemblies(probeDirectories);
         foreach (var candidate in SelectPreferredSharedContractCandidates(candidateAssemblies))
         {
@@ -45,24 +33,6 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         }
 
         RegisterSharedDependencyClosure(candidateAssemblies);
-    }
-
-    private void RegisterOptionalHostAssembly(string assemblyName)
-    {
-        if (_hostSharedAssemblies.ContainsKey(assemblyName))
-        {
-            return;
-        }
-
-        try
-        {
-            var assembly = Assembly.Load(new AssemblyName(assemblyName));
-            _hostSharedAssemblies[assemblyName] = assembly;
-        }
-        catch
-        {
-            // Optional host-owned assemblies may not be loaded in every runtime host configuration.
-        }
     }
 
     public Assembly? ResolveSharedAssembly(AssemblyName assemblyName)

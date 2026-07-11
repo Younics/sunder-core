@@ -16,7 +16,7 @@
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="avares://Sunder.Sdk/Themes/SunderThemeResources.axaml" />
+        <ResourceInclude Source="avares://Sunder.Sdk.Avalonia/Themes/SunderThemeResources.axaml" />
         <ResourceInclude Source="avares://Sunder.App/Styles/IconResources.axaml" />
       </ResourceDictionary.MergedDictionaries>
       <x:Double x:Key="Sunder.Layout.RailWidth">72</x:Double>
@@ -42,7 +42,7 @@
   <Application.Styles>
     <FluentTheme />
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
-    <StyleInclude Source="avares://Sunder.Sdk/Themes/SunderPackageStyles.axaml" />
+    <StyleInclude Source="avares://Sunder.Sdk.Avalonia/Themes/SunderPackageStyles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/SunderShellStyles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/NotificationStyles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/PackageWindowStyles.axaml" />

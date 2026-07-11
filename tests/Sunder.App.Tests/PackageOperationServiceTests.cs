@@ -1,6 +1,6 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
@@ -44,7 +44,6 @@ public sealed class PackageOperationServiceTests
         Assert.Equal(PackageOperationService.PackageStoreGroupKey, operation.GroupKey);
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
-        Assert.Equal(["agent"], registryClient.DownloadedPackageIds);
         Assert.Equal(["agent"], runtimeClient.InstalledPackageIds);
         Assert.Collection(lifecycleApplications, packageIds => Assert.Equal(["agent"], packageIds));
     }
@@ -482,11 +481,26 @@ public sealed class PackageOperationServiceTests
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
+
+        public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
+        {
+            InstalledPackageIds.Add(request.PackageId);
+            return Task.FromResult(new RuntimeRegistryPackageChangeResult(
+                true,
+                RuntimeRegistryErrorCode.None,
+                $"Installed {request.PackageId}.",
+                RuntimeSessionApplied,
+                RequiresAppRestart,
+                [],
+                [],
+                [request.PackageId],
+                []));
+        }
 
         public Uri CreatePackageAssetUri(string packageId, string assetPath)
             => throw new NotSupportedException();
@@ -504,27 +518,6 @@ public sealed class PackageOperationServiceTests
             return new PackageOperationResult(true, $"Installed {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
             {
                 ImpactedPackageIds = [packageId],
-            };
-        }
-
-        public async Task<PackageOperationResult> InstallPackagesFromPathsAsync(PackageInstallBatchFromPathRequest request, CancellationToken cancellationToken = default)
-        {
-            var impactedPackageIds = new List<string>();
-            foreach (var item in request.Items)
-            {
-                var result = string.IsNullOrWhiteSpace(item.PackageId)
-                    ? await InstallPackageFromPathAsync(item.PackagePath, cancellationToken)
-                    : await UpgradePackageFromPathAsync(item.PackageId, item.PackagePath, item.AllowDowngrade, item.Reinstall, cancellationToken);
-                impactedPackageIds.AddRange(result.ImpactedPackageIds);
-                if (!result.Success)
-                {
-                    return result with { ImpactedPackageIds = impactedPackageIds.ToArray() };
-                }
-            }
-
-            return new PackageOperationResult(true, "Installed batch.", RuntimeSessionApplied, RequiresAppRestart, [], [])
-            {
-                ImpactedPackageIds = impactedPackageIds.ToArray(),
             };
         }
 
@@ -581,7 +574,7 @@ public sealed class PackageOperationServiceTests
                     ImpactedPackageIds = impactedPackageIds,
                 },
                 impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
-                impactedPackageIds.Select(packageId => new PackageSourceDescriptor(packageId, PackageSourceKind.Installed, packageId)).ToArray());
+                impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray());
         }
 
         public Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)
@@ -663,6 +656,6 @@ public sealed class PackageOperationServiceTests
         private static string GetMutationPackageId(PackageStoreMutationRequest mutation)
             => !string.IsNullOrWhiteSpace(mutation.PackageId)
                 ? mutation.PackageId
-                : Path.GetFileNameWithoutExtension(mutation.PackagePath ?? string.Empty).Split('.')[0];
+                : Path.GetFileNameWithoutExtension(mutation.UploadId ?? string.Empty).Split('.')[0];
     }
 }

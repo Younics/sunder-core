@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Callbacks;
@@ -7,8 +7,8 @@ using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageAuthSessionCoordinator(
-    Func<string, ActiveLoadedPackage?> getLoadedPackage,
-    Action<string, PackageFailureOrigin, Exception, string> handlePackageFault)
+    Func<string, (ActiveLoadedPackage? Package, long Generation)> getLoadedPackage,
+    Action<string, long, PackageFailureOrigin, Exception, string> handlePackageFault)
 {
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, ActivePackageAuthSession> _authSessions = new(StringComparer.OrdinalIgnoreCase);
@@ -39,7 +39,7 @@ internal sealed class PackageAuthSessionCoordinator(
         string packageId,
         CancellationToken cancellationToken = default)
     {
-        var loadedPackage = getLoadedPackage(packageId);
+        var (loadedPackage, generation) = getLoadedPackage(packageId);
         var callbackHandler = loadedPackage is null ? null : ResolveAuthCallbackHandler(loadedPackage);
         if (loadedPackage?.AuthHandler is null || callbackHandler is null)
         {
@@ -56,7 +56,7 @@ internal sealed class PackageAuthSessionCoordinator(
         }
         catch (Exception ex)
         {
-            return CreateFaultedAuthStatus(packageId, PackageFailureOrigin.RuntimeAuthentication, ex, "read package auth status");
+            return CreateFaultedAuthStatus(packageId, generation, PackageFailureOrigin.RuntimeAuthentication, ex, "read package auth status");
         }
     }
 
@@ -65,7 +65,7 @@ internal sealed class PackageAuthSessionCoordinator(
         PackageAuthCallbackServer packageAuthCallbackServer,
         CancellationToken cancellationToken = default)
     {
-        var loadedPackage = getLoadedPackage(packageId);
+        var (loadedPackage, generation) = getLoadedPackage(packageId);
         var callbackHandler = loadedPackage is null ? null : ResolveAuthCallbackHandler(loadedPackage);
         if (loadedPackage?.AuthHandler is null || callbackHandler is null)
         {
@@ -88,7 +88,7 @@ internal sealed class PackageAuthSessionCoordinator(
             return new PackageAuthSessionStartResponse(
                 packageId,
                 authSessionId,
-                Sunder.Protocol.PackageAuthFlowKind.Browser,
+                Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser,
                 string.Empty,
                 ex.Message);
         }
@@ -118,7 +118,7 @@ internal sealed class PackageAuthSessionCoordinator(
 
             lock (_syncRoot)
             {
-                _authSessions[authSessionId] = new ActivePackageAuthSession(packageId, loadedPackage.AuthHandler, callbackHandler, sessionStatus);
+                _authSessions[authSessionId] = new ActivePackageAuthSession(packageId, generation, loadedPackage.AuthHandler, callbackHandler, sessionStatus);
             }
 
             return ToProtocolAuthSessionStart(sessionStatus);
@@ -129,11 +129,11 @@ internal sealed class PackageAuthSessionCoordinator(
         }
         catch (Exception ex)
         {
-            handlePackageFault(packageId, PackageFailureOrigin.RuntimeAuthentication, ex, "start package authorization");
+            handlePackageFault(packageId, generation, PackageFailureOrigin.RuntimeAuthentication, ex, "start package authorization");
             return new PackageAuthSessionStartResponse(
                 packageId,
                 authSessionId,
-                Sunder.Protocol.PackageAuthFlowKind.Browser,
+                Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser,
                 string.Empty,
                 ex.Message);
         }
@@ -186,7 +186,7 @@ internal sealed class PackageAuthSessionCoordinator(
         }
         catch (Exception ex)
         {
-            handlePackageFault(session.PackageId, PackageFailureOrigin.RuntimeAuthentication, ex, "complete package authorization");
+            handlePackageFault(session.PackageId, session.Generation, PackageFailureOrigin.RuntimeAuthentication, ex, "complete package authorization");
             finalStatus = new PackageAuthStatus(
                 session.PackageId,
                 Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed,
@@ -220,7 +220,7 @@ internal sealed class PackageAuthSessionCoordinator(
         string packageId,
         CancellationToken cancellationToken = default)
     {
-        var loadedPackage = getLoadedPackage(packageId);
+        var (loadedPackage, generation) = getLoadedPackage(packageId);
         if (loadedPackage?.AuthHandler is null)
         {
             return null;
@@ -236,7 +236,7 @@ internal sealed class PackageAuthSessionCoordinator(
         }
         catch (Exception ex)
         {
-            return CreateFaultedAuthStatus(packageId, PackageFailureOrigin.RuntimeAuthentication, ex, "disconnect package authorization");
+            return CreateFaultedAuthStatus(packageId, generation, PackageFailureOrigin.RuntimeAuthentication, ex, "disconnect package authorization");
         }
     }
 
@@ -252,14 +252,15 @@ internal sealed class PackageAuthSessionCoordinator(
 
     private PackageAuthStatusResponse CreateFaultedAuthStatus(
         string packageId,
+        long generation,
         PackageFailureOrigin origin,
         Exception exception,
         string action)
     {
-        handlePackageFault(packageId, origin, exception, action);
+        handlePackageFault(packageId, generation, origin, exception, action);
         return new PackageAuthStatusResponse(
             packageId,
-            Sunder.Protocol.PackageAuthStatusKind.Failed,
+            Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,
             exception.Message,
             CanAuthorize: false,
             CanDisconnect: false);
@@ -267,6 +268,7 @@ internal sealed class PackageAuthSessionCoordinator(
 
     private sealed record ActivePackageAuthSession(
         string PackageId,
+        long Generation,
         IPackageAuthHandler AuthHandler,
         IPackageCallbackHandler CallbackHandler,
         PackageAuthSessionStatus Status);

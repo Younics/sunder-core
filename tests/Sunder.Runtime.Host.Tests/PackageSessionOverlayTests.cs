@@ -1,8 +1,8 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sunder.PackageManagement;
-using Sunder.Protocol;
+using Sunder.Package.Format;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Stacks;
@@ -12,6 +12,15 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class PackageSessionOverlayTests
 {
+    [Fact]
+    public void RuntimeSharedAssemblyRegistry_ResolvesHostStackSdkAssembly()
+    {
+        using var registry = new RuntimeSharedAssemblyRegistry([]);
+        var stackSdkAssembly = typeof(IPackageStackContributor).Assembly;
+
+        Assert.Same(stackSdkAssembly, registry.ResolveSharedAssembly(stackSdkAssembly.GetName()));
+    }
+
     [Fact]
     public async Task LoadInstalledWithDevOverlays_WhenPackageIdsCollide_UsesDevPackageSource()
     {
@@ -82,7 +91,7 @@ public sealed class PackageSessionOverlayTests
         Assert.NotNull(candidateType);
         var assemblyName = new AssemblyName("Example.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null");
         var firstCandidate = Activator.CreateInstance(candidateType, typeof(PackageSessionOverlayTests).Assembly.Location, assemblyName);
-        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderPackageModule).Assembly.Location, assemblyName);
+        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderRuntimePackageModule).Assembly.Location, assemblyName);
 
         registerMethod.Invoke(registry, [firstCandidate, null]);
         registerMethod.Invoke(registry, [secondCandidate, null]);
@@ -135,17 +144,17 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "test.package", "1.0.0", PackageSourceKind.Installed);
         var devFolder = CreatePackageLayout(paths.RootPath, "dev", "test.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            Assert.True((await store.InstallAsync(installedPackage)).Success);
+            await AddInstalledPackageAsync(store, installedPackage);
             await service.LoadInstalledPackagesAsync();
 
-            var loadResult = await service.LoadPackageSessionAsync(new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, devFolder, Watch: true));
+            var loadResult = await service.LoadDevPackageFromRuntimeInputAsync(devFolder);
 
             Assert.True(loadResult.Success, string.Join(Environment.NewLine, loadResult.Errors));
             Assert.NotNull(loadResult.Status);
@@ -174,19 +183,19 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
 
             Assert.Empty(startupResult.Errors);
             Assert.Contains(startupResult.ActivePackages, package => package.PackageId == "startup.package");
 
-            var loadResult = await service.LoadPackageSessionAsync(new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, builderDevFolder, Watch: true));
+            var loadResult = await service.LoadDevPackageFromRuntimeInputAsync(builderDevFolder);
 
             Assert.True(loadResult.Success, string.Join(Environment.NewLine, loadResult.Errors));
             Assert.NotNull(loadResult.Status);
@@ -211,17 +220,17 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "installed.package", "1.0.0", PackageSourceKind.Installed);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            Assert.True((await store.InstallAsync(installedPackage)).Success);
+            await AddInstalledPackageAsync(store, installedPackage);
             await service.LoadInstalledPackagesAsync();
 
-            var loadResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var loadResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
 
             Assert.Empty(loadResult.Errors);
             Assert.Contains(loadResult.ActivePackages, package => package.PackageId == "installed.package");
@@ -240,23 +249,23 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "test.package", "1.0.0", PackageSourceKind.Installed);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "test.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            Assert.True((await store.InstallAsync(installedPackage)).Success);
+            await AddInstalledPackageAsync(store, installedPackage);
             File.Delete(installedPackage.EntryAssemblyPath);
 
-            var loadResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var loadResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
 
             Assert.Empty(loadResult.Errors);
             var activePackage = Assert.Single(loadResult.ActivePackages);
             Assert.Equal("test.package", activePackage.PackageId);
             Assert.Equal("2.0.0", activePackage.Version);
-            var source = Assert.Single(service.GetActivePackageSources());
+            var source = Assert.Single(service.GetActiveRuntimePackageSources());
             Assert.Equal(PackageSourceKind.Dev, source.Kind);
             var status = await service.GetPackageSessionStatusAsync("test.package");
             Assert.NotNull(status);
@@ -274,16 +283,16 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "installed.package", "1.0.0", PackageSourceKind.Installed);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            Assert.True((await store.InstallAsync(installedPackage)).Success);
+            await AddInstalledPackageAsync(store, installedPackage);
             await service.LoadInstalledPackagesAsync();
-            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
             Assert.Empty(startupResult.Errors);
 
             var reloadResult = await service.ReloadInstalledPackageSessionAsync(new InstalledPackageSessionReloadRequest(["installed.package"]));
@@ -308,15 +317,15 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var goodPackage = CreatePackageLayout(paths.RootPath, "installed", "good.package", "1.0.0", PackageSourceKind.Installed);
         var badPackage = CreatePackageLayout(paths.RootPath, "installed", "bad.package", "1.0.0", PackageSourceKind.Installed);
 
         try
         {
-            Assert.True((await store.InstallAsync(goodPackage)).Success);
-            Assert.True((await store.InstallAsync(badPackage)).Success);
+            await AddInstalledPackageAsync(store, goodPackage);
+            await AddInstalledPackageAsync(store, badPackage);
             File.Delete(badPackage.EntryAssemblyPath);
 
             var reloadResult = await service.ReloadInstalledPackageSessionAsync(new InstalledPackageSessionReloadRequest(["good.package", "bad.package"]));
@@ -341,17 +350,17 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
             Assert.Empty(startupResult.Errors);
 
-            var builderLoadResult = await service.LoadPackageSessionAsync(new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, builderDevFolder, Watch: true));
+            var builderLoadResult = await service.LoadDevPackageFromRuntimeInputAsync(builderDevFolder);
             Assert.True(builderLoadResult.Success, string.Join(Environment.NewLine, builderLoadResult.Errors));
 
             WritePackageManifest(startupDevFolder, "startup.package", "1.1.0");
@@ -387,17 +396,17 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "shared.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "shared.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
             Assert.Empty(startupResult.Errors);
 
-            var builderLoadResult = await service.LoadPackageSessionAsync(new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, builderDevFolder, Watch: true));
+            var builderLoadResult = await service.LoadDevPackageFromRuntimeInputAsync(builderDevFolder);
             Assert.True(builderLoadResult.Success, string.Join(Environment.NewLine, builderLoadResult.Errors));
             Assert.Equal("2.0.0", builderLoadResult.Status?.Version);
 
@@ -436,34 +445,28 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public async Task CommitPackageLifecycleStageAsync_WhenStageOwnerIsSdk_PreservesStartupDevOverlay()
+    public async Task StagePackageLifecycleAsync_WhenAskedToAddUnknownSdkPackage_RejectsPathlessRequest()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
             Assert.Empty(startupResult.Errors);
 
-            var stageResult = await service.StagePackageLifecycleAsync(CreateSdkStageRequest(builderDevFolder));
+            var stageResult = await service.StagePackageLifecycleAsync(
+                new PackageLifecycleStageRequest(["builder.package"], PackageLifecycleOverlayOwner.Sdk));
 
-            Assert.Empty(stageResult.Errors);
-            Assert.NotNull(stageResult.StageId);
-            Assert.Contains(stageResult.ActivePackages, package => package.PackageId == "startup.package");
-            Assert.Contains(stageResult.ActivePackages, package => package.PackageId == "builder.package");
-            Assert.DoesNotContain("startup.package", stageResult.ImpactedPackageIds);
-            Assert.Contains("builder.package", stageResult.ImpactedPackageIds);
-
-            var commitResult = await service.CommitPackageLifecycleStageAsync(stageResult.StageId!);
-
-            Assert.Empty(commitResult.Errors);
+            Assert.False(stageResult.Success);
+            Assert.Null(stageResult.StageId);
+            Assert.Contains(stageResult.Errors, error => error.Contains("not an active dev package", StringComparison.OrdinalIgnoreCase));
             Assert.Contains(service.GetActivePackages(), package => package.PackageId == "startup.package");
-            Assert.Contains(service.GetActivePackages(), package => package.PackageId == "builder.package");
+            Assert.DoesNotContain(service.GetActivePackages(), package => package.PackageId == "builder.package");
         }
         finally
         {
@@ -476,30 +479,30 @@ public sealed class PackageSessionOverlayTests
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths, store);
+        var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
-        var stagedDevFolder = CreatePackageLayout(paths.RootPath, "staged-dev", "staged.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
         try
         {
-            var startupResult = await service.LoadPackageLifecycleAsync(CreateStartupLifecycleRequest(startupDevFolder));
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
             Assert.Empty(startupResult.Errors);
 
-            var stageResult = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(stagedDevFolder));
+            WritePackageManifest(startupDevFolder, "startup.package", "1.1.0");
+            var stageResult = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(startupDevFolder));
             Assert.Empty(stageResult.Errors);
             Assert.NotNull(stageResult.StageId);
-            Assert.Contains(stageResult.ActivePackages, package => package.PackageId == "staged.package");
+            Assert.Contains(stageResult.ActivePackages, package => package.PackageId == "startup.package" && package.Version == "1.1.0");
 
-            var builderLoadResult = await service.LoadPackageSessionAsync(new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, builderDevFolder, Watch: true));
+            var builderLoadResult = await service.LoadDevPackageFromRuntimeInputAsync(builderDevFolder);
             Assert.True(builderLoadResult.Success, string.Join(Environment.NewLine, builderLoadResult.Errors));
 
             var commitResult = await service.CommitPackageLifecycleStageAsync(stageResult.StageId!);
 
             Assert.False(commitResult.Success);
             Assert.Contains(commitResult.Errors, error => error.Contains("stale", StringComparison.OrdinalIgnoreCase));
-            Assert.DoesNotContain(service.GetActivePackages(), package => package.PackageId == "staged.package");
+            Assert.Contains(service.GetActivePackages(), package => package.PackageId == "startup.package" && package.Version == "1.1.0");
             Assert.Contains(service.GetActivePackages(), package => package.PackageId == "startup.package");
             Assert.Contains(service.GetActivePackages(), package => package.PackageId == "builder.package");
         }
@@ -543,7 +546,7 @@ public sealed class PackageSessionOverlayTests
             entryAssemblyFileName,
             Icon: null,
             DependsOn: (dependencies ?? [])
-                .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, "*"))
+                .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, ">=0.0.0"))
                 .ToArray(),
             packageFolder,
             IsEnabled: true,
@@ -558,7 +561,7 @@ public sealed class PackageSessionOverlayTests
     {
         var entryAssemblyFileName = Path.GetFileName(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
         var dependencyJson = dependencies is { Count: > 0 }
-            ? ",\n  \"dependsOn\": [\n" + string.Join(",\n", dependencies.Select(dependencyId => $"    {{ \"packageId\": \"{dependencyId}\", \"versionRange\": \"*\" }}")) + "\n  ]"
+            ? ",\n  \"dependsOn\": [\n" + string.Join(",\n", dependencies.Select(dependencyId => $"    {{ \"packageId\": \"{dependencyId}\", \"versionRange\": \">=0.0.0\" }}")) + "\n  ]"
             : string.Empty;
         File.WriteAllText(Path.Combine(packageFolder, "sunder-package.json"), $$"""
             {
@@ -566,25 +569,26 @@ public sealed class PackageSessionOverlayTests
               "id": "{{packageId}}",
               "name": "{{packageId}}",
               "version": "{{version}}",
+              "sdkApiVersion": 1,
+              "sdkPackageVersion": "1.0.0",
+              "requiredSdkCapabilities": ["core.v1"],
               "entryAssembly": "{{entryAssemblyFileName}}"{{dependencyJson}}
             }
             """);
     }
 
-    private static PackageLifecycleLoadRequest CreateStartupLifecycleRequest(string folder)
-        => new([
-            new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, folder),
-        ], PackageLifecycleOverlayOwner.Startup);
+    private static async Task AddInstalledPackageAsync(InstalledPackageStore store, InstalledPackageRecord package)
+    {
+        var packages = (await store.ListAsync()).Append(package).ToArray();
+        await store.WriteAsync(packages);
+    }
 
     private static PackageLifecycleStageRequest CreateHotReloadStageRequest(string folder)
-        => new([
-            new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, folder),
-        ], PackageLifecycleOverlayOwner.HotReload);
-
-    private static PackageLifecycleStageRequest CreateSdkStageRequest(string folder)
-        => new([
-            new Sunder.Protocol.PackageSessionLoadRequest(PackageSourceKind.Dev, folder),
-        ], PackageLifecycleOverlayOwner.Sdk);
+    {
+        using var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "sunder-package.json")));
+        var packageId = manifest.RootElement.GetProperty("id").GetString()!;
+        return new PackageLifecycleStageRequest([packageId], PackageLifecycleOverlayOwner.HotReload);
+    }
 
     private static string CreateTempDirectory()
     {
@@ -609,17 +613,17 @@ public sealed class PackageSessionOverlayTests
     }
 }
 
-public sealed class PackageSessionOverlayTestPackageModule : ISunderPackageModule
+public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePackageModule
 {
     public static bool RegisterStackContributor { get; set; }
 
     public static bool StackContributorContainsSecrets { get; set; }
 
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
         if (!RegisterStackContributor)
         {

@@ -1,0 +1,33 @@
+{
+  "packageId": "sunder.package.sample",
+  "name": "Sample",
+  "summary": "A sample package.",
+  "version": "1.2.3",
+  "icon": "assets/icon.png",
+  "entryAssembly": "Sample.dll",
+  "compatibility": {
+    "sdkApiVersion": 1,
+    "sdkPackageVersion": "0.8.0",
+    "requiredCapabilities": [
+      "app-ui.v1",
+      "core.v1"
+    ],
+    "targetFramework": "net10.0",
+    "manifestFormatVersion": 1,
+    "archiveFormatVersion": 1
+  },
+  "isYanked": false,
+  "deprecatedMessage": null,
+  "dependsOn": [
+    {
+      "packageId": "sunder.package.base",
+      "versionRange": "\u003E=1.0.0"
+    }
+  ],
+  "artifact": {
+    "sha256": "abc123",
+    "size": 42,
+    "downloadUrl": "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/download"
+  },
+  "publishedAtUtc": "2026-07-11T10:00:00+00:00"
+}

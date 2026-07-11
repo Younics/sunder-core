@@ -1,7 +1,10 @@
+using Sunder.App.Services;
+
 namespace Sunder.App.ViewModels;
 
 internal sealed class MarketplaceSearchScheduler(Func<CancellationToken, Task> searchAsync, TimeSpan defaultDelay) : IDisposable
 {
+    private readonly OwnedTaskObserver _tasks = new(nameof(MarketplaceSearchScheduler));
     private CancellationTokenSource? _pendingSearchCts;
     private bool _disposed;
 
@@ -15,7 +18,7 @@ internal sealed class MarketplaceSearchScheduler(Func<CancellationToken, Task> s
         Cancel();
         var cancellationTokenSource = new CancellationTokenSource();
         _pendingSearchCts = cancellationTokenSource;
-        _ = RunQueuedSearchAsync(cancellationTokenSource, delay ?? defaultDelay);
+        _tasks.Observe(RunQueuedSearchAsync(cancellationTokenSource, delay ?? defaultDelay), "running a queued search");
     }
 
     public void Cancel()
@@ -34,6 +37,7 @@ internal sealed class MarketplaceSearchScheduler(Func<CancellationToken, Task> s
     {
         _disposed = true;
         Cancel();
+        _tasks.Dispose();
     }
 
     private async Task RunQueuedSearchAsync(

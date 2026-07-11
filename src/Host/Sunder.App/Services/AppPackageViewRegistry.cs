@@ -1,8 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Avalonia;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -15,32 +16,45 @@ internal sealed class AppPackageViewRegistry
     private readonly Dictionary<string, Control> _settingsViewCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PackageSettingsViewDescriptor> _settingsViewPackagesById;
     private readonly Dictionary<string, List<string>> _viewIdsByPackageId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IUiDispatcher _uiDispatcher;
 
-    public AppPackageViewRegistry()
-        : this(new Dictionary<string, PackageSettingsViewDescriptor>(StringComparer.OrdinalIgnoreCase))
+    public AppPackageViewRegistry(IUiDispatcher? uiDispatcher = null)
+        : this(new Dictionary<string, PackageSettingsViewDescriptor>(StringComparer.OrdinalIgnoreCase), uiDispatcher)
     {
     }
 
-    public AppPackageViewRegistry(IDictionary<string, PackageSettingsViewDescriptor> settingsViewPackagesById)
+    public AppPackageViewRegistry(
+        IDictionary<string, PackageSettingsViewDescriptor> settingsViewPackagesById,
+        IUiDispatcher? uiDispatcher = null)
     {
         _settingsViewPackagesById = new Dictionary<string, PackageSettingsViewDescriptor>(settingsViewPackagesById, StringComparer.OrdinalIgnoreCase);
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     }
 
-    public void RegisterPackageView<TView>(string packageId, string viewId, IServiceProvider serviceProvider)
+    public void RegisterPackageView<TView>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
         where TView : Control
-        => RegisterPackageView(packageId, viewId, serviceProvider, typeof(TView), AppRegistrationKind.View);
+        => RegisterPackageView(packageId, registration, serviceProvider, typeof(TView), AppRegistrationKind.View);
 
-    public void RegisterPackageViewFactory<TFactory>(string packageId, string viewId, IServiceProvider serviceProvider)
+    internal void RegisterPackageView<TView>(string packageId, string viewId, IServiceProvider serviceProvider)
+        where TView : Control
+        => RegisterPackageView<TView>(packageId, new PackageViewRegistration(viewId, viewId), serviceProvider);
+
+    public void RegisterPackageViewFactory<TFactory>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
         where TFactory : class, IPackageWorkspaceFactory
-        => RegisterPackageView(packageId, viewId, serviceProvider, typeof(TFactory), AppRegistrationKind.Factory);
+        => RegisterPackageView(packageId, registration, serviceProvider, typeof(TFactory), AppRegistrationKind.Factory);
+
+    internal void RegisterPackageViewFactory<TFactory>(string packageId, string viewId, IServiceProvider serviceProvider)
+        where TFactory : class, IPackageWorkspaceFactory
+        => RegisterPackageViewFactory<TFactory>(packageId, new PackageViewRegistration(viewId, viewId), serviceProvider);
 
     private void RegisterPackageView(
         string packageId,
-        string viewId,
+        PackageViewRegistration registration,
         IServiceProvider serviceProvider,
         Type implementationType,
         AppRegistrationKind registrationKind)
     {
+        var viewId = registration.Id;
         lock (_syncRoot)
         {
             if (_registeredViews.TryGetValue(viewId, out var existingRegistration)
@@ -50,8 +64,25 @@ internal sealed class AppPackageViewRegistry
                     $"Package view id '{viewId}' is already registered by package '{existingRegistration.PackageId}'.");
             }
 
-            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, implementationType, registrationKind, packageId);
+            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, implementationType, registrationKind, packageId, registration);
             TrackPackageViewId(packageId, viewId);
+        }
+    }
+
+    public IReadOnlyList<PackageViewDescriptor> GetPackageViewDescriptors(string packageId)
+    {
+        lock (_syncRoot)
+        {
+            return _registeredViews.Values
+                .Where(view => string.Equals(view.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+                .Select(view => new PackageViewDescriptor(
+                    view.Registration.Id,
+                    packageId,
+                    view.Registration.Name,
+                    string.IsNullOrWhiteSpace(view.Registration.Icon) ? null : new PackageIconDescriptor(null, view.Registration.Icon),
+                    view.Registration.DefaultPlacement.ToString(),
+                    view.Registration.ShowInHotbarByDefault))
+                .ToArray();
         }
     }
 
@@ -271,15 +302,13 @@ internal sealed class AppPackageViewRegistry
     public async Task RemoveCachedViewsAsync(string packageId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess() || Application.Current is null)
         {
             RemoveCachedViews(packageId);
             return;
         }
 
-        await Dispatcher.UIThread.InvokeAsync(
-            () => RemoveCachedViews(packageId),
-            DispatcherPriority.Normal);
+        await _uiDispatcher.InvokeAsync(() => RemoveCachedViews(packageId));
     }
 
     public bool RemoveCachedView(string viewId)
@@ -331,14 +360,12 @@ internal sealed class AppPackageViewRegistry
     public async Task<IReadOnlyList<string>> UnregisterPackageAsync(string packageId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (Dispatcher.UIThread.CheckAccess() || Application.Current is null)
+        if (_uiDispatcher.CheckAccess() || Application.Current is null)
         {
             return UnregisterPackage(packageId);
         }
 
-        return await Dispatcher.UIThread.InvokeAsync(
-            () => UnregisterPackage(packageId),
-            DispatcherPriority.Normal);
+        return await _uiDispatcher.InvokeAsync(() => UnregisterPackage(packageId));
     }
 
     private void TrackPackageViewId(string packageId, string viewId)
@@ -381,6 +408,26 @@ internal sealed class AppPackageViewRegistry
             return;
         }
 
+        try
+        {
+            switch (control.Parent)
+            {
+                case ContentControl contentParent when ReferenceEquals(contentParent.Content, control):
+                    contentParent.Content = null;
+                    break;
+                case Decorator decorator when ReferenceEquals(decorator.Child, control):
+                    decorator.Child = null;
+                    break;
+                case Panel panel:
+                    panel.Children.Remove(control);
+                    break;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // A generation may be torn down after its UI thread exits; disposal remains best effort.
+        }
+
         object? dataContext = null;
         try
         {
@@ -416,7 +463,12 @@ internal sealed class AppPackageViewRegistry
         }
     }
 
-    private sealed record AppRegisteredPackageView(IServiceProvider ServiceProvider, Type ImplementationType, AppRegistrationKind RegistrationKind, string PackageId);
+    private sealed record AppRegisteredPackageView(
+        IServiceProvider ServiceProvider,
+        Type ImplementationType,
+        AppRegistrationKind RegistrationKind,
+        string PackageId,
+        PackageViewRegistration Registration);
 
     private sealed record AppRegisteredSettingsView(IServiceProvider ServiceProvider, Type ImplementationType, AppRegistrationKind RegistrationKind, string PackageId);
 

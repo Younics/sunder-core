@@ -9,9 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sunder.Protocol\Sunder.Protocol.csproj" />
-    <ProjectReference Include="..\..\Sunder.Registry.Shared\Sunder.Registry.Shared.csproj" />
-    <ProjectReference Include="..\..\Sunder.PackageManagement\Sunder.PackageManagement.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
+    <ProjectReference Include="..\..\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
+    <ProjectReference Include="..\..\Sunder.Package.Format\Sunder.Package.Format.csproj" />
   </ItemGroup>
 
   <ItemGroup>

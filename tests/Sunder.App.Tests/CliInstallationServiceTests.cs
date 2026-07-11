@@ -146,7 +146,7 @@ public sealed class CliInstallationServiceTests
         CreateBundledCli(testRoot, CliInstallPlatform.Windows, "exe");
         var bundledCliDirectory = Path.Combine(testRoot, "app", "Cli");
         File.WriteAllText(Path.Combine(bundledCliDirectory, "sunder.dll"), "dll");
-        File.WriteAllText(Path.Combine(bundledCliDirectory, "Sunder.Protocol.dll"), "protocol");
+        File.WriteAllText(Path.Combine(bundledCliDirectory, "Sunder.Runtime.Contracts.dll"), "protocol");
         var environment = new FakeCliEnvironmentVariableStore();
         var service = CreateService(testRoot, CliInstallPlatform.Windows, environment);
 
@@ -154,7 +154,7 @@ public sealed class CliInstallationServiceTests
 
         Assert.Equal("exe", File.ReadAllText(result.Status.Paths.InstalledCliPath));
         Assert.Equal("dll", File.ReadAllText(Path.Combine(result.Status.Paths.InstalledCliDirectory, "sunder.dll")));
-        Assert.Equal("protocol", File.ReadAllText(Path.Combine(result.Status.Paths.InstalledCliDirectory, "Sunder.Protocol.dll")));
+        Assert.Equal("protocol", File.ReadAllText(Path.Combine(result.Status.Paths.InstalledCliDirectory, "Sunder.Runtime.Contracts.dll")));
     }
 
     [Fact]
@@ -219,11 +219,11 @@ public sealed class CliInstallationServiceTests
         var testRoot = CreateTempDirectory();
         CreateBundledCli(testRoot, CliInstallPlatform.Windows, "v1");
         var bundledCliDirectory = Path.Combine(testRoot, "app", "Cli");
-        File.WriteAllText(Path.Combine(bundledCliDirectory, "Sunder.Protocol.dll"), "protocol");
+        File.WriteAllText(Path.Combine(bundledCliDirectory, "Sunder.Runtime.Contracts.dll"), "protocol");
         var environment = new FakeCliEnvironmentVariableStore { UserPath = @"C:\Users\test\bin" };
         var service = CreateService(testRoot, CliInstallPlatform.Windows, environment);
         var installResult = await service.EnsureInstalledAsync();
-        var installedCompanionPath = Path.Combine(installResult.Status.Paths.InstalledCliDirectory, "Sunder.Protocol.dll");
+        var installedCompanionPath = Path.Combine(installResult.Status.Paths.InstalledCliDirectory, "Sunder.Runtime.Contracts.dll");
         Assert.True(File.Exists(installedCompanionPath));
 
         var status = await service.UninstallAsync();

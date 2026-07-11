@@ -8,7 +8,8 @@ Creates a Sunder runtime package project that can be built into a `sunder-dev` f
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --createInPlace --output ./MyPackage
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --noDefaultView
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withAvalonia
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withStacks
 dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent
 dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
 ```
@@ -17,6 +18,8 @@ Generated package projects reference:
 
 - `Sunder.Sdk`
 - `Sunder.Package.Build`
+
+All Sunder references use exact version `1.0.0`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are added only by their matching opt-ins.
 
 You can build the generated package with:
 

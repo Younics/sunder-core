@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Configuration;
@@ -108,11 +108,11 @@ internal static class PackageProtocolMapper
                     field.Label,
                     field.Kind switch
                     {
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Text => Sunder.Protocol.PackageConfigurationFieldKind.Text,
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Secret => Sunder.Protocol.PackageConfigurationFieldKind.Secret,
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Boolean => Sunder.Protocol.PackageConfigurationFieldKind.Boolean,
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Select => Sunder.Protocol.PackageConfigurationFieldKind.Select,
-                        _ => Sunder.Protocol.PackageConfigurationFieldKind.Text,
+                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Text => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Text,
+                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Secret => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Secret,
+                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Boolean => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Boolean,
+                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Select => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Select,
+                        _ => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Text,
                     },
                     field.Description,
                     field.IsRequired,
@@ -132,10 +132,10 @@ internal static class PackageProtocolMapper
             status.PackageId,
             status.Status switch
             {
-                Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected => Sunder.Protocol.PackageAuthStatusKind.NotConnected,
-                Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected => Sunder.Protocol.PackageAuthStatusKind.Connected,
-                Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed => Sunder.Protocol.PackageAuthStatusKind.Failed,
-                _ => Sunder.Protocol.PackageAuthStatusKind.Unavailable,
+                Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected => Sunder.Runtime.Contracts.PackageAuthStatusKind.NotConnected,
+                Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected => Sunder.Runtime.Contracts.PackageAuthStatusKind.Connected,
+                Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed => Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,
+                _ => Sunder.Runtime.Contracts.PackageAuthStatusKind.Unavailable,
             },
             status.Message,
             status.CanAuthorize,
@@ -148,7 +148,7 @@ internal static class PackageProtocolMapper
         return new PackageAuthSessionStartResponse(
             status.PackageId,
             status.AuthSessionId,
-            Sunder.Protocol.PackageAuthFlowKind.Browser,
+            Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser,
             status.LaunchUrl ?? string.Empty,
             status.Message);
     }
@@ -160,10 +160,10 @@ internal static class PackageProtocolMapper
             status.AuthSessionId,
             status.State switch
             {
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Connected => Sunder.Protocol.PackageAuthSessionState.Connected,
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Failed => Sunder.Protocol.PackageAuthSessionState.Failed,
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Cancelled => Sunder.Protocol.PackageAuthSessionState.Cancelled,
-                _ => Sunder.Protocol.PackageAuthSessionState.Pending,
+                Sunder.Sdk.Authentication.PackageAuthSessionState.Connected => Sunder.Runtime.Contracts.PackageAuthSessionState.Connected,
+                Sunder.Sdk.Authentication.PackageAuthSessionState.Failed => Sunder.Runtime.Contracts.PackageAuthSessionState.Failed,
+                Sunder.Sdk.Authentication.PackageAuthSessionState.Cancelled => Sunder.Runtime.Contracts.PackageAuthSessionState.Cancelled,
+                _ => Sunder.Runtime.Contracts.PackageAuthSessionState.Pending,
             },
             status.Message,
             status.LaunchUrl);

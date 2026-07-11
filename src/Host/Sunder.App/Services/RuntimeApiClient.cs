@@ -1,35 +1,42 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.Services;
 
 public sealed class RuntimeApiClient : IRuntimeApiClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int MaxSseEventCharacters = 256 * 1024;
 
     private readonly HttpClient _httpClient;
-    private readonly Func<Uri> _getRuntimeBaseUri;
-    private readonly bool _disposeHttpClient;
+    private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
 
     public RuntimeApiClient(Uri runtimeBaseUri)
-        : this(() => RuntimeUrlHelper.Normalize(runtimeBaseUri)) { }
+        : this(() => RuntimeConnectionInfoStore.LoadFor(runtimeBaseUri)) { }
 
     public RuntimeApiClient(RuntimeConnectionState runtimeConnectionState)
-        : this(() => runtimeConnectionState.RuntimeUrl) { }
+        : this(() => runtimeConnectionState.ConnectionInfo) { }
 
-    public RuntimeApiClient(Func<Uri> getRuntimeBaseUri, HttpClient? httpClient = null)
+    internal RuntimeApiClient(
+        Func<RuntimeConnectionInfo?> getConnectionInfo,
+        HttpMessageHandler? innerHandler = null)
     {
-        _httpClient = httpClient ?? new HttpClient();
-        _disposeHttpClient = httpClient is null;
-        _getRuntimeBaseUri = getRuntimeBaseUri ?? throw new ArgumentNullException(nameof(getRuntimeBaseUri));
+        _getConnectionInfo = getConnectionInfo ?? throw new ArgumentNullException(nameof(getConnectionInfo));
+        _httpClient = new HttpClient(new RuntimeAuthenticatedHttpMessageHandler(_getConnectionInfo, innerHandler));
     }
 
     public async Task<SystemStatusResponse?> GetSystemStatusAsync(
         CancellationToken cancellationToken = default
     ) =>
         await _httpClient.GetFromJsonAsync<SystemStatusResponse>(
-            CreateRequestUri("api/system"),
+            CreateRequestUri("system"),
             cancellationToken
         );
 
@@ -53,7 +60,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default
     ) =>
         await _httpClient.GetFromJsonAsync<IReadOnlyList<ActivePackageDescriptor>>(
-            CreateRequestUri("api/packages/active"),
+            CreateRequestUri("packages/active"),
             cancellationToken
         ) ?? [];
 
@@ -61,23 +68,80 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default
     ) =>
         await _httpClient.GetFromJsonAsync<IReadOnlyList<SessionPackageDescriptor>>(
-            CreateRequestUri("api/packages/session"),
+            CreateRequestUri("packages/session"),
             cancellationToken
         ) ?? [];
 
-    public async Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(
+    public async Task<DevPackageWatchStatus> SetDevPackageWatchIntentAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(
+            CreateRequestUri("dev-packages/watch"),
+            new DevPackageWatchIntentRequest(enabled),
+            cancellationToken);
+        return await ReadRequiredAsync<DevPackageWatchStatus>(response, cancellationToken);
+    }
+
+    public async Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(
+        long afterSequenceId = 0,
+        CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<RuntimeEventSnapshot>(
+               CreateRequestUri($"runtime-events/snapshot?after={Math.Max(0, afterSequenceId)}"),
+               cancellationToken)
+           ?? throw new InvalidDataException("Runtime returned an empty event snapshot.");
+
+    public IAsyncEnumerable<RuntimeEventDescriptor> StreamRuntimeEventsAsync(
+        long afterSequenceId,
+        CancellationToken cancellationToken = default)
+        => ReadSseAsync<RuntimeEventDescriptor>("runtime-events/stream", afterSequenceId, cancellationToken);
+
+    public async Task<PackageLogSnapshot> GetPackageLogSnapshotAsync(
+        long afterSequenceId = 0,
+        int limit = 500,
+        CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<PackageLogSnapshot>(
+               CreateRequestUri($"package-logs/snapshot?after={Math.Max(0, afterSequenceId)}&limit={Math.Clamp(limit, 1, 1000)}"),
+               cancellationToken)
+           ?? throw new InvalidDataException("Runtime returned an empty package-log snapshot.");
+
+    public IAsyncEnumerable<PackageLogEntryDescriptor> StreamPackageLogsAsync(
+        long afterSequenceId,
+        CancellationToken cancellationToken = default)
+        => ReadSseAsync<PackageLogEntryDescriptor>("package-logs/stream", afterSequenceId, cancellationToken);
+
+    public async Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
         CancellationToken cancellationToken = default
     ) =>
-        await _httpClient.GetFromJsonAsync<IReadOnlyList<PackageSourceDescriptor>>(
-            CreateRequestUri("api/packages/sources/active"),
+        await _httpClient.GetFromJsonAsync<IReadOnlyList<PackageUiSnapshotDescriptor>>(
+            CreateRequestUri("packages/ui-snapshots"),
             cancellationToken
         ) ?? [];
+
+    public async Task DownloadPackageUiSnapshotAsync(
+        PackageUiSnapshotDescriptor snapshot,
+        Stream destination,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(
+            CreateRequestUri(snapshot.SnapshotUri),
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength is > AppPackageSourcePreparer.MaxSnapshotBytes)
+        {
+            throw new InvalidDataException("Runtime package UI snapshot exceeds the App stream limit.");
+        }
+
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await source.CopyToAsync(destination, cancellationToken);
+    }
 
     public async Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(
         CancellationToken cancellationToken = default
     ) =>
         await _httpClient.GetFromJsonAsync<IReadOnlyList<InstalledPackageDescriptor>>(
-            CreateRequestUri("api/packages/installed"),
+            CreateRequestUri("packages/installed"),
             cancellationToken
         ) ?? [];
 
@@ -86,7 +150,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.GetAsync(
-            CreateRequestUri($"api/packages/session/{Uri.EscapeDataString(packageId)}/status"),
+            CreateRequestUri($"packages/session/{Uri.EscapeDataString(packageId)}/status"),
             cancellationToken);
 
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -103,7 +167,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/packages/session/load"),
+            CreateRequestUri("packages/session/load"),
             request,
             cancellationToken);
 
@@ -118,7 +182,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri($"api/packages/session/{Uri.EscapeDataString(packageId)}/unload"),
+            CreateRequestUri($"packages/session/{Uri.EscapeDataString(packageId)}/unload"),
             new PackageSessionUnloadRequest(sourceKind),
             cancellationToken);
 
@@ -129,7 +193,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
 
     public Uri CreatePackageAssetUri(string packageId, string assetPath) =>
         CreateRequestUri(
-            $"api/packages/{Uri.EscapeDataString(packageId)}/assets/{EscapeRelativePath(assetPath)}"
+            $"packages/{Uri.EscapeDataString(packageId)}/assets/{EscapeRelativePath(assetPath)}"
         );
 
     public async Task<PackageOperationResult> InstallPackageFromPathAsync(
@@ -142,26 +206,14 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         string packagePath,
         bool applyRuntimeSession,
         CancellationToken cancellationToken = default
-    ) =>
-        await SendPackageOperationAsync(
-            () =>
-                _httpClient.PostAsJsonAsync(
-                    CreateRequestUri("api/packages/install/local"),
-                    new PackageInstallFromPathRequest(packagePath, applyRuntimeSession),
-                    cancellationToken
-                ),
-            cancellationToken
-        );
-
-    public async Task<PackageOperationResult> InstallPackagesFromPathsAsync(
-        PackageInstallBatchFromPathRequest request,
-        CancellationToken cancellationToken = default)
-        => await SendPackageOperationAsync(
-            () => _httpClient.PostAsJsonAsync(
-                CreateRequestUri("api/packages/install/local-batch"),
-                request,
-                cancellationToken),
+    )
+    {
+        var upload = await UploadPackageAsync(packagePath, cancellationToken);
+        var stage = await StagePackageStoreChangesAsync(
+            new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId)]),
             cancellationToken);
+        return stage.StageId is null ? stage.OperationResult : await CommitPackageStoreStageAsync(stage.StageId, cancellationToken);
+    }
 
     public async Task<PackageOperationResult> UpgradePackageFromPathAsync(
         string packageId,
@@ -179,18 +231,74 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         bool reinstall,
         bool applyRuntimeSession,
         CancellationToken cancellationToken = default
-    ) =>
-        await SendPackageOperationAsync(
-            () =>
-                _httpClient.PostAsJsonAsync(
-                    CreateRequestUri(
-                        $"api/packages/{Uri.EscapeDataString(packageId)}/upgrade/local"
-                    ),
-                    new PackageUpgradeFromPathRequest(packagePath, allowDowngrade, reinstall, applyRuntimeSession),
-                    cancellationToken
-                ),
-            cancellationToken
-        );
+    )
+    {
+        var upload = await UploadPackageAsync(packagePath, cancellationToken);
+        var stage = await StagePackageStoreChangesAsync(
+            new PackageStoreStageRequest([new PackageStoreMutationRequest(
+                PackageStoreMutationKind.Upgrade,
+                packageId,
+                upload.UploadId,
+                allowDowngrade,
+                reinstall)]),
+            cancellationToken);
+        return stage.StageId is null ? stage.OperationResult : await CommitPackageStoreStageAsync(stage.StageId, cancellationToken);
+    }
+
+    public async Task<ContentUploadDescriptor> UploadPackageAsync(
+        string packagePath,
+        CancellationToken cancellationToken = default)
+        => await UploadFileAsync(packagePath, "uploads/packages", "application/vnd.sunder.package", cancellationToken);
+
+    public async Task<ContentUploadDescriptor> UploadStackAsync(
+        string stackPath,
+        CancellationToken cancellationToken = default)
+        => await UploadFileAsync(stackPath, "uploads/stacks", "application/vnd.sunder.stack", cancellationToken);
+
+    public async Task<ContentUploadDescriptor> UploadStackMediaAsync(
+        string mediaPath,
+        string contentType,
+        CancellationToken cancellationToken = default)
+        => await UploadFileAsync(mediaPath, "uploads/stack-media", contentType, cancellationToken);
+
+    public async Task DownloadContentAsync(
+        ContentDownloadDescriptor download,
+        string destinationPath,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(CreateRequestUri(download.DownloadUri), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(destinationPath))!);
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[128 * 1024];
+        long length = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            length += read;
+            if (length > download.Length)
+            {
+                throw new InvalidDataException("Runtime download exceeded its declared length.");
+            }
+            hash.AppendData(buffer, 0, read);
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+
+        var actualHash = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        if (length != download.Length || !string.Equals(actualHash, download.ContentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            destination.Close();
+            File.Delete(destinationPath);
+            throw new InvalidDataException("Runtime download hash or length verification failed.");
+        }
+    }
 
     public async Task<PackageOperationResult> EnableInstalledPackageAsync(
         string packageId,
@@ -199,7 +307,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         await SendPackageOperationAsync(
             () =>
                 _httpClient.PostAsync(
-                    CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/enable"),
+                    CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/enable"),
                     content: null,
                     cancellationToken
                 ),
@@ -213,7 +321,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         await SendPackageOperationAsync(
             () =>
                 _httpClient.PostAsync(
-                    CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/disable"),
+                    CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/disable"),
                     content: null,
                     cancellationToken
                 ),
@@ -227,7 +335,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         await SendPackageOperationAsync(
             () =>
                 _httpClient.DeleteAsync(
-                    CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}"),
+                    CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}"),
                     cancellationToken
                 ),
             cancellationToken
@@ -238,7 +346,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/packages/store/stage"),
+            CreateRequestUri("packages/store/stage"),
             request,
             cancellationToken);
 
@@ -260,7 +368,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
         => await SendPackageOperationAsync(
             () => _httpClient.PostAsync(
-                CreateRequestUri($"api/packages/store/stage/{Uri.EscapeDataString(stageId)}/commit"),
+                CreateRequestUri($"packages/store/stage/{Uri.EscapeDataString(stageId)}/commit"),
                 content: null,
                 cancellationToken),
             cancellationToken);
@@ -270,7 +378,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.DeleteAsync(
-            CreateRequestUri($"api/packages/store/stage/{Uri.EscapeDataString(stageId)}"),
+            CreateRequestUri($"packages/store/stage/{Uri.EscapeDataString(stageId)}"),
             cancellationToken);
 
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -287,7 +395,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/packages/session/load-batch"),
+            CreateRequestUri("packages/session/load-batch"),
             request,
             cancellationToken
         );
@@ -301,7 +409,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
 
     public async Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken cancellationToken = default)
         => await _httpClient.GetFromJsonAsync<RuntimeStackExportDiscoveryResponse>(
-               CreateRequestUri("api/stacks/export/items"),
+               CreateRequestUri("stacks/export/items"),
                cancellationToken)
            ?? new RuntimeStackExportDiscoveryResponse([], [], ["Runtime returned an empty Stack export discovery response."]);
 
@@ -310,7 +418,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/stacks/export"),
+            CreateRequestUri("stacks/export"),
             request,
             cancellationToken);
 
@@ -336,7 +444,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/stacks/import/preview"),
+            CreateRequestUri("stacks/import/preview"),
             request,
             cancellationToken);
 
@@ -364,7 +472,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/stacks/import/apply"),
+            CreateRequestUri("stacks/import/apply"),
             request,
             cancellationToken);
 
@@ -391,7 +499,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default)
         => await SendPackageOperationAsync(
             () => _httpClient.PostAsJsonAsync(
-                CreateRequestUri("api/packages/session/reload-installed"),
+                CreateRequestUri("packages/session/reload-installed"),
                 new InstalledPackageSessionReloadRequest(impactedPackageIds),
                 cancellationToken),
             cancellationToken);
@@ -402,7 +510,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("api/packages/session/stage"),
+            CreateRequestUri("packages/session/stage"),
             request,
             cancellationToken
         );
@@ -420,7 +528,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.PostAsync(
-            CreateRequestUri($"api/packages/session/stage/{Uri.EscapeDataString(stageId)}/commit"),
+            CreateRequestUri($"packages/session/stage/{Uri.EscapeDataString(stageId)}/commit"),
             content: null,
             cancellationToken);
 
@@ -437,7 +545,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.DeleteAsync(
-            CreateRequestUri($"api/packages/session/stage/{Uri.EscapeDataString(stageId)}"),
+            CreateRequestUri($"packages/session/stage/{Uri.EscapeDataString(stageId)}"),
             cancellationToken);
 
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -452,7 +560,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         IReadOnlyList<PackageConfigurationSchemaDescriptor>
     > GetConfigurationSchemasAsync(CancellationToken cancellationToken = default) =>
         await _httpClient.GetFromJsonAsync<IReadOnlyList<PackageConfigurationSchemaDescriptor>>(
-            CreateRequestUri("api/packages/configuration/schemas"),
+            CreateRequestUri("packages/configuration/schemas"),
             cancellationToken
         ) ?? [];
 
@@ -461,7 +569,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default
     ) =>
         await _httpClient.GetFromJsonAsync<PackageConfigurationValuesResponse>(
-            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/config/values"),
+            CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/config/values"),
             cancellationToken
         );
 
@@ -472,7 +580,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.PutAsJsonAsync(
-            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/config/values"),
+            CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/config/values"),
             new UpdatePackageConfigurationValuesRequest(values),
             cancellationToken
         );
@@ -485,7 +593,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default
     ) =>
         await _httpClient.GetFromJsonAsync<PackageAuthStatusResponse>(
-            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/auth/status"),
+            CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/auth/status"),
             cancellationToken
         );
 
@@ -495,7 +603,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.PostAsync(
-            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/auth/start"),
+            CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/auth/start"),
             content: null,
             cancellationToken
         );
@@ -513,7 +621,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     ) =>
         await _httpClient.GetFromJsonAsync<PackageAuthSessionStatusResponse>(
             CreateRequestUri(
-                $"api/packages/{Uri.EscapeDataString(packageId)}/auth/sessions/{Uri.EscapeDataString(authSessionId)}"
+                $"packages/{Uri.EscapeDataString(packageId)}/auth/sessions/{Uri.EscapeDataString(authSessionId)}"
             ),
             cancellationToken
         );
@@ -524,7 +632,7 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     )
     {
         using var response = await _httpClient.PostAsync(
-            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/auth/disconnect"),
+            CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/auth/disconnect"),
             content: null,
             cancellationToken
         );
@@ -542,9 +650,15 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
         CancellationToken cancellationToken = default
     )
     {
+        var status = await GetPackageSessionStatusAsync(packageId, cancellationToken);
+        if (status is null)
+        {
+            return;
+        }
+
         using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri($"api/packages/{Uri.EscapeDataString(packageId)}/fault"),
-            new ReportPackageFaultRequest(origin, message),
+            CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/fault"),
+            new ReportPackageFaultRequest(origin, message, status.GenerationId),
             cancellationToken
         );
 
@@ -554,15 +668,149 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
     public async Task ShutdownAsync(CancellationToken cancellationToken = default)
     {
         using var response = await _httpClient.PostAsync(
-            CreateRequestUri("api/system/shutdown"),
+            CreateRequestUri("system/shutdown"),
             content: null,
             cancellationToken
         );
         response.EnsureSuccessStatusCode();
     }
 
-    private Uri CreateRequestUri(string relativePath) =>
-        new(RuntimeUrlHelper.Normalize(_getRuntimeBaseUri()), relativePath);
+    public Task<RuntimeRegistryAuthStartResponse> StartRegistryAuthAsync(RuntimeRegistryAuthStartRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryAuthStartRequest, RuntimeRegistryAuthStartResponse>("registry/auth/start", request, cancellationToken);
+
+    public async Task<RuntimeRegistryAuthSessionStatus?> GetRegistryAuthSessionAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(CreateRequestUri($"registry/auth/sessions/{Uri.EscapeDataString(sessionId)}"), cancellationToken);
+        return response.StatusCode == System.Net.HttpStatusCode.NotFound
+            ? null
+            : await ReadRequiredAsync<RuntimeRegistryAuthSessionStatus>(response, cancellationToken);
+    }
+
+    public async Task<RuntimeRegistryAuthStatus> GetRegistryAuthStatusAsync(string registryOrigin, CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(CreateRequestUri($"registry/auth/status?origin={Uri.EscapeDataString(registryOrigin)}"), cancellationToken);
+        return await ReadRequiredAsync<RuntimeRegistryAuthStatus>(response, cancellationToken);
+    }
+
+    public Task<RuntimeRegistryAuthStatus> LogoutRegistryAsync(string registryOrigin, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryOriginRequest, RuntimeRegistryAuthStatus>("registry/auth/logout", new(registryOrigin), cancellationToken);
+
+    public Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryPackageBatchRequest, RegistryResolveInstallPlanResponse>("registry/packages/plan", request, cancellationToken);
+
+    public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryPackageRequest, RuntimeRegistryPackageChangeResult>("registry/packages/install", request, cancellationToken);
+
+    public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryPackageBatchRequest, RuntimeRegistryPackageChangeResult>("registry/packages/apply", request, cancellationToken);
+
+    public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryUpdateRequest, RuntimeRegistryPackageChangeResult>("registry/packages/update", request, cancellationToken);
+
+    public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryStarRequest, RegistryPackageStarResponse>("registry/packages/star", request, cancellationToken);
+
+    public Task<RegistryStackStarResponse> SetRegistryStackStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryStarRequest, RegistryStackStarResponse>("registry/stacks/star", request, cancellationToken);
+
+    public Task<RegistryPublishStackResponse> PublishRegistryStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryPublishRequest, RegistryPublishStackResponse>("registry/stacks/publish", request, cancellationToken);
+
+    public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken = default)
+        => PostRegistryAsync<RuntimeRegistryDeleteStackRequest, RegistryStackManagementOperationResponse>("registry/stacks/delete", request, cancellationToken);
+
+    private async Task<TResponse> PostRegistryAsync<TRequest, TResponse>(string path, TRequest request, CancellationToken cancellationToken)
+    {
+        using var response = await _httpClient.PostAsJsonAsync(CreateRequestUri(path), request, cancellationToken);
+        return await ReadRequiredAsync<TResponse>(response, cancellationToken);
+    }
+
+    private async IAsyncEnumerable<T> ReadSseAsync<T>(
+        string endpoint,
+        long afterSequenceId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            CreateRequestUri($"{endpoint}?after={Math.Max(0, afterSequenceId)}"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        if (afterSequenceId > 0)
+        {
+            request.Headers.TryAddWithoutValidation("Last-Event-ID", afterSequenceId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 8192, leaveOpen: false);
+        var data = new StringBuilder();
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (line.Length == 0)
+            {
+                if (data.Length > 0)
+                {
+                    yield return JsonSerializer.Deserialize<T>(data.ToString(), JsonOptions)
+                                 ?? throw new InvalidDataException("Runtime stream returned an empty event.");
+                    data.Clear();
+                }
+
+                continue;
+            }
+
+            if (!line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = line.AsSpan(5).TrimStart();
+            if (data.Length + value.Length > MaxSseEventCharacters)
+            {
+                throw new InvalidDataException("Runtime stream event exceeded the client parser limit.");
+            }
+
+            if (data.Length > 0)
+            {
+                data.Append('\n');
+            }
+
+            data.Append(value);
+        }
+    }
+
+    private static async Task<T> ReadRequiredAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken)
+               ?? throw new InvalidDataException($"Runtime returned an empty {typeof(T).Name} response.");
+    }
+
+    private async Task<ContentUploadDescriptor> UploadFileAsync(
+        string filePath,
+        string endpoint,
+        string contentType,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+        stream.Position = 0;
+        using var content = new StreamContent(stream);
+        content.Headers.ContentLength = stream.Length;
+        content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileNameStar = Path.GetFileName(filePath) };
+        content.Headers.Add("X-Content-SHA256", hash);
+        using var response = await _httpClient.PostAsync(CreateRequestUri(endpoint), content, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<ContentUploadDescriptor>(cancellationToken: cancellationToken)
+               ?? throw new InvalidDataException("Runtime returned an empty upload response.");
+    }
+
+    private Uri CreateRequestUri(string relativePath)
+    {
+        var connectionInfo = _getConnectionInfo()
+            ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
+        return new Uri(RuntimeUrlHelper.Normalize(connectionInfo.RuntimeUrl), $"api/v1/{relativePath}");
+    }
 
     private static string EscapeRelativePath(string path) =>
         string.Join(
@@ -692,9 +940,6 @@ public sealed class RuntimeApiClient : IRuntimeApiClient
 
     public void Dispose()
     {
-        if (_disposeHttpClient)
-        {
-            _httpClient.Dispose();
-        }
+        _httpClient.Dispose();
     }
 }

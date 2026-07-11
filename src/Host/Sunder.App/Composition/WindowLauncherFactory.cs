@@ -14,7 +14,8 @@ public sealed class WindowLauncherFactory(
     BackgroundProcessQueueService backgroundProcessQueue,
     SettingsWindowFactory settingsWindowFactory,
     PackagesWindowFactory packagesWindowFactory,
-    StacksWindowFactory stacksWindowFactory)
+    StacksWindowFactory stacksWindowFactory,
+    IUiDispatcher uiDispatcher)
 {
     public WindowLauncher Create(PackageViewHostService packageViewHostService)
         => new(
@@ -24,10 +25,11 @@ public sealed class WindowLauncherFactory(
             notificationCenter,
             shellStateService,
             shellState,
-            developerLog,
-            updateService,
-            backgroundProcessQueue,
             settingsWindowFactory,
             packagesWindowFactory,
-            stacksWindowFactory);
+            stacksWindowFactory,
+            uiDispatcher,
+            developerLog,
+            updateService,
+            backgroundProcessQueue);
 }

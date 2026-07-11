@@ -15,10 +15,7 @@ public sealed class AppUpdateSettingsService
 
     public AppUpdateSettingsService(string? settingsFilePath = null)
     {
-        _settingsFilePath = settingsFilePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Sunder",
-            "update-settings.json");
+        _settingsFilePath = settingsFilePath ?? AppLocalState.GetPath("update-settings.json");
     }
 
     public AppUpdateSettings Load()

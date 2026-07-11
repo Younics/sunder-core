@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Sunder.Runtime.Client;
 
 namespace Sunder.App.Services;
 
@@ -7,6 +8,8 @@ internal static class RuntimeHostStartInfoFactory
     public static ProcessStartInfo Create(
         string runtimeHostPath,
         Uri runtimeUrl,
+        string bearerToken,
+        string connectionInfoPath,
         IReadOnlyList<string>? devPackageFolders = null)
     {
         var runtimeUrlText = runtimeUrl.ToString().TrimEnd('/');
@@ -18,6 +21,8 @@ internal static class RuntimeHostStartInfoFactory
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(runtimeHostPath)!,
         };
+        startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"] = bearerToken;
+        startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = connectionInfoPath;
 
         if (isDotnetAssembly)
         {

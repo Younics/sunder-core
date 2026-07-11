@@ -1,6 +1,6 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
@@ -121,12 +121,16 @@ public sealed class PackageUpdateStartupCheckServiceTests
         FakeRuntimeApiClient runtimeApiClient,
         FakeRegistryApiClient registryApiClient,
         NotificationCenterService notificationCenter)
-        => new(
+    {
+        runtimeApiClient.Updates = registryApiClient.Updates;
+        runtimeApiClient.ThrowOnResolveUpdates = registryApiClient.ThrowOnResolveUpdates;
+        return new(
             queue,
             new FakeRuntimeApiClientFactory(runtimeApiClient),
             new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder"),
             () => new Uri("https://registry.example/"),
             _ => registryApiClient);
+    }
 
     private static NotificationCenterService CreateNotificationCenter()
         => new(Path.Combine(CreateTempDirectory(), "notifications.json"));
@@ -211,6 +215,21 @@ public sealed class PackageUpdateStartupCheckServiceTests
     {
         private readonly IReadOnlyList<InstalledPackageDescriptor> _installedPackages = installedPackages ?? [];
 
+        public IReadOnlyList<RegistryPackageUpdate> Updates { get; set; } = [];
+
+        public bool ThrowOnResolveUpdates { get; set; }
+
+        public Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnResolveUpdates) throw new InvalidOperationException("registry unavailable");
+            return Task.FromResult(new RegistryResolveInstallPlanResponse(
+                true,
+                Updates.Select(update => new RegistryPackageInstallPlanItem(update.PackageId, update.CurrentVersion, update.AvailableVersion, true, update.DeprecatedMessage, [], update.Artifact)).ToArray(),
+                [],
+                [],
+                []));
+        }
+
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
@@ -223,7 +242,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)

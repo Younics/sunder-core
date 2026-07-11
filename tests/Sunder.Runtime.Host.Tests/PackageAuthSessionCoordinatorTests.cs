@@ -1,11 +1,11 @@
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Authentication;
-using Sunder.Sdk.Storage;
+using Sunder.Runtime.Host.Infrastructure.Storage;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -21,8 +21,8 @@ public sealed class PackageAuthSessionCoordinatorTests
             NullLogger<PackageAuthCallbackServer>.Instance,
             GetFreePort());
         var coordinator = new PackageAuthSessionCoordinator(
-            packageId => string.Equals(packageId, "test.package", StringComparison.OrdinalIgnoreCase) ? loadedPackage : null,
-            (_, _, _, _) => throw new InvalidOperationException("Unexpected package fault."));
+            packageId => (string.Equals(packageId, "test.package", StringComparison.OrdinalIgnoreCase) ? loadedPackage : null, 1),
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected package fault."));
 
         var first = await coordinator.StartPackageAuthAsync("test.package", callbackServer);
         var second = await coordinator.StartPackageAuthAsync("test.package", callbackServer);
@@ -31,7 +31,7 @@ public sealed class PackageAuthSessionCoordinatorTests
         Assert.NotNull(second);
         Assert.Equal(first.AuthSessionId, second.AuthSessionId);
         Assert.Equal(1, authHandler.StartCount);
-        Assert.Equal(Sunder.Protocol.PackageAuthFlowKind.Browser, first.Flow);
+        Assert.Equal(Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser, first.Flow);
         Assert.Equal("https://login.example.test", first.LaunchUrl);
     }
 
@@ -44,8 +44,8 @@ public sealed class PackageAuthSessionCoordinatorTests
             NullLogger<PackageAuthCallbackServer>.Instance,
             GetFreePort());
         var coordinator = new PackageAuthSessionCoordinator(
-            _ => loadedPackage,
-            (_, _, _, _) => throw new InvalidOperationException("Unexpected package fault."));
+            _ => (loadedPackage, 1),
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected package fault."));
         var started = await coordinator.StartPackageAuthAsync("test.package", callbackServer);
 
         var completed = await coordinator.CompletePackageAuthSessionAsync(
@@ -55,7 +55,7 @@ public sealed class PackageAuthSessionCoordinatorTests
 
         Assert.True(completed);
         Assert.NotNull(status);
-        Assert.Equal(Sunder.Protocol.PackageAuthSessionState.Connected, status.State);
+        Assert.Equal(Sunder.Runtime.Contracts.PackageAuthSessionState.Connected, status.State);
         Assert.Equal("Connected.", status.Message);
         Assert.Equal("abc", authHandler.CompletedCode);
     }
@@ -67,10 +67,14 @@ public sealed class PackageAuthSessionCoordinatorTests
 
         return new ActiveLoadedPackage(
             new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
-            new PackageSourceDescriptor("test.package", PackageSourceKind.Dev, tempDirectory),
+            new RuntimePackageSource("test.package", PackageSourceKind.Dev, tempDirectory),
             ConfigurationSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
-            new JsonPackageSecretsStore(Path.Combine(tempDirectory, "secrets.json")),
+            new JsonPackageSecretsStore(
+                Path.Combine(tempDirectory, "secrets.json"),
+                null,
+                null,
+                new RestrictedFileMasterKeyProtection()),
             authHandler,
             new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
             {

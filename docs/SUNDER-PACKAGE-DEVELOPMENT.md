@@ -26,7 +26,7 @@ dotnet new install Sunder.Package.Templates
 
 ## Create A Package
 
-Create a standard package with a default shell view:
+Create a headless Runtime package:
 
 ```powershell
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
@@ -38,10 +38,10 @@ Create package files directly in the specified output folder:
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --createInPlace --output .\MyPackage
 ```
 
-Create a package with no default view:
+Create a package with an Avalonia App view:
 
 ```powershell
-dotnet new sunder-package --name MyHeadlessPackage --packageId my.company.headless --packageName "My Headless Package" --noDefaultView
+dotnet new sunder-package --name MyUiPackage --packageId my.company.ui --packageName "My UI Package" --withAvalonia
 ```
 
 Create a package that exposes contracts:
@@ -68,9 +68,10 @@ Template options:
 | --- | --- |
 | `--packageId <id>` | Required runtime package id written into generated metadata |
 | `--packageName <name>` | Required display name written into generated metadata and starter view |
+| `--withAvalonia` | Adds exact V1 Avalonia SDK references and a default App package view |
+| `--withStacks` | Adds the exact V1 Stack SDK reference and a Runtime Stack contributor example |
 | `--withContracts` | Adds a `*.Contracts` project for public extension points |
 | `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder |
-| `--noDefaultView` | Omits the default shell-visible package view |
 | `--withHostDependency` | Adds runtime dependency metadata for another package |
 | `--hostPackageId <id>` | Required with `--withHostDependency` or `--withHostContracts`; runtime package id that this package depends on |
 | `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub |
@@ -79,7 +80,7 @@ Template options:
 
 ## Project Files
 
-Generated package projects reference `Sunder.Sdk` and `Sunder.Package.Build` with floating versions so restores resolve the latest stable Sunder SDK/build tooling from configured package sources.
+Generated package projects reference the coordinated `1.0.0` versions of `Sunder.Sdk` and `Sunder.Package.Build`. Avalonia and Stack contracts are exact-version opt-ins.
 
 Current generated package project shape:
 
@@ -90,13 +91,11 @@ Current generated package project shape:
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.3" />
-    <PackageReference Include="Sunder.Sdk" Version="*" />
-    <PackageReference Include="Sunder.Package.Build" Version="*" PrivateAssets="all" />
+    <PackageReference Include="Sunder.Sdk" Version="1.0.0" />
+    <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
   </ItemGroup>
 </Project>
 ```
@@ -113,16 +112,18 @@ Rules:
 
 ## Sunder SDK Overview
 
-`Sunder.Sdk` is the package-author contract layer between a package and the installed Sunder Host. Packages use it to declare metadata, define a module entrypoint, register UI/runtime contributions, access package-scoped state, and integrate with Host services without referencing Host implementation projects.
+`Sunder.Sdk` contains the headless Runtime/App lifecycle and extension contracts. `Sunder.Sdk.Avalonia` is an explicit opt-in for packages that register Avalonia views, settings, workspaces, or theme resources. Neither package requires references to Host implementation projects.
 
 SDK areas:
 
 | Area | Primary Types | What It Provides |
 | --- | --- | --- |
 | Packaging metadata | `SunderPackageAttribute`, `SunderPackageDependencyAttribute` | Package identity and runtime package dependencies |
-| Module lifecycle | `ISunderPackageModule` | Package startup, service registration, and contribution registration |
+| Runtime lifecycle | `ISunderRuntimePackageModule` | Headless Runtime service and contribution registration |
+| App lifecycle | `ISunderAppPackageModule` | App-side service and Avalonia contribution registration |
 | Package context | `IPackageContext` | Package id, version, install path, storage, configuration, secrets, logging |
-| Contributions | `IPackageContributionRegistry` | Views, settings views, background services, extensions, configuration schemas |
+| Runtime contributions | `ISunderRuntimeContributionRegistry` | Background services, Runtime extensions, configuration schemas |
+| App contributions | `ISunderAppContributionRegistry` | App-side extensions; `Sunder.Sdk.Avalonia` adds view/settings registration extensions |
 | Views | `PackageViewRegistration`, `PackageViewPlacement` | Shell-visible Avalonia package views |
 | Workspaces | `IPackageWorkspaceFactory` | Factory-created package workspaces/views |
 | Extensions | `PackageExtensionPoint<T>`, `IPackageExtensionCatalog` | Typed package-to-package contribution points and active contribution discovery |
@@ -149,14 +150,14 @@ using Sunder.Sdk.Abstractions;
 
 namespace MyCompany.Package;
 
-public sealed class PackageModule : ISunderPackageModule
+public sealed class PackageModule : ISunderAppPackageModule
 {
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
         services.AddTransient<MyViewModel>();
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
         registry.RegisterPackageView<MyView>(new PackageViewRegistration(
             id: "my.company.package.main",
@@ -194,9 +195,9 @@ registry.RegisterConfigurationSchema(new PackageConfigurationSchema(
 Use package-scoped configuration, state, and secrets:
 
 ```csharp
-var enabled = context.Configuration.GetValue("enabled");
+var enabled = await context.Configuration.GetValueAsync("enabled", cancellationToken);
 await context.Storage.State.SetValueAsync("last-run", DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
-context.Secrets.SetSecret("api-key", apiKey);
+await context.Secrets.SetSecretAsync("api-key", apiKey, cancellationToken);
 ```
 
 Define and consume a typed extension point:
@@ -325,7 +326,7 @@ Manual capability entries are reserved for unusual reflection or dynamic scenari
 </ItemGroup>
 ```
 
-See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for Host/SDK/package versioning rules and the process for future SDK capability versions.
+See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for the V1 Host/SDK/package rules.
 
 ## Package Metadata
 
@@ -363,7 +364,7 @@ The package version is controlled by MSBuild properties such as `Version`.
 
 ## Package Module
 
-Every runtime package exposes one public module implementing `ISunderPackageModule`.
+An entry assembly may expose one Runtime role, one App role, or one class implementing both. Each host discovers and invokes only its own role.
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
@@ -371,28 +372,27 @@ using Sunder.Sdk.Abstractions;
 
 namespace MyCompany.Package;
 
-public sealed class PackageModule : ISunderPackageModule
+public sealed class PackageModule : ISunderRuntimePackageModule
 {
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
-        services.AddTransient<MyViewModel>();
+        services.AddSingleton<MyRuntimeService>();
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
-        registry.RegisterPackageView<MyView>(new PackageViewRegistration(
-            "my.company.package.default",
-            "My Package"));
+        registry.RegisterBackgroundService<MyRuntimeService>();
     }
 }
 ```
 
 Current module rules:
 
-- The package entry assembly contains exactly one public, non-abstract `ISunderPackageModule` implementation.
-- The module type has a public parameterless constructor.
-- Services are registered in `ConfigureServices`.
-- Views, settings, background services, configuration schemas, and extensions are registered in `RegisterContributions`.
+- Each role has at most one public, non-abstract implementation with a public parameterless constructor.
+- Runtime services are registered in `ConfigureRuntimeServices`; App services are registered in `ConfigureAppServices`.
+- Background services and configuration schemas are Runtime-only.
+- Views and settings views are App-only and require `Sunder.Sdk.Avalonia`.
+- Extensions are registered in the host catalog that consumes them; some packages intentionally register equivalent extension objects in both isolated host service providers.
 
 Open package UI that depends on other packages should observe `IPackageExtensionCatalogMonitor.Changed` and refresh only when relevant extension points change. The event identifies the lifecycle reason and extension point additions/removals.
 
@@ -415,11 +415,11 @@ Available context members:
 
 Use package storage/configuration/secrets abstractions for mutable package data. Do not write mutable state into the installed package folder.
 
-Host-provided services can also be injected into package services and views. App-hosted packages can use `IBackgroundProcessQueue`, `IPackageNotificationService`, `IPackageShellViewService`, `IPackageSettingsNavigationService`, and `IPackageSessionService`. Runtime-only activation provides null or disabled implementations for UI/app services, so packages should handle `false`, `null`, no-op results, or `NotSupportedException` where documented by the service contract.
+Host-provided services can also be injected into package services and views. App modules can use `IBackgroundProcessQueue`, `IPackageNotificationService`, `IPackageShellViewService`, `IPackageSettingsNavigationService`, and `IPackageSessionService`. Runtime does not construct or invoke App modules.
 
 ## Views
 
-Package views are Avalonia controls registered by code.
+Package views are Avalonia controls registered by an App module through `Sunder.Sdk.Avalonia`.
 
 ```csharp
 registry.RegisterPackageView<MyView>(new PackageViewRegistration(
@@ -439,7 +439,7 @@ View guidance:
 
 ## Theme Resources
 
-`Sunder.Sdk.Theming.SunderThemeKeys` contains semantic resource keys.
+`Sunder.Sdk.Avalonia.Theming.SunderThemeKeys` contains semantic resource keys.
 
 Common keys:
 
@@ -518,7 +518,15 @@ Load multiple dev packages:
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\HostPackage\bin\Debug\net10.0\sunder-dev" --dev-package ".\ExtensionPackage\bin\Debug\net10.0\sunder-dev"
 ```
 
-The app sends dev-package folders to the runtime host through the local protocol. The runtime validates and activates the runtime side, then the app activates package UI contributions from the original dev-package folders.
+The app passes dev-package folders only as Runtime startup inputs. Runtime validates and activates the package, then exposes generation-scoped UI snapshots to the App; the App does not inspect the dev output directories.
+
+Add `--watch` to reload after build output changes:
+
+```powershell
+& "C:\Path\To\Sunder.App.exe" --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev" --watch
+```
+
+Runtime owns watcher lifecycle, parent-folder replacement handling, debounce/stability checks, and generation-fenced reload transactions. Reload state reaches the App through the authenticated Runtime event stream. Package runtime logs are likewise discovered, parsed, bounded, and streamed by Runtime rather than read from package storage by the App.
 
 ## Debug Runtime Package Code
 
@@ -608,9 +616,4 @@ Publish to a local development Registry endpoint when the Registry server is run
 sunder publish --file .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg --dev-local --registry-url http://localhost:5288/
 ```
 
-Authentication token sources for publish:
-
-- Saved CLI token from `sunder auth login`.
-- `SUNDER_REGISTRY_TOKEN` environment variable.
-- `--token <token>` command-line option.
-- `--dev-local` for a development Registry endpoint that enables local publish.
+Authenticated publish uses the encrypted Registry credential owned by Runtime after `sunder auth login`. `--dev-local` remains available for a development Registry endpoint that enables local publish.

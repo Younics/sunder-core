@@ -86,7 +86,7 @@ internal sealed record PackageSelectionDetails(
 
     public static PackageSelectionDetails FromMarketplaceDetails(
         RegistryPackageSearchItemViewModel item,
-        Sunder.Registry.Shared.RegistryPackageDetails package)
+        Sunder.Registry.Contracts.RegistryPackageDetails package)
         => new(
             string.IsNullOrWhiteSpace(package.Name) ? item.Name : package.Name,
             package.PackageId,

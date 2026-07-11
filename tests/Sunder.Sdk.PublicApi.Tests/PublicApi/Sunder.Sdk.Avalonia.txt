@@ -1,0 +1,99 @@
+type class CompiledAvaloniaXaml.!AvaloniaResources
+  method Avalonia.Controls.ResourceDictionary Build:/Themes/SunderThemeResources.axaml(System.IServiceProvider )
+  method Avalonia.Styling.Styles Build:/Themes/SunderPackageStyles.axaml(System.IServiceProvider )
+  method System.Void Populate:/Themes/SunderPackageStyles.axaml(System.IServiceProvider , Avalonia.Styling.Styles )
+  method System.Void Populate:/Themes/SunderThemeResources.axaml(System.IServiceProvider , Avalonia.Controls.ResourceDictionary )
+type class CompiledAvaloniaXaml.!XamlLoader
+  method System.Object TryLoad(System.IServiceProvider , System.String )
+  method System.Object TryLoad(System.String )
+type sealed class Sunder.Sdk.Avalonia.AvaloniaPackageContributionRegistryExtensions
+  method System.Void RegisterPackageView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, Sunder.Sdk.Abstractions.PackageViewRegistration registration)
+  method System.Void RegisterPackageView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, System.String viewId)
+  method System.Void RegisterPackageViewFactory<TFactory>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, Sunder.Sdk.Abstractions.PackageViewRegistration registration)
+  method System.Void RegisterPackageViewFactory<TFactory>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, System.String viewId)
+  method System.Void RegisterSettingsView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry)
+  method System.Void RegisterSettingsViewFactory<TFactory>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry)
+type interface Sunder.Sdk.Avalonia.IAvaloniaPackageContributionRegistry : Sunder.Sdk.Abstractions.ISunderAppContributionRegistry
+  method System.Void RegisterPackageView<TView>(Sunder.Sdk.Abstractions.PackageViewRegistration registration)
+  method System.Void RegisterPackageView<TView>(System.String viewId)
+  method System.Void RegisterPackageViewFactory<TFactory>(Sunder.Sdk.Abstractions.PackageViewRegistration registration)
+  method System.Void RegisterPackageViewFactory<TFactory>(System.String viewId)
+  method System.Void RegisterSettingsView<TView>()
+  method System.Void RegisterSettingsViewFactory<TFactory>()
+type interface Sunder.Sdk.Avalonia.IPackageWorkspaceFactory
+  method Avalonia.Controls.Control CreateRootView(System.IServiceProvider services)
+type sealed class Sunder.Sdk.Avalonia.Theming.SunderThemeKeys
+  field System.String AccentBrush = Sunder.Brush.Accent
+  field System.String AccentOverlayBrush = Sunder.Brush.Accent.Overlay
+  field System.String AccentSoftBrush = Sunder.Brush.Accent.Soft
+  field System.String AppGradientEndColor = Sunder.Color.AppGradient.End
+  field System.String AppGradientMiddleColor = Sunder.Color.AppGradient.Middle
+  field System.String AppGradientStartColor = Sunder.Color.AppGradient.Start
+  field System.String BackgroundAppBrush = Sunder.Brush.Background.App
+  field System.String BackgroundAppColor = Sunder.Color.Background.App
+  field System.String BorderDangerBrush = Sunder.Brush.Border.Danger
+  field System.String BorderFocusBrush = Sunder.Brush.Border.Focus
+  field System.String BorderStrongBrush = Sunder.Brush.Border.Strong
+  field System.String BorderSubtleBrush = Sunder.Brush.Border.Subtle
+  field System.String BorderWarningBrush = Sunder.Brush.Border.Warning
+  field System.String DangerBrush = Sunder.Brush.Danger
+  field System.String DangerSoftBrush = Sunder.Brush.Danger.Soft
+  field System.String DisabledBrush = Sunder.Brush.Disabled
+  field System.String ErrorBrush = Sunder.Brush.Error
+  field System.String ErrorSoftBrush = Sunder.Brush.Error.Soft
+  field System.String FocusBrush = Sunder.Brush.Focus
+  field System.String FontSizeBody = Sunder.FontSize.Body
+  field System.String FontSizeCaption = Sunder.FontSize.Caption
+  field System.String FontSizePageTitle = Sunder.FontSize.PageTitle
+  field System.String FontSizeSectionTitle = Sunder.FontSize.SectionTitle
+  field System.String ForegroundCodeBrush = Sunder.Brush.Foreground.Code
+  field System.String ForegroundMutedBrush = Sunder.Brush.Foreground.Muted
+  field System.String ForegroundOnAccentBrush = Sunder.Brush.Foreground.OnAccent
+  field System.String ForegroundOnDangerBrush = Sunder.Brush.Foreground.OnDanger
+  field System.String ForegroundPrimaryBrush = Sunder.Brush.Foreground.Primary
+  field System.String ForegroundSecondaryBrush = Sunder.Brush.Foreground.Secondary
+  field System.String InfoBrush = Sunder.Brush.Info
+  field System.String InfoSoftBrush = Sunder.Brush.Info.Soft
+  field System.String LoadingOverlayEndColor = Sunder.Color.Loading.Overlay.End
+  field System.String LoadingOverlayMiddleColor = Sunder.Color.Loading.Overlay.Middle
+  field System.String LoadingOverlaySoftColor = Sunder.Color.Loading.Overlay.Soft
+  field System.String LoadingOverlayStartColor = Sunder.Color.Loading.Overlay.Start
+  field System.String OverlayBackdropBrush = Sunder.Brush.Overlay.Backdrop
+  field System.String OverlayBackdropStrongBrush = Sunder.Brush.Overlay.Backdrop.Strong
+  field System.String OverlayBorderBrush = Sunder.Brush.Overlay.Border
+  field System.String OverlaySurfaceBrush = Sunder.Brush.Overlay.Surface
+  field System.String RadiusFull = Sunder.Radius.Full
+  field System.String RadiusLarge = Sunder.Radius.Large
+  field System.String RadiusMedium = Sunder.Radius.Medium
+  field System.String RadiusSmall = Sunder.Radius.Small
+  field System.String SelectionBrush = Sunder.Brush.Selection
+  field System.String ShadowOverlay = Sunder.Shadow.Overlay
+  field System.String ShadowPackageCard = Sunder.Shadow.PackageCard
+  field System.String ShadowPackagePanel = Sunder.Shadow.PackagePanel
+  field System.String ShadowPrompt = Sunder.Shadow.Prompt
+  field System.String ShadowShellPanel = Sunder.Shadow.ShellPanel
+  field System.String ShadowToast = Sunder.Shadow.Toast
+  field System.String ShadowWelcomeLogo = Sunder.Shadow.WelcomeLogo
+  field System.String ShadowWorkspacePanel = Sunder.Shadow.WorkspacePanel
+  field System.String SpacingLarge = Sunder.Spacing.Large
+  field System.String SpacingMedium = Sunder.Spacing.Medium
+  field System.String SpacingSmall = Sunder.Spacing.Small
+  field System.String SpacingXLarge = Sunder.Spacing.XLarge
+  field System.String SpacingXSmall = Sunder.Spacing.XSmall
+  field System.String SuccessBrush = Sunder.Brush.Success
+  field System.String SuccessSoftBrush = Sunder.Brush.Success.Soft
+  field System.String SurfaceBaseBrush = Sunder.Brush.Surface.Base
+  field System.String SurfaceBaseColor = Sunder.Color.Surface.Base
+  field System.String SurfaceCodeBrush = Sunder.Brush.Surface.Code
+  field System.String SurfaceDragOverBrush = Sunder.Brush.Surface.DragOver
+  field System.String SurfaceHoverBrush = Sunder.Brush.Surface.Hover
+  field System.String SurfacePopoverBrush = Sunder.Brush.Surface.Popover
+  field System.String SurfaceRaisedBrush = Sunder.Brush.Surface.Raised
+  field System.String SurfaceRaisedColor = Sunder.Color.Surface.Raised
+  field System.String SurfaceSelectedBrush = Sunder.Brush.Surface.Selected
+  field System.String SurfaceWorkspaceBrush = Sunder.Brush.Surface.Workspace
+  field System.String SurfaceWorkspaceColor = Sunder.Color.Surface.Workspace
+  field System.String TransparentBrush = Sunder.Brush.Transparent
+  field System.String WarningBrush = Sunder.Brush.Warning
+  field System.String WarningSoftBrush = Sunder.Brush.Warning.Soft
+  property System.Collections.Generic.IReadOnlyList<System.String> BrushKeys { get; }

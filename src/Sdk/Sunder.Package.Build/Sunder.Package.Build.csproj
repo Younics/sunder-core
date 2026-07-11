@@ -5,10 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificBuildOutput>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificContentInPackage>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <NoWarn>$(NoWarn);NU5100</NoWarn>
-    <Version>0.8.0</Version>
+    <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
+    <Version>1.0.0</Version>
     <Title>Sunder.Package.Build</Title>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
@@ -31,12 +32,17 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" PrivateAssets="all" />
+    <ProjectReference Include="..\..\Sunder.Package.Format\Sunder.Package.Format.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" PrivateAssets="all" />
   </ItemGroup>
 
   <Target Name="_AddSunderPackageBuildTaskFiles">
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(TargetDir)*.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Package.Format.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Sunder.Sdk.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.dll" PackagePath="tasks\$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.dll" PackagePath="tasks\$(TargetFramework)" />
     </ItemGroup>
   </Target>
 

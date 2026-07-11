@@ -1,5 +1,5 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.ViewModels;
 

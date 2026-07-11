@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -7,60 +7,95 @@ internal static class PackageSessionEndpoints
 {
     public static IEndpointRouteBuilder MapPackageSessionEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/api/packages");
+        var group = endpoints.MapGroup("/packages");
         group.MapGet(
             "active",
-            (RuntimePackageSessionService packageSessionService) => Results.Ok(packageSessionService.GetActivePackages()));
+            (PackageSessionLifecycleService sessions) => Results.Ok(sessions.GetActivePackages()));
 
         group.MapGet(
             "session",
-            (RuntimePackageSessionService packageSessionService) => Results.Ok(packageSessionService.GetSessionPackages()));
+            (PackageSessionLifecycleService sessions) => Results.Ok(sessions.GetSessionPackages()));
 
         group.MapGet(
-            "sources/active",
-            (RuntimePackageSessionService packageSessionService) => Results.Ok(packageSessionService.GetActivePackageSources()));
+            "ui-snapshots",
+            (RuntimePackageUiService packageUi) => Results.Ok(packageUi.GetActiveSnapshots()));
+
+        group.MapGet("ui-snapshots/{snapshotId}", (string snapshotId, RuntimePackageUiService packageUi) =>
+            packageUi.AcquireCurrent(snapshotId) is { } snapshot
+                ? Results.Stream(
+                    new FileStream(snapshot.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete),
+                    "application/vnd.sunder.package-ui-snapshot+zip")
+                : throw new RuntimeNotFoundException("The package UI snapshot was not found or belongs to a stale Runtime generation."));
+
+        group.MapGet("session/stage/{stageId}/ui-snapshots/{snapshotId}", (string stageId, string snapshotId, RuntimePackageUiService packageUi) =>
+            packageUi.AcquireStage(stageId, snapshotId) is { } snapshot
+                ? Results.Stream(
+                    new FileStream(snapshot.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete),
+                    "application/vnd.sunder.package-ui-snapshot+zip")
+                : throw new RuntimeNotFoundException("The staged package UI snapshot was not found or belongs to a stale Runtime generation."));
 
         group.MapGet(
             "session/{packageId}/status",
-            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                await packageSessionService.GetPackageSessionStatusAsync(packageId, cancellationToken) is { } status
-                    ? Results.Ok(status)
-                    : Results.NotFound());
+            async (string packageId, PackageSessionLifecycleService sessions, CancellationToken cancellationToken) =>
+                Results.Ok(RuntimeEndpointErrors.Required(
+                    await sessions.GetStatusAsync(packageId, cancellationToken),
+                    $"Package session '{packageId}'")));
 
         group.MapPost(
             "session/load",
-            async (PackageSessionLoadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.LoadPackageSessionAsync(request, cancellationToken)));
-
-        group.MapPost(
-            "session/load-batch",
-            async (PackageLifecycleLoadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.LoadPackageLifecycleAsync(request, cancellationToken)));
+            async (PackageSessionLoadRequest request, PackageSessionCommandService commands, CancellationToken cancellationToken) =>
+            {
+                var result = await commands.LoadAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
+            });
 
         group.MapPost(
             "session/reload-installed",
-            async (InstalledPackageSessionReloadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.ReloadInstalledPackageSessionAsync(request, cancellationToken)));
+            async (InstalledPackageSessionReloadRequest request, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
+            {
+                var result = await installedPackages.ReloadAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
+            });
 
         group.MapPost(
             "session/stage",
-            async (PackageLifecycleStageRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.StagePackageLifecycleAsync(request, cancellationToken)));
+            async (PackageLifecycleStageRequest request, PackageSessionLifecycleService sessions, CancellationToken cancellationToken) =>
+            {
+                var result = await sessions.StageAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault(), packageValidation: true);
+                return Results.Ok(result);
+            });
 
         group.MapPost(
             "session/stage/{stageId}/commit",
-            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.CommitPackageLifecycleStageAsync(stageId, cancellationToken)));
+            async (string stageId, PackageSessionLifecycleService sessions, CancellationToken cancellationToken) =>
+            {
+                var result = await sessions.CommitStageAsync(stageId, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
+            });
 
         group.MapDelete(
             "session/stage/{stageId}",
-            async (string stageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                await packageSessionService.DiscardPackageLifecycleStageAsync(stageId, cancellationToken) ? Results.NoContent() : Results.NotFound());
+            async (string stageId, PackageSessionLifecycleService sessions, CancellationToken cancellationToken) =>
+            {
+                if (!await sessions.DiscardStageAsync(stageId, cancellationToken))
+                {
+                    throw new RuntimeNotFoundException($"Package lifecycle stage '{stageId}' was not found.");
+                }
+                return Results.NoContent();
+            });
 
         group.MapPost(
             "session/{packageId}/unload",
-            async (string packageId, PackageSessionUnloadRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.UnloadPackageSessionAsync(packageId, request.SourceKind, cancellationToken)));
+            async (string packageId, PackageSessionUnloadRequest request, PackageSessionCommandService commands, CancellationToken cancellationToken) =>
+            {
+                var result = await commands.UnloadAsync(packageId, request.SourceKind, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
+                return Results.Ok(result);
+            });
 
         return endpoints;
     }

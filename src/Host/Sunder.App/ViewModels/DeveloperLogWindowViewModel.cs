@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using Avalonia.Threading;
 using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
@@ -7,14 +6,17 @@ namespace Sunder.App.ViewModels;
 public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
 {
     private readonly DeveloperLogService _developerLog;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly OwnedTaskObserver _tasks = new(nameof(DeveloperLogWindowViewModel));
     private readonly List<DeveloperLogEntryViewModel> _entries = [];
     private string _searchText = string.Empty;
     private DeveloperLogFilterOptionViewModel? _selectedFilter;
     private bool _disposed;
 
-    public DeveloperLogWindowViewModel(DeveloperLogService developerLog)
+    public DeveloperLogWindowViewModel(DeveloperLogService developerLog, IUiDispatcher? uiDispatcher = null)
     {
         _developerLog = developerLog;
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         Reload();
         _developerLog.EntriesChanged += DeveloperLog_OnEntriesChanged;
     }
@@ -62,17 +64,18 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
 
         _disposed = true;
         _developerLog.EntriesChanged -= DeveloperLog_OnEntriesChanged;
+        _tasks.Dispose();
     }
 
     private void DeveloperLog_OnEntriesChanged(object? sender, DeveloperLogEntriesChangedEventArgs e)
     {
-        if (Dispatcher.UIThread.CheckAccess())
+        if (_uiDispatcher.CheckAccess())
         {
             ApplyEntriesChange(e);
             return;
         }
 
-        Dispatcher.UIThread.Post(() => ApplyEntriesChange(e), DispatcherPriority.Background);
+        _tasks.Observe(_uiDispatcher.InvokeAsync(() => ApplyEntriesChange(e)), "applying developer log entries");
     }
 
     private void Reload()

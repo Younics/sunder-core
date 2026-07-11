@@ -2,8 +2,9 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-public sealed class AppPackageSettingsNavigationService : IPackageSettingsNavigationService
+public sealed class AppPackageSettingsNavigationService(IUiDispatcher? uiDispatcher = null) : IPackageSettingsNavigationService
 {
+    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
     private IWindowLauncher? _windowLauncher;
 
     public void Attach(IWindowLauncher windowLauncher)
@@ -28,7 +29,7 @@ public sealed class AppPackageSettingsNavigationService : IPackageSettingsNaviga
             return false;
         }
 
-        return await UiThread.InvokeAsync(() =>
+        return await _uiDispatcher.InvokeAsync(() =>
         {
             launcher.ShowSettings();
             return true;
@@ -52,6 +53,6 @@ public sealed class AppPackageSettingsNavigationService : IPackageSettingsNaviga
             return false;
         }
 
-        return await UiThread.InvokeAsync(() => launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken));
+        return await _uiDispatcher.InvokeAsync(() => launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken));
     }
 }

@@ -1,6 +1,7 @@
 using System.Reflection;
 using Avalonia.Controls;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Stacks;
 using Sunder.App.Views.Controls;
@@ -25,7 +26,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
 {
     public static PackageViewHostService Empty { get; } = new(
         new AppPackageViewRegistry(),
-        new AppPackageBackgroundServiceCoordinator(),
         [],
         [],
         [],
@@ -33,7 +33,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
         sessionFolder: null,
         backgroundProcessQueue: null);
 
-    private AppPackageBackgroundServiceCoordinator _backgroundServices;
     private AppPackageHostComposition _composition;
     private AppPackageHostState _state;
     private readonly AppPackageLifecycleGate _lifecycleGate = new(nameof(PackageViewHostService));
@@ -48,7 +47,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     internal PackageViewHostService(
         AppPackageViewRegistry viewRegistry,
-        AppPackageBackgroundServiceCoordinator backgroundServices,
         HashSet<string> disabledPackageIds,
         IReadOnlyList<object> ownedDisposables,
         IReadOnlyList<AppPackageLoadContext> loadContexts,
@@ -61,7 +59,9 @@ public sealed class PackageViewHostService : IAsyncDisposable
         IPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
-        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null)
+        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null,
+        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo = null,
+        Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task>? downloadPackageUiSnapshotAsync = null)
     {
         _faultReporter = faultReporter;
         _sessionFolder = sessionFolder;
@@ -70,12 +70,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _packageSessionService = packageSessionService;
         _notificationCenter = notificationCenter;
         _backgroundProcessQueue = backgroundProcessQueue;
-        _backgroundServices = backgroundServices;
         _state = new AppPackageHostState(disabledPackageIds, ownedDisposables, loadContexts);
         _composition = new AppPackageHostComposition(
             this,
             viewRegistry,
-            _backgroundServices,
             _state,
             faultReporter,
             sessionFolder,
@@ -86,7 +84,9 @@ public sealed class PackageViewHostService : IAsyncDisposable
             packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
-            resourceAssemblyRegistry);
+            resourceAssemblyRegistry,
+            getRuntimeConnectionInfo,
+            downloadPackageUiSnapshotAsync);
         AttachFaultForwarder(_composition);
     }
 
@@ -104,7 +104,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     public static async Task<PackageViewHostService> CreateForPackagesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         PackageRuntimeFaultReporter? faultReporter = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
@@ -122,11 +122,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
             notificationCenter,
             backgroundProcessQueue,
             resourceAssemblyRegistry: null,
+            getRuntimeConnectionInfo: null,
             cancellationToken).ConfigureAwait(false);
 
     internal static async Task<PackageViewHostService> CreateForPackagesWithResourceRegistryAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         PackageRuntimeFaultReporter? faultReporter,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
@@ -134,6 +135,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry resourceAssemblyRegistry,
+        Func<RuntimeConnectionInfo?> getRuntimeConnectionInfo,
         CancellationToken cancellationToken = default)
         => await CreateForPackagesCoreAsync(
             activePackages,
@@ -145,11 +147,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
             notificationCenter,
             backgroundProcessQueue,
             resourceAssemblyRegistry,
+            getRuntimeConnectionInfo,
             cancellationToken).ConfigureAwait(false);
 
     private static async Task<PackageViewHostService> CreateForPackagesCoreAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         PackageRuntimeFaultReporter? faultReporter,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
@@ -157,13 +160,13 @@ public sealed class PackageViewHostService : IAsyncDisposable
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
+        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
         CancellationToken cancellationToken)
     {
         AppPackageSessionDirectories.CleanupStaleSessions();
         var sessionFolder = activePackages.Count > 0 ? AppPackageSessionDirectories.CreateSessionFolder() : null;
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
@@ -176,7 +179,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
-            resourceAssemblyRegistry);
+            resourceAssemblyRegistry,
+            getRuntimeConnectionInfo);
 
         await hostService.ApplyPackageDeltaAsync(activePackages, packageSources, cancellationToken: cancellationToken);
         return hostService;
@@ -184,7 +188,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     public async Task ApplyPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds = null,
         CancellationToken cancellationToken = default)
     {
@@ -195,7 +199,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     internal async Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds = null,
         CancellationToken cancellationToken = default)
     {
@@ -207,7 +211,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
     public IReadOnlyList<ActivePackageDescriptor> FilterEnabledPackages(IReadOnlyList<ActivePackageDescriptor> activePackages)
     {
         ThrowIfDisposed();
-        return _state.FilterEnabledPackages(activePackages);
+        return _state.FilterEnabledPackages(activePackages)
+            .Select(package => package with
+            {
+                Views = _composition.ViewFacade.GetPackageViewDescriptors(package.PackageId),
+            })
+            .ToArray();
     }
 
     public bool TryHandleUnhandledException(Exception exception)
@@ -341,7 +350,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         }
 
         DetachFaultForwarder(_composition);
-        await DisposeGenerationAsync(_backgroundServices, _composition, _state);
+        await DisposeGenerationAsync(_composition, _state);
 
         // Keep package shadows for the rest of the process; native library finalizers can run after package unload.
         GC.SuppressFinalize(this);
@@ -392,7 +401,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
         => PackageFaultedHandlers?.Invoke(this, e);
 
     private static async Task DisposeGenerationAsync(
-        AppPackageBackgroundServiceCoordinator backgroundServices,
         AppPackageHostComposition composition,
         AppPackageHostState state)
     {
@@ -403,8 +411,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             await composition.UnloadPackageAsync(packageId);
         }
 
-        await backgroundServices.StopAllAsync();
         await composition.DisposeLegacyOwnedInstancesAsync();
         composition.DisposeSharedAssemblies();
+        composition.Dispose();
     }
 }

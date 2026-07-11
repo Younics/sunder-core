@@ -22,7 +22,7 @@ Useful targeted tests:
 ```powershell
 dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
 dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
-dotnet test tests/Sunder.PackageManagement.Tests/Sunder.PackageManagement.Tests.csproj --no-restore
+dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
 dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
 ```
 
@@ -34,10 +34,12 @@ dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -
 | `Sunder.Runtime.Host` | Installed package state, validation, install/update/uninstall, runtime activation, local API |
 | `Sunder.Cli` | Thin command-line client over Registry and runtime APIs |
 | `Sunder.Sdk` | Public package author contracts only |
+| `Sunder.Sdk.Avalonia` | Optional Avalonia view/settings, workspace, and theme contracts |
+| `Sunder.Sdk.Stacks` | Optional public Stack package-author contracts; references only `Sunder.Sdk` |
 | `Sunder.Package.Build` | Generated manifest, dev output, and `.sunderpkg` archive behavior |
-| `Sunder.PackageManagement` | Archive inspection and validation |
+| `Sunder.Package.Format` | Archive inspection and validation |
 
-The public package-author NuGet surface is `Sunder.Sdk`, `Sunder.Package.Build`, and `Sunder.Package.Templates`.
+The public package-author NuGet surface is `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`, `Sunder.Package.Build`, and `Sunder.Package.Templates`.
 
 ## Pull Request Checklist
 

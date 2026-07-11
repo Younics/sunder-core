@@ -1,3 +1,5 @@
+using Sunder.Package.Format;
+
 namespace Sunder.Runtime.Host.Services;
 
 internal static class RuntimePackageManifestValidator
@@ -19,9 +21,9 @@ internal static class RuntimePackageManifestValidator
 
         errors.AddRange(SunderSdkCompatibilityProfile.Validate(manifest));
 
-        if (string.IsNullOrWhiteSpace(manifest.Id))
+        if (!PackageId.TryParse(manifest.Id, out _))
         {
-            errors.Add($"Package manifest at '{shadowFolder}' is missing 'id'.");
+            errors.Add($"Package manifest at '{shadowFolder}' has invalid 'id' '{manifest.Id}'.");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.Name))
@@ -29,9 +31,9 @@ internal static class RuntimePackageManifestValidator
             errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' is missing 'name'.");
         }
 
-        if (string.IsNullOrWhiteSpace(manifest.Version))
+        if (!SemanticVersion.TryParse(manifest.Version, out _))
         {
-            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' is missing 'version'.");
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' must declare a strict SemVer 2.0 'version'.");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.EntryAssembly))
@@ -41,8 +43,11 @@ internal static class RuntimePackageManifestValidator
 
         if (!string.IsNullOrWhiteSpace(manifest.EntryAssembly))
         {
-            var entryAssemblyPath = Path.Combine(shadowFolder, "lib", manifest.EntryAssembly);
-            if (!File.Exists(entryAssemblyPath))
+            if (!ArchiveRelativePath.TryParse(manifest.EntryAssembly, int.MaxValue, int.MaxValue, out var entryAssembly, out var pathError))
+            {
+                errors.Add($"Package '{manifest.Id ?? shadowFolder}' entryAssembly '{manifest.EntryAssembly}' is unsafe: {pathError}.");
+            }
+            else if (!File.Exists(entryAssembly.ToPlatformPath(Path.Combine(shadowFolder, "lib"))))
             {
                 errors.Add($"Package '{manifest.Id ?? shadowFolder}' is missing entry assembly '{manifest.EntryAssembly}' under lib/.");
             }
@@ -50,14 +55,40 @@ internal static class RuntimePackageManifestValidator
 
         foreach (var dependency in manifest.DependsOn ?? [])
         {
-            if (string.IsNullOrWhiteSpace(dependency.PackageId))
+            if (!PackageId.TryParse(dependency.PackageId, out _))
             {
-                errors.Add($"Package '{manifest.Id ?? shadowFolder}' has a dependency without a 'packageId'.");
+                errors.Add($"Package '{manifest.Id ?? shadowFolder}' has an invalid dependency packageId '{dependency.PackageId}'.");
             }
 
-            if (string.IsNullOrWhiteSpace(dependency.VersionRange))
+            if (!PackageVersionRange.TryParse(dependency.VersionRange, out _))
             {
-                errors.Add($"Package '{manifest.Id ?? shadowFolder}' dependency '{dependency.PackageId ?? "unknown"}' is missing 'versionRange'.");
+                errors.Add($"Package '{manifest.Id ?? shadowFolder}' dependency '{dependency.PackageId ?? "unknown"}' has unsupported versionRange '{dependency.VersionRange}'.");
+            }
+        }
+
+        if (!SemanticVersion.TryParse(manifest.SdkPackageVersion, out _))
+        {
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' must declare a strict SemVer 2.0 'sdkPackageVersion'.");
+        }
+
+        var capabilities = manifest.RequiredSdkCapabilities;
+        if (capabilities is null || capabilities.Count == 0)
+        {
+            errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' must declare 'requiredSdkCapabilities'.");
+        }
+        else
+        {
+            var seenCapabilities = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var capability in capabilities)
+            {
+                if (!SunderPackageFormat.IsSdkCapabilityId(capability))
+                {
+                    errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' declares invalid SDK capability '{capability}'.");
+                }
+                else if (!seenCapabilities.Add(capability))
+                {
+                    errors.Add($"Package manifest for '{manifest.Id ?? shadowFolder}' declares SDK capability '{capability}' more than once.");
+                }
             }
         }
 

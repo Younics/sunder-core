@@ -1,14 +1,15 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
-public sealed class PackageRuntimeFaultReporter(IRuntimeApiClientFactory runtimeApiClientFactory)
+public sealed class PackageRuntimeFaultReporter(IRuntimeApiClientFactory runtimeApiClientFactory) : IDisposable
 {
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory = runtimeApiClientFactory;
+    private readonly OwnedTaskObserver _tasks = new(nameof(PackageRuntimeFaultReporter));
 
     public void ReportPackageFault(string packageId, PackageFailureOrigin origin, string message)
     {
-        _ = ReportPackageFaultAsync(packageId, origin, message);
+        _tasks.Observe(ReportPackageFaultAsync(packageId, origin, message), $"reporting package fault for '{packageId}'");
     }
 
     private async Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message)
@@ -23,4 +24,6 @@ public sealed class PackageRuntimeFaultReporter(IRuntimeApiClientFactory runtime
             AppSessionLog.WriteError($"Failed to report package fault for '{packageId}'.", ex);
         }
     }
+
+    public void Dispose() => _tasks.Dispose();
 }

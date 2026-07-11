@@ -1,5 +1,6 @@
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
 
@@ -14,7 +15,8 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
         Uri? iconUri,
         IImage? iconImage = null,
         bool ownsIconImage = true,
-        bool loadIcon = true)
+        bool loadIcon = true,
+        IUiDispatcher? uiDispatcher = null)
     {
         IconUri = iconUri;
         _ownsIconImage = ownsIconImage;
@@ -25,6 +27,7 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
             _iconLoadCts = new CancellationTokenSource();
             _iconLoadTask = PackageIconImageViewModelLoader.LoadAsync(
                 IconUri,
+                uiDispatcher ?? AvaloniaUiDispatcher.Instance,
                 () => _isDisposed,
                 (error, image) =>
                 {

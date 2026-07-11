@@ -11,9 +11,9 @@ public sealed class RuntimePackageManifestValidatorTests
         var errors = RuntimePackageManifestValidator.Validate(new RuntimePackageManifest(), CreateTempDirectory());
 
         Assert.Contains(errors, error => error.Contains("'manifestVersion' 1", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("missing 'id'", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("invalid 'id'", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("missing 'name'", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("missing 'version'", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("SemVer 2.0 'version'", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("missing 'entryAssembly'", StringComparison.Ordinal));
     }
 
@@ -68,7 +68,7 @@ public sealed class RuntimePackageManifestValidatorTests
 
     private static RuntimePackageManifest CreateManifest(
         string entryAssembly = "Test.Package.dll",
-        int? sdkApiVersion = null,
+        int? sdkApiVersion = 1,
         IReadOnlyList<string>? requiredSdkCapabilities = null)
         => new()
         {
@@ -78,7 +78,8 @@ public sealed class RuntimePackageManifestValidatorTests
             Version = "1.0.0",
             EntryAssembly = entryAssembly,
             SdkApiVersion = sdkApiVersion,
-            RequiredSdkCapabilities = requiredSdkCapabilities,
+            SdkPackageVersion = "1.0.0",
+            RequiredSdkCapabilities = requiredSdkCapabilities ?? ["core.v1"],
         };
 
     private static string CreateTempDirectory()

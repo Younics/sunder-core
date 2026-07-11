@@ -1,5 +1,5 @@
 using System.Collections.ObjectModel;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.ViewModels;
 

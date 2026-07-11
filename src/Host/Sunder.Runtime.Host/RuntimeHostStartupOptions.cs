@@ -6,9 +6,12 @@ public sealed class RuntimeHostStartupOptions
 
     public IReadOnlyList<string> DevPackageFolders { get; init; } = [];
 
+    public bool DevelopmentAllowNonLoopbackRuntimeListen { get; init; }
+
     public static RuntimeHostStartupOptions Parse(IReadOnlyList<string> args)
     {
         var waitForDebugger = false;
+        var developmentAllowNonLoopbackRuntimeListen = false;
         var devPackageFolders = new List<string>();
 
         for (var index = 0; index < args.Count; index++)
@@ -17,6 +20,12 @@ public sealed class RuntimeHostStartupOptions
             if (string.Equals(argument, "--wait-for-debugger", StringComparison.OrdinalIgnoreCase))
             {
                 waitForDebugger = true;
+                continue;
+            }
+
+            if (string.Equals(argument, "--development-allow-non-loopback-runtime-listen", StringComparison.OrdinalIgnoreCase))
+            {
+                developmentAllowNonLoopbackRuntimeListen = true;
                 continue;
             }
 
@@ -36,9 +45,17 @@ public sealed class RuntimeHostStartupOptions
                 || bool.TryParse(environmentValue, out var enabled) && enabled;
         }
 
+        if (!developmentAllowNonLoopbackRuntimeListen)
+        {
+            var environmentValue = Environment.GetEnvironmentVariable("SUNDER_DEVELOPMENT_ALLOW_NON_LOOPBACK_RUNTIME_LISTEN");
+            developmentAllowNonLoopbackRuntimeListen = string.Equals(environmentValue, "1", StringComparison.OrdinalIgnoreCase)
+                || bool.TryParse(environmentValue, out var enabled) && enabled;
+        }
+
         return new RuntimeHostStartupOptions
         {
             WaitForDebugger = waitForDebugger,
+            DevelopmentAllowNonLoopbackRuntimeListen = developmentAllowNonLoopbackRuntimeListen,
             DevPackageFolders = devPackageFolders
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),

@@ -1,12 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Threading;
 using Sunder.App.Composition;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -22,9 +21,11 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly SunderUpdateService _updateService;
     private readonly BackgroundProcessQueueService _backgroundProcessQueue;
     private readonly PackageOperationService _packageOperationService;
-    private readonly SettingsWindowFactory? _settingsWindowFactory;
-    private readonly PackagesWindowFactory? _packagesWindowFactory;
-    private readonly StacksWindowFactory? _stacksWindowFactory;
+    private readonly SettingsWindowFactory _settingsWindowFactory;
+    private readonly PackagesWindowFactory _packagesWindowFactory;
+    private readonly StacksWindowFactory _stacksWindowFactory;
+    private readonly IUiDispatcher _uiDispatcher;
+    private readonly OwnedTaskObserver _tasks = new(nameof(WindowLauncher));
     private readonly bool _ownsBackgroundProcessQueue;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
@@ -41,12 +42,13 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         NotificationCenterService notificationCenter,
         ShellStateService shellStateService,
         ShellState shellState,
+        SettingsWindowFactory settingsWindowFactory,
+        PackagesWindowFactory packagesWindowFactory,
+        StacksWindowFactory stacksWindowFactory,
+        IUiDispatcher? uiDispatcher = null,
         DeveloperLogService? developerLog = null,
         SunderUpdateService? updateService = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
-        SettingsWindowFactory? settingsWindowFactory = null,
-        PackagesWindowFactory? packagesWindowFactory = null,
-        StacksWindowFactory? stacksWindowFactory = null)
+        BackgroundProcessQueueService? backgroundProcessQueue = null)
     {
         _packageViewHostService = packageViewHostService;
         _runtimeApiClientFactory = runtimeApiClientFactory;
@@ -59,6 +61,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _settingsWindowFactory = settingsWindowFactory;
         _packagesWindowFactory = packagesWindowFactory;
         _stacksWindowFactory = stacksWindowFactory;
+        _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         _ownsBackgroundProcessQueue = backgroundProcessQueue is null;
         _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _packageOperationService = new PackageOperationService(
@@ -95,7 +98,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         ShowWindow(_settingsWindow);
         if (!createdWindow)
         {
-            _ = RefreshSettingsWindowPackageSectionsAsync();
+            _tasks.Observe(RefreshSettingsWindowPackageSectionsAsync(_tasks.Token), "refreshing Settings package sections");
         }
     }
 
@@ -223,6 +226,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _packageSessionService?.Detach(ApplyPackageLifecycleChangesAsync);
         _packageSessionService = null;
         _packageOperationService.Dispose();
+        _tasks.Dispose();
         if (_ownsBackgroundProcessQueue)
         {
             _backgroundProcessQueue.Dispose();
@@ -236,19 +240,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private SettingsWindow CreateSettingsWindow()
     {
-        var window = _settingsWindowFactory?.Create(_packageViewHostService, PersistBackgroundProcessPopoverSize)
-            ?? new SettingsWindow(_shellStateService, _shellState)
-            {
-                DataContext = new SettingsWindowViewModel(
-                    _runtimeApiClientFactory.CreateClient(),
-                    _packageViewHostService,
-                    _cliInstallationService,
-                    _updateService,
-                    _backgroundProcessQueue,
-                    _shellState.BackgroundProcessPopoverWidth,
-                    _shellState.BackgroundProcessPopoverHeight,
-                    PersistBackgroundProcessPopoverSize),
-            };
+        var window = _settingsWindowFactory.Create(_packageViewHostService, PersistBackgroundProcessPopoverSize);
 
         window.Closed += (_, _) =>
         {
@@ -263,26 +255,11 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private PackagesWindow CreatePackagesWindow()
     {
-        var window = _packagesWindowFactory?.Create(
+        var window = _packagesWindowFactory.Create(
             ApplyPackageLifecycleChangesAsync,
             PreflightPackageLifecycleChangesAsync,
             _packageOperationService,
             PersistBackgroundProcessPopoverSize);
-        if (window is null)
-        {
-            window = new PackagesWindow(_shellStateService, _shellState);
-            window.DataContext = new PackagesWindowViewModel(
-                _runtimeApiClientFactory.CreateClient(),
-                new PackageArchivePicker(window),
-                ApplyPackageLifecycleChangesAsync,
-                _packageOperationService,
-                _backgroundProcessQueue,
-                notificationCenter: _notificationCenter,
-                preflightPackageLifecycleChangesAsync: PreflightPackageLifecycleChangesAsync,
-                backgroundProcessPopoverWidth: _shellState.BackgroundProcessPopoverWidth,
-                backgroundProcessPopoverHeight: _shellState.BackgroundProcessPopoverHeight,
-                persistBackgroundProcessPopoverSize: PersistBackgroundProcessPopoverSize);
-        }
 
         window.Closed += (_, _) =>
         {
@@ -297,18 +274,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private StacksWindow CreateStacksWindow()
     {
-        var window = _stacksWindowFactory?.Create(ApplyPackageLifecycleChangesAsync, NotifyStackImportAppliedAsync);
-        if (window is null)
-        {
-            window = new StacksWindow(_shellStateService, _shellState);
-            window.DataContext = new StacksWindowViewModel(
-                new LocalStackLibraryService(),
-                new StackArchivePicker(window),
-                _runtimeApiClientFactory.CreateClient(),
-                new RegistryPackageInstallService(),
-                ApplyPackageLifecycleChangesAsync,
-                NotifyStackImportAppliedAsync);
-        }
+        var window = _stacksWindowFactory.Create(ApplyPackageLifecycleChangesAsync, NotifyStackImportAppliedAsync);
 
         window.Closed += (_, _) =>
         {
@@ -363,7 +329,11 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     {
         _shellState.BackgroundProcessPopoverWidth = width;
         _shellState.BackgroundProcessPopoverHeight = height;
-        _shellStateService.Save(_shellState);
+        _shellStateService.Update(_shellState, state =>
+        {
+            state.BackgroundProcessPopoverWidth = width;
+            state.BackgroundProcessPopoverHeight = height;
+        });
     }
 
     internal async Task ApplyPackageLifecycleChangesAsync(
@@ -381,7 +351,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     internal async Task PreflightPackageLifecycleChangesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyList<string> impactedPackageIds,
         CancellationToken cancellationToken)
     {
@@ -403,23 +373,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
     {
-        if (!Dispatcher.UIThread.CheckAccess() && Application.Current is not null)
+        if (!_uiDispatcher.CheckAccess() && Application.Current is not null)
         {
-            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            Dispatcher.UIThread.Post(async () =>
-            {
-                try
-                {
-                    await RefreshSettingsWindowPackageSectionsAsync(cancellationToken);
-                    completion.SetResult();
-                }
-                catch (Exception ex)
-                {
-                    completion.SetException(ex);
-                }
-            });
-
-            await completion.Task.ConfigureAwait(false);
+            await _uiDispatcher.InvokeAsync(() => RefreshSettingsWindowPackageSectionsAsync(cancellationToken));
             return;
         }
 

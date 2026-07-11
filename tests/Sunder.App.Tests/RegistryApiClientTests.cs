@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Sunder.App.Services;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -32,7 +32,7 @@ public sealed class RegistryApiClientTests
         Assert.Collection(results, result => Assert.Equal("sunder.package.agent", result.PackageId));
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Get, request.Method);
-        Assert.Equal(new Uri("https://registry.example/api/packages?skip=10&take=20&sort=downloads&query=agent%20package"), request.RequestUri);
+        Assert.Equal(new Uri("https://registry.example/api/v1/packages?skip=10&take=20&sort=downloads&query=agent%20package"), request.RequestUri);
     }
 
     [Fact]
@@ -48,33 +48,6 @@ public sealed class RegistryApiClientTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    [Fact]
-    public async Task GetCurrentUserAsync_UsesCurrentUserEndpointAndBearerToken()
-    {
-        var user = new RegistryCurrentUserResponse(
-            "user_123",
-            "Wreit",
-            "wreit@example.test",
-            "wreit",
-            "https://img.clerk.test/user_123.png");
-        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = JsonContent.Create(user),
-        });
-        using var httpClient = new HttpClient(handler);
-        using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
-
-        var result = await registryClient.GetCurrentUserAsync("test-token");
-
-        Assert.NotNull(result);
-        Assert.Equal("wreit", result.Username);
-        Assert.Equal("https://img.clerk.test/user_123.png", result.AvatarUrl);
-        var request = Assert.Single(handler.Requests);
-        Assert.Equal(HttpMethod.Get, request.Method);
-        Assert.Equal(new Uri("https://registry.example/api/me"), request.RequestUri);
-        Assert.Equal("Bearer test-token", request.Authorization);
-    }
-
     private sealed class RecordingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     {
         private readonly List<RecordedRequest> _requests = [];
@@ -83,10 +56,10 @@ public sealed class RegistryApiClientTests
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            _requests.Add(new RecordedRequest(request.Method, request.RequestUri, request.Headers.Authorization?.ToString()));
+            _requests.Add(new RecordedRequest(request.Method, request.RequestUri));
             return Task.FromResult(send(request));
         }
     }
 
-    private sealed record RecordedRequest(HttpMethod Method, Uri? RequestUri, string? Authorization);
+    private sealed record RecordedRequest(HttpMethod Method, Uri? RequestUri);
 }

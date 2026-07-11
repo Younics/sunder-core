@@ -24,4 +24,14 @@ public sealed class RuntimeHostStartupOptionsTests
         var folder = Assert.Single(options.DevPackageFolders);
         Assert.Equal(fullDevPackageFolder, folder);
     }
+
+    [Fact]
+    public void Parse_WhenDevelopmentNonLoopbackOverrideProvided_EnablesOverride()
+    {
+        var options = RuntimeHostStartupOptions.Parse([
+            "--development-allow-non-loopback-runtime-listen",
+        ]);
+
+        Assert.True(options.DevelopmentAllowNonLoopbackRuntimeListen);
+    }
 }

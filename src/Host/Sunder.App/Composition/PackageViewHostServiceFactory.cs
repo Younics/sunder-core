@@ -1,5 +1,5 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Composition;
 
@@ -8,13 +8,14 @@ public sealed class PackageViewHostServiceFactory(
     AppPackageShellViewService shellViewService,
     AppPackageSettingsNavigationService settingsNavigationService,
     AppPackageSessionService packageSessionService,
+    RuntimeConnectionState runtimeConnectionState,
     NotificationCenterService notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue,
     AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry)
 {
     public async Task<PackageViewHostService> CreateForPackagesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         CancellationToken cancellationToken = default)
         => await PackageViewHostService.CreateForPackagesWithResourceRegistryAsync(
             activePackages,
@@ -26,5 +27,6 @@ public sealed class PackageViewHostServiceFactory(
             notificationCenter,
             backgroundProcessQueue,
             packageResourceAssemblyRegistry,
+            () => runtimeConnectionState.ConnectionInfo,
             cancellationToken).ConfigureAwait(false);
 }

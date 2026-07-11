@@ -1,13 +1,16 @@
 using System.Collections.ObjectModel;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Sunder.App.Models;
 using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
 
-public sealed partial class NotificationTrayViewModel(NotificationCenterService notificationCenter) : ViewModelBase, IDisposable
+public sealed partial class NotificationTrayViewModel(
+    NotificationCenterService notificationCenter,
+    IUiDispatcher? uiDispatcher = null) : ViewModelBase, IDisposable
 {
+    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+    private readonly OwnedTaskObserver _tasks = new(nameof(NotificationTrayViewModel));
     private bool _disposed;
 
     public ObservableCollection<NotificationItemViewModel> Notifications { get; } = [];
@@ -55,7 +58,7 @@ public sealed partial class NotificationTrayViewModel(NotificationCenterService 
 
         var toast = new ToastNotificationViewModel(notification);
         Toasts.Add(toast);
-        _ = DismissToastAsync(toast);
+        _tasks.Observe(DismissToastAsync(toast, _tasks.Token), "dismissing a toast");
     }
 
     public void DismissToastNotification(ToastNotificationViewModel? toast)
@@ -69,36 +72,26 @@ public sealed partial class NotificationTrayViewModel(NotificationCenterService 
     public void Dispose()
     {
         _disposed = true;
+        _tasks.Dispose();
     }
 
-    private async Task DismissToastAsync(ToastNotificationViewModel toast)
+    private async Task DismissToastAsync(ToastNotificationViewModel toast, CancellationToken cancellationToken)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(3.5));
+            await Task.Delay(TimeSpan.FromSeconds(3.5), cancellationToken);
         }
         catch
         {
             return;
         }
 
-        RunOnUiThread(() =>
+        await _uiDispatcher.InvokeAsync(() =>
         {
             if (!_disposed)
             {
                 Toasts.Remove(toast);
             }
         });
-    }
-
-    private static void RunOnUiThread(Action action)
-    {
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            action();
-            return;
-        }
-
-        Dispatcher.UIThread.Post(action, DispatcherPriority.Background);
     }
 }

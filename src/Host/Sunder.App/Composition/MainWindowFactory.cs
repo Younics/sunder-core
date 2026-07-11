@@ -2,7 +2,7 @@ using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Composition;
 
@@ -18,7 +18,8 @@ public sealed class MainWindowFactory(
     BackgroundProcessQueueService backgroundProcessQueue,
     RegistryAuthService registryAuthService,
     ExternalBrowserService externalBrowserService,
-    IShellCompositionService shellCompositionService)
+    IShellCompositionService shellCompositionService,
+    IUiDispatcher uiDispatcher)
 {
     public (MainWindow Window, MainWindowViewModel ViewModel) Create(
         IWindowLauncher windowLauncher,
@@ -44,7 +45,8 @@ public sealed class MainWindowFactory(
             shellCompositionService: shellCompositionService,
             developerLog: developerLog,
             registryAuthService: registryAuthService,
-            externalBrowserService: externalBrowserService);
+            externalBrowserService: externalBrowserService,
+            uiDispatcher: uiDispatcher);
 
         return (new MainWindow { DataContext = viewModel }, viewModel);
     }

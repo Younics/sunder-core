@@ -1,5 +1,6 @@
 using System.Reflection;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
@@ -8,8 +9,9 @@ internal sealed class AppPackageActivator(
     AppSharedAssemblyRegistry sharedAssemblyRegistry,
     AppPackageServiceProviderFactory serviceProviderFactory,
     AppPackageViewRegistry viewRegistry,
-    AppPackageBackgroundServiceCoordinator backgroundServices,
-    AppPackageExtensionCatalog extensionCatalog)
+    AppPackageExtensionCatalog extensionCatalog,
+    bool isPreflight = false,
+    Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo = null)
 {
     public async Task ActivateAsync(
         ActivePackageDescriptor package,
@@ -18,9 +20,9 @@ internal sealed class AppPackageActivator(
         Action<string, Assembly> registerPackageAssembly,
         Action<AppPackageLoadContext> trackLoadContext,
         Action<object> trackOwnedDisposable,
-        CancellationToken cancellationToken,
-        bool startBackgroundServices = true)
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var manifest = AppPackageManifest.Load(Path.Combine(preparedSource.Folder, "sunder-package.json"));
         if (manifest?.EntryAssembly is null)
         {
@@ -35,7 +37,13 @@ internal sealed class AppPackageActivator(
 
         var entryAssembly = loadContext.LoadPackageEntryAssembly();
         var module = CreatePackageModule(entryAssembly);
-        var packageContext = new AppPackageContext(package.PackageId, package.Version, activation.PackageInfo.Folder);
+        var packageContext = await AppPackageContext.CreateAsync(
+            package.PackageId,
+            package.Version,
+            activation.PackageInfo.Folder,
+            isPreflight,
+            getRuntimeConnectionInfo,
+            cancellationToken).ConfigureAwait(false);
         var serviceProvider = serviceProviderFactory.Create(package, packageContext, module);
         activation.ServiceProvider = serviceProvider;
         trackOwnedDisposable(serviceProvider);
@@ -44,27 +52,28 @@ internal sealed class AppPackageActivator(
             package.PackageId,
             package.DisplayName,
             $"Configure {package.DisplayName}."));
-        var registry = new AppPackageContributionRegistry(serviceProvider, viewRegistry, backgroundServices, extensionCatalog, package.PackageId);
-        module.RegisterContributions(registry, serviceProvider);
-        if (startBackgroundServices)
+        if (module is not null)
         {
-            await backgroundServices.StartAsync(package.PackageId, cancellationToken);
+            var registry = new AppPackageContributionRegistry(serviceProvider, viewRegistry, extensionCatalog, package.PackageId);
+            module.RegisterAppContributions(registry, serviceProvider);
         }
     }
 
-    private static ISunderPackageModule CreatePackageModule(Assembly entryAssembly)
+    private static ISunderAppPackageModule? CreatePackageModule(Assembly entryAssembly)
     {
         var moduleType = AppPackageModuleResolver.Resolve(entryAssembly, out var moduleResolutionError);
         if (moduleType is null)
         {
-            throw new InvalidOperationException(moduleResolutionError);
+            return moduleResolutionError is null
+                ? null
+                : throw new InvalidOperationException(moduleResolutionError);
         }
 
-        if (Activator.CreateInstance(moduleType) is ISunderPackageModule module)
+        if (Activator.CreateInstance(moduleType) is ISunderAppPackageModule module)
         {
             return module;
         }
 
-        throw new InvalidOperationException($"Package module '{moduleType.FullName}' does not implement ISunderPackageModule.");
+        throw new InvalidOperationException($"Package module '{moduleType.FullName}' does not implement ISunderAppPackageModule.");
     }
 }

@@ -2,8 +2,8 @@ using Avalonia;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Sdk.Theming;
+using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Avalonia.Theming;
 
 namespace Sunder.App.ViewModels;
 

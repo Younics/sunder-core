@@ -4,18 +4,24 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Abstractions;
 
+/// <summary>Implements package-owned authorization lifecycle and generic browser callbacks.</summary>
+/// <remarks>Handlers are activation-scoped and may be called concurrently. They own credential validation and persistence through package secrets.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
 [SunderSdkCapability(SunderSdkCapabilities.CallbacksV1)]
 public interface IPackageAuthHandler : IPackageCallbackHandler
 {
     string IPackageCallbackHandler.CallbackHandlerId => PackageCallbackHandlerIds.Authentication;
 
+    /// <summary>Gets current authorization status without starting user interaction.</summary>
     ValueTask<PackageAuthStatus> GetStatusAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Starts authorization, returning <see langword="null"/> when no flow can currently start.</summary>
     Task<PackageAuthSessionStartResult?> StartAuthorizationAsync(PackageAuthSessionStartContext context, CancellationToken cancellationToken = default);
 
+    /// <summary>Validates callback values, persists resulting credentials, and returns current status.</summary>
     Task<PackageAuthStatus> CompleteAuthorizationAsync(PackageAuthSessionCompletionContext context, CancellationToken cancellationToken = default);
 
+    /// <summary>Removes package-owned credentials and returns resulting status.</summary>
     Task<PackageAuthStatus> DisconnectAsync(CancellationToken cancellationToken = default);
 
     async Task<PackageCallbackStartResult?> IPackageCallbackHandler.StartCallbackAsync(

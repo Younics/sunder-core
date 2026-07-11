@@ -8,6 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sdk\Sunder.Package.Build\Sunder.Package.Build.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
   </ItemGroup>
 
   <ItemGroup>

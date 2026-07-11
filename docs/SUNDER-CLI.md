@@ -28,7 +28,8 @@ Global options:
 | `--registry-web-url <url>` | Registry web URL used by browser auth |
 | `--registry-url <url>` | Back-compatible alias that sets both Registry URLs |
 | `--runtime-url <url>` | Local runtime host URL |
-| `--timeout <duration>` | Registry request timeout. Defaults to `15m`; accepts values like `15m`, `900s`, `900`, or `00:15:00` |
+| `--timeout <duration>` | Command request timeout. Defaults to `15m`; accepts values like `15m`, `900s`, `900`, or `00:15:00` |
+| `--json` | Emit one machine-readable JSON result instead of text output |
 
 Environment overrides:
 
@@ -38,7 +39,56 @@ Environment overrides:
 | `SUNDER_REGISTRY_WEB_URL` | Registry web URL |
 | `SUNDER_REGISTRY_URL` | Legacy alias for both Registry URLs |
 | `SUNDER_RUNTIME_URL` | Local runtime host URL |
-| `SUNDER_REGISTRY_TOKEN` | Bearer token used for authenticated publish/package management |
+
+Runtime-bound commands authenticate automatically from the current user's private Runtime connection file. The Runtime URL in that file must exactly match the configured `Runtime:Url`, `SUNDER_RUNTIME_URL`, or `--runtime-url`; a missing or mismatched entry fails closed instead of sending an unauthenticated request. Runtime API endpoints use `/api/v1`.
+
+The connection document lives only in the Runtime V1 local-state root. Unversioned connection files and legacy `auth.json` files are not read.
+
+## Output And Exit Codes
+
+Text output is deterministic: package and Stack collections are sorted, dates use UTC ISO-8601, and untrusted server content is sanitized. Tokens, Runtime secrets, stack traces, and raw HTML responses are not printed.
+
+`--json` emits one JSON object with `exitCode`, `success`, `messages`, and `data` properties:
+
+```powershell
+sunder search agent --json
+```
+
+Stable exit codes are:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Operation failed |
+| `2` | Command usage or argument error |
+| `3` | Resource not found |
+| `4` | Authentication required |
+| `5` | Forbidden or conflicting operation |
+| `6` | Runtime or Registry unavailable |
+| `124` | Request timed out |
+| `130` | Cancelled with Ctrl+C |
+
+## Runtime Status
+
+Show authenticated local Runtime status:
+
+```powershell
+sunder system status
+```
+
+`sunder runtime status` is an equivalent alias.
+
+## Reset Runtime V1 State
+
+Deliberately remove all local Runtime V1 state:
+
+```powershell
+sunder runtime reset --yes
+```
+
+The command is rejected without `--yes`. If Runtime is running, the CLI first obtains and consumes a short-lived, one-time authenticated reset challenge, asks Runtime to drain and stop, and then waits for the exclusive Runtime state lease. If Runtime is already stopped, reset proceeds under that same lease.
+
+Reset validates the V1 schema identity before deleting anything and operates only on fixed V1 categories: package catalog/payloads, package state/files/secrets/logs, uploads/snapshots, Registry credentials, Runtime connection data, and the validated V1 root itself. Output reports `reset`, `already-empty`, or `partial` for each category and does not print local paths or secret values. A partial reset retains schema/key metadata and is safe to retry. Legacy roots and legacy credential namespaces are never scanned or deleted.
 
 ## Help
 
@@ -68,11 +118,7 @@ Remove saved auth for the configured Registry:
 sunder auth logout
 ```
 
-Authenticated commands use tokens in this order:
-
-- `--token <token>`
-- `SUNDER_REGISTRY_TOKEN`
-- saved token from `sunder auth login`
+The Runtime owns the saved Registry credential. The CLI only receives the browser launch URL and typed auth status; credentials are never returned to the CLI or accepted on its command line.
 
 ## Search Packages
 
@@ -144,6 +190,7 @@ Install behavior:
 
 - Registry installs resolve a dependency-aware install plan before downloading artifacts.
 - Local file installs validate the archive before calling the runtime host.
+- Local archives are streamed to the Runtime and mutations use opaque upload handles; the CLI never sends its local path in a Runtime DTO.
 - Existing packages are upgraded through the runtime update path.
 - Local file installs do not accept `--version` or `--tag`.
 
@@ -169,9 +216,9 @@ sunder update --all --include-prerelease
 
 Update behavior:
 
-- The CLI reads installed package state from the runtime.
-- The Registry resolves available updates.
-- Each update is applied through the same runtime package update path as local installs.
+- The CLI sends one typed update request to the Runtime.
+- The Runtime reads installed state, resolves Registry updates, downloads and verifies artifacts, and applies one atomic transaction.
+- The CLI does not resolve plans, download package artifacts, or perform package-store mutations.
 
 ## Validate Packages
 
@@ -203,12 +250,6 @@ Publish without setting or promoting `latest`:
 sunder publish --file .\MyPackage.1.0.0.sunderpkg --no-latest
 ```
 
-Publish with an explicit token:
-
-```powershell
-sunder publish --file .\MyPackage.1.0.0.sunderpkg --token $env:SUNDER_REGISTRY_TOKEN
-```
-
 Publish to a development Registry endpoint:
 
 ```powershell
@@ -224,7 +265,7 @@ sunder publish --file .\MyPackage.1.0.0.sunderpkg --timeout 30m
 Publish behavior:
 
 - The CLI validates the package archive before upload.
-- Authenticated publish requires sign-in, `SUNDER_REGISTRY_TOKEN`, or `--token`.
+- Authenticated publish requires `sunder auth login`; the Runtime supplies the saved credential internally.
 - Publish uses the global Registry request timeout; the default is 15 minutes.
 - `--dev-local` calls the development-only local publish endpoint and does not require an auth token.
 - The Registry rejects duplicate package versions.
@@ -288,15 +329,31 @@ sunder dist-tag delete sunder.package.agent beta
 
 Commands that install, update, or list local packages require `Sunder.Runtime.Host` to be reachable.
 
+The CLI and Runtime may use different temporary roots. Package content crosses `/api/v1` as bounded authenticated streams, not shared local paths.
+
 Runtime-bound commands:
 
+- `sunder system status`
+- `sunder auth ...`
 - `sunder list`
 - `sunder install --file ...`
 - `sunder install <package-id> ...`
 - `sunder update ...`
+- authenticated `sunder publish`, package management, and Stack management commands
 
-Use `--runtime-url` or `SUNDER_RUNTIME_URL` when the runtime is not listening on the default URL.
+Use `--runtime-url` or `SUNDER_RUNTIME_URL` when the runtime is not listening on the default URL. The selected URL must match the authenticated connection information published by that Runtime instance.
 
 ```powershell
 sunder list --runtime-url http://127.0.0.1:5276/
 ```
+
+## V1 Client Boundaries
+
+`Sunder.Cli` is a parser, command-handler, and renderer layer. Command handlers receive explicit option records and do not construct Runtime HTTP endpoints.
+
+- `Sunder.Runtime.Client` owns Runtime authentication, endpoint paths, JSON and Problem Details handling, content upload verification, and package stage/commit delegation.
+- The Runtime owns Registry credentials, install/update plans, package downloads, verification, and package mutations.
+- The CLI keeps a small anonymous Registry browse client for public search/details and explicit Stack downloads.
+- Local package and Stack archive validation remains CLI-owned.
+- Development-only local Registry publish remains CLI-owned behind `--dev-local`.
+- The CLI test project enforces a less-than-500-line limit across every production CLI source file and rejects direct Runtime credential or package-mutation implementations.

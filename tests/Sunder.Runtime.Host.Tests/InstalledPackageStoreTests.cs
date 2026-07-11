@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Sunder.Runtime.Host.Services;
 using Xunit;
 
@@ -6,250 +7,82 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class InstalledPackageStoreTests
 {
     [Fact]
-    public async Task InstallAsync_WhenPackageIdAlreadyExists_ReturnsFailure()
+    public async Task ListAsync_WhenUnrecordedPayloadExists_DoesNotResurrectPackage()
     {
         var paths = CreateRuntimePackagePaths();
+        CreateInstallPath(paths, "orphan.package", "1.0.0");
         var store = new InstalledPackageStore(paths);
-        var package = CreatePackage(paths, "test.package");
 
-        Assert.True((await store.InstallAsync(package)).Success);
+        var packages = await store.ListAsync();
 
-        var duplicateResult = await store.InstallAsync(package with { InstallPath = CreateInstallPath(paths, "test.package", "1.0.1") });
-
-        Assert.False(duplicateResult.Success);
-        Assert.Contains("already installed", duplicateResult.Errors[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(packages);
+        Assert.False(File.Exists(paths.StateFilePath));
     }
 
     [Fact]
-    public async Task InstallAsync_WhenPackageHasDependency_ReturnsOnlyInstalledPackageAsImpacted()
+    public async Task ListAsync_WhenPersistedPathIsOutsideVersionRoot_RejectsCatalog()
     {
         var paths = CreateRuntimePackagePaths();
+        var outsidePath = Path.Combine(Path.GetDirectoryName(paths.RootPath)!, "outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outsidePath);
+        Directory.CreateDirectory(paths.CatalogRootPath);
+        await File.WriteAllTextAsync(paths.StateFilePath, JsonSerializer.Serialize(new InstalledPackageStateFile(
+            1,
+            [CreatePackage(paths, "unsafe.package") with { InstallPath = outsidePath }]), TestJsonOptions));
         var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
 
-        Assert.True((await store.InstallAsync(dependency)).Success);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => store.ListAsync());
 
-        var result = await store.InstallAsync(dependent);
-
-        Assert.True(result.Success);
-        Assert.Equal(["test.dependent"], result.ImpactedPackageIds);
+        Assert.Contains("outside", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(outsidePath));
     }
 
     [Fact]
-    public async Task SetEnabledAsync_WhenEnabledDependentExists_BlocksDisable()
+    public async Task WriteAsync_RejectsDuplicateIdsWithoutReplacingCatalog()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
+        var original = CreatePackage(paths, "test.package");
+        await store.WriteAsync([original]);
 
-        Assert.True((await store.InstallAsync(dependency)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.WriteAsync([original, original]));
 
-        var disableResult = await store.SetEnabledAsync("test.dependency", isEnabled: false);
-
-        Assert.False(disableResult.Success);
-        Assert.Contains("cannot be disabled", disableResult.Errors[0], StringComparison.OrdinalIgnoreCase);
+        var persisted = Assert.Single(await store.ListAsync());
+        Assert.Equal(original.PackageId, persisted.PackageId);
+        Assert.Equal(original.Version, persisted.Version);
+        Assert.Equal(original.InstallPath, persisted.InstallPath);
     }
 
     [Fact]
-    public async Task UninstallAsync_WhenDependentExists_UninstallsDependents()
+    public async Task WriteAsync_RejectsInvalidVersionAndDependencyRange()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
+        var invalidVersion = CreatePackage(paths, "test.package") with { Version = "latest" };
+        var invalidRange = CreatePackage(paths, "test.package") with
+        {
+            DependsOn = [new InstalledPackageDependencyRecord("other.package", "banana")],
+        };
 
-        Assert.True((await store.InstallAsync(dependency)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
-
-        var uninstallResult = await store.UninstallAsync("test.dependency");
-
-        Assert.True(uninstallResult.Success, string.Join(Environment.NewLine, uninstallResult.Errors));
-        Assert.Equal(["test.dependency", "test.dependent"], uninstallResult.ImpactedPackageIds.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase));
-        Assert.False(Directory.Exists(dependency.InstallPath));
-        Assert.False(Directory.Exists(dependent.InstallPath));
-        Assert.Empty(await store.ListAsync());
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.WriteAsync([invalidVersion]));
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.WriteAsync([invalidRange]));
     }
 
     [Fact]
-    public async Task UninstallAsync_WhenTransitiveDependentsExist_UninstallsAllDependents()
+    public async Task WriteAsync_PersistsOneAuthoritativeSortedCatalog()
     {
         var paths = CreateRuntimePackagePaths();
         var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
-        var transitiveDependent = CreatePackage(
-            paths,
-            "test.transitive",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependent", ">=1.0.0")]);
-        var unrelated = CreatePackage(paths, "test.unrelated");
+        var second = CreatePackage(paths, "z.package");
+        var first = CreatePackage(paths, "a.package");
 
-        Assert.True((await store.InstallAsync(dependency)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
-        Assert.True((await store.InstallAsync(transitiveDependent)).Success);
-        Assert.True((await store.InstallAsync(unrelated)).Success);
+        await store.WriteAsync([second, first]);
 
-        var result = await store.UninstallAsync("test.dependency");
-
-        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-        Assert.Equal(["test.dependency", "test.dependent", "test.transitive"], result.ImpactedPackageIds.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase));
-        Assert.False(Directory.Exists(dependency.InstallPath));
-        Assert.False(Directory.Exists(dependent.InstallPath));
-        Assert.False(Directory.Exists(transitiveDependent.InstallPath));
-        Assert.True(Directory.Exists(unrelated.InstallPath));
-        var installedPackage = Assert.Single(await store.ListAsync());
-        Assert.Equal("test.unrelated", installedPackage.PackageId);
+        Assert.Equal(["a.package", "z.package"], (await store.ListAsync()).Select(package => package.PackageId));
+        Assert.DoesNotContain(".tmp-", await File.ReadAllTextAsync(paths.StateFilePath), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task UninstallAsync_WhenPackageHasDependency_ReturnsOnlyTargetAsImpacted()
-    {
-        var paths = CreateRuntimePackagePaths();
-        var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
-
-        Assert.True((await store.InstallAsync(dependency)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
-
-        var result = await store.UninstallAsync("test.dependent");
-
-        Assert.True(result.Success);
-        Assert.Equal(["test.dependent"], result.ImpactedPackageIds);
-        Assert.False(Directory.Exists(dependent.InstallPath));
-        Assert.True(Directory.Exists(dependency.InstallPath));
-        var installedPackage = Assert.Single(await store.ListAsync());
-        Assert.Equal("test.dependency", installedPackage.PackageId);
-    }
-
-    [Fact]
-    public async Task SetEnabledAsync_WhenDependencyIsDisabled_BlocksEnable()
-    {
-        var paths = CreateRuntimePackagePaths();
-        var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            isEnabled: false,
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0")]);
-
-        Assert.True((await store.InstallAsync(dependency)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
-        Assert.True((await store.SetEnabledAsync("test.dependency", isEnabled: false)).Success);
-
-        var enableResult = await store.SetEnabledAsync("test.dependent", isEnabled: true);
-
-        Assert.False(enableResult.Success);
-        Assert.Contains("disabled package", enableResult.Errors[0], StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task UpgradeAsync_WhenPackageIsDisabled_PreservesDisabledState()
-    {
-        var paths = CreateRuntimePackagePaths();
-        var store = new InstalledPackageStore(paths);
-        var package = CreatePackage(paths, "test.package", isEnabled: false);
-        var upgradedPackage = CreatePackage(paths, "test.package", version: "1.1.0", isEnabled: true);
-
-        Assert.True((await store.InstallAsync(package)).Success);
-
-        var result = await store.UpgradeAsync("test.package", upgradedPackage, allowDowngrade: false, reinstall: false);
-
-        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-        var installedPackage = Assert.Single(await store.ListAsync());
-        Assert.Equal("1.1.0", installedPackage.Version);
-        Assert.False(installedPackage.IsEnabled);
-    }
-
-    [Fact]
-    public async Task UpgradeAsync_WhenDependentRangeWouldBreak_ReturnsFailure()
-    {
-        var paths = CreateRuntimePackagePaths();
-        var store = new InstalledPackageStore(paths);
-        var dependency = CreatePackage(paths, "test.dependency");
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0 <2.0.0")]);
-        var incompatibleDependency = CreatePackage(paths, "test.dependency", version: "2.0.0");
-
-        Assert.True((await store.InstallAsync(dependency)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
-
-        var result = await store.UpgradeAsync("test.dependency", incompatibleDependency, allowDowngrade: false, reinstall: false);
-
-        Assert.False(result.Success);
-        Assert.Contains("test.dependent", result.Errors[0], StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task UpgradeAsync_ReturnsTargetAndDependentsAsImpacted()
-    {
-        var paths = CreateRuntimePackagePaths();
-        var store = new InstalledPackageStore(paths);
-        var sharedDependency = CreatePackage(paths, "test.shared");
-        var package = CreatePackage(
-            paths,
-            "test.package",
-            dependencies: [new InstalledPackageDependencyRecord("test.shared", ">=1.0.0")]);
-        var dependent = CreatePackage(
-            paths,
-            "test.dependent",
-            dependencies: [new InstalledPackageDependencyRecord("test.package", ">=1.0.0")]);
-        var upgradedPackage = CreatePackage(
-            paths,
-            "test.package",
-            version: "1.1.0",
-            dependencies: [new InstalledPackageDependencyRecord("test.shared", ">=1.0.0")]);
-
-        Assert.True((await store.InstallAsync(sharedDependency)).Success);
-        Assert.True((await store.InstallAsync(package)).Success);
-        Assert.True((await store.InstallAsync(dependent)).Success);
-
-        var result = await store.UpgradeAsync("test.package", upgradedPackage, allowDowngrade: false, reinstall: false);
-
-        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-        Assert.Equal(["test.package", "test.dependent"], result.ImpactedPackageIds);
-    }
-
-    [Fact]
-    public async Task ListAsync_WhenDevLayoutWasCopiedIntoInstalledRoot_RecoversStateForUninstall()
-    {
-        var paths = CreateRuntimePackagePaths();
-        var store = new InstalledPackageStore(paths);
-        var copiedPackagePath = CreateCopiedDevLayout(paths, "copied.package", "1.0.0");
-
-        var installedPackages = await store.ListAsync();
-
-        var package = Assert.Single(installedPackages);
-        Assert.Equal("copied.package", package.PackageId);
-        Assert.Equal(copiedPackagePath, package.InstallPath);
-        Assert.True(File.Exists(paths.StateFilePath));
-
-        var uninstallResult = await store.UninstallAsync("copied.package");
-
-        Assert.True(uninstallResult.Success, string.Join(Environment.NewLine, uninstallResult.Errors));
-        Assert.False(Directory.Exists(copiedPackagePath));
-        Assert.Empty(await store.ListAsync());
-    }
+    private static readonly JsonSerializerOptions TestJsonOptions = new() { WriteIndented = true };
 
     private static RuntimePackagePaths CreateRuntimePackagePaths()
     {
@@ -258,15 +91,13 @@ public sealed class InstalledPackageStoreTests
         return new RuntimePackagePaths(root);
     }
 
-    private static InstalledPackageRecord CreatePackage(
+    internal static InstalledPackageRecord CreatePackage(
         RuntimePackagePaths paths,
         string packageId,
         string version = "1.0.0",
         bool isEnabled = true,
         IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null)
-    {
-        var installPath = CreateInstallPath(paths, packageId, version);
-        return new InstalledPackageRecord(
+        => new(
             packageId,
             packageId,
             Summary: null,
@@ -274,32 +105,14 @@ public sealed class InstalledPackageStoreTests
             EntryAssembly: packageId + ".dll",
             Icon: null,
             DependsOn: dependencies ?? [],
-            installPath,
+            CreateInstallPath(paths, packageId, version),
             isEnabled,
             DateTimeOffset.UtcNow);
-    }
 
     private static string CreateInstallPath(RuntimePackagePaths paths, string packageId, string version)
     {
         var installPath = paths.GetInstalledPackagePath(packageId, version);
         Directory.CreateDirectory(installPath);
-        return installPath;
-    }
-
-    private static string CreateCopiedDevLayout(RuntimePackagePaths paths, string packageId, string version)
-    {
-        var installPath = paths.GetInstalledPackagePath(packageId, version);
-        Directory.CreateDirectory(Path.Combine(installPath, "lib"));
-        File.WriteAllText(Path.Combine(installPath, "sunder-package.json"), $$"""
-            {
-              "manifestVersion": 1,
-              "id": "{{packageId}}",
-              "name": "Copied Package",
-              "version": "{{version}}",
-              "entryAssembly": "Copied.Package.dll"
-            }
-            """);
-        File.WriteAllText(Path.Combine(installPath, "lib", "Copied.Package.dll"), "not a real assembly");
         return installPath;
     }
 }

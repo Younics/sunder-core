@@ -1,4 +1,4 @@
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 

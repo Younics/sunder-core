@@ -1,5 +1,5 @@
 using Sunder.App.Models;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Features.Shell.Menus;
 

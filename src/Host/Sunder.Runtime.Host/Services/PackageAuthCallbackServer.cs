@@ -107,8 +107,15 @@ public sealed class PackageAuthCallbackServer : IDisposable
     {
         lock (_syncRoot)
         {
-            _listener?.Stop();
-            _listener?.Close();
+            try
+            {
+                _listener?.Stop();
+                _listener?.Close();
+            }
+            catch (HttpListenerException)
+            {
+                // A concurrent listener shutdown can race endpoint-manager cleanup.
+            }
             _listener = null;
             _handlers.Clear();
         }

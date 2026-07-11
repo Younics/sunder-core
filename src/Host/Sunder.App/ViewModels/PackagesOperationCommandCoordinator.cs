@@ -1,6 +1,6 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 
@@ -13,7 +13,7 @@ internal sealed class PackagesOperationCommandCoordinator(
     RegistryPackageInstallService registryInstallService,
     PackageOperationService? packageOperationService,
     Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
-    Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
+    Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
     NotificationCenterService? notificationCenter,
     Func<bool> getIsBusy,
     Action<bool> setIsBusy,
@@ -48,9 +48,10 @@ internal sealed class PackagesOperationCommandCoordinator(
             return true;
         }
 
+        var upload = await runtimeApiClient.UploadPackageAsync(packagePath);
         await ExecuteLocalPackageOperationAsync(
             () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
-                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: packagePath),
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
             ])),
             selectedPackageId: null,
             "Package installed",
@@ -314,7 +315,7 @@ internal sealed class PackagesOperationCommandCoordinator(
 
         await preflightPackageLifecycleChangesAsync(
             stage.ActivePackages,
-            stage.PackageSources,
+            stage.PackageUiSnapshots,
             stage.ImpactedPackageIds,
             cancellationToken);
     }

@@ -1,15 +1,17 @@
 using System.Text.Json;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class PackageSessionLoadService(ILogger logger)
+internal sealed class PackageSessionLoadService(ILogger logger, RuntimePackagePaths? paths = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -233,7 +235,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
 
         return PrepareMaterializedPackage(
             folder,
-            new PackageSourceDescriptor(string.Empty, PackageSourceKind.Dev, folder),
+            new RuntimePackageSource(string.Empty, PackageSourceKind.Dev, folder, shadowFolder),
             shadowFolder,
             errors);
     }
@@ -275,14 +277,14 @@ internal sealed class PackageSessionLoadService(ILogger logger)
 
         return PrepareMaterializedPackage(
             package.InstallPath,
-            new PackageSourceDescriptor(package.PackageId, PackageSourceKind.Installed, package.InstallPath),
+            new RuntimePackageSource(package.PackageId, PackageSourceKind.Installed, package.InstallPath, shadowFolder),
             shadowFolder,
             errors);
     }
 
     private static PreparedRuntimePackage? PrepareMaterializedPackage(
         string sourceFolder,
-        PackageSourceDescriptor source,
+        RuntimePackageSource source,
         string shadowFolder,
         ICollection<string> errors)
     {
@@ -389,7 +391,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             loadContext = new RuntimePackageLoadContext(preparedPackage.PackageId, preparedPackage.EntryAssemblyPath, sharedAssemblyRegistry);
             var entryAssembly = loadContext.LoadPackageEntryAssembly();
             var moduleType = ResolvePackageModuleType(entryAssembly, out var moduleResolutionError);
-            if (moduleType is null)
+            if (moduleType is null && moduleResolutionError is not null)
             {
                 errors.Add($"Package '{preparedPackage.PackageId}' {moduleResolutionError}");
                 loadContext.Unload();
@@ -402,20 +404,30 @@ internal sealed class PackageSessionLoadService(ILogger logger)
                     failureCount: 1));
             }
 
-            if (Activator.CreateInstance(moduleType) is not ISunderPackageModule module)
+            ISunderRuntimePackageModule? module = null;
+            var moduleInstance = moduleType is null ? null : Activator.CreateInstance(moduleType);
+            if (moduleType is not null && moduleInstance is not ISunderRuntimePackageModule)
             {
-                errors.Add($"Package '{preparedPackage.PackageId}' module '{moduleType.FullName}' does not implement ISunderPackageModule.");
+                errors.Add($"Package '{preparedPackage.PackageId}' module '{moduleType.FullName}' does not implement ISunderRuntimePackageModule.");
                 loadContext.Unload();
                 return new PackageActivationResult(false, null, BuildSessionDescriptor(
                     preparedPackage.Manifest,
                     isEnabled: false,
                     readiness: PackageReadinessState.Failed,
                     failureOrigin: PackageFailureOrigin.RuntimeActivation,
-                    lastError: $"Module '{moduleType.FullName}' does not implement ISunderPackageModule.",
+                    lastError: $"Module '{moduleType.FullName}' does not implement ISunderRuntimePackageModule.",
                     failureCount: 1));
             }
+            else if (moduleType is not null)
+            {
+                module = (ISunderRuntimePackageModule)moduleInstance!;
+            }
 
-            var packageContext = new RuntimePackageContext(preparedPackage.PackageId, preparedPackage.Version, preparedPackage.ShadowFolder);
+            var packageContext = new RuntimePackageContext(
+                preparedPackage.PackageId,
+                preparedPackage.Version,
+                preparedPackage.ShadowFolder,
+                (paths ?? new RuntimePackagePaths()).PackageDataRootPath);
             var services = new ServiceCollection();
             services.AddSingleton<IPackageContext>(packageContext);
             services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
@@ -426,11 +438,11 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             services.AddSingleton<IPackageSessionService>(NullPackageSessionService.Instance);
             services.AddSingleton<IPackageNotificationService>(NullPackageNotificationService.Instance);
 
-            module.ConfigureServices(services, packageContext);
+            module?.ConfigureRuntimeServices(services, packageContext);
             serviceProvider = services.BuildServiceProvider();
 
-            var contributionRegistry = new CollectingPackageContributionRegistry(serviceProvider, extensionCatalog, preparedPackage.PackageId);
-            module.RegisterContributions(contributionRegistry, serviceProvider);
+            var contributionRegistry = new RuntimePackageContributionRegistry(serviceProvider, extensionCatalog, preparedPackage.PackageId);
+            module?.RegisterRuntimeContributions(contributionRegistry, serviceProvider);
 
             foreach (var backgroundService in contributionRegistry.BackgroundServices)
             {
@@ -442,7 +454,7 @@ internal sealed class PackageSessionLoadService(ILogger logger)
             }
 
             var loadedPackage = new ActiveLoadedPackage(
-                BuildDescriptor(preparedPackage.Manifest, isEnabled: true, readiness: PackageReadinessState.Ready, contributionRegistry.PackageViews),
+                BuildDescriptor(preparedPackage.Manifest, isEnabled: true, readiness: PackageReadinessState.Ready, packageViews: []),
                 preparedPackage.Source,
                 ToProtocolConfigurationSchema(contributionRegistry.ConfigurationSchema),
                 packageContext.Storage.State,
@@ -457,14 +469,13 @@ internal sealed class PackageSessionLoadService(ILogger logger)
                 preparedPackage.Manifest,
                 isEnabled: true,
                 readiness: PackageReadinessState.Ready,
-                contributionRegistry.PackageViews);
+                packageViews: []);
 
-            if (!contributionRegistry.HasRegisteredViews
-                && !contributionRegistry.HasRegisteredExtensions
+            if (!contributionRegistry.HasRegisteredExtensions
                 && !contributionRegistry.HasRegisteredBackgroundServices
                 && contributionRegistry.ConfigurationSchema is null)
             {
-                warnings.Add($"Package '{preparedPackage.PackageId}' loaded without any package views or extension contributions.");
+                warnings.Add($"Package '{preparedPackage.PackageId}' loaded without any Runtime contributions.");
             }
 
             return new PackageActivationResult(true, loadedPackage, sessionPackage);
@@ -493,20 +504,19 @@ internal sealed class PackageSessionLoadService(ILogger logger)
 
     private static Type? ResolvePackageModuleType(Assembly entryAssembly, out string? error)
     {
-        var moduleTypes = entryAssembly.GetTypes()
-            .Where(static type => type is { IsClass: true, IsAbstract: false, IsPublic: true }
-                && typeof(ISunderPackageModule).IsAssignableFrom(type))
+        var moduleTypes = FindRuntimeModuleTypeNames(entryAssembly.Location)
+            .Select(typeName => entryAssembly.GetType(typeName, throwOnError: true)!)
             .ToArray();
 
         if (moduleTypes.Length == 0)
         {
-            error = "does not contain a public ISunderPackageModule implementation.";
+            error = null;
             return null;
         }
 
         if (moduleTypes.Length > 1)
         {
-            error = "contains multiple public ISunderPackageModule implementations: "
+            error = "contains multiple public ISunderRuntimePackageModule implementations: "
                 + string.Join(", ", moduleTypes.Select(static type => type.FullName));
             return null;
         }
@@ -520,6 +530,44 @@ internal sealed class PackageSessionLoadService(ILogger logger)
 
         error = null;
         return moduleType;
+    }
+
+    private static IEnumerable<string> FindRuntimeModuleTypeNames(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            var type = metadata.GetTypeDefinition(typeHandle);
+            if ((type.Attributes & TypeAttributes.VisibilityMask) != TypeAttributes.Public
+                || (type.Attributes & TypeAttributes.Abstract) != 0
+                || (type.Attributes & TypeAttributes.Interface) != 0)
+            {
+                continue;
+            }
+
+            var implementsRuntimeRole = type.GetInterfaceImplementations().Any(interfaceHandle =>
+            {
+                var implementation = metadata.GetInterfaceImplementation(interfaceHandle);
+                if (implementation.Interface.Kind != HandleKind.TypeReference)
+                {
+                    return false;
+                }
+
+                var interfaceType = metadata.GetTypeReference((TypeReferenceHandle)implementation.Interface);
+                return metadata.GetString(interfaceType.Namespace) == "Sunder.Sdk.Abstractions"
+                    && metadata.GetString(interfaceType.Name) == nameof(ISunderRuntimePackageModule);
+            });
+            if (!implementsRuntimeRole)
+            {
+                continue;
+            }
+
+            var typeNamespace = metadata.GetString(type.Namespace);
+            var typeName = metadata.GetString(type.Name);
+            yield return string.IsNullOrEmpty(typeNamespace) ? typeName : $"{typeNamespace}.{typeName}";
+        }
     }
 
     private static void TryDeleteDirectory(string? path)

@@ -1,0 +1,76 @@
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
+
+namespace Sunder.Cli.Tests;
+
+public sealed class RuntimeResetCommandTests
+{
+    [Fact]
+    public async Task Reset_requires_explicit_yes()
+    {
+        var result = await CliTestHost.RunAsync(["runtime", "reset"]);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
+        Assert.Contains("--yes", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reset_uses_one_time_runtime_challenge_before_local_deletion()
+    {
+        var calls = new List<string>();
+        var runtime = new FakeRuntimeClient
+        {
+            ResetPrepare = _ =>
+            {
+                calls.Add("prepare");
+                return Task.FromResult(new RuntimeResetChallengeResponse("one-time", DateTimeOffset.UtcNow.AddSeconds(30)));
+            },
+            ResetDrain = (challenge, _) =>
+            {
+                Assert.Equal("one-time", challenge);
+                calls.Add("drain");
+                return Task.FromResult(new RuntimeResetDrainResponse([]));
+            },
+            LocalReset = _ =>
+            {
+                calls.Add("delete");
+                return Task.FromResult(new RuntimeV1ResetResult([
+                    new("package-catalog-and-payloads", "reset"),
+                    new("package-state-files-secrets-and-logs", "reset"),
+                    new("uploads-and-snapshots", "reset"),
+                    new("registry-credentials", "reset"),
+                    new("runtime-connection", "reset"),
+                    new("runtime-v1-root", "reset"),
+                ]));
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["runtime", "reset", "--yes"], runtime);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.Equal(["prepare", "drain", "delete"], calls);
+        Assert.DoesNotContain("/", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Partial_reset_is_reported_and_can_be_retried()
+    {
+        var runtime = new FakeRuntimeClient
+        {
+            LocalReset = _ => Task.FromResult(new RuntimeV1ResetResult([
+                new("package-catalog-and-payloads", "reset"),
+                new("package-state-files-secrets-and-logs", "partial"),
+                new("uploads-and-snapshots", "already-empty"),
+                new("registry-credentials", "reset"),
+                new("runtime-connection", "reset"),
+                new("runtime-v1-root", "partial"),
+            ])),
+        };
+
+        var result = await CliTestHost.RunAsync(["runtime", "reset", "--yes"], runtime);
+
+        Assert.Equal(CliExitCodes.Failure, result.ExitCode);
+        Assert.Contains("package-state-files-secrets-and-logs: partial", result.Output, StringComparison.Ordinal);
+    }
+}

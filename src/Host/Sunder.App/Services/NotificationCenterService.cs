@@ -17,10 +17,7 @@ public sealed class NotificationCenterService
 
     public NotificationCenterService(string? stateFilePath = null)
     {
-        _stateFilePath = stateFilePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Sunder",
-            "notifications.json");
+        _stateFilePath = stateFilePath ?? AppLocalState.GetPath("notifications.json");
         LoadState();
     }
 

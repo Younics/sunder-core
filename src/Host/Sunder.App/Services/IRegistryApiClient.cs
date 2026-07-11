@@ -1,128 +1,17 @@
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.Services;
 
 public interface IRegistryApiClient : IDisposable
 {
     Uri RegistryUrl { get; }
-
-    Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(
-        string? query,
-        int skip,
-        int take,
-        RegistrySearchSort sort = RegistrySearchSort.Downloads,
-        CancellationToken cancellationToken = default);
-
-    Task<RegistryPackageDetails?> GetPackageAsync(
-        string packageId,
-        CancellationToken cancellationToken = default);
-
-    Task<RegistryPackageDetails?> GetPackageAsync(
-        string packageId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => GetPackageAsync(packageId, cancellationToken);
-
-    Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(
-        string? query,
-        int skip,
-        int take,
-        RegistrySearchSort sort = RegistrySearchSort.Downloads,
-        CancellationToken cancellationToken = default)
+    Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default);
+    Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<RegistryStackSummary>>([]);
-
-    Task<RegistryStackDetails?> GetStackAsync(
-        string stackId,
-        CancellationToken cancellationToken = default)
+    Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken cancellationToken = default)
         => Task.FromResult<RegistryStackDetails?>(null);
-
-    Task<RegistryStackDetails?> GetStackAsync(
-        string stackId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => GetStackAsync(stackId, cancellationToken);
-
-    Task<RegistryPackageVersionDetails?> GetVersionAsync(
-        string packageId,
-        string version,
-        CancellationToken cancellationToken = default);
-
-    Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(
-        RegistryResolveUpdatesRequest request,
-        CancellationToken cancellationToken = default);
-
-    Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
-        RegistryResolveInstallPlanRequest request,
-        CancellationToken cancellationToken = default);
-
-    Task<RegistryCurrentUserResponse?> GetCurrentUserAsync(
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult<RegistryCurrentUserResponse?>(null);
-
-    Task<RegistryCliTokenResponse> ExchangeCliTokenAsync(
-        string code,
-        string codeVerifier,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryCliTokenResponse(false, null, null, null, ["Registry token exchange is not supported by this client."]));
-
-    Task<RegistryResolveInstallPlanResponse> ResolvePackageChangesAsync(
-        RegistryResolvePackageChangesRequest request,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryResolveInstallPlanResponse(
-            false,
-            [],
-            [],
-            ["Registry client does not support batch package change planning."],
-            []));
-
-    Task DownloadArtifactAsync(
-        RegistryPackageArtifact artifact,
-        string packageId,
-        string version,
-        string destinationPath,
-        CancellationToken cancellationToken = default);
-
-    Task DownloadStackAsync(
-        RegistryStackArtifact artifact,
-        string stackId,
-        string destinationPath,
-        CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Registry client does not support Stack downloads.");
-
-    Task<RegistryPublishStackResponse> PublishStackAsync(
-        string stackPath,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryPublishStackResponse(false, null, null, [], ["Registry Stack publishing is not supported by this client."]));
-
-    Task<RegistryStackManagementOperationResponse> DeleteStackAsync(
-        string stackId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryStackManagementOperationResponse(false, null, ["Registry Stack deletion is not supported by this client."]));
-
-    Task<RegistryStackStarResponse> StarStackAsync(
-        string stackId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryStackStarResponse(false, null, null, ["Registry Stack starring is not supported by this client."]));
-
-    Task<RegistryStackStarResponse> UnstarStackAsync(
-        string stackId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryStackStarResponse(false, null, null, ["Registry Stack starring is not supported by this client."]));
-
-    Task<RegistryPackageStarResponse> StarPackageAsync(
-        string packageId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryPackageStarResponse(false, null, null, ["Registry package starring is not supported by this client."]));
-
-    Task<RegistryPackageStarResponse> UnstarPackageAsync(
-        string packageId,
-        string bearerToken,
-        CancellationToken cancellationToken = default)
-        => Task.FromResult(new RegistryPackageStarResponse(false, null, null, ["Registry package starring is not supported by this client."]));
+    Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken cancellationToken = default);
+    Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
 }

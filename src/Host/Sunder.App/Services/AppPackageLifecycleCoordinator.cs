@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -13,7 +13,7 @@ public sealed class AppPackageLifecycleCoordinator(
         cancellationToken.ThrowIfCancellationRequested();
         using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
         var activePackagesTask = runtimeApiClient.GetActivePackagesAsync(cancellationToken);
-        var packageSourcesTask = runtimeApiClient.GetActivePackageSourcesAsync(cancellationToken);
+        var packageSourcesTask = runtimeApiClient.GetActivePackageUiSnapshotsAsync(cancellationToken);
         await Task.WhenAll(activePackagesTask, packageSourcesTask).ConfigureAwait(false);
 
         var activePackages = await activePackagesTask.ConfigureAwait(false);

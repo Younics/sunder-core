@@ -1,8 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Storage;
+using Sunder.Runtime.Host.Infrastructure.Storage;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -122,7 +122,7 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
-    public async Task DisposeAsync_LeavesSessionFolderForProcessLifetime()
+    public async Task DisposeAsync_ReleasesSessionFolder()
     {
         var sessionFolder = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(sessionFolder);
@@ -135,7 +135,7 @@ public sealed class ActivePackageSessionTests
 
             await session.DisposeAsync();
 
-            Assert.True(Directory.Exists(sessionFolder));
+            Assert.False(Directory.Exists(sessionFolder));
         }
         finally
         {
@@ -176,10 +176,14 @@ public sealed class ActivePackageSessionTests
 
         return new ActiveLoadedPackage(
             CreateActivePackage(packageId, isEnabled: true, PackageReadinessState.Ready),
-            new PackageSourceDescriptor(packageId, PackageSourceKind.Dev, tempDirectory),
+            new RuntimePackageSource(packageId, PackageSourceKind.Dev, tempDirectory),
             ConfigurationSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
-            new JsonPackageSecretsStore(Path.Combine(tempDirectory, "secrets.json")),
+            new JsonPackageSecretsStore(
+                Path.Combine(tempDirectory, "secrets.json"),
+                null,
+                null,
+                new RestrictedFileMasterKeyProtection()),
             AuthHandler: null,
             CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             BackgroundServices: [new TestBackgroundService()],

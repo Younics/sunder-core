@@ -1,12 +1,11 @@
 using Sunder.App.Services;
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesMarketplaceCatalog(
-    PackageRegistryClientProvider registryClientProvider,
-    Func<Uri, RegistryAuthToken?> registryTokenProvider)
+    PackageRegistryClientProvider registryClientProvider)
 {
     public async Task<PackagesMarketplaceSearchResult> SearchAsync(
         string searchText,
@@ -45,12 +44,7 @@ internal sealed class PackagesMarketplaceCatalog(
 
         using (registryClient)
         {
-            var token = registryClientProvider.TryResolve(out var registryUrl, out _) && registryUrl is not null
-                ? registryTokenProvider(registryUrl)
-                : null;
-            var package = token is not null && !string.IsNullOrWhiteSpace(token.Token)
-                ? await registryClient.GetPackageAsync(packageId, token.Token, cancellationToken).ConfigureAwait(false)
-                : await registryClient.GetPackageAsync(packageId, cancellationToken).ConfigureAwait(false);
+            var package = await registryClient.GetPackageAsync(packageId, cancellationToken).ConfigureAwait(false);
             var versions = package?.Versions
                 .OrderByDescending(version => RegistryPackageVersionOrdering.TryParse(version.Version), RegistryPackageVersionOrdering.Comparer)
                 .ThenByDescending(version => version.PublishedAtUtc)

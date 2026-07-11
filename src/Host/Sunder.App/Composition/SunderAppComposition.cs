@@ -19,6 +19,7 @@ internal static class SunderAppComposition
         services.AddSingleton(application);
         services.AddSingleton(startupOptions);
         services.AddSingleton(packageResourceAssemblyRegistry);
+        services.AddSingleton<IUiDispatcher>(AvaloniaUiDispatcher.Instance);
         services.AddSingleton<SunderAppSettings>(_ => SunderAppSettings.Load());
 
         services.AddSingleton<ShellStateService>();
@@ -34,6 +35,7 @@ internal static class SunderAppComposition
             "sunder.app",
             "Sunder"));
         services.AddSingleton<DeveloperLogService>();
+        services.AddSingleton<RuntimeEventSubscriptionService>();
         services.AddSingleton<CliInstallationService>();
         services.AddSingleton<AppUpdateSettingsService>();
         services.AddSingleton<SunderUpdateService>();
@@ -66,6 +68,7 @@ internal static class SunderAppComposition
         services.AddSingleton<SettingsWindowFactory>();
         services.AddSingleton<PackagesWindowFactory>();
         services.AddSingleton<StacksWindowFactory>();
+        services.AddSingleton<StackWizardWindowFactory>();
         services.AddSingleton<ShellStartupCoordinator>();
 
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });

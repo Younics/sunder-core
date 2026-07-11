@@ -1,11 +1,13 @@
 using System.Reflection;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppPackageHostComposition
+internal sealed class AppPackageHostComposition : IDisposable
 {
+    private readonly OwnedTaskObserver _tasks = new(nameof(AppPackageHostComposition));
     private readonly AppPackageDeltaCoordinator _deltaCoordinator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
@@ -18,7 +20,6 @@ internal sealed class AppPackageHostComposition
     public AppPackageHostComposition(
         object eventSender,
         AppPackageViewRegistry viewRegistry,
-        AppPackageBackgroundServiceCoordinator backgroundServices,
         AppPackageHostState state,
         PackageRuntimeFaultReporter? faultReporter,
         string? sessionFolder,
@@ -29,7 +30,9 @@ internal sealed class AppPackageHostComposition
         IPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
-        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry)
+        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
+        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
+        Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task>? downloadPackageUiSnapshotAsync = null)
     {
         _eventSender = eventSender;
         _resourceAssemblyRegistry = resourceAssemblyRegistry;
@@ -44,13 +47,30 @@ internal sealed class AppPackageHostComposition
             _state.IsPackageDisabled,
             (packageId, message, exception) => DisablePackage(packageId, message, PackageFailureOrigin.AppHostedView, exception));
 
-        var sourceLoader = new AppPackageSourceLoader(new AppPackageSourcePreparer(sessionFolder));
+        async Task DownloadSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken)
+        {
+            if (downloadPackageUiSnapshotAsync is not null)
+            {
+                await downloadPackageUiSnapshotAsync(snapshot, destination, cancellationToken);
+                return;
+            }
+
+            if (getRuntimeConnectionInfo is null)
+            {
+                throw new InvalidOperationException("Runtime connection information is required to download package UI snapshots.");
+            }
+
+            using var client = new RuntimeApiClient(getRuntimeConnectionInfo);
+            await client.DownloadPackageUiSnapshotAsync(snapshot, destination, cancellationToken);
+        }
+
+        var sourceLoader = new AppPackageSourceLoader(new AppPackageSourcePreparer(sessionFolder), DownloadSnapshotAsync);
         var resolvedSharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         _sharedAssemblyRegistry = resolvedSharedAssemblyRegistry;
         var resolvedExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
         ExtensionCatalog = resolvedExtensionCatalog;
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
-        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(backgroundServices, resolvedBackgroundProcessQueue);
+        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue);
         var serviceProviderFactory = new AppPackageServiceProviderFactory(
             resolvedExtensionCatalog,
             shellViewService,
@@ -62,8 +82,8 @@ internal sealed class AppPackageHostComposition
             resolvedSharedAssemblyRegistry,
             serviceProviderFactory,
             viewRegistry,
-            backgroundServices,
-            resolvedExtensionCatalog);
+            resolvedExtensionCatalog,
+            getRuntimeConnectionInfo: getRuntimeConnectionInfo);
 
         _unloadCoordinator = new AppPackageUnloadCoordinator(
             viewRegistry,
@@ -104,17 +124,14 @@ internal sealed class AppPackageHostComposition
         _preflightCoordinator = new AppPackagePreflightCoordinator(
             _state.GetLoadedPackage,
             _state.IsPackageDisabled,
-            RequiresSharedAssemblyReset);
+            RequiresSharedAssemblyReset,
+            DownloadSnapshotAsync);
 
-        bool RequiresSharedAssemblyReset(IReadOnlyList<PackageSourceDescriptor> packageSources)
+        bool RequiresSharedAssemblyReset(IReadOnlyList<PackageUiSnapshotDescriptor> packageSources)
         {
-            var libraryFolders = packageSources
-                .Select(AppPackageSourcePreparer.TryResolveLibraryFolder)
-                .Where(static libraryFolder => !string.IsNullOrWhiteSpace(libraryFolder))
-                .Select(static libraryFolder => libraryFolder!)
-                .ToArray();
-
-            return resolvedSharedAssemblyRegistry.RequiresResetForProbeDirectories(libraryFolders);
+            return packageSources.Any(snapshot =>
+                _state.GetLoadedPackage(snapshot.PackageId) is { } loaded
+                && !string.Equals(loaded.Source.ContentHash, snapshot.ContentHash, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -128,14 +145,14 @@ internal sealed class AppPackageHostComposition
 
     public Task ApplyPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds,
         CancellationToken cancellationToken)
         => _deltaCoordinator.ApplyPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
 
     public Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds,
         CancellationToken cancellationToken)
         => _preflightCoordinator.PreflightPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
@@ -145,7 +162,11 @@ internal sealed class AppPackageHostComposition
         string message,
         PackageFailureOrigin origin,
         Exception? exception = null)
-        => _ = DisablePackageAndLogAsync(packageId, message, origin, exception);
+        => _tasks.Observe(
+            DisablePackageAndLogAsync(packageId, message, origin, exception),
+            $"disabling package '{packageId}'");
+
+    public void Dispose() => _tasks.Dispose();
 
     public async Task DisablePackageAsync(
         string packageId,

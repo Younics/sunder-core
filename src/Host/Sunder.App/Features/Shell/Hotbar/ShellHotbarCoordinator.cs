@@ -1,5 +1,6 @@
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
+using Sunder.App.Services;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Features.Shell.Hotbar;
@@ -11,8 +12,9 @@ internal sealed class ShellHotbarCoordinator(
     Func<string, IReadOnlyDictionary<string, string?>?, ValueTask<bool>> openPackageViewPanelAsync,
     Action<bool> rebuildRailCollections,
     Action<IReadOnlySet<RailPlacement>, IReadOnlySet<string>, bool> updateRailCollections,
-    Action persistShellState)
+    Action persistShellState) : IDisposable
 {
+    private readonly OwnedTaskObserver _tasks = new(nameof(ShellHotbarCoordinator));
     public bool IsViewInHotbar(string viewId)
         => viewsById.ContainsKey(viewId) && !shellState.HiddenHotbarViewIds.Contains(viewId);
 
@@ -91,7 +93,9 @@ internal sealed class ShellHotbarCoordinator(
 
         if (!IsViewInHotbar(viewId))
         {
-            _ = AddViewToHotbarAsync(viewId, ShellPlacementCatalog.ToPackageHotbarPlacement(placement), targetIndex, openPanel: true);
+            _tasks.Observe(
+                AddViewToHotbarAsync(viewId, ShellPlacementCatalog.ToPackageHotbarPlacement(placement), targetIndex, openPanel: true).AsTask(),
+                $"moving package view '{viewId}' into the hotbar");
             return;
         }
 
@@ -110,6 +114,8 @@ internal sealed class ShellHotbarCoordinator(
         UpdateRailCollectionsForView(viewId, new HashSet<RailPlacement> { sourcePlacement, placement }, createHostedViews: true);
         persistShellState();
     }
+
+    public void Dispose() => _tasks.Dispose();
 
     private void UpdateRailCollectionsForView(
         string viewId,

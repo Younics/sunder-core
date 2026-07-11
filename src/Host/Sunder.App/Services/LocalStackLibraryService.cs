@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Sunder.PackageManagement;
+using Sunder.Package.Format;
 
 namespace Sunder.App.Services;
 
@@ -206,7 +206,7 @@ public sealed class LocalStackLibraryService
 
     public async Task<SunderStackManifest> ReadManifestAsync(string stackPath, CancellationToken cancellationToken = default)
     {
-        var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "inspect", Guid.NewGuid().ToString("N"));
+        var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "V1", "inspect", Guid.NewGuid().ToString("N"));
         try
         {
             var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(stackPath, stagingPath, cancellationToken);
@@ -283,30 +283,7 @@ public sealed class LocalStackLibraryService
         => Path.Combine(_stacksRoot, "media", SanitizeFileName(stackId));
 
     private static string GetDefaultStacksRoot()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Sunder", "stacks");
-        }
-
-        if (OperatingSystem.IsMacOS())
-        {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "Library",
-                "Application Support",
-                "Sunder",
-                "stacks");
-        }
-
-        var configRoot = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
-        if (string.IsNullOrWhiteSpace(configRoot))
-        {
-            configRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
-        }
-
-        return Path.Combine(configRoot, "sunder", "stacks");
-    }
+        => AppLocalState.GetPath("stacks");
 
     public static IReadOnlyList<LocalStackDetailPackage> BuildDetailsFromManifest(SunderStackManifest manifest)
         => (manifest.Fragments ?? [])
@@ -344,7 +321,7 @@ public sealed class LocalStackLibraryService
             return [];
         }
 
-        var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "media", Guid.NewGuid().ToString("N"));
+        var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "V1", "media", Guid.NewGuid().ToString("N"));
         try
         {
             var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(stackPath, stagingPath, cancellationToken);
@@ -362,7 +339,7 @@ public sealed class LocalStackLibraryService
                     continue;
                 }
 
-                var sourcePath = Path.Combine(stagingPath, item.Path.Replace('/', Path.DirectorySeparatorChar));
+                var sourcePath = SunderArchive.ResolveFile(stagingPath, ArchiveRelativePath.Parse(item.Path));
                 if (!File.Exists(sourcePath))
                 {
                     continue;

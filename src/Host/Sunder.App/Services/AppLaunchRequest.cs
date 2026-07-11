@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Sunder.Package.Format;
 
 namespace Sunder.App.Services;
 
@@ -29,7 +30,6 @@ public enum AppLaunchRequestKind
 
 public static class AppLaunchRequestParser
 {
-    private static readonly Regex PackageIdRegex = new("^[a-z0-9]+(\\.[a-z0-9]+)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex StackIdRegex = new("^[a-z0-9]+([.-][a-z0-9]+)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static AppLaunchRequest Parse(IReadOnlyList<string> args)
@@ -92,7 +92,7 @@ public static class AppLaunchRequestParser
         }
 
         var packageId = segments[0];
-        if (!PackageIdRegex.IsMatch(packageId))
+        if (!PackageId.TryParse(packageId, out _))
         {
             return AppLaunchRequest.Invalid($"Sunder package link has invalid package id '{packageId}'.");
         }

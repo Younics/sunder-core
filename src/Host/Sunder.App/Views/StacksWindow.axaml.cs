@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Sunder.App.Models;
+using Sunder.App.Composition;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 
@@ -12,8 +13,9 @@ public partial class StacksWindow : Window
     private StacksWindowViewModel? ViewModel => DataContext as StacksWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
     private readonly SecondaryWindowLifecycleController _lifecycleController;
-    private readonly ShellStateService? _shellStateService;
-    private readonly ShellState? _shellState;
+    private readonly StackWizardWindowFactory? _stackWizardWindowFactory;
+    private readonly OwnedTaskObserver _tasks = new(nameof(StacksWindow));
+    private readonly CancellationTokenSource _lifetime = new();
     private StacksWindowViewModel? _subscribedViewModel;
 
     public StacksWindow()
@@ -28,11 +30,13 @@ public partial class StacksWindow : Window
         DataContextChanged += OnDataContextChanged;
     }
 
-    public StacksWindow(ShellStateService shellStateService, ShellState shellState)
+    public StacksWindow(
+        ShellStateService shellStateService,
+        ShellState shellState,
+        StackWizardWindowFactory stackWizardWindowFactory)
         : this()
     {
-        _shellStateService = shellStateService;
-        _shellState = shellState;
+        _stackWizardWindowFactory = stackWizardWindowFactory;
         _stateController = new SecondaryWindowStateController(
             this,
             shellStateService,
@@ -49,13 +53,13 @@ public partial class StacksWindow : Window
     public void CloseForShutdown()
         => _lifecycleController.CloseForShutdown();
 
-    private async void OnOpened(object? sender, EventArgs e)
+    private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
 
         if (ViewModel is not null)
         {
-            await ViewModel.InitializeAsync();
+            _tasks.Observe(ViewModel.InitializeAsync(_lifetime.Token), "initializing Stacks");
         }
     }
 
@@ -64,25 +68,19 @@ public partial class StacksWindow : Window
         _stateController?.PersistSidebarWidth();
     }
 
-    private async void CreateStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void CreateStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (ViewModel is null)
         {
             return;
         }
 
-        var wizardWindow = new CreateStackWizardWindow();
-        ApplyCreateStackWizardPlacement(wizardWindow);
         var wizardViewModel = ViewModel.CreateCreateStackWizardViewModel();
-        wizardWindow.DataContext = wizardViewModel;
-        var result = await wizardWindow.ShowDialog<bool?>(this);
-        if (result == true)
-        {
-            await ViewModel.RefreshAfterCreatedStackAsync(wizardViewModel.CreatedStackId);
-        }
+        var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
+        _tasks.Observe(ShowCreateWizardAsync(wizardWindow, wizardViewModel, isEdit: false), "showing Create Stack wizard");
     }
 
-    private async void EditStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void EditStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (ViewModel is null)
         {
@@ -95,39 +93,26 @@ public partial class StacksWindow : Window
             return;
         }
 
-        var wizardWindow = new CreateStackWizardWindow
-        {
-            DataContext = wizardViewModel,
-        };
-        ApplyCreateStackWizardPlacement(wizardWindow);
-        var result = await wizardWindow.ShowDialog<bool?>(this);
-        if (result == true)
-        {
-            await ViewModel.RefreshAfterEditedStackAsync(wizardViewModel.CreatedStackId);
-        }
+        var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
+        _tasks.Observe(ShowCreateWizardAsync(wizardWindow, wizardViewModel, isEdit: true), "showing Edit Stack wizard");
     }
 
-    private async void ImportStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void ImportStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (ViewModel is not null)
         {
-            await ViewModel.ImportStackWithPickerAsync();
+            _tasks.Observe(ViewModel.ImportStackWithPickerAsync(_lifetime.Token), "importing a Stack");
         }
     }
 
-    private async void UseRegistryStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void UseRegistryStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (ViewModel is null || !await ViewModel.ImportSelectedRegistryStackAsLocalAsync(AppLaunchRequestKind.StackUse))
-        {
-            return;
-        }
-
-        await ShowUseStackWizardAsync();
+        _tasks.Observe(ImportAndShowUseStackWizardAsync(), "opening a Registry Stack");
     }
 
-    private async void UseLocalStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void UseLocalStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await ShowUseStackWizardAsync();
+        _tasks.Observe(ShowUseStackWizardAsync(), "showing Use Stack wizard");
     }
 
     private async Task ShowUseStackWizardAsync()
@@ -143,11 +128,7 @@ public partial class StacksWindow : Window
             return;
         }
 
-        var wizardWindow = new UseStackWizardWindow
-        {
-            DataContext = wizardViewModel,
-        };
-        ApplyUseStackWizardPlacement(wizardWindow);
+        var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
         var result = await wizardWindow.ShowDialog<bool?>(this);
         if (result == true)
         {
@@ -158,39 +139,44 @@ public partial class StacksWindow : Window
     private void OnLifecycleClosed()
     {
         SubscribeToViewModel(null);
+        _lifetime.Cancel();
+        _tasks.Dispose();
         ViewModel?.Dispose();
         DataContext = null;
+        _lifetime.Dispose();
     }
 
-    private void ApplyCreateStackWizardPlacement(Window wizardWindow)
-        => ApplyStackWizardPlacement(
-            wizardWindow,
-            state => state.CreateStackWizardWindowPlacement,
-            (state, placement) => state.CreateStackWizardWindowPlacement = placement);
-
-    private void ApplyUseStackWizardPlacement(Window wizardWindow)
-        => ApplyStackWizardPlacement(
-            wizardWindow,
-            state => state.UseStackWizardWindowPlacement,
-            (state, placement) => state.UseStackWizardWindowPlacement = placement);
-
-    private void ApplyStackWizardPlacement(
-        Window wizardWindow,
-        Func<ShellState, ShellWindowPlacement?> getPlacement,
-        Action<ShellState, ShellWindowPlacement?> setPlacement)
+    private async Task ShowCreateWizardAsync(
+        CreateStackWizardWindow window,
+        CreateStackWizardViewModel viewModel,
+        bool isEdit)
     {
-        if (_shellState is null || _shellStateService is null)
+        var result = await window.ShowDialog<bool?>(this);
+        if (result == true && ViewModel is not null)
         {
-            return;
+            if (isEdit)
+            {
+                await ViewModel.RefreshAfterEditedStackAsync(viewModel.CreatedStackId);
+            }
+            else
+            {
+                await ViewModel.RefreshAfterCreatedStackAsync(viewModel.CreatedStackId);
+            }
         }
-
-        ShellWindowPlacementService.Apply(wizardWindow, getPlacement(_shellState));
-        wizardWindow.Closing += (_, _) =>
-        {
-            setPlacement(_shellState, ShellWindowPlacementService.Capture(wizardWindow, getPlacement(_shellState)));
-            _shellStateService.Save(_shellState);
-        };
     }
+
+    private async Task ImportAndShowUseStackWizardAsync()
+    {
+        if (ViewModel is not null
+            && await ViewModel.ImportSelectedRegistryStackAsLocalAsync(AppLaunchRequestKind.StackUse, _lifetime.Token))
+        {
+            await ShowUseStackWizardAsync();
+        }
+    }
+
+    private StackWizardWindowFactory RequireWizardFactory()
+        => _stackWizardWindowFactory
+           ?? throw new InvalidOperationException("Stack wizard windows must be created by the composition root.");
 
     private void OnDataContextChanged(object? sender, EventArgs e) => SubscribeToViewModel(ViewModel);
 

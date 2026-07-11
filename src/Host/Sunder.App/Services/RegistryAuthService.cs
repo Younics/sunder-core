@@ -1,122 +1,68 @@
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
-public sealed class RegistryAuthService(ExternalBrowserService browserService)
+public sealed class RegistryAuthService(
+    IRuntimeApiClientFactory runtimeApiClientFactory,
+    ExternalBrowserService browserService)
 {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(350);
+
     public RegistryAuthState GetCachedStatus(Uri? registryUrl = null)
+        => RegistryAuthState.SignedOut(RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl));
+
+    public async Task<RegistryAuthState> GetStatusAsync(Uri? registryUrl = null, CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        var store = SunderAuthStore.Load();
-        var token = store.GetToken(registryUrl);
-        if (token is null)
-        {
-            return RegistryAuthState.SignedOut(registryUrl);
-        }
-
-        if (token.ExpiresAtUtc is not null && token.ExpiresAtUtc <= DateTimeOffset.UtcNow)
-        {
-            store.RemoveToken(registryUrl);
-            store.Save();
-            return RegistryAuthState.SignedOut(registryUrl, "Saved Registry token is expired.");
-        }
-
-        return RegistryAuthState.SignedIn(registryUrl, ToCachedUser(token), token.ExpiresAtUtc);
+        using var runtime = runtimeApiClientFactory.CreateClient();
+        return ToState(await runtime.GetRegistryAuthStatusAsync(registryUrl.AbsoluteUri, cancellationToken));
     }
 
-    public async Task<RegistryAuthState> GetStatusAsync(
-        Uri? registryUrl = null,
-        CancellationToken cancellationToken = default)
+    public async Task<RegistryAuthState> LoginAsync(Uri? registryUrl = null, CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        var store = SunderAuthStore.Load();
-        var token = store.GetToken(registryUrl);
-        if (token is null)
+        using var runtime = runtimeApiClientFactory.CreateClient();
+        var start = await runtime.StartRegistryAuthAsync(
+            new RuntimeRegistryAuthStartRequest(registryUrl.AbsoluteUri, DisplayName: "Sunder App"),
+            cancellationToken);
+        browserService.Open(new Uri(start.LaunchUrl));
+
+        while (DateTimeOffset.UtcNow < start.ExpiresAtUtc)
         {
-            return RegistryAuthState.SignedOut(registryUrl);
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = await runtime.GetRegistryAuthSessionAsync(start.SessionId, cancellationToken);
+            if (status?.State == RuntimeRegistryAuthSessionState.Succeeded)
+            {
+                return RegistryAuthState.SignedIn(registryUrl, ToUser(status.User!), status.CredentialExpiresAtUtc);
+            }
+            if (status?.State is RuntimeRegistryAuthSessionState.Failed or RuntimeRegistryAuthSessionState.Expired)
+            {
+                return RegistryAuthState.SignedOut(registryUrl, status.Message ?? "Registry sign-in failed.");
+            }
+            await Task.Delay(PollInterval, cancellationToken);
         }
 
-        if (token.ExpiresAtUtc is not null && token.ExpiresAtUtc <= DateTimeOffset.UtcNow)
-        {
-            store.RemoveToken(registryUrl);
-            store.Save();
-            return RegistryAuthState.SignedOut(registryUrl, "Saved Registry token is expired.");
-        }
-
-        using var registryClient = new RegistryApiClient(registryUrl);
-        var user = await registryClient.GetCurrentUserAsync(token.Token, cancellationToken);
-        if (user is null)
-        {
-            store.RemoveToken(registryUrl);
-            store.Save();
-            return RegistryAuthState.SignedOut(registryUrl, "Saved Registry token is invalid.");
-        }
-
-        SaveToken(store, registryUrl, token.Token, token.UserId ?? user.UserId, token.ExpiresAtUtc, user);
-
-        return RegistryAuthState.SignedIn(registryUrl, user, token.ExpiresAtUtc);
+        return RegistryAuthState.SignedOut(registryUrl, "Registry sign-in timed out.");
     }
 
-    public async Task<RegistryAuthState> LoginAsync(
-        Uri? registryUrl = null,
-        CancellationToken cancellationToken = default)
+    public async Task<RegistryAuthState> LogoutAsync(Uri? registryUrl = null, CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        using var registryClient = new RegistryApiClient(registryUrl);
-        var flow = new RegistryBrowserAuthFlow(registryUrl, registryClient, browserService);
-        var result = await flow.LoginAsync(cancellationToken);
-
-        var store = SunderAuthStore.Load();
-
-        var user = await registryClient.GetCurrentUserAsync(result.Token, cancellationToken);
-        if (user is not null)
-        {
-            SaveToken(store, registryUrl, result.Token, result.UserId ?? user.UserId, result.ExpiresAtUtc, user);
-        }
-
-        return user is null
-            ? RegistryAuthState.SignedOut(registryUrl, "Registry sign-in completed, but the token could not be verified.")
-            : RegistryAuthState.SignedIn(registryUrl, user, result.ExpiresAtUtc);
+        using var runtime = runtimeApiClientFactory.CreateClient();
+        return ToState(await runtime.LogoutRegistryAsync(registryUrl.AbsoluteUri, cancellationToken));
     }
 
-    public RegistryAuthState Logout(Uri? registryUrl = null)
+    private static RegistryAuthState ToState(RuntimeRegistryAuthStatus status)
     {
-        registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        var store = SunderAuthStore.Load();
-        store.RemoveToken(registryUrl);
-        store.Save();
-        return RegistryAuthState.SignedOut(registryUrl);
+        var origin = new Uri(status.RegistryOrigin);
+        return status.IsSignedIn && status.User is not null
+            ? RegistryAuthState.SignedIn(origin, ToUser(status.User), status.ExpiresAtUtc)
+            : RegistryAuthState.SignedOut(origin, status.Message);
     }
 
-    private static void SaveToken(
-        SunderAuthStore store,
-        Uri registryUrl,
-        string token,
-        string? userId,
-        DateTimeOffset? expiresAtUtc,
-        RegistryCurrentUserResponse user)
-    {
-        store.SetToken(
-            registryUrl,
-            token,
-            userId,
-            expiresAtUtc,
-            user.Username,
-            user.DisplayName,
-            user.Email,
-            user.AvatarUrl,
-            DateTimeOffset.UtcNow);
-        store.Save();
-    }
-
-    private static RegistryCurrentUserResponse ToCachedUser(RegistryAuthToken token)
-        => new(
-            token.UserId ?? string.Empty,
-            token.DisplayName,
-            token.Email,
-            token.Username,
-            token.AvatarUrl);
+    private static RegistryCurrentUserResponse ToUser(RuntimeRegistryUser user)
+        => new(user.UserId, user.DisplayName, user.Email, user.Username, user.AvatarUrl, user.RequiresUsername);
 }
 
 public sealed record RegistryAuthState(
@@ -129,9 +75,6 @@ public sealed record RegistryAuthState(
     public static RegistryAuthState SignedOut(Uri registryUrl, string? message = null)
         => new(registryUrl, false, null, null, message);
 
-    public static RegistryAuthState SignedIn(
-        Uri registryUrl,
-        RegistryCurrentUserResponse user,
-        DateTimeOffset? expiresAtUtc)
+    public static RegistryAuthState SignedIn(Uri registryUrl, RegistryCurrentUserResponse user, DateTimeOffset? expiresAtUtc)
         => new(registryUrl, true, user, expiresAtUtc, null);
 }

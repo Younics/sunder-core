@@ -8,17 +8,13 @@ internal static class AppSessionLog
 {
     private const int MaxRecentEntries = 5000;
 
-    private static readonly string LogRootPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Sunder",
-        "logs");
+    private static readonly string LogRootPath = AppLocalState.GetPath("logs");
     private static readonly object RecentEntriesGate = new();
     private static readonly List<AppSessionLogSnapshotEntry> RecentEntries = [];
 
-    private static readonly Lazy<IPackageLogging> Logging = new(() => new FilePackageLogging(
+    private static readonly string SessionLogPath = Path.Combine(
         LogRootPath,
-        "sunder.app",
-        typeof(AppSessionLog).Assembly.GetName().Version ?? new Version(0, 0)));
+        $"app-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Environment.ProcessId}.log");
     private static readonly Channel<AppSessionLogEntry> Entries = Channel.CreateBounded<AppSessionLogEntry>(
         new BoundedChannelOptions(1024)
         {
@@ -52,6 +48,13 @@ internal static class AppSessionLog
         DeveloperLogEntryScope developerLogScope = DeveloperLogEntryScope.Application,
         string? developerLogSource = null)
         => Write(PackageLogLevel.Error, message, exception, visibleInDeveloperLog, developerLogScope, developerLogSource);
+
+    internal static void WritePackage(
+        PackageLogLevel level,
+        string packageId,
+        string message,
+        Exception? exception = null)
+        => Write(level, message, exception, visibleInDeveloperLog: true, DeveloperLogEntryScope.Package, packageId);
 
     public static async Task FlushAsync(CancellationToken cancellationToken = default)
     {
@@ -115,15 +118,14 @@ internal static class AppSessionLog
                     continue;
                 }
 
-                await Logging.Value.Events.WriteAsync(
-                    entry.Level,
-                    "app.session.log",
-                    entry.Message,
-                    new Dictionary<string, object?>(StringComparer.Ordinal)
-                    {
-                        ["log.scope"] = "app",
-                    },
-                    entry.Exception).ConfigureAwait(false);
+                Directory.CreateDirectory(LogRootPath);
+                var line = $"{DateTimeOffset.Now:O} level={entry.Level} {entry.Message}";
+                if (entry.Exception is not null)
+                {
+                    line += $"{Environment.NewLine}{entry.Exception}";
+                }
+
+                await File.AppendAllTextAsync(SessionLogPath, line + Environment.NewLine).ConfigureAwait(false);
             }
             catch
             {

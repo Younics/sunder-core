@@ -1,0 +1,23 @@
+{
+  "stackId": "sample-stack",
+  "name": "Sample Stack",
+  "summary": "A sample Stack.",
+  "packageCount": 2,
+  "fragmentCount": 1,
+  "createdAtUtc": "2026-07-10T10:00:00+00:00",
+  "updatedAtUtc": "2026-07-11T10:00:00+00:00",
+  "stats": {
+    "totalDownloads": 12,
+    "stars": 3,
+    "isStarred": true,
+    "weeklyDownloads": 4,
+    "dailyDownloads": [
+      {
+        "date": "2026-07-11",
+        "count": 2
+      }
+    ],
+    "totalViews": 9
+  },
+  "creator": null
+}

@@ -7,4 +7,4 @@ using Sunder.Sdk.Packaging;
     Icon = "assets/icon.png"
 )]
 
-[assembly: SunderPackageDependency(PackageId = "sunder.host.package", VersionRange = ">=1.0.0")]
+[assembly: SunderPackageDependency(PackageId = "sunder.host.package", VersionRange = ">=1.0.0 <2.0.0")]

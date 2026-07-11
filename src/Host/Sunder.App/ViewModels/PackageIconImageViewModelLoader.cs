@@ -7,6 +7,7 @@ internal static class PackageIconImageViewModelLoader
 {
     public static async Task LoadAsync(
         Uri iconUri,
+        IUiDispatcher uiDispatcher,
         Func<bool> isDisposed,
         Action<string, IImage?> applyResult,
         CancellationToken cancellationToken = default)
@@ -21,7 +22,7 @@ internal static class PackageIconImageViewModelLoader
             return;
         }
 
-        await UiThread.InvokeAsync(() =>
+        await uiDispatcher.InvokeAsync(() =>
         {
             if (isDisposed() || cancellationToken.IsCancellationRequested)
             {

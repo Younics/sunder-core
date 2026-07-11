@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "packageId": "sunder.package.sample",
+      "name": "Sample",
+      "summary": "A sample package.",
+      "latestVersion": "1.2.3",
+      "iconUrl": null,
+      "isYanked": false,
+      "createdAtUtc": "2026-07-10T10:00:00+00:00",
+      "updatedAtUtc": "2026-07-11T10:00:00+00:00",
+      "stats": null,
+      "creator": null
+    }
+  ],
+  "totalCount": 12,
+  "skip": 5,
+  "take": 5
+}

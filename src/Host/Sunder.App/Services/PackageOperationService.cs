@@ -1,5 +1,5 @@
-using Sunder.Protocol;
-using Sunder.Registry.Shared;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
@@ -80,7 +80,7 @@ internal sealed class PackageOperationService : IDisposable
     private readonly Func<Uri, IRegistryApiClient> _createRegistryClient;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly PackageOperationFinalizer _operationFinalizer;
-    private readonly Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
+    private readonly Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
     private readonly object _operationGate = new();
     private volatile bool _disposed;
 
@@ -91,7 +91,7 @@ internal sealed class PackageOperationService : IDisposable
         NotificationCenterService notificationCenter,
         RegistryPackageInstallService? registryInstallService = null,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
-        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageSourceDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? preflightPackageLifecycleChangesAsync = null)
+        Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? preflightPackageLifecycleChangesAsync = null)
     {
         _backgroundProcesses = backgroundProcesses;
         _runtimeApiClientFactory = runtimeApiClientFactory;
@@ -201,9 +201,10 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportIndeterminate($"Installing {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                var upload = await runtimeApiClient.UploadPackageAsync(packagePath, context.CancellationToken).ConfigureAwait(false);
                 var result = await StagePreflightCommitPackageStoreAsync(
                     runtimeApiClient,
-                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, PackagePath: packagePath)]),
+                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId)]),
                     context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package installed", "Package installed from disk.").ConfigureAwait(false);
             });
@@ -383,7 +384,7 @@ internal sealed class PackageOperationService : IDisposable
 
         await _preflightPackageLifecycleChangesAsync(
             stage.ActivePackages,
-            stage.PackageSources,
+            stage.PackageUiSnapshots,
             stage.ImpactedPackageIds,
             cancellationToken).ConfigureAwait(false);
     }

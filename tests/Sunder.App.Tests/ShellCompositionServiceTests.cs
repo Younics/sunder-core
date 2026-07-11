@@ -1,6 +1,6 @@
 using Sunder.App.Models;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Xunit;
 
 namespace Sunder.App.Tests;

@@ -1,0 +1,69 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.MarketplaceProfileCard"
+             x:DataType="controls:MarketplaceProfileCard"
+             x:Name="Root">
+  <Border Classes="card-surface marketplace-profile-card">
+    <StackPanel Spacing="12">
+      <StackPanel Spacing="2">
+        <TextBlock Classes="section-title" Text="{Binding Title, ElementName=Root}" />
+        <TextBlock Classes="caption" Text="{Binding Description, ElementName=Root}" />
+      </StackPanel>
+
+      <ItemsControl ItemsSource="{Binding Links, ElementName=Root}"
+                    IsVisible="{Binding HasLinks, ElementName=Root}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:RegistryPackageProfileLinkViewModel">
+            <Border Classes="marketplace-profile-row marketplace-profile-link-row">
+              <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
+                <TextBlock Classes="caption marketplace-profile-label" Text="{Binding Label}" />
+                <HyperlinkButton Grid.Column="1"
+                                 Classes="marketplace-profile-link"
+                                 NavigateUri="{Binding NavigateUri}">
+                  <TextBlock Text="{Binding DisplayUrl}" TextWrapping="Wrap" />
+                </HyperlinkButton>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <ItemsControl ItemsSource="{Binding Metadata, ElementName=Root}"
+                    IsVisible="{Binding HasMetadata, ElementName=Root}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:RegistryPackageProfileMetadataItemViewModel">
+            <Border Classes="marketplace-profile-row">
+              <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
+                <TextBlock Classes="caption marketplace-profile-label" Text="{Binding Label}" />
+                <TextBlock Grid.Column="1"
+                           Classes="marketplace-profile-value"
+                           Text="{Binding Value}"
+                           TextWrapping="Wrap" />
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <StackPanel Spacing="6" IsVisible="{Binding HasTags, ElementName=Root}">
+        <TextBlock Classes="caption marketplace-profile-label" Text="Tags" />
+        <ItemsControl ItemsSource="{Binding Tags, ElementName=Root}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="x:String">
+              <Border Classes="marketplace-tag-chip">
+                <TextBlock Text="{Binding}" />
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</UserControl>

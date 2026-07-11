@@ -14,11 +14,7 @@ public sealed class ShellStateService
 
     public ShellStateService(string? stateFilePath = null)
     {
-        _stateFilePath = stateFilePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Sunder",
-            "shell-state.json"
-        );
+        _stateFilePath = stateFilePath ?? AppLocalState.GetPath("shell-state.json");
     }
 
     public ShellState Load()
@@ -64,24 +60,28 @@ public sealed class ShellStateService
 
     public void Save(ShellState state)
     {
-        var serializedState = JsonSerializer.Serialize(state, JsonOptions);
         lock (_syncRoot)
         {
-            var directory = Path.GetDirectoryName(_stateFilePath)!;
-            Directory.CreateDirectory(directory);
+            var persisted = Load();
+            if (state.Revision < persisted.Revision)
+            {
+                return;
+            }
 
-            var tempFilePath = Path.Combine(directory, $"{Path.GetFileName(_stateFilePath)}.{Guid.NewGuid():N}.tmp");
-            try
-            {
-                File.WriteAllText(tempFilePath, serializedState);
-                File.Move(tempFilePath, _stateFilePath, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                TryDeleteTempFile(tempFilePath);
-                AppSessionLog.WriteError("Failed to save shell state.", ex);
-                throw;
-            }
+            state.Revision = Math.Max(state.Revision, persisted.Revision) + 1;
+            WriteCore(state);
+        }
+    }
+
+    public void Update(ShellState liveState, Action<ShellState> update)
+    {
+        lock (_syncRoot)
+        {
+            var persisted = Load();
+            update(persisted);
+            persisted.Revision = Math.Max(persisted.Revision, liveState.Revision) + 1;
+            WriteCore(persisted);
+            ShellStateSnapshotFactory.CopyFrom(persisted, liveState);
         }
     }
 
@@ -90,6 +90,26 @@ public sealed class ShellStateService
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = ShellStateSnapshotFactory.Clone(state);
         return Task.Run(() => Save(snapshot), cancellationToken);
+    }
+
+    private void WriteCore(ShellState state)
+    {
+        var serializedState = JsonSerializer.Serialize(state, JsonOptions);
+        var directory = Path.GetDirectoryName(_stateFilePath)!;
+        Directory.CreateDirectory(directory);
+
+        var tempFilePath = Path.Combine(directory, $"{Path.GetFileName(_stateFilePath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempFilePath, serializedState);
+            File.Move(tempFilePath, _stateFilePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            TryDeleteTempFile(tempFilePath);
+            AppSessionLog.WriteError("Failed to save shell state.", ex);
+            throw;
+        }
     }
 
     private static void TryDeleteTempFile(string tempFilePath)

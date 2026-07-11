@@ -1,13 +1,18 @@
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Svg.Skia;
+using Sunder.Runtime.Client;
 
 namespace Sunder.App.Services;
 
 public static class PackageIconImageLoader
 {
     private const long MaxIconBytes = 1_048_576;
-    private static readonly HttpClient ImageHttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private static readonly HttpClient ImageHttpClient = new(
+        new RuntimeAuthenticatedHttpMessageHandler(() => RuntimeConnectionInfoStore.Load()))
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+    };
     private static readonly SemaphoreSlim ImageLoadSemaphore = new(4, 4);
 
     public static async Task<PackageIconImageLoadResult> LoadAsync(Uri uri, CancellationToken cancellationToken = default)

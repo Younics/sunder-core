@@ -1,7 +1,8 @@
 using System.Diagnostics;
 using Sunder.App.Models;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -163,12 +164,14 @@ public sealed class RuntimeHostProcessManagerTests
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
         var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
         var manager = new RuntimeHostProcessManager(
             new AppStartupOptions(),
             resolveRuntimeHostPath: () => runtimeHostPath,
             tryGetRuntimeStatusAsync: (_, _) => Task.FromResult<SystemStatusResponse?>(null),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
-            startProcess: _ => throw new InvalidOperationException("start failed"));
+            startProcess: _ => throw new InvalidOperationException("start failed"),
+            connectionInfoPath: connectionInfoPath);
 
         try
         {
@@ -186,11 +189,38 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureStartedAsync_WhenManagedUrlIsNotLoopback_RejectsBeforeLaunch()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var startCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeStatusAsync: (_, _) => Task.FromResult<SystemStatusResponse?>(null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            startProcess: _ => startCount++,
+            connectionInfoPath: Path.Combine(rootPath, "connection-v1.json"));
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => manager.EnsureStartedAsync(new Uri("http://192.0.2.1:5275/")));
+
+            Assert.Equal(0, startCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task EnsureStartedAsync_WhenDevPackagesConfigured_PassesDevPackageArgsToRuntime()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
         var runtimeUrl = new Uri("http://localhost:54321/");
         var devPackageFolder = Path.Combine(rootPath, "dev package");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
         ProcessStartInfo? capturedStartInfo = null;
         var runtimeStarted = false;
         var manager = new RuntimeHostProcessManager(
@@ -204,7 +234,8 @@ public sealed class RuntimeHostProcessManagerTests
                 capturedStartInfo = startInfo;
                 runtimeStarted = true;
             },
-            delayAsync: (_, _) => Task.CompletedTask);
+            delayAsync: (_, _) => Task.CompletedTask,
+            connectionInfoPath: connectionInfoPath);
 
         try
         {
@@ -213,6 +244,13 @@ public sealed class RuntimeHostProcessManagerTests
             Assert.NotNull(capturedStartInfo);
             Assert.Contains("--dev-package", capturedStartInfo.ArgumentList);
             Assert.Contains(devPackageFolder, capturedStartInfo.ArgumentList);
+            Assert.True(capturedStartInfo.Environment.TryGetValue("SUNDER_RUNTIME_BEARER_TOKEN", out var bearerToken));
+            Assert.False(string.IsNullOrWhiteSpace(bearerToken));
+            Assert.DoesNotContain(
+                capturedStartInfo.ArgumentList,
+                argument => string.Equals(argument, bearerToken, StringComparison.Ordinal));
+            Assert.Equal(connectionInfoPath, capturedStartInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"]);
+            Assert.NotNull(RuntimeConnectionInfoStore.Load(connectionInfoPath));
         }
         finally
         {
@@ -228,6 +266,7 @@ public sealed class RuntimeHostProcessManagerTests
         var runtimeHostPath = Path.Combine(rootPath, OperatingSystem.IsWindows() ? "Sunder.Runtime.Host.exe" : "Sunder.Runtime.Host");
         await File.WriteAllTextAsync(runtimeHostPath, string.Empty);
         var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
         var firstStatusProbeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirstStatusProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runtimeStarted = false;
@@ -254,7 +293,8 @@ public sealed class RuntimeHostProcessManagerTests
                 Interlocked.Increment(ref startCount);
                 runtimeStarted = true;
             },
-            delayAsync: (_, _) => Task.CompletedTask);
+            delayAsync: (_, _) => Task.CompletedTask,
+            connectionInfoPath: connectionInfoPath);
 
         try
         {

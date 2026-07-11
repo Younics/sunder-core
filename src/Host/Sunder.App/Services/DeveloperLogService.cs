@@ -1,3 +1,4 @@
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Logging;
 
 namespace Sunder.App.Services;
@@ -37,16 +38,18 @@ public sealed class DeveloperLogEntriesChangedEventArgs : EventArgs
 public sealed class DeveloperLogService : IDisposable
 {
     private const int MaxEntries = 50000;
-    private static readonly string PackageLogsRootPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Sunder",
-        "Packages");
 
     private readonly object _syncRoot = new();
     private readonly List<DeveloperLogEntry> _entries = [];
-    private readonly Dictionary<string, long> _logFileOffsets = new(StringComparer.OrdinalIgnoreCase);
-    private FileSystemWatcher? _packageLogWatcher;
+    private readonly IRuntimeApiClientFactory? _runtimeApiClientFactory;
+    private CancellationTokenSource? _packageLogCancellation;
+    private Task _packageLogTask = Task.CompletedTask;
     private bool _disposed;
+
+    public DeveloperLogService(IRuntimeApiClientFactory? runtimeApiClientFactory = null)
+    {
+        _runtimeApiClientFactory = runtimeApiClientFactory;
+    }
 
     public event EventHandler<DeveloperLogEntriesChangedEventArgs>? EntriesChanged;
 
@@ -70,7 +73,11 @@ public sealed class DeveloperLogService : IDisposable
         IsEnabled = true;
         AppSessionLog.EntryWritten += AppSessionLog_OnEntryWritten;
         AddEntries(AppSessionLog.Snapshot().Select(CreateMirroredLogEntry).ToArray(), forceReset: true);
-        StartPackageLogWatcher();
+        if (_runtimeApiClientFactory is not null)
+        {
+            _packageLogCancellation = new CancellationTokenSource();
+            _packageLogTask = ConsumePackageLogsAsync(_packageLogCancellation.Token);
+        }
     }
 
     public void Write(PackageLogLevel level, string source, string message)
@@ -110,137 +117,68 @@ public sealed class DeveloperLogService : IDisposable
     private static string Normalize(string? value, string fallback)
         => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 
-    private void StartPackageLogWatcher()
+    private async Task ConsumePackageLogsAsync(CancellationToken cancellationToken)
     {
-        lock (_syncRoot)
+        long sequenceId = 0;
+        while (!cancellationToken.IsCancellationRequested)
         {
-            if (_disposed || _packageLogWatcher is not null)
+            try
             {
-                return;
-            }
-
-            Directory.CreateDirectory(PackageLogsRootPath);
-            foreach (var filePath in Directory.EnumerateFiles(PackageLogsRootPath, "*.log", SearchOption.AllDirectories))
-            {
-                TryInitializeOffset(filePath);
-            }
-
-            _packageLogWatcher = new FileSystemWatcher(PackageLogsRootPath, "*.log")
-            {
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
-                EnableRaisingEvents = true,
-            };
-            _packageLogWatcher.Created += PackageLogWatcher_OnChanged;
-            _packageLogWatcher.Changed += PackageLogWatcher_OnChanged;
-            _packageLogWatcher.Renamed += PackageLogWatcher_OnRenamed;
-        }
-    }
-
-    private void PackageLogWatcher_OnChanged(object sender, FileSystemEventArgs e)
-        => TryReadNewLogLines(e.FullPath);
-
-    private void PackageLogWatcher_OnRenamed(object sender, RenamedEventArgs e)
-        => TryReadNewLogLines(e.FullPath);
-
-    private void TryInitializeOffset(string filePath)
-    {
-        try
-        {
-            _logFileOffsets[filePath] = new FileInfo(filePath).Length;
-        }
-        catch
-        {
-            _logFileOffsets[filePath] = 0;
-        }
-    }
-
-    private void TryReadNewLogLines(string filePath)
-    {
-        if (!IsEnabled || _disposed)
-        {
-            return;
-        }
-
-        try
-        {
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            long offset;
-            lock (_syncRoot)
-            {
-                offset = _logFileOffsets.TryGetValue(filePath, out var existingOffset) ? existingOffset : 0;
-                if (offset > stream.Length)
+                using var client = _runtimeApiClientFactory!.CreateClient();
+                var snapshot = await client.GetPackageLogSnapshotAsync(sequenceId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (snapshot.HistoryGap)
                 {
-                    offset = 0;
+                    sequenceId = 0;
                 }
 
-                _logFileOffsets[filePath] = stream.Length;
-            }
-
-            stream.Seek(offset, SeekOrigin.Begin);
-            using var reader = new StreamReader(stream);
-            while (reader.ReadLine() is { } line)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
+                foreach (var entry in snapshot.Entries)
                 {
-                    WritePackageLog(ParseLevel(line), ResolveLogSource(filePath), line);
+                    if (entry.SequenceId <= sequenceId)
+                    {
+                        continue;
+                    }
+
+                    sequenceId = entry.SequenceId;
+                    AddPackageLog(entry);
+                }
+
+                sequenceId = Math.Max(sequenceId, snapshot.SequenceId);
+                await foreach (var entry in client.StreamPackageLogsAsync(sequenceId, cancellationToken).ConfigureAwait(false))
+                {
+                    if (entry.SequenceId <= sequenceId)
+                    {
+                        continue;
+                    }
+
+                    sequenceId = entry.SequenceId;
+                    AddPackageLog(entry);
                 }
             }
-        }
-        catch
-        {
-            // Package log tailing must never interrupt package execution or shell UI.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Runtime package-log stream disconnected.", ex, visibleInDeveloperLog: false);
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
-    private static string ResolveLogSource(string filePath)
-    {
-        var relativePath = Path.GetRelativePath(PackageLogsRootPath, filePath);
-        var segments = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return segments.Length > 0 && !string.IsNullOrWhiteSpace(segments[0])
-            ? segments[0]
-            : "package.log";
-    }
+    private void AddPackageLog(PackageLogEntryDescriptor entry)
+        => WritePackageLog(ToPackageLogLevel(entry.Level), entry.PackageId, entry.Message);
 
-    private static PackageLogLevel ParseLevel(string line)
-    {
-        if (line.Contains("level=critical", StringComparison.OrdinalIgnoreCase)
-            || line.Contains(" critical", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("crit:", StringComparison.OrdinalIgnoreCase))
+    private static PackageLogLevel ToPackageLogLevel(RuntimePackageLogLevel level)
+        => level switch
         {
-            return PackageLogLevel.Critical;
-        }
-
-        if (line.Contains("level=error", StringComparison.OrdinalIgnoreCase)
-            || line.Contains(" error", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("fail:", StringComparison.OrdinalIgnoreCase))
-        {
-            return PackageLogLevel.Error;
-        }
-
-        if (line.Contains("level=warning", StringComparison.OrdinalIgnoreCase)
-            || line.Contains(" warning", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("warn:", StringComparison.OrdinalIgnoreCase))
-        {
-            return PackageLogLevel.Warning;
-        }
-
-        if (line.Contains("level=debug", StringComparison.OrdinalIgnoreCase)
-            || line.Contains(" debug", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("dbug:", StringComparison.OrdinalIgnoreCase))
-        {
-            return PackageLogLevel.Debug;
-        }
-
-        if (line.Contains("level=trace", StringComparison.OrdinalIgnoreCase)
-            || line.Contains(" trace", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("trce:", StringComparison.OrdinalIgnoreCase))
-        {
-            return PackageLogLevel.Trace;
-        }
-
-        return PackageLogLevel.Information;
-    }
+            RuntimePackageLogLevel.Trace => PackageLogLevel.Trace,
+            RuntimePackageLogLevel.Debug => PackageLogLevel.Debug,
+            RuntimePackageLogLevel.Warning => PackageLogLevel.Warning,
+            RuntimePackageLogLevel.Error => PackageLogLevel.Error,
+            RuntimePackageLogLevel.Critical => PackageLogLevel.Critical,
+            _ => PackageLogLevel.Information,
+        };
 
     internal void WritePackageLog(PackageLogLevel level, string packageId, string message)
     {
@@ -330,14 +268,9 @@ public sealed class DeveloperLogService : IDisposable
 
             _disposed = true;
             AppSessionLog.EntryWritten -= AppSessionLog_OnEntryWritten;
-            if (_packageLogWatcher is not null)
-            {
-                _packageLogWatcher.Created -= PackageLogWatcher_OnChanged;
-                _packageLogWatcher.Changed -= PackageLogWatcher_OnChanged;
-                _packageLogWatcher.Renamed -= PackageLogWatcher_OnRenamed;
-                _packageLogWatcher.Dispose();
-                _packageLogWatcher = null;
-            }
+            _packageLogCancellation?.Cancel();
+            _packageLogCancellation?.Dispose();
+            _packageLogCancellation = null;
         }
     }
 }

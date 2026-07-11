@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -14,7 +14,7 @@ internal sealed record AppPreparedPackageSource(string PackageId, string Folder)
 
 internal sealed record AppPreparedPackageActivation(
     ActivePackageDescriptor Package,
-    PackageSourceDescriptor Source,
+    PackageUiSnapshotDescriptor Source,
     AppPreparedPackageSource PreparedSource)
 {
     public string LibraryFolder => Path.Combine(PreparedSource.Folder, "lib");
@@ -35,7 +35,7 @@ internal sealed record AppPackagePrepareResult(
 
 internal sealed record AppLoadedPackageHandle(
     ActivePackageDescriptor Package,
-    PackageSourceDescriptor Source,
+    PackageUiSnapshotDescriptor Source,
     string Folder,
     IServiceProvider ServiceProvider,
     AppPackageLoadContext LoadContext)

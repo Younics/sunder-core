@@ -42,6 +42,9 @@ public sealed class WindowLauncherTests
             new NotificationCenterService(Path.Combine(rootPath, "notifications.json")),
             new ShellStateService(Path.Combine(rootPath, "shell-state.json")),
             shellState,
+            settingsWindowFactory: null!,
+            packagesWindowFactory: null!,
+            stacksWindowFactory: null!,
             backgroundProcessQueue: queue);
 
         return new WindowLauncherHarness(launcher, rootPath);

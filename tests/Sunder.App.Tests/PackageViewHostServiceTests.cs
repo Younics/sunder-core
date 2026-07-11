@@ -1,8 +1,9 @@
 using System.Reflection;
 using Sunder.App.Services;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
+using Sunder.Sdk.Stacks;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -10,54 +11,12 @@ namespace Sunder.App.Tests;
 public sealed class PackageViewHostServiceTests
 {
     [Fact]
-    public async Task DisablePackageAsync_WaitsForBackgroundServicesToStop()
+    public void AppSharedAssemblyRegistry_ResolvesHostStackSdkAssembly()
     {
-        var backgroundServices = new AppPackageBackgroundServiceCoordinator();
-        var backgroundService = new BlockingBackgroundService();
-        backgroundServices.Register("test.package", backgroundService);
-        var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(),
-            backgroundServices,
-            [],
-            [],
-            [],
-            faultReporter: null,
-            sessionFolder: null);
+        using var registry = new AppSharedAssemblyRegistry([]);
+        var stackSdkAssembly = typeof(IPackageStackContributor).Assembly;
 
-        var disableTask = hostService.DisablePackageAsync(
-            "test.package",
-            "Activation failed.",
-            PackageFailureOrigin.AppActivation);
-
-        await backgroundService.StopStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.False(disableTask.IsCompleted);
-
-        backgroundService.AllowStop.SetResult();
-        await disableTask.WaitAsync(TimeSpan.FromSeconds(2));
-
-        Assert.Equal(1, backgroundService.StopCount);
-    }
-
-    [Fact]
-    public async Task DisablePackageAsync_StopsPackageOnlyOnce()
-    {
-        var backgroundServices = new AppPackageBackgroundServiceCoordinator();
-        var backgroundService = new BlockingBackgroundService();
-        backgroundServices.Register("test.package", backgroundService);
-        var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(),
-            backgroundServices,
-            [],
-            [],
-            [],
-            faultReporter: null,
-            sessionFolder: null);
-
-        backgroundService.AllowStop.SetResult();
-        await hostService.DisablePackageAsync("test.package", "First failure.", PackageFailureOrigin.AppActivation);
-        await hostService.DisablePackageAsync("test.package", "Second failure.", PackageFailureOrigin.AppActivation);
-
-        Assert.Equal(1, backgroundService.StopCount);
+        Assert.Same(stackSdkAssembly, registry.ResolveSharedAssembly(stackSdkAssembly.GetName()));
     }
 
     [Fact]
@@ -68,7 +27,6 @@ public sealed class PackageViewHostServiceTests
         var notificationCenter = new NotificationCenterService(Path.Combine(rootPath, "notifications.json"));
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
@@ -125,7 +83,6 @@ public sealed class PackageViewHostServiceTests
             }));
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
@@ -153,7 +110,6 @@ public sealed class PackageViewHostServiceTests
         {
             var hostService = new PackageViewHostService(
                 new AppPackageViewRegistry(),
-                new AppPackageBackgroundServiceCoordinator(),
                 [],
                 [],
                 [],
@@ -171,7 +127,7 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public void AppPackageSourcePreparer_Prepare_WhenManifestIdMissing_DeletesShadowFolder()
+    public async Task AppPackageSourcePreparer_Prepare_WhenManifestIdMissing_DeletesShadowFolder()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var sessionFolder = Path.Combine(rootPath, "session");
@@ -183,7 +139,7 @@ public sealed class PackageViewHostServiceTests
         try
         {
             var preparer = new AppPackageSourcePreparer(sessionFolder);
-            var preparedSource = preparer.Prepare(new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder));
+            var preparedSource = await PrepareSnapshotAsync(preparer, "agent", packageSourceFolder);
 
             Assert.Null(preparedSource);
             Assert.Empty(Directory.EnumerateDirectories(sessionFolder));
@@ -195,11 +151,39 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task AppPackageSourcePreparer_MaterializesIntoAppOwnedRootSeparateFromRuntimeRoot()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var runtimeRoot = Path.Combine(rootPath, "runtime-root");
+        var appRoot = Path.Combine(rootPath, "app-root");
+        var runtimeSource = CreateAppPackageSource(runtimeRoot, "agent");
+        var snapshot = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, runtimeSource);
+        var preparer = new AppPackageSourcePreparer(appRoot);
+
+        try
+        {
+            var prepared = await preparer.PrepareAsync(
+                snapshot,
+                RuntimeContractTestData.DownloadSnapshotAsync,
+                CancellationToken.None);
+
+            Assert.NotNull(prepared);
+            Assert.StartsWith(Path.GetFullPath(appRoot), Path.GetFullPath(prepared.Folder), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(Path.GetFullPath(runtimeRoot), Path.GetFullPath(prepared.Folder), StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(Path.Combine(runtimeSource, "sunder-package.json")));
+            Assert.True(File.Exists(Path.Combine(prepared.Folder, "sunder-package.json")));
+        }
+        finally
+        {
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task DisposeAsync_RejectsPublicOperations()
     {
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
@@ -231,7 +215,7 @@ public sealed class PackageViewHostServiceTests
         Assert.NotNull(candidateType);
         var assemblyName = new AssemblyName("Example.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null");
         var firstCandidate = Activator.CreateInstance(candidateType, typeof(PackageViewHostServiceTests).Assembly.Location, assemblyName);
-        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderPackageModule).Assembly.Location, assemblyName);
+        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderRuntimePackageModule).Assembly.Location, assemblyName);
 
         registerMethod.Invoke(registry, [firstCandidate, null]);
         registerMethod.Invoke(registry, [secondCandidate, null]);
@@ -315,22 +299,22 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task ApplyPackageDeltaAsync_WhenPackageReloads_UsesNewShadowFolder()
+    public async Task ApplyPackageDeltaAsync_WhenPackageReloads_DeletesOldSnapshotAfterDetach()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var sessionFolder = Path.Combine(rootPath, "session");
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder);
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -342,9 +326,8 @@ public sealed class PackageViewHostServiceTests
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            Assert.Equal(2, shadowFolders.Length);
-            Assert.StartsWith("0001-agent", shadowFolders[0]);
-            Assert.StartsWith("0002-agent", shadowFolders[1]);
+            var shadowFolder = Assert.Single(shadowFolders);
+            Assert.StartsWith("0002-agent", shadowFolder);
         }
         finally
         {
@@ -358,8 +341,8 @@ public sealed class PackageViewHostServiceTests
     {
         var packageA = CreateActivePackage("package.a");
         var packageB = CreateActivePackage("package.b");
-        var sourceA = new PackageSourceDescriptor("package.a", PackageSourceKind.Dev, "/tmp/package-a");
-        var sourceB = new PackageSourceDescriptor("package.b", PackageSourceKind.Dev, "/tmp/package-b");
+        var sourceA = RuntimeContractTestData.Snapshot("package.a", PackageSourceKind.Dev, "package-a");
+        var sourceB = RuntimeContractTestData.Snapshot("package.b", PackageSourceKind.Dev, "package-b");
         var loadedPackages = new Dictionary<string, AppLoadedPackageHandle>(StringComparer.OrdinalIgnoreCase)
         {
             ["package.a"] = new(packageA, sourceA, string.Empty, null!, null!),
@@ -403,8 +386,8 @@ public sealed class PackageViewHostServiceTests
     {
         var packageA = CreateActivePackage("package.a");
         var packageB = CreateActivePackage("package.b");
-        var sourceA = new PackageSourceDescriptor("package.a", PackageSourceKind.Dev, "/tmp/package-a");
-        var sourceB = new PackageSourceDescriptor("package.b", PackageSourceKind.Dev, "/tmp/package-b");
+        var sourceA = RuntimeContractTestData.Snapshot("package.a", PackageSourceKind.Dev, "package-a");
+        var sourceB = RuntimeContractTestData.Snapshot("package.b", PackageSourceKind.Dev, "package-b");
         var loadedPackages = new Dictionary<string, AppLoadedPackageHandle>(StringComparer.OrdinalIgnoreCase)
         {
             ["package.a"] = new(packageA, sourceA, string.Empty, null!, null!),
@@ -455,16 +438,16 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowAfterViewMarkerFileName), string.Empty);
         var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var viewRegistry = new AppPackageViewRegistry();
         var hostService = new PackageViewHostService(
             viewRegistry,
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder);
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -487,44 +470,6 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task ApplyPackageDeltaAsync_WhenBackgroundServiceStartFails_StopsRegisteredBackgroundService()
-    {
-        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        var sessionFolder = Path.Combine(rootPath, "session");
-        Directory.CreateDirectory(sessionFolder);
-        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RegisterBackgroundServiceMarkerFileName), string.Empty);
-        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowOnBackgroundStartMarkerFileName), string.Empty);
-        var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
-            [],
-            [],
-            [],
-            faultReporter: null,
-            sessionFolder);
-
-        try
-        {
-            await hostService.ApplyPackageDeltaAsync([package], [source]);
-
-            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.BackgroundServiceStartedFileName, SearchOption.AllDirectories));
-            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.BackgroundServiceStoppedFileName, SearchOption.AllDirectories));
-            Assert.Empty(hostService.FilterEnabledPackages([package]));
-            Assert.Equal(0, hostService.LoadedPackageCount);
-            Assert.Equal(0, hostService.OwnedDisposableCount);
-            Assert.Equal(0, hostService.LoadContextCount);
-        }
-        finally
-        {
-            await hostService.DisposeAsync();
-            TryDeleteDirectoryBestEffort(rootPath);
-        }
-    }
-
-    [Fact]
     public async Task DisablePackageAsync_WhenPackageLoaded_UnloadsResourcesAndKeepsPackageDisabled()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -532,15 +477,15 @@ public sealed class PackageViewHostServiceTests
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder);
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -572,15 +517,15 @@ public sealed class PackageViewHostServiceTests
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder);
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -612,15 +557,15 @@ public sealed class PackageViewHostServiceTests
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder);
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -629,8 +574,9 @@ public sealed class PackageViewHostServiceTests
             Assert.NotNull(liveView);
 
             File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowAfterViewMarkerFileName), string.Empty);
+            var failingSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
 
-            var preflight = await hostService.PreflightPackageDeltaAsync([package], [source], ["agent"]);
+            var preflight = await hostService.PreflightPackageDeltaAsync([package], [failingSource], ["agent"]);
 
             Assert.False(preflight.Success);
             Assert.Contains(preflight.Errors, error => error.Contains("preflight failed", StringComparison.OrdinalIgnoreCase));
@@ -652,11 +598,12 @@ public sealed class PackageViewHostServiceTests
         var packageASourceFolder = CreateAppPackageSource(rootPath, "package.a");
         var packageA = CreateActivePackage("package.a");
         var packageB = CreateActivePackage("package.b");
-        var sourceA = new PackageSourceDescriptor("package.a", PackageSourceKind.Dev, packageASourceFolder);
+        var sourceA = RuntimeContractTestData.Snapshot("package.a", PackageSourceKind.Dev, packageASourceFolder);
         var coordinator = new AppPackagePreflightCoordinator(
             _ => null,
             _ => false,
-            _ => true);
+            _ => true,
+            RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -676,41 +623,6 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task PreflightPackageDeltaAsync_DoesNotStartBackgroundServices()
-    {
-        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        var sessionFolder = Path.Combine(rootPath, "session");
-        Directory.CreateDirectory(sessionFolder);
-        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RegisterBackgroundServiceMarkerFileName), string.Empty);
-        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowOnBackgroundStartMarkerFileName), string.Empty);
-        var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
-            [],
-            [],
-            [],
-            faultReporter: null,
-            sessionFolder);
-
-        try
-        {
-            var preflight = await hostService.PreflightPackageDeltaAsync([package], [source], ["agent"]);
-
-            Assert.True(preflight.Success, string.Join(Environment.NewLine, preflight.Errors));
-            Assert.Empty(Directory.EnumerateFiles(packageSourceFolder, ShellLifecycleTestPackageModule.BackgroundServiceStartedFileName, SearchOption.AllDirectories));
-            Assert.Equal(0, hostService.LoadedPackageCount);
-        }
-        finally
-        {
-            await hostService.DisposeAsync();
-            TryDeleteDirectoryBestEffort(rootPath);
-        }
-    }
-
-    [Fact]
     public async Task ApplyPackageDeltaAsync_ProvidesPackageSessionServiceToPackageModules()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
@@ -719,15 +631,15 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RequirePackageSessionServiceMarkerFileName), string.Empty);
         var package = CreateActiveAgentPackage();
-        var source = new PackageSourceDescriptor("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
             new AppPackageViewRegistry(),
-            new AppPackageBackgroundServiceCoordinator(),
             [],
             [],
             [],
             faultReporter: null,
-            sessionFolder);
+            sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
 
         try
         {
@@ -740,6 +652,32 @@ public sealed class PackageViewHostServiceTests
             await hostService.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);
         }
+    }
+
+    private static async Task<AppPreparedPackageSource?> PrepareSnapshotAsync(
+        AppPackageSourcePreparer preparer,
+        string packageId,
+        string sourceFolder)
+    {
+        await using var archiveStream = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(archiveStream, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var file in Directory.EnumerateFiles(sourceFolder, "*", SearchOption.AllDirectories))
+            {
+                var entry = archive.CreateEntry(Path.GetRelativePath(sourceFolder, file).Replace('\\', '/'));
+                await using var input = File.OpenRead(file);
+                await using var output = entry.Open();
+                await input.CopyToAsync(output);
+            }
+        }
+
+        var bytes = archiveStream.ToArray();
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var snapshot = new PackageUiSnapshotDescriptor(packageId, PackageSourceKind.Dev, 1, hash, "snapshot", "packages/ui-snapshots/snapshot");
+        return await preparer.PrepareAsync(
+            snapshot,
+            async (_, destination, cancellationToken) => await destination.WriteAsync(bytes, cancellationToken),
+            CancellationToken.None);
     }
 
     private static void TryDeleteDirectory(string path)
@@ -809,24 +747,6 @@ public sealed class PackageViewHostServiceTests
         }
 
         return packageSourceFolder;
-    }
-
-    private sealed class BlockingBackgroundService : IPackageBackgroundService
-    {
-        public TaskCompletionSource StopStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource AllowStop { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public int StopCount { get; private set; }
-
-        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-        public async Task StopAsync(CancellationToken cancellationToken = default)
-        {
-            StopCount++;
-            StopStarted.TrySetResult();
-            await AllowStop.Task.WaitAsync(cancellationToken);
-        }
     }
 
     private static class PackageStackFrame

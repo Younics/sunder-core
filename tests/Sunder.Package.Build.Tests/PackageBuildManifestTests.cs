@@ -6,6 +6,8 @@ using Microsoft.Build.Framework;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Package.Build.Tasks;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Avalonia;
+using Sunder.Sdk.Avalonia.Theming;
 using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Callbacks;
 using Sunder.Sdk.Compatibility;
@@ -13,7 +15,6 @@ using Sunder.Sdk.Configuration;
 using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Stacks;
-using Sunder.Sdk.Theming;
 using Xunit;
 using MSBuildTaskItem = Microsoft.Build.Utilities.TaskItem;
 
@@ -70,6 +71,27 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.StacksV1,
             SunderSdkCapabilities.StackContributionsV1,
             SunderSdkCapabilities.ThemingV1);
+    }
+
+    [Fact]
+    public void GenerateManifest_InfersStackCapabilitiesFromSeparateSdkAssembly()
+    {
+        Assert.Equal("Sunder.Sdk.Stacks", typeof(IPackageStackContributor).Assembly.GetName().Name);
+        Assert.NotEqual(typeof(SunderPackageAttribute).Assembly, typeof(IPackageStackContributor).Assembly);
+
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+
+        var success = task.Execute();
+
+        Assert.True(success, string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        var capabilities = ReadCapabilities(document.RootElement);
+        AssertContainsCapabilities(
+            capabilities,
+            SunderSdkCapabilities.StacksV1,
+            SunderSdkCapabilities.StackContributionsV1);
     }
 
     [Fact]
@@ -153,9 +175,9 @@ public sealed class PackageBuildManifestTests
     }
 }
 
-public sealed class FixturePackageModule : ISunderPackageModule
+public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderAppPackageModule
 {
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
         _ = context.Configuration;
         _ = context.Storage.State;
@@ -167,12 +189,8 @@ public sealed class FixturePackageModule : ISunderPackageModule
         services.AddSingleton<IPackageStackContributor, FixtureStackContributor>();
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
-        registry.RegisterPackageView<FixtureView>(new PackageViewRegistration("fixture.view", "Fixture View"));
-        registry.RegisterPackageViewFactory<FixtureWorkspaceFactory>(new PackageViewRegistration("fixture.workspace", "Fixture Workspace"));
-        registry.RegisterSettingsView<FixtureSettingsView>();
-        registry.RegisterSettingsViewFactory<FixtureWorkspaceFactory>();
         registry.RegisterBackgroundService<FixtureBackgroundService>();
         registry.RegisterExtension(new PackageExtensionPoint<IFixtureExtension>("fixture.extension"), new FixtureExtension());
         registry.RegisterExtension(SunderStackExtensionPoints.StackContributors, services.GetRequiredService<IPackageStackContributor>());
@@ -185,6 +203,18 @@ public sealed class FixturePackageModule : ISunderPackageModule
                 "General",
                 null,
                 [new PackageConfigurationField("enabled", "Enabled", PackageConfigurationFieldKind.Boolean)])]));
+    }
+
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
+    {
+    }
+
+    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
+    {
+        registry.RegisterPackageView<FixtureView>(new PackageViewRegistration("fixture.view", "Fixture View"));
+        registry.RegisterPackageViewFactory<FixtureWorkspaceFactory>(new PackageViewRegistration("fixture.workspace", "Fixture Workspace"));
+        registry.RegisterSettingsView<FixtureSettingsView>();
+        registry.RegisterSettingsViewFactory<FixtureWorkspaceFactory>();
     }
 }
 

@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:controls="using:Sunder.App.Views.Controls"
              xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia"
              x:Class="Sunder.App.Views.Controls.MarketplacePackageDetails"
              x:DataType="vm:PackagesWindowViewModel"
@@ -59,38 +60,7 @@
 
     <Border Classes="card-surface"
             IsVisible="{Binding HasMarketplaceProfileMedia}">
-      <StackPanel Spacing="8">
-        <TextBlock Classes="section-title" Text="Images" />
-        <ScrollViewer Classes="marketplace-image-strip-scroll"
-                      HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Disabled">
-          <ItemsControl ItemsSource="{Binding MarketplaceProfileMedia}"
-                        Margin="0,0,0,12">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <StackPanel Orientation="Horizontal" Spacing="12" />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
-                <Button Classes="marketplace-image-thumb"
-                        Command="{Binding SelectCommand}"
-                        ToolTip.Tip="{Binding Caption}">
-                  <Grid>
-                    <Border Classes="marketplace-image-frame">
-                      <Image Source="{Binding Image}"
-                             Stretch="UniformToFill" />
-                    </Border>
-                    <TextBlock Classes="caption marketplace-image-loading"
-                               Text="Loading..."
-                               IsVisible="{Binding IsImageLoading}" />
-                  </Grid>
-                </Button>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </ScrollViewer>
-      </StackPanel>
+      <controls:MarketplaceMediaStrip Items="{Binding MarketplaceProfileMedia}" />
     </Border>
 
     <Border Classes="card-surface"
@@ -101,72 +71,14 @@
       </StackPanel>
     </Border>
 
-    <Border Classes="card-surface marketplace-profile-card"
-            IsVisible="{Binding HasMarketplaceProfile}">
-      <StackPanel Spacing="12">
-        <StackPanel Spacing="2">
-          <TextBlock Classes="section-title" Text="Profile" />
-          <TextBlock Classes="caption" Text="Project links and package metadata." />
-        </StackPanel>
-
-        <ItemsControl ItemsSource="{Binding MarketplaceProfileLinks}"
-                      IsVisible="{Binding HasMarketplaceProfileLinks}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:RegistryPackageProfileLinkViewModel">
-              <Border Classes="marketplace-profile-row marketplace-profile-link-row">
-                <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
-                  <TextBlock Classes="caption marketplace-profile-label"
-                             Text="{Binding Label}" />
-                  <HyperlinkButton Grid.Column="1"
-                                   Classes="marketplace-profile-link"
-                                   NavigateUri="{Binding NavigateUri}">
-                    <TextBlock Text="{Binding DisplayUrl}"
-                               TextWrapping="Wrap" />
-                  </HyperlinkButton>
-                </Grid>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <ItemsControl ItemsSource="{Binding MarketplaceProfileMetadata}"
-                      IsVisible="{Binding HasMarketplaceProfileMetadata}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:RegistryPackageProfileMetadataItemViewModel">
-              <Border Classes="marketplace-profile-row">
-                <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
-                  <TextBlock Classes="caption marketplace-profile-label"
-                             Text="{Binding Label}" />
-                  <TextBlock Grid.Column="1"
-                             Classes="marketplace-profile-value"
-                             Text="{Binding Value}"
-                             TextWrapping="Wrap" />
-                </Grid>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <StackPanel Spacing="6"
-                    IsVisible="{Binding HasMarketplaceProfileTags}">
-          <TextBlock Classes="caption marketplace-profile-label" Text="Tags" />
-          <ItemsControl ItemsSource="{Binding MarketplaceProfileTags}">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <WrapPanel />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="x:String">
-                <Border Classes="marketplace-tag-chip">
-                  <TextBlock Text="{Binding}" />
-                </Border>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </StackPanel>
-      </StackPanel>
-    </Border>
+    <controls:MarketplaceProfileCard Description="Project links and package metadata."
+                                     Links="{Binding MarketplaceProfileLinks}"
+                                     Metadata="{Binding MarketplaceProfileMetadata}"
+                                     Tags="{Binding MarketplaceProfileTags}"
+                                     HasLinks="{Binding HasMarketplaceProfileLinks}"
+                                     HasMetadata="{Binding HasMarketplaceProfileMetadata}"
+                                     HasTags="{Binding HasMarketplaceProfileTags}"
+                                     IsVisible="{Binding HasMarketplaceProfile}" />
 
     <Border Classes="card-surface marketplace-profile-card"
             IsVisible="{Binding HasMarketplaceAttributions}">

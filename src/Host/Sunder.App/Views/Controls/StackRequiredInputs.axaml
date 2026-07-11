@@ -1,0 +1,12 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             x:Class="Sunder.App.Views.Controls.StackRequiredInputs"
+             x:DataType="controls:StackRequiredInputs"
+             x:Name="Root">
+  <StackPanel Spacing="8">
+    <TextBlock Text="Required Inputs" FontWeight="SemiBold" />
+    <ItemsControl ItemsSource="{Binding Items, ElementName=Root}"
+                  ItemTemplate="{Binding ItemTemplate, ElementName=Root}" />
+  </StackPanel>
+</UserControl>

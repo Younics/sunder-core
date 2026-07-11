@@ -1,4 +1,5 @@
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 
@@ -47,26 +48,28 @@ public sealed class PackageUpdateStartupCheckService(
             }
 
             context.ReportProgress(35, "Resolving package updates...");
-            using var registryClient = _registryClientFactory(_registryUrlProvider());
-            var response = await registryClient.ResolveUpdatesAsync(
-                new RegistryResolveUpdatesRequest(
-                    installedPackages.Select(package => new RegistryInstalledPackage(package.PackageId, package.Version)).ToArray()),
+            var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
+                new RuntimeRegistryPackageBatchRequest(
+                    _registryUrlProvider().AbsoluteUri,
+                    installedPackages.Select(package => new RegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray()),
                 context.CancellationToken).ConfigureAwait(false);
+            var updateCount = plan.Items.Count(item => item.CurrentVersion is not null
+                                                       && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase));
 
-            if (response.Updates.Count > 0)
+            if (updateCount > 0)
             {
                 await _notificationService.PublishAsync(
                     new PackageNotificationRequest(
                         "Package updates available",
-                        FormatUpdateNotificationMessage(response.Updates.Count),
+                        FormatUpdateNotificationMessage(updateCount),
                         PackageNotificationDisplayMode.ToastAndTray,
                         PackageNotificationSeverity.Information),
                     context.CancellationToken).ConfigureAwait(false);
             }
 
-            context.ReportProgress(100, response.Updates.Count == 0
+            context.ReportProgress(100, updateCount == 0
                 ? "Installed packages are up to date."
-                : $"{response.Updates.Count} package update(s) available.");
+                : $"{updateCount} package update(s) available.");
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {

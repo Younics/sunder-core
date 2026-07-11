@@ -66,38 +66,7 @@
 
               <Border Classes="card-surface"
                       IsVisible="{Binding HasStackProfileMedia}">
-                <StackPanel Spacing="8">
-                  <TextBlock Classes="section-title" Text="Images" />
-                  <ScrollViewer Classes="marketplace-image-strip-scroll"
-                                HorizontalScrollBarVisibility="Auto"
-                                VerticalScrollBarVisibility="Disabled">
-                    <ItemsControl ItemsSource="{Binding StackProfileMedia}"
-                                  Margin="0,0,0,12">
-                      <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                          <StackPanel Orientation="Horizontal" Spacing="12" />
-                        </ItemsPanelTemplate>
-                      </ItemsControl.ItemsPanel>
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
-                          <Button Classes="marketplace-image-thumb"
-                                  Command="{Binding SelectCommand}"
-                                  ToolTip.Tip="{Binding Caption}">
-                            <Grid>
-                              <Border Classes="marketplace-image-frame">
-                                <Image Source="{Binding Image}"
-                                       Stretch="UniformToFill" />
-                              </Border>
-                              <TextBlock Classes="caption marketplace-image-loading"
-                                         Text="Loading..."
-                                         IsVisible="{Binding IsImageLoading}" />
-                            </Grid>
-                          </Button>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                  </ScrollViewer>
-                </StackPanel>
+                <controls:MarketplaceMediaStrip Items="{Binding StackProfileMedia}" />
               </Border>
 
               <Border Classes="card-surface"
@@ -108,12 +77,15 @@
                 </StackPanel>
               </Border>
 
-              <StackPanel Spacing="8"
-                          IsVisible="{Binding HasPackages}">
-                <TextBlock Text="Packages"
-                           FontWeight="SemiBold" />
-                <ItemsControl ItemsSource="{Binding PackageRows}">
-                  <ItemsControl.ItemTemplate>
+              <controls:StackInstallPlan Items="{Binding PackageRows}"
+                                         Warnings="{Binding InstallPlanWarnings}"
+                                         Errors="{Binding InstallPlanErrors}"
+                                         HasItems="{Binding HasPackages}"
+                                         HasWarnings="{Binding HasInstallPlanWarnings}"
+                                         HasErrors="{Binding HasInstallPlanErrors}"
+                                         ShowNoChanges="{Binding ShowNoInstallPlanChanges}"
+                                         IsVisible="{Binding HasPackageRequirements}">
+                <controls:StackInstallPlan.ItemTemplate>
                     <DataTemplate x:DataType="vm:UseStackPackageReviewViewModel">
                       <Border Classes="stack-wizard-card package"
                               Margin="0,0,0,8">
@@ -147,9 +119,8 @@
                         </Grid>
                       </Border>
                     </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </StackPanel>
+                </controls:StackInstallPlan.ItemTemplate>
+              </controls:StackInstallPlan>
 
               <StackPanel Spacing="8"
                           IsVisible="{Binding HasSetupPackageGroups}">
@@ -297,12 +268,27 @@
                 </ItemsControl>
               </StackPanel>
 
-              <StackPanel Spacing="8"
-                          IsVisible="{Binding HasRequiredInputs}">
-                <TextBlock Text="Required Inputs"
-                           FontWeight="SemiBold" />
-                <ItemsControl ItemsSource="{Binding RequiredInputs}">
-                  <ItemsControl.ItemTemplate>
+              <controls:StackImportPreview Actions="{Binding ImportActions}"
+                                           RequiredInputs="{Binding RequiredInputs}"
+                                           Warnings="{Binding ImportWarnings}"
+                                           Errors="{Binding ImportErrors}"
+                                           HasActions="{Binding HasImportActions}"
+                                           HasRequiredInputs="{Binding HasRequiredInputs}"
+                                           HasWarnings="{Binding HasImportWarnings}"
+                                           HasErrors="{Binding HasImportErrors}"
+                                           IsVisible="{Binding HasSetupPackageGroups}">
+                <controls:StackImportPreview.ActionTemplate>
+                  <DataTemplate x:DataType="vm:UseStackImportActionViewModel">
+                    <Border Classes="marketplace-profile-row" Margin="0,0,0,6">
+                      <StackPanel Spacing="4">
+                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
+                        <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </controls:StackImportPreview.ActionTemplate>
+                <controls:StackImportPreview.RequiredInputTemplate>
                     <DataTemplate x:DataType="vm:UseStackRequiredInputValueViewModel">
                       <Border Classes="marketplace-profile-row">
                         <Grid RowDefinitions="Auto,Auto,Auto"
@@ -322,65 +308,8 @@
                         </Grid>
                       </Border>
                     </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </StackPanel>
-
-              <ItemsControl ItemsSource="{Binding InstallPlanWarnings}"
-                            IsVisible="{Binding HasInstallPlanWarnings}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Border Classes="settings-note-card"
-                            Margin="0,0,0,6">
-                      <TextBlock Classes="muted"
-                                 Text="{Binding}"
-                                 TextWrapping="Wrap" />
-                    </Border>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-
-              <ItemsControl ItemsSource="{Binding InstallPlanErrors}"
-                            IsVisible="{Binding HasInstallPlanErrors}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Border Classes="settings-note-card"
-                            Margin="0,0,0,6">
-                      <TextBlock Classes="runtime-error-text"
-                                 Text="{Binding}"
-                                 TextWrapping="Wrap" />
-                    </Border>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-
-              <ItemsControl ItemsSource="{Binding ImportWarnings}"
-                            IsVisible="{Binding HasImportWarnings}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Border Classes="settings-note-card"
-                            Margin="0,0,0,6">
-                      <TextBlock Classes="muted"
-                                 Text="{Binding}"
-                                 TextWrapping="Wrap" />
-                    </Border>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-
-              <ItemsControl ItemsSource="{Binding ImportErrors}"
-                            IsVisible="{Binding HasImportErrors}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Border Classes="settings-note-card"
-                            Margin="0,0,0,6">
-                      <TextBlock Classes="runtime-error-text"
-                                 Text="{Binding}"
-                                 TextWrapping="Wrap" />
-                    </Border>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+                </controls:StackImportPreview.RequiredInputTemplate>
+              </controls:StackImportPreview>
             </StackPanel>
           </ScrollViewer>
     </Border>

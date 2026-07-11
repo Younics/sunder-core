@@ -56,7 +56,13 @@ internal sealed class SecondaryWindowStateController(
         }
 
         PersistSidebarWidth();
-        setWindowPlacement(shellState, ShellWindowPlacementService.Capture(window, getWindowPlacement(shellState)));
-        shellStateService.Save(shellState);
+        var sidebarWidth = getSidebarWidth(shellState);
+        var placement = ShellWindowPlacementService.Capture(window, getWindowPlacement(shellState));
+        setWindowPlacement(shellState, placement);
+        shellStateService.Update(shellState, persisted =>
+        {
+            setSidebarWidth(persisted, sidebarWidth);
+            setWindowPlacement(persisted, placement);
+        });
     }
 }

@@ -2,7 +2,7 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed record PreparedRuntimePackage(
     string SourceFolder,
-    Sunder.Protocol.PackageSourceDescriptor Source,
+    RuntimePackageSource Source,
     string ShadowFolder,
     string LibraryFolder,
     string PackageId,

@@ -3,19 +3,20 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Package.Template;
 
-public sealed partial class PackageModule : ISunderPackageModule
+public sealed partial class PackageModule : ISunderRuntimePackageModule
 {
-    public void ConfigureServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
-        services.AddSingleton(new HeadlessPackageRuntime(context.PackageId, context.Version.ToString()));
+        services.AddSingleton(new PackageRuntimeState(context.Storage.State));
     }
 
-    public void RegisterContributions(IPackageContributionRegistry registry, IServiceProvider services)
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
         RegisterHostContractContributions(registry, services);
+        RegisterStackContributions(registry);
     }
 
-    partial void RegisterHostContractContributions(IPackageContributionRegistry registry, IServiceProvider services);
+    partial void RegisterHostContractContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services);
 
-    private sealed record HeadlessPackageRuntime(string PackageId, string PackageVersion);
+    partial void RegisterStackContributions(ISunderRuntimeContributionRegistry registry);
 }

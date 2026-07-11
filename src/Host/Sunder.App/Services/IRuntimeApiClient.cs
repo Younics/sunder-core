@@ -1,4 +1,5 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -12,7 +13,40 @@ public interface IRuntimeApiClient : IDisposable
 
     Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<PackageSourceDescriptor>> GetActivePackageSourcesAsync(CancellationToken cancellationToken = default);
+    Task<DevPackageWatchStatus> SetDevPackageWatchIntentAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support dev-package watch intent.");
+
+    Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(
+        long afterSequenceId = 0,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support Runtime event snapshots.");
+
+    IAsyncEnumerable<RuntimeEventDescriptor> StreamRuntimeEventsAsync(
+        long afterSequenceId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support Runtime event streaming.");
+
+    Task<PackageLogSnapshot> GetPackageLogSnapshotAsync(
+        long afterSequenceId = 0,
+        int limit = 500,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-log snapshots.");
+
+    IAsyncEnumerable<PackageLogEntryDescriptor> StreamPackageLogsAsync(
+        long afterSequenceId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package-log streaming.");
+
+    Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+
+    Task DownloadPackageUiSnapshotAsync(
+        PackageUiSnapshotDescriptor snapshot,
+        Stream destination,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support package UI snapshot downloads.");
 
     Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default);
 
@@ -38,10 +72,27 @@ public interface IRuntimeApiClient : IDisposable
         string packagePath,
         CancellationToken cancellationToken = default);
 
-    Task<PackageOperationResult> InstallPackagesFromPathsAsync(
-        PackageInstallBatchFromPathRequest request,
+    Task<ContentUploadDescriptor> UploadPackageAsync(
+        string packagePath,
         CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Runtime client does not support batch package installation.");
+        => Task.FromResult(new ContentUploadDescriptor(packagePath, string.Empty, 0, Path.GetFileName(packagePath), "application/vnd.sunder.package"));
+
+    Task<ContentUploadDescriptor> UploadStackAsync(
+        string stackPath,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new ContentUploadDescriptor(stackPath, string.Empty, 0, Path.GetFileName(stackPath), "application/vnd.sunder.stack"));
+
+    Task<ContentUploadDescriptor> UploadStackMediaAsync(
+        string mediaPath,
+        string contentType,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new ContentUploadDescriptor(mediaPath, string.Empty, 0, Path.GetFileName(mediaPath), contentType));
+
+    Task DownloadContentAsync(
+        ContentDownloadDescriptor download,
+        string destinationPath,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Runtime client does not support content downloads.");
 
     Task<PackageOperationResult> InstallPackageFromPathAsync(
         string packagePath,
@@ -171,4 +222,64 @@ public interface IRuntimeApiClient : IDisposable
         CancellationToken cancellationToken = default);
 
     Task ShutdownAsync(CancellationToken cancellationToken = default);
+
+    Task<RuntimeRegistryAuthStartResponse> StartRegistryAuthAsync(
+        RuntimeRegistryAuthStartRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RuntimeRegistryAuthSessionStatus?> GetRegistryAuthSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RuntimeRegistryAuthStatus> GetRegistryAuthStatusAsync(
+        string registryOrigin,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RuntimeRegistryAuthStatus> LogoutRegistryAsync(
+        string registryOrigin,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(
+        RuntimeRegistryPackageBatchRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(
+        RuntimeRegistryPackageRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(
+        RuntimeRegistryPackageBatchRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(
+        RuntimeRegistryUpdateRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(
+        RuntimeRegistryStarRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RegistryStackStarResponse> SetRegistryStackStarAsync(
+        RuntimeRegistryStarRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RegistryPublishStackResponse> PublishRegistryStackAsync(
+        RuntimeRegistryPublishRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(
+        RuntimeRegistryDeleteStackRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
 }

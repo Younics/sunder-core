@@ -1,0 +1,147 @@
+name: Sunder SDK CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sunder-sdk-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  SDK_VERSION: "1.0.0"
+
+jobs:
+  build-test-pack:
+    name: Build, test, and inspect V1 packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore Sunder.Core.slnx
+
+      - name: Build forced Release
+        run: dotnet build Sunder.Core.slnx -c Release --no-restore --no-incremental -p:GeneratePackageOnBuild=false
+
+      - name: Test
+        run: dotnet test Sunder.Core.slnx -c Release --no-restore --no-build
+
+      - name: CLI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet src/Host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help >/dev/null
+          dotnet src/Host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help --json | grep -q '"exitCode":0'
+
+      - name: Pack coordinated V1 packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$PWD/artifacts/sdk"
+          mkdir -p "$output"
+          projects=(
+            src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj
+            src/Sdk/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj
+            src/Sdk/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj
+            src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj
+            src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj
+          )
+          for project in "${projects[@]}"; do
+            dotnet pack "$project" -c Release --no-restore --no-build -o "$output" -p:GeneratePackageOnBuild=false
+          done
+
+          expected=(
+            "Sunder.Sdk.$SDK_VERSION.nupkg"
+            "Sunder.Sdk.Avalonia.$SDK_VERSION.nupkg"
+            "Sunder.Sdk.Stacks.$SDK_VERSION.nupkg"
+            "Sunder.Package.Build.$SDK_VERSION.nupkg"
+            "Sunder.Package.Templates.$SDK_VERSION.nupkg"
+          )
+          test "$(find "$output" -maxdepth 1 -name '*.nupkg' -type f | wc -l)" -eq 5
+          for package in "${expected[@]}"; do
+            test -f "$output/$package"
+          done
+
+          build_entries="$(unzip -Z1 "$output/Sunder.Package.Build.$SDK_VERSION.nupkg")"
+          test "$(printf '%s\n' "$build_entries" | grep -c '^buildTransitive/Sunder.Package.Build.targets$')" -eq 1
+          test "$(printf '%s\n' "$build_entries" | grep -c '^tasks/net10.0/.*\.dll$')" -eq 5
+          if printf '%s\n' "$build_entries" | grep -Eq '^(lib|ref|runtimes)/'; then
+            echo "Sunder.Package.Build leaked a consumer compile/runtime asset." >&2
+            exit 1
+          fi
+
+      - name: Upload local V1 feed
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunder-sdk-v1-feed
+          path: artifacts/sdk/*.nupkg
+          if-no-files-found: error
+
+  template-smoke:
+    name: Template smoke (${{ matrix.variant }})
+    needs: build-test-pack
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: headless
+            arguments: ""
+          - variant: avalonia
+            arguments: "--withAvalonia"
+          - variant: stacks
+            arguments: "--withStacks"
+          - variant: all
+            arguments: "--withAvalonia --withStacks --withContracts"
+    steps:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Download local V1 feed
+        uses: actions/download-artifact@v4
+        with:
+          name: sunder-sdk-v1-feed
+          path: local-feed
+
+      - name: Generate, restore, build, and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet new install "$PWD/local-feed/Sunder.Package.Templates.$SDK_VERSION.nupkg"
+          sample="$RUNNER_TEMP/sunder-template-${{ matrix.variant }}"
+          dotnet new sunder-package \
+            --name "Smoke.${{ matrix.variant }}" \
+            --packageId "smoke.${{ matrix.variant }}" \
+            --packageName "Smoke ${{ matrix.variant }}" \
+            --createInPlace \
+            --output "$sample" \
+            ${{ matrix.arguments }}
+
+          project="$sample/Smoke.${{ matrix.variant }}.csproj"
+          dotnet restore "$project" \
+            --source "$PWD/local-feed" \
+            --source https://api.nuget.org/v3/index.json
+          dotnet build "$project" -c Release --no-restore --no-incremental
+          dotnet publish "$project" -c Release --no-restore --no-build
+
+          mapfile -t archives < <(find "$sample/bin/Release" -name '*.sunderpkg' -type f)
+          if [[ ${#archives[@]} -ne 1 ]]; then
+            echo "Expected exactly one generated package archive, found ${#archives[@]}." >&2
+            exit 1
+          fi
+          unzip -t "${archives[0]}"

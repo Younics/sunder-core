@@ -1,45 +1,58 @@
-using Sunder.Protocol;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageSourcePreparer(string? sessionFolder)
 {
+    internal const long MaxSnapshotBytes = 256L * 1024 * 1024;
+    internal const int MaxSnapshotFiles = 20_000;
     private int _shadowFolderSequence;
 
-    public AppPreparedPackageSource? Prepare(PackageSourceDescriptor source)
+    public async Task<AppPreparedPackageSource?> PrepareAsync(
+        PackageUiSnapshotDescriptor snapshot,
+        Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task> downloadSnapshotAsync,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(source.Folder) || !Directory.Exists(source.Folder))
-        {
-            return null;
-        }
-
         var shadowRoot = sessionFolder ?? AppPackageSessionDirectories.CreateSessionFolder();
         Directory.CreateDirectory(shadowRoot);
         var sequence = Interlocked.Increment(ref _shadowFolderSequence);
-        var shadowFolder = Path.Combine(shadowRoot, $"{sequence:D4}-{SanitizeFolderName(source.PackageId)}");
+        var shadowFolder = Path.Combine(shadowRoot, $"{sequence:D4}-{SanitizeFolderName(snapshot.PackageId)}");
         Directory.CreateDirectory(shadowFolder);
+        var archivePath = Path.Combine(shadowFolder, ".snapshot.zip");
         var prepared = false;
         try
         {
-            switch (source.Kind)
+            await using (var destination = new FileStream(
+                             archivePath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             128 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                case PackageSourceKind.Dev:
-                    CopyDirectory(source.Folder, shadowFolder);
-                    break;
-                case PackageSourceKind.Installed:
-                    PrepareInstalledPackageSource(source.Folder, shadowFolder);
-                    break;
-                default:
-                    return null;
+                await downloadSnapshotAsync(snapshot, destination, cancellationToken);
+                await destination.FlushAsync(cancellationToken);
+                if (destination.Length > MaxSnapshotBytes)
+                {
+                    throw new InvalidDataException($"Package UI snapshot exceeds the {MaxSnapshotBytes} byte limit.");
+                }
             }
 
+            await using (var archiveStream = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(archiveStream, cancellationToken)).ToLowerInvariant();
+                if (!string.Equals(actualHash, snapshot.ContentHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Package UI snapshot hash verification failed.");
+                }
+            }
+
+            ExtractSnapshot(archivePath, shadowFolder, cancellationToken);
+            File.Delete(archivePath);
             var manifestPath = Path.Combine(shadowFolder, "sunder-package.json");
-            if (!File.Exists(manifestPath))
-            {
-                return null;
-            }
-
-            var manifest = AppPackageManifest.Load(manifestPath);
+            var manifest = File.Exists(manifestPath) ? AppPackageManifest.Load(manifestPath) : null;
             if (string.IsNullOrWhiteSpace(manifest?.Id))
             {
                 return null;
@@ -72,71 +85,39 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
         }
     }
 
-    public static string? TryResolveLibraryFolder(PackageSourceDescriptor source)
+    private static void ExtractSnapshot(string archivePath, string destinationRoot, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(source.Folder) || !Directory.Exists(source.Folder))
+        using var archive = ZipFile.OpenRead(archivePath);
+        if (archive.Entries.Count > MaxSnapshotFiles)
         {
-            return null;
+            throw new InvalidDataException($"Package UI snapshot exceeds the {MaxSnapshotFiles} file limit.");
         }
 
-        var libraryFolder = source.Kind switch
+        long totalLength = 0;
+        var root = Path.GetFullPath(destinationRoot) + Path.DirectorySeparatorChar;
+        foreach (var entry in archive.Entries)
         {
-            PackageSourceKind.Dev => Path.Combine(source.Folder, "lib"),
-            PackageSourceKind.Installed => ResolveInstalledPackageFolder(source.Folder, "lib"),
-            _ => null,
-        };
+            cancellationToken.ThrowIfCancellationRequested();
+            totalLength += entry.Length;
+            if (totalLength > MaxSnapshotBytes)
+            {
+                throw new InvalidDataException($"Package UI snapshot exceeds the {MaxSnapshotBytes} uncompressed byte limit.");
+            }
 
-        return !string.IsNullOrWhiteSpace(libraryFolder) && Directory.Exists(libraryFolder)
-            ? libraryFolder
-            : null;
-    }
+            var destinationPath = Path.GetFullPath(Path.Combine(destinationRoot, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
+            if (!destinationPath.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                throw new InvalidDataException($"Package UI snapshot entry '{entry.FullName}' escapes the destination root.");
+            }
 
-    private static void PrepareInstalledPackageSource(string sourceFolder, string shadowFolder)
-    {
-        var manifestPath = ResolveInstalledPackageManifestPath(sourceFolder);
-        if (File.Exists(manifestPath))
-        {
-            File.Copy(manifestPath, Path.Combine(shadowFolder, "sunder-package.json"), overwrite: true);
-        }
+            if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
+            {
+                Directory.CreateDirectory(destinationPath);
+                continue;
+            }
 
-        var libraryFolder = ResolveInstalledPackageFolder(sourceFolder, "lib");
-        if (Directory.Exists(libraryFolder))
-        {
-            CopyDirectory(libraryFolder, Path.Combine(shadowFolder, "lib"));
-        }
-
-        var assetFolder = ResolveInstalledPackageFolder(sourceFolder, "assets");
-        if (Directory.Exists(assetFolder))
-        {
-            CopyDirectory(assetFolder, Path.Combine(shadowFolder, "assets"));
-        }
-    }
-
-    private static string ResolveInstalledPackageManifestPath(string sourceFolder)
-    {
-        var packagedManifestPath = Path.Combine(sourceFolder, "manifest", "sunder-package.json");
-        return File.Exists(packagedManifestPath)
-            ? packagedManifestPath
-            : Path.Combine(sourceFolder, "sunder-package.json");
-    }
-
-    private static string ResolveInstalledPackageFolder(string sourceFolder, string folderName)
-    {
-        var packagedFolder = Path.Combine(sourceFolder, "payload", folderName);
-        return Directory.Exists(packagedFolder)
-            ? packagedFolder
-            : Path.Combine(sourceFolder, folderName);
-    }
-
-    private static void CopyDirectory(string sourceFolder, string destinationFolder)
-    {
-        Directory.CreateDirectory(destinationFolder);
-        foreach (var sourceFile in Directory.EnumerateFiles(sourceFolder, "*", SearchOption.AllDirectories))
-        {
-            var relativePath = Path.GetRelativePath(sourceFolder, sourceFile);
-            var destinationPath = Path.Combine(destinationFolder, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-            File.Copy(sourceFile, destinationPath, overwrite: true);
+            entry.ExtractToFile(destinationPath, overwrite: false);
         }
     }
 

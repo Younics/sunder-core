@@ -6,7 +6,8 @@ internal static class RuntimePackageSessionDirectories
 {
     private static readonly string SessionRootPath = Path.Combine(
         Path.GetTempPath(),
-        "Sunder.Runtime.Host");
+        "Sunder.Runtime.Host",
+        "V1");
 
     public static string CreateInstalledSessionFolder()
         => CreateSessionFolder("installed-sessions");

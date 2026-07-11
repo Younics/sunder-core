@@ -2,7 +2,7 @@ using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
-using Sunder.Registry.Shared;
+using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
@@ -136,7 +136,7 @@ public partial class MainWindowViewModel
     }
 
     [RelayCommand(CanExecute = nameof(CanManageRegistryAccount))]
-    private void LogoutRegistry()
+    private async Task LogoutRegistryAsync()
     {
         if (_registryAuthService is null)
         {
@@ -146,7 +146,7 @@ public partial class MainWindowViewModel
         IsRegistryAuthBusy = true;
         try
         {
-            ApplyRegistryAuthState(_registryAuthService.Logout());
+            ApplyRegistryAuthState(await _registryAuthService.LogoutAsync());
         }
         finally
         {

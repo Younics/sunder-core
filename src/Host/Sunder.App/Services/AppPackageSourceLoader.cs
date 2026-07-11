@@ -1,28 +1,28 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppPackageSourceLoader(AppPackageSourcePreparer sourcePreparer)
+internal sealed class AppPackageSourceLoader(
+    AppPackageSourcePreparer sourcePreparer,
+    Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task> downloadSnapshotAsync)
 {
     public async Task<AppPackageSourceLoadResult> LoadAsync(
         ActivePackageDescriptor package,
-        PackageSourceDescriptor source,
+        PackageUiSnapshotDescriptor source,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var preparedSource = await Task.Run(
-            () => sourcePreparer.Prepare(source),
-            cancellationToken);
+        var preparedSource = await sourcePreparer.PrepareAsync(source, downloadSnapshotAsync, cancellationToken);
         if (preparedSource is null)
         {
-            return AppPackageSourceLoadResult.Failure($"Failed to prepare app-side package source '{source.Folder}'.");
+            return AppPackageSourceLoadResult.Failure($"Failed to materialize package UI snapshot '{source.SnapshotId}'.");
         }
 
         if (!string.Equals(preparedSource.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase))
         {
             AppPackageSourcePreparer.TryDeleteDirectory(preparedSource.Folder);
             return AppPackageSourceLoadResult.Failure(
-                $"Runtime package source '{source.Folder}' resolved to package '{preparedSource.PackageId}'.");
+                $"Package UI snapshot '{source.SnapshotId}' resolved to package '{preparedSource.PackageId}'.");
         }
 
         return AppPackageSourceLoadResult.Success(preparedSource);

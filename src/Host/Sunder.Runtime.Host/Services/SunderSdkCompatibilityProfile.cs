@@ -1,4 +1,4 @@
-using Sunder.PackageManagement;
+using Sunder.Package.Format;
 using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Runtime.Host.Services;
@@ -7,7 +7,7 @@ internal static class SunderSdkCompatibilityProfile
 {
     private static readonly HashSet<int> SupportedApiVersions = [SunderSdkApiVersions.V1];
 
-    private static readonly HashSet<string> SupportedCapabilities = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> SupportedCapabilities = new(StringComparer.Ordinal)
     {
         SunderSdkCapabilities.CoreV1,
         SunderSdkCapabilities.PackagingV1,
@@ -23,6 +23,7 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ConfigurationSchemaV1,
         SunderSdkCapabilities.ConfigurationValuesV1,
         SunderSdkCapabilities.StorageV1,
+        SunderSdkCapabilities.LocalWorkspaceV1,
         SunderSdkCapabilities.SecretsV1,
         SunderSdkCapabilities.LoggingV1,
         SunderSdkCapabilities.NotificationsV1,
@@ -58,10 +59,13 @@ internal static class SunderSdkCompatibilityProfile
     {
         var errors = new List<string>();
         var packageLabel = packageId ?? "unknown";
-        var sdkApiVersion = requiredSdkApiVersion ?? SunderSdkApiVersions.V1;
-        if (!SupportedApiVersions.Contains(sdkApiVersion))
+        if (requiredSdkApiVersion is null)
         {
-            errors.Add($"Package '{packageLabel}' requires SDK API version {sdkApiVersion}, but this Sunder Host supports {string.Join(", ", SupportedApiVersions.Order())}.");
+            errors.Add($"Package '{packageLabel}' must declare SDK API version {SunderSdkApiVersions.V1}.");
+        }
+        else if (!SupportedApiVersions.Contains(requiredSdkApiVersion.Value))
+        {
+            errors.Add($"Package '{packageLabel}' requires SDK API version {requiredSdkApiVersion}, but this Sunder Host supports {string.Join(", ", SupportedApiVersions.Order())}.");
         }
 
         foreach (var capability in requiredSdkCapabilities ?? [])

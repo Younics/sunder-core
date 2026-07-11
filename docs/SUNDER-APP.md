@@ -13,9 +13,26 @@
 - package icon loading and fallback rendering
 - shell notifications
 - app-side package fault reporting to the runtime
+- observation of Runtime package/session generations and package logs through authenticated bounded streams
 - visual theme resources and app branding
 
-`Sunder.App` does not own installed package state. Installed package state belongs to `Sunder.Runtime.Host`.
+`Sunder.App` does not own installed package state, dev-package directory watching, or package-log discovery. Those responsibilities belong to `Sunder.Runtime.Host`.
+
+App-to-Runtime HTTP endpoints are versioned under `/api/v1` and require a per-Runtime-instance bearer token, including health and status. The App generates the token before launching its managed Runtime, passes it only through the inherited child environment, and publishes the matching URL/token through the per-user private Runtime connection file used by the App and CLI. Tokens are never command-line arguments.
+
+## Local State V1
+
+Persistent local state uses explicit, destructive V1 boundaries under the current user's local application data directory:
+
+- `Sunder/runtime/v1` owns the installed catalog and payloads, transactions/tombstones, package state/files/secrets/logs, uploads/snapshots, Registry credentials, Runtime lease, and Runtime connection document.
+- `Sunder/app/v1` owns shell/UI state, notifications and update settings, local Stack library data, package workspaces, image caches, and App logs.
+- Runtime and App package snapshot/session materialization uses explicitly named `V1` temporary roots.
+
+Each persistent V1 root contains `schema.json` with product identity `Sunder`, schema version `1`, and its Runtime or App local-state API identity. A fresh empty root is initialized with an atomic create. A non-empty V1 root with missing, malformed, or incompatible metadata is rejected; no legacy root is inferred, scanned, or migrated.
+
+Package and Registry secrets use Runtime-V1-specific DPAPI entropy and macOS Keychain/Linux Secret Service namespaces. Existing unversioned filesystem data and old credential items remain untouched.
+
+The V1 boundary does not assume a shared filesystem. Runtime package UI is exposed as bounded, generation-scoped snapshot descriptors and authenticated ZIP streams. The App verifies each immutable SHA-256 revision and extracts it into an App-owned session directory; old directories are deleted only after views, services, assembly probes, and load contexts detach. Package and Stack mutations upload bytes to Runtime-owned temporary storage and use opaque handles. Runtime install, dev, staging, workspace, and transfer paths are never returned in API JSON.
 
 ## Startup Arguments
 
@@ -47,6 +64,7 @@ Argument forms:
 
 - `--dev-package <folder>`
 - `--dev-package=<folder>`
+- `--watch` (requires at least one `--dev-package`)
 - `--runtime-url <url>`
 - `--runtime-url=<url>`
 - `--runtime-host-path <path>`
@@ -86,6 +104,10 @@ Runtime host also supports:
 | `--wait-for-debugger` | Blocks runtime startup until a debugger is attached |
 | `SUNDER_WAIT_FOR_DEBUGGER=1` | Enables debugger wait through environment |
 | `--urls <url>` | ASP.NET Core URL binding passed through to the web host |
+| `--development-allow-non-loopback-runtime-listen` | Development-only override permitting a non-loopback Runtime listen URL |
+| `SUNDER_DEVELOPMENT_ALLOW_NON_LOOPBACK_RUNTIME_LISTEN=1` | Environment form of the development-only non-loopback override |
+
+The Runtime defaults to `http://127.0.0.1:5275` and rejects wildcard or non-loopback listen URLs unless the explicitly named development override is supplied. Managed App launches never supply that override. A directly launched Runtime generates its own instance token and atomically publishes private connection information for the current user. On Unix, the connection directory/file modes are `0700`/`0600`; on Windows, the file is under Local App Data and its token is protected with current-user DPAPI.
 
 ## Dev Package Flow
 
@@ -95,8 +117,12 @@ When `--dev-package` is used:
 2. The app sends the dev package folder list to the runtime host.
 3. The runtime host shadow-materializes and validates runtime package content.
 4. The runtime host activates runtime package modules and reports active descriptors.
-5. The app matches active descriptors back to the original dev package folders.
+5. The app downloads generation-scoped package UI snapshots without inspecting the dev directories.
 6. The app activates app-side package modules and registers package UI contributions.
+
+With `--watch`, the App sends watch intent through the typed Runtime API. Runtime owns recursive and parent-folder watchers, debounce, stability polling, stage/commit generation fencing, and reload result publication. The App keeps one cancellable Runtime event subscription and reconciles package UI on its dispatcher when the session generation changes.
+
+Runtime lifecycle events and package logs use authenticated SSE feeds with monotonic sequence IDs, bounded replay, and snapshot fallback after a replay gap. Package log files are discovered and tailed only by Runtime. The App developer log combines its own `AppSessionLog` entries with structured, safely truncated package entries received through the Runtime API; API payloads do not contain package log paths.
 
 Installed package changes still save to local runtime state while dev-package override mode is active. The runtime reports a warning when local changes are saved during a dev-package session.
 
@@ -108,7 +134,7 @@ Current behavior:
 
 - Installed package descriptors expose package icon asset paths.
 - The app turns package icon paths into runtime asset URLs.
-- Runtime serves icon assets through `/api/packages/{packageId}/assets/{assetPath}`.
+- Runtime serves authenticated icon assets through `/api/v1/packages/{packageId}/assets/{assetPath}`.
 - SVG icons load through `Svg.Controls.Skia.Avalonia` / Avalonia SVG support.
 - Raster icons load through Avalonia bitmap support.
 - File extension routing is used before content sniffing to avoid loading raster images as SVG.
@@ -147,7 +173,7 @@ Package UI guidance:
 - Keep package UI independent of `Sunder.App` implementation details.
 - Use regular Avalonia controls and layout patterns inside package views.
 
-Semantic theme keys are exposed in `Sunder.Sdk.Theming.SunderThemeKeys`.
+Semantic theme keys are exposed in `Sunder.Sdk.Avalonia.Theming.SunderThemeKeys`.
 
 Common keys:
 

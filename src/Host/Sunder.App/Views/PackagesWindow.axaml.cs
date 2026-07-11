@@ -14,6 +14,8 @@ public partial class PackagesWindow : Window
     private readonly SecondaryWindowStateController? _stateController;
     private readonly SecondaryWindowLifecycleController _lifecycleController;
     private PackagesWindowViewModel? _subscribedViewModel;
+    private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindow));
+    private readonly CancellationTokenSource _lifetime = new();
 
     public PackagesWindow()
     {
@@ -46,13 +48,13 @@ public partial class PackagesWindow : Window
     public void CloseForShutdown()
         => _lifecycleController.CloseForShutdown();
 
-    private async void OnOpened(object? sender, EventArgs e)
+    private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
 
         if (ViewModel is not null)
         {
-            await ViewModel.InitializeAsync();
+            _tasks.Observe(ViewModel.InitializeAsync(_lifetime.Token), "initializing Packages");
         }
     }
 
@@ -64,8 +66,11 @@ public partial class PackagesWindow : Window
     private void OnLifecycleClosed()
     {
         SubscribeToViewModel(null);
+        _lifetime.Cancel();
+        _tasks.Dispose();
         ViewModel?.Dispose();
         DataContext = null;
+        _lifetime.Dispose();
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e) => SubscribeToViewModel(ViewModel);

@@ -1,7 +1,7 @@
 using Avalonia;
 using Avalonia.Media;
 using Sunder.App.Services;
-using Sunder.Sdk.Theming;
+using Sunder.Sdk.Avalonia.Theming;
 using Xunit;
 
 namespace Sunder.App.Tests;

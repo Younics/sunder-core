@@ -1,7 +1,7 @@
 using Avalonia;
 using Avalonia.Media;
 using Sunder.App.Themes;
-using Sunder.Sdk.Theming;
+using Sunder.Sdk.Avalonia.Theming;
 
 namespace Sunder.App.Services;
 

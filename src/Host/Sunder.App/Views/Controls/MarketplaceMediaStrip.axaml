@@ -1,0 +1,39 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Sunder.App.Views.Controls"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.MarketplaceMediaStrip"
+             x:DataType="controls:MarketplaceMediaStrip"
+             x:Name="Root">
+  <StackPanel Spacing="8">
+    <TextBlock Classes="section-title" Text="Images" />
+    <ScrollViewer Classes="marketplace-image-strip-scroll"
+                  HorizontalScrollBarVisibility="Auto"
+                  VerticalScrollBarVisibility="Disabled">
+      <ItemsControl ItemsSource="{Binding Items, ElementName=Root}"
+                    Margin="0,0,0,12">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="12" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:RegistryPackageMediaItemViewModel">
+            <Button Classes="marketplace-image-thumb"
+                    Command="{Binding SelectCommand}"
+                    ToolTip.Tip="{Binding Caption}">
+              <Grid>
+                <Border Classes="marketplace-image-frame">
+                  <Image Source="{Binding Image}" Stretch="UniformToFill" />
+                </Border>
+                <TextBlock Classes="caption marketplace-image-loading"
+                           Text="Loading..."
+                           IsVisible="{Binding IsImageLoading}" />
+              </Grid>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </StackPanel>
+</UserControl>

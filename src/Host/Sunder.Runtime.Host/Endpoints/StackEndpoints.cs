@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -7,35 +7,38 @@ internal static class StackEndpoints
 {
     public static IEndpointRouteBuilder MapStackEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/api/stacks");
+        var group = endpoints.MapGroup("/stacks");
 
         group.MapGet(
             "export/items",
-            async (RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
-                Results.Ok(await packageSessionService.ListStackExportItemsAsync(cancellationToken)));
+            async (RuntimeStackExportService stackExport, CancellationToken cancellationToken) =>
+                Results.Ok(await stackExport.ListItemsAsync(cancellationToken)));
 
         group.MapPost(
             "export",
-            async (RuntimeStackExportRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (RuntimeStackExportRequest request, RuntimeStackExportService stackExport, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.ExportStackAsync(request, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await stackExport.ExportAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault());
+                return Results.Ok(result);
             });
 
         group.MapPost(
             "import/preview",
-            async (RuntimeStackImportPreviewRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (RuntimeStackImportPreviewRequest request, RuntimeStackImportService stackImport, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.PreviewStackImportAsync(request, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await stackImport.PreviewAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault(), packageValidation: true);
+                return Results.Ok(result);
             });
 
         group.MapPost(
             "import/apply",
-            async (RuntimeStackImportRequest request, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (RuntimeStackImportRequest request, RuntimeStackImportService stackImport, CancellationToken cancellationToken) =>
             {
-                var result = await packageSessionService.ImportStackAsync(request, cancellationToken);
-                return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+                var result = await stackImport.ImportAsync(request, cancellationToken);
+                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault(), packageValidation: true);
+                return Results.Ok(result);
             });
 
         return endpoints;

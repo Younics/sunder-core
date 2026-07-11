@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -7,17 +7,17 @@ internal sealed class AppPackageDeltaCoordinator(
     Func<string, AppLoadedPackageHandle?> getLoadedPackage,
     Func<string, bool> isPackageDisabled,
     Func<string, CancellationToken, bool, Task<bool>> unloadPackageAsync,
-    Func<ActivePackageDescriptor, PackageSourceDescriptor, CancellationToken, Task> loadPackageAsync,
+    Func<ActivePackageDescriptor, PackageUiSnapshotDescriptor, CancellationToken, Task> loadPackageAsync,
     Func<string, string, PackageFailureOrigin, Exception?, CancellationToken, Task> disablePackageAsync,
-    Func<IReadOnlyList<PackageSourceDescriptor>, bool>? requiresSharedAssemblyReset = null,
+    Func<IReadOnlyList<PackageUiSnapshotDescriptor>, bool>? requiresSharedAssemblyReset = null,
     Action? resetSharedAssemblies = null,
-    Func<ActivePackageDescriptor, PackageSourceDescriptor, CancellationToken, Task<AppPackagePrepareResult>>? preparePackageAsync = null,
+    Func<ActivePackageDescriptor, PackageUiSnapshotDescriptor, CancellationToken, Task<AppPackagePrepareResult>>? preparePackageAsync = null,
     Func<AppPreparedPackageActivation, CancellationToken, Task>? activatePreparedPackageAsync = null,
     Action<IReadOnlyList<string>>? addSharedAssemblyProbeDirectories = null)
 {
     public async Task ApplyPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds,
         CancellationToken cancellationToken)
     {
@@ -122,7 +122,7 @@ internal sealed class AppPackageDeltaCoordinator(
         IReadOnlyList<AppPackageDeltaPlanAction> plannedActions,
         IReadOnlyList<string> loadedPackageIds,
         bool sharedAssemblyResetRequired,
-        Func<ActivePackageDescriptor, PackageSourceDescriptor, CancellationToken, Task<AppPackagePrepareResult>> preparePackageAsync,
+        Func<ActivePackageDescriptor, PackageUiSnapshotDescriptor, CancellationToken, Task<AppPackagePrepareResult>> preparePackageAsync,
         Func<AppPreparedPackageActivation, CancellationToken, Task> activatePreparedPackageAsync,
         Action<IReadOnlyList<string>> addSharedAssemblyProbeDirectories,
         CancellationToken cancellationToken)
@@ -220,6 +220,6 @@ internal sealed class AppPackageDeltaCoordinator(
 
     private sealed record AppPackageDeltaPlanAction(
         ActivePackageDescriptor Package,
-        PackageSourceDescriptor? Source,
+        PackageUiSnapshotDescriptor? Source,
         AppPackageDeltaAction Action);
 }

@@ -4,7 +4,8 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageSessionReconciler(
     ILogger logger,
-    InstalledPackageStore installedPackageStore)
+    InstalledPackageStore installedPackageStore,
+    RuntimePackagePaths paths)
 {
     public async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
@@ -25,7 +26,7 @@ internal sealed class PackageSessionReconciler(
         }
 
         return devFolders.Length == 0
-            ? await new PackageSessionLoadService(logger).LoadInstalledAsync(installedPackages, startBackgroundServices)
-            : await new PackageSessionLoadService(logger).LoadInstalledWithDevOverlaysAsync(installedPackages, devFolders, startBackgroundServices);
+            ? await new PackageSessionLoadService(logger, paths).LoadInstalledAsync(installedPackages, startBackgroundServices)
+            : await new PackageSessionLoadService(logger, paths).LoadInstalledWithDevOverlaysAsync(installedPackages, devFolders, startBackgroundServices);
     }
 }

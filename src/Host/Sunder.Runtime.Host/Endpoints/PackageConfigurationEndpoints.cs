@@ -1,4 +1,4 @@
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -7,17 +7,17 @@ internal static class PackageConfigurationEndpoints
 {
     public static IEndpointRouteBuilder MapPackageConfigurationEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/api/packages");
+        var group = endpoints.MapGroup("/packages");
         group.MapGet(
             "configuration/schemas",
-            (RuntimePackageSessionService packageSessionService) => Results.Ok(packageSessionService.GetConfigurationSchemas()));
+            (PackageConfigurationAccessService configuration) => Results.Ok(configuration.GetSchemas()));
 
         group.MapGet(
             "{packageId}/config/values",
-            async (string packageId, RuntimePackageSessionService packageSessionService, CancellationToken cancellationToken) =>
+            async (string packageId, PackageConfigurationAccessService configuration, CancellationToken cancellationToken) =>
             {
-                var values = await packageSessionService.GetConfigurationValuesAsync(packageId, cancellationToken);
-                return values is null ? Results.NotFound() : Results.Ok(values);
+                var values = await configuration.GetValuesAsync(packageId, cancellationToken);
+                return Results.Ok(RuntimeEndpointErrors.Required(values, $"Package '{packageId}' configuration"));
             });
 
         group.MapPut(
@@ -25,11 +25,15 @@ internal static class PackageConfigurationEndpoints
             async (
                 string packageId,
                 UpdatePackageConfigurationValuesRequest request,
-                RuntimePackageSessionService packageSessionService,
+                PackageConfigurationAccessService configuration,
                 CancellationToken cancellationToken) =>
             {
-                var saved = await packageSessionService.SaveConfigurationValuesAsync(packageId, request, cancellationToken);
-                return saved ? Results.NoContent() : Results.NotFound();
+                var saved = await configuration.SaveValuesAsync(packageId, request, cancellationToken);
+                if (!saved)
+                {
+                    throw new RuntimeNotFoundException($"Package '{packageId}' configuration was not found.");
+                }
+                return Results.NoContent();
             });
 
         return endpoints;

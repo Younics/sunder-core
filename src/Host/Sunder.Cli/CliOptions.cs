@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Sunder.Cli;
 
-internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri RuntimeUrl, TimeSpan RegistryTimeout)
+internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri RuntimeUrl, TimeSpan RequestTimeout, bool Json)
 {
     public static readonly TimeSpan DefaultRegistryTimeout = TimeSpan.FromMinutes(15);
 
@@ -22,18 +22,48 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
             ?? settings.RuntimeUrl
             ?? "http://127.0.0.1:5275/";
 
-        var registryUrlAlias = CommandLine.ConsumeOption(args, "--registry-url");
-        registryApiUrl = CommandLine.ConsumeOption(args, "--registry-api-url") ?? registryUrlAlias ?? registryApiUrl;
-        registryWebUrl = CommandLine.ConsumeOption(args, "--registry-web-url") ?? registryUrlAlias ?? registryWebUrl;
-        runtimeUrl = CommandLine.ConsumeOption(args, "--runtime-url") ?? runtimeUrl;
-        var timeout = ParseTimeout(CommandLine.ConsumeOption(args, "--timeout"));
+        var registryUrlAlias = ConsumeOption(args, "--registry-url");
+        registryApiUrl = ConsumeOption(args, "--registry-api-url") ?? registryUrlAlias ?? registryApiUrl;
+        registryWebUrl = ConsumeOption(args, "--registry-web-url") ?? registryUrlAlias ?? registryWebUrl;
+        runtimeUrl = ConsumeOption(args, "--runtime-url") ?? runtimeUrl;
+        var timeout = ParseTimeout(ConsumeOption(args, "--timeout"));
+        var json = ConsumeFlag(args, "--json");
 
         return new CliOptions(
             NormalizeUrl(RequireUrl(registryApiUrl, "Registry:ApiUrl"), "registry API"),
             NormalizeUrl(RequireUrl(registryWebUrl, "Registry:WebUrl"), "registry web"),
             NormalizeUrl(runtimeUrl, "runtime"),
-            timeout);
+            timeout,
+            json);
     }
+
+    private static bool ConsumeFlag(List<string> args, string name)
+    {
+        var indexes = FindIndexes(args, name);
+        if (indexes.Count > 1) throw new CliUsageException($"Option '{name}' may only be specified once.");
+        if (indexes.Count == 0) return false;
+        args.RemoveAt(indexes[0]);
+        return true;
+    }
+
+    private static string? ConsumeOption(List<string> args, string name)
+    {
+        var indexes = FindIndexes(args, name);
+        if (indexes.Count > 1) throw new CliUsageException($"Option '{name}' may only be specified once.");
+        if (indexes.Count == 0) return null;
+        var index = indexes[0];
+        if (index + 1 >= args.Count || args[index + 1].StartsWith("-", StringComparison.Ordinal))
+            throw new CliUsageException($"Option '{name}' requires a value.");
+        var value = args[index + 1];
+        args.RemoveRange(index, 2);
+        return value;
+    }
+
+    private static List<int> FindIndexes(List<string> args, string name)
+        => args.Select((value, index) => (value, index))
+            .Where(item => string.Equals(item.value, name, StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.index)
+            .ToList();
 
     private static TimeSpan ParseTimeout(string? value)
     {

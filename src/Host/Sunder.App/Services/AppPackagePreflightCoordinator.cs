@@ -1,5 +1,5 @@
 using System.Reflection;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
@@ -18,11 +18,12 @@ internal sealed record AppPackagePreflightResult(
 internal sealed class AppPackagePreflightCoordinator(
     Func<string, AppLoadedPackageHandle?> getLoadedPackage,
     Func<string, bool> isPackageDisabled,
-    Func<IReadOnlyList<PackageSourceDescriptor>, bool>? requiresSharedAssemblyReset = null)
+    Func<IReadOnlyList<PackageUiSnapshotDescriptor>, bool>? requiresSharedAssemblyReset = null,
+    Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task>? downloadSnapshotAsync = null)
 {
     public async Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds,
         CancellationToken cancellationToken)
     {
@@ -30,6 +31,16 @@ internal sealed class AppPackagePreflightCoordinator(
         var effectiveForceReloadPackageIds = requiresSharedAssemblyReset?.Invoke(packageSources) == true
             ? activePackages.Select(package => package.PackageId).ToArray()
             : forceReloadPackageIds;
+        var candidateIds = effectiveForceReloadPackageIds is null
+            ? activePackages.Select(package => package.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : effectiveForceReloadPackageIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var snapshotPackageIds = packageSources.Select(snapshot => snapshot.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingSnapshot = activePackages.FirstOrDefault(package => candidateIds.Contains(package.PackageId) && !snapshotPackageIds.Contains(package.PackageId));
+        if (missingSnapshot is not null)
+        {
+            return AppPackagePreflightResult.Failed($"Runtime did not provide a package UI snapshot for '{missingSnapshot.PackageId}'.");
+        }
+
         var candidates = BuildPreflightCandidates(activePackages, packageSources, effectiveForceReloadPackageIds).ToArray();
         if (candidates.Length == 0)
         {
@@ -40,13 +51,14 @@ internal sealed class AppPackagePreflightCoordinator(
         var ownedDisposables = new List<object>();
         var loadContexts = new List<AppPackageLoadContext>();
         var viewRegistry = new AppPackageViewRegistry();
-        var backgroundServices = new AppPackageBackgroundServiceCoordinator();
         var extensionCatalog = new AppPackageExtensionCatalog();
         var backgroundProcessQueue = new BackgroundProcessQueueService();
         var assemblyTracker = new AppPackageAssemblyTracker();
         var sharedAssemblyRegistry = new AppSharedAssemblyRegistry([]);
-        var sourceLoader = new AppPackageSourceLoader(new AppPackageSourcePreparer(sessionFolder));
-        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(backgroundServices, backgroundProcessQueue);
+        var sourceLoader = new AppPackageSourceLoader(
+            new AppPackageSourcePreparer(sessionFolder),
+            downloadSnapshotAsync ?? ((_, _, _) => throw new InvalidOperationException("Runtime snapshot download is unavailable.")));
+        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(backgroundProcessQueue);
         var unloadCoordinator = new AppPackageUnloadCoordinator(
             viewRegistry,
             extensionCatalog,
@@ -59,8 +71,8 @@ internal sealed class AppPackagePreflightCoordinator(
             sharedAssemblyRegistry,
             new AppPackageServiceProviderFactory(extensionCatalog, null, null, null, null, backgroundProcessQueue),
             viewRegistry,
-            backgroundServices,
-            extensionCatalog);
+            extensionCatalog,
+            isPreflight: true);
 
         try
         {
@@ -107,9 +119,9 @@ internal sealed class AppPackagePreflightCoordinator(
         }
     }
 
-    private IEnumerable<(ActivePackageDescriptor Package, PackageSourceDescriptor Source)> BuildPreflightCandidates(
+    private IEnumerable<(ActivePackageDescriptor Package, PackageUiSnapshotDescriptor Source)> BuildPreflightCandidates(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageSourceDescriptor> packageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? forceReloadPackageIds)
     {
         var deltaPlan = new AppPackageDeltaPlan(activePackages, packageSources, forceReloadPackageIds);
@@ -126,7 +138,6 @@ internal sealed class AppPackagePreflightCoordinator(
 
             if (!deltaPlan.TryGetSource(activePackage, out var source))
             {
-                yield return (activePackage, new PackageSourceDescriptor(activePackage.PackageId, PackageSourceKind.Installed, string.Empty));
                 continue;
             }
 
@@ -157,8 +168,7 @@ internal sealed class AppPackagePreflightCoordinator(
                 registerPackageAssembly,
                 trackLoadContext,
                 trackOwnedDisposable,
-                cancellationToken,
-                startBackgroundServices: false).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             return AppPackagePreflightResult.Succeeded();
         }
         catch (OperationCanceledException)

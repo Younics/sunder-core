@@ -1,7 +1,7 @@
 using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
-using Sunder.Protocol;
+using Sunder.Runtime.Contracts;
 using Xunit;
 
 namespace Sunder.App.Tests;
