@@ -82,7 +82,7 @@ public sealed record RegistryStackRequiredInput(
 
 public sealed record RegistryStackArtifact(
     string Sha256,
-    long Size,
+    long? Size,
     string DownloadUrl);
 
 public sealed record RegistryStackProfile(

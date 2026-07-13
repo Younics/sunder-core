@@ -1,279 +1,111 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Callbacks;
 using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
+using ProtocolCallbackState = Sunder.Runtime.Contracts.PackageCallbackSessionState;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageAuthSessionCoordinator(
-    Func<string, (ActiveLoadedPackage? Package, long Generation)> getLoadedPackage,
+    PackageSessionState sessionState,
+    PackageCallbackSessionCoordinator callbacks,
     Action<string, long, PackageFailureOrigin, Exception, string> handlePackageFault)
 {
-    private readonly object _syncRoot = new();
-    private readonly Dictionary<string, ActivePackageAuthSession> _authSessions = new(StringComparer.OrdinalIgnoreCase);
-
-    public void Clear()
-    {
-        lock (_syncRoot)
-        {
-            _authSessions.Clear();
-        }
-    }
-
-    public void RemovePackageSessions(string packageId)
-    {
-        lock (_syncRoot)
-        {
-            foreach (var authSessionId in _authSessions
-                         .Where(pair => string.Equals(pair.Value.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
-                         .Select(pair => pair.Key)
-                         .ToArray())
-            {
-                _authSessions.Remove(authSessionId);
-            }
-        }
-    }
-
     public async Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(
+        PackageSessionLease lease,
         string packageId,
         CancellationToken cancellationToken = default)
     {
-        var (loadedPackage, generation) = getLoadedPackage(packageId);
-        var callbackHandler = loadedPackage is null ? null : ResolveAuthCallbackHandler(loadedPackage);
-        if (loadedPackage?.AuthHandler is null || callbackHandler is null)
-        {
-            return null;
-        }
-
+        var loadedPackage = sessionState.GetLoadedPackage(lease, packageId);
+        if (loadedPackage?.AuthHandler is null) return null;
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         try
         {
-            return ToProtocolAuthStatus(await loadedPackage.AuthHandler.GetStatusAsync(cancellationToken));
+            return ToProtocolAuthStatus(await loadedPackage.AuthHandler.GetStatusAsync(linked.Token));
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return CreateFaultedAuthStatus(packageId, generation, PackageFailureOrigin.RuntimeAuthentication, ex, "read package auth status");
+            handlePackageFault(packageId, lease.Generation, PackageFailureOrigin.RuntimeAuthentication, exception, "read package auth status");
+            return new PackageAuthStatusResponse(
+                packageId,
+                Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,
+                exception.Message,
+                CanAuthorize: false,
+                CanDisconnect: false);
         }
     }
 
     public async Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(
+        PackageSessionLease lease,
         string packageId,
-        PackageAuthCallbackServer packageAuthCallbackServer,
+        PackageCallbackServer callbackServer,
         CancellationToken cancellationToken = default)
     {
-        var (loadedPackage, generation) = getLoadedPackage(packageId);
-        var callbackHandler = loadedPackage is null ? null : ResolveAuthCallbackHandler(loadedPackage);
-        if (loadedPackage?.AuthHandler is null || callbackHandler is null)
-        {
-            return null;
-        }
-
-        var existingSession = GetLatestPendingAuthSession(packageId);
-        if (existingSession is not null)
-        {
-            return ToProtocolAuthSessionStart(existingSession.Status);
-        }
-
-        var authSessionId = Guid.NewGuid().ToString("N");
-        try
-        {
-            packageAuthCallbackServer.EnsureStarted();
-        }
-        catch (Exception ex)
-        {
-            return new PackageAuthSessionStartResponse(
-                packageId,
-                authSessionId,
-                Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser,
-                string.Empty,
-                ex.Message);
-        }
-
-        try
-        {
-            var callbackUri = packageAuthCallbackServer.CallbackUri;
-            var result = await callbackHandler.StartCallbackAsync(
-                new PackageCallbackStartContext(authSessionId, callbackUri, PackageCallbackHandlerIds.Authentication),
-                cancellationToken);
-
-            if (result is null)
-            {
-                return null;
-            }
-
-            var sessionStatus = new PackageAuthSessionStatus(
-                packageId,
-                authSessionId,
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Pending,
-                result.Message,
-                result.LaunchUrl);
-
-            packageAuthCallbackServer.RegisterHandler(
-                authSessionId,
-                (queryValues, ct) => CompletePackageAuthSessionAsync(authSessionId, queryValues, ct));
-
-            lock (_syncRoot)
-            {
-                _authSessions[authSessionId] = new ActivePackageAuthSession(packageId, generation, loadedPackage.AuthHandler, callbackHandler, sessionStatus);
-            }
-
-            return ToProtocolAuthSessionStart(sessionStatus);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            handlePackageFault(packageId, generation, PackageFailureOrigin.RuntimeAuthentication, ex, "start package authorization");
-            return new PackageAuthSessionStartResponse(
-                packageId,
-                authSessionId,
-                Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser,
-                string.Empty,
-                ex.Message);
-        }
+        var status = await callbacks.StartAsync(
+            lease,
+            packageId,
+            PackageCallbackHandlerIds.Authentication,
+            parameters: null,
+            callbackServer,
+            cancellationToken);
+        return status is null ? null : new PackageAuthSessionStartResponse(
+            status.PackageId,
+            status.CallbackSessionId,
+            PackageAuthFlowKind.Browser,
+            status.LaunchUri ?? string.Empty,
+            status.Message);
     }
 
-    public PackageAuthSessionStatusResponse? GetPackageAuthSessionStatus(string packageId, string authSessionId)
+    public PackageAuthSessionStatusResponse? GetPackageAuthSessionStatus(
+        PackageSessionLease lease,
+        string packageId,
+        string authSessionId)
     {
-        lock (_syncRoot)
-        {
-            return _authSessions.TryGetValue(authSessionId, out var session) && string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
-                ? ToProtocolAuthSessionStatus(session.Status)
-                : null;
-        }
+        var status = callbacks.GetStatus(lease, packageId, authSessionId);
+        return status is null ? null : new PackageAuthSessionStatusResponse(
+            status.PackageId,
+            status.CallbackSessionId,
+            status.State switch
+            {
+                ProtocolCallbackState.Pending => PackageAuthSessionState.Pending,
+                ProtocolCallbackState.Completed => PackageAuthSessionState.Connected,
+                ProtocolCallbackState.Cancelled or ProtocolCallbackState.Expired => PackageAuthSessionState.Cancelled,
+                _ => PackageAuthSessionState.Failed,
+            },
+            status.Message,
+            status.LaunchUri);
     }
 
-    public async Task<bool> CompletePackageAuthSessionAsync(
+    public Task<bool> CompletePackageAuthSessionAsync(
+        PackageSessionLease lease,
         string authSessionId,
         IReadOnlyDictionary<string, string?> queryValues,
         CancellationToken cancellationToken = default)
-    {
-        ActivePackageAuthSession? session;
-        lock (_syncRoot)
-        {
-            session = _authSessions.TryGetValue(authSessionId, out var foundSession) ? foundSession : null;
-        }
-
-        if (session is null)
-        {
-            return false;
-        }
-
-        PackageAuthStatus finalStatus;
-        try
-        {
-            var completion = await session.CallbackHandler.CompleteCallbackAsync(
-                new PackageCallbackCompletionContext(authSessionId, queryValues),
-                cancellationToken);
-            finalStatus = completion.State == PackageCallbackCompletionState.Completed
-                ? await session.AuthHandler.GetStatusAsync(cancellationToken)
-                : new PackageAuthStatus(
-                    session.PackageId,
-                    Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed,
-                    completion.Message,
-                    CanAuthorize: true,
-                    CanDisconnect: false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            handlePackageFault(session.PackageId, session.Generation, PackageFailureOrigin.RuntimeAuthentication, ex, "complete package authorization");
-            finalStatus = new PackageAuthStatus(
-                session.PackageId,
-                Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed,
-                ex.Message,
-                CanAuthorize: false,
-                CanDisconnect: false);
-        }
-
-        lock (_syncRoot)
-        {
-            _authSessions[authSessionId] = session with
-            {
-                Status = new PackageAuthSessionStatus(
-                    session.PackageId,
-                    authSessionId,
-                    finalStatus.Status switch
-                    {
-                        Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected => Sunder.Sdk.Authentication.PackageAuthSessionState.Connected,
-                        Sunder.Sdk.Authentication.PackageAuthStatusKind.Failed => Sunder.Sdk.Authentication.PackageAuthSessionState.Failed,
-                        _ => Sunder.Sdk.Authentication.PackageAuthSessionState.Failed,
-                    },
-                    finalStatus.Message,
-                    session.Status.LaunchUrl)
-            };
-        }
-
-        return true;
-    }
+        => callbacks.CompleteAsync(lease, authSessionId, queryValues, cancellationToken);
 
     public async Task<PackageAuthStatusResponse?> DisconnectPackageAsync(
+        PackageSessionLease lease,
         string packageId,
         CancellationToken cancellationToken = default)
     {
-        var (loadedPackage, generation) = getLoadedPackage(packageId);
-        if (loadedPackage?.AuthHandler is null)
-        {
-            return null;
-        }
-
+        var loadedPackage = sessionState.GetLoadedPackage(lease, packageId);
+        if (loadedPackage?.AuthHandler is null) return null;
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         try
         {
-            return ToProtocolAuthStatus(await loadedPackage.AuthHandler.DisconnectAsync(cancellationToken));
+            return ToProtocolAuthStatus(await loadedPackage.AuthHandler.DisconnectAsync(linked.Token));
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return CreateFaultedAuthStatus(packageId, generation, PackageFailureOrigin.RuntimeAuthentication, ex, "disconnect package authorization");
+            handlePackageFault(packageId, lease.Generation, PackageFailureOrigin.RuntimeAuthentication, exception, "disconnect package authorization");
+            return new PackageAuthStatusResponse(
+                packageId,
+                Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,
+                exception.Message,
+                CanAuthorize: false,
+                CanDisconnect: false);
         }
     }
-
-    private ActivePackageAuthSession? GetLatestPendingAuthSession(string packageId)
-    {
-        lock (_syncRoot)
-        {
-            return _authSessions.Values.LastOrDefault(session =>
-                string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
-                && session.Status.State == Sunder.Sdk.Authentication.PackageAuthSessionState.Pending);
-        }
-    }
-
-    private PackageAuthStatusResponse CreateFaultedAuthStatus(
-        string packageId,
-        long generation,
-        PackageFailureOrigin origin,
-        Exception exception,
-        string action)
-    {
-        handlePackageFault(packageId, generation, origin, exception, action);
-        return new PackageAuthStatusResponse(
-            packageId,
-            Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,
-            exception.Message,
-            CanAuthorize: false,
-            CanDisconnect: false);
-    }
-
-    private sealed record ActivePackageAuthSession(
-        string PackageId,
-        long Generation,
-        IPackageAuthHandler AuthHandler,
-        IPackageCallbackHandler CallbackHandler,
-        PackageAuthSessionStatus Status);
-
-    private static IPackageCallbackHandler? ResolveAuthCallbackHandler(ActiveLoadedPackage loadedPackage)
-        => loadedPackage.GetCallbackHandler(PackageCallbackHandlerIds.Authentication)
-           ?? (loadedPackage.AuthHandler as IPackageCallbackHandler);
 }

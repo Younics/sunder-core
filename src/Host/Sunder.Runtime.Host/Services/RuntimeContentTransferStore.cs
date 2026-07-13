@@ -20,15 +20,27 @@ internal sealed record RuntimeUploadLease(
     string FileName,
     string ContentType);
 
-internal sealed class RuntimeContentTransferStore(RuntimePackagePaths paths) : IDisposable
+internal sealed class RuntimeContentTransferStore : IDisposable
 {
     internal const long MaxPackageUploadBytes = 512L * 1024 * 1024;
     internal const long MaxStackUploadBytes = 256L * 1024 * 1024;
     internal const long MaxMediaUploadBytes = 64L * 1024 * 1024;
 
-    private static readonly TimeSpan HandleLifetime = TimeSpan.FromMinutes(30);
+    private readonly RuntimePackagePaths _paths;
+    private readonly RuntimeTransportPolicyOptions _policy;
+    private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, UploadEntry> _uploads = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DownloadEntry> _downloads = new(StringComparer.Ordinal);
+
+    public RuntimeContentTransferStore(
+        RuntimePackagePaths paths,
+        RuntimeTransportPolicyOptions? policy = null,
+        TimeProvider? timeProvider = null)
+    {
+        _paths = paths;
+        _policy = policy ?? new RuntimeTransportPolicyOptions();
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async Task<ContentUploadDescriptor> CreateUploadAsync(
         RuntimeUploadKind kind,
@@ -52,16 +64,16 @@ internal sealed class RuntimeContentTransferStore(RuntimePackagePaths paths) : I
             throw new RuntimeUploadLimitException($"Upload exceeds the {limit} byte limit.");
         }
 
-        Directory.CreateDirectory(paths.TransferRootPath);
+        Directory.CreateDirectory(_paths.TransferRootPath);
         var uploadId = Guid.NewGuid().ToString("N");
-        var partialPath = Path.Combine(paths.TransferRootPath, uploadId + ".partial");
+        var partialPath = Path.Combine(_paths.TransferRootPath, uploadId + ".partial");
         var extension = kind switch
         {
             RuntimeUploadKind.Package => ".sunderpkg",
             RuntimeUploadKind.Stack => ".sunderstack",
             _ => ".media",
         };
-        var finalPath = Path.Combine(paths.TransferRootPath, uploadId + extension);
+        var finalPath = Path.Combine(_paths.TransferRootPath, uploadId + extension);
         var normalizedFileName = NormalizeFileName(fileName, kind == RuntimeUploadKind.Package ? "package.sunderpkg" : "content.bin");
         var normalizedContentType = NormalizeContentType(contentType);
         long length = 0;
@@ -106,7 +118,7 @@ internal sealed class RuntimeContentTransferStore(RuntimePackagePaths paths) : I
             }
 
             File.Move(partialPath, finalPath);
-            var entry = new UploadEntry(kind, finalPath, contentHash, length, normalizedFileName, normalizedContentType, generation, DateTimeOffset.UtcNow);
+            var entry = new UploadEntry(kind, finalPath, contentHash, length, normalizedFileName, normalizedContentType, generation, _timeProvider.GetUtcNow());
             if (!_uploads.TryAdd(uploadId, entry))
             {
                 throw new IOException("Failed to allocate an upload handle.");
@@ -128,19 +140,25 @@ internal sealed class RuntimeContentTransferStore(RuntimePackagePaths paths) : I
 
     public RuntimeUploadLease? AcquireUpload(string uploadId, RuntimeUploadKind kind, long generation, bool consume)
     {
-        CleanupExpired();
-        if (!_uploads.TryGetValue(uploadId, out var entry)
-            || entry.Kind != kind
+        SweepExpired(_timeProvider.GetUtcNow());
+        UploadEntry? entry;
+        var acquired = consume
+            ? _uploads.TryRemove(uploadId, out entry)
+            : _uploads.TryGetValue(uploadId, out entry);
+        if (!acquired || entry is null)
+        {
+            return null;
+        }
+        if (entry.Kind != kind
             || entry.Generation != generation
             || !File.Exists(entry.FilePath))
         {
-            RemoveUpload(uploadId);
+            if (!consume)
+            {
+                _uploads.TryRemove(new KeyValuePair<string, UploadEntry>(uploadId, entry));
+            }
+            TryDeleteFile(entry.FilePath);
             return null;
-        }
-
-        if (consume)
-        {
-            _uploads.TryRemove(uploadId, out _);
         }
 
         return new RuntimeUploadLease(uploadId, entry.FilePath, entry.ContentHash, entry.Length, entry.FileName, entry.ContentType);
@@ -159,14 +177,14 @@ internal sealed class RuntimeContentTransferStore(RuntimePackagePaths paths) : I
         long generation)
     {
         var id = Guid.NewGuid().ToString("N");
-        var entry = new DownloadEntry(filePath, contentHash, length, NormalizeFileName(fileName, "download.bin"), NormalizeContentType(contentType), generation, DateTimeOffset.UtcNow);
+        var entry = new DownloadEntry(filePath, contentHash, length, NormalizeFileName(fileName, "download.bin"), NormalizeContentType(contentType), generation, _timeProvider.GetUtcNow());
         _downloads[id] = entry;
         return new ContentDownloadDescriptor(id, contentHash, length, entry.FileName, entry.ContentType, $"downloads/{id}");
     }
 
     public RuntimeUploadLease? AcquireDownload(string downloadId, long generation)
     {
-        CleanupExpired();
+        SweepExpired(_timeProvider.GetUtcNow());
         if (!_downloads.TryRemove(downloadId, out var entry)
             || entry.Generation != generation
             || !File.Exists(entry.FilePath))
@@ -194,9 +212,9 @@ internal sealed class RuntimeContentTransferStore(RuntimePackagePaths paths) : I
         _downloads.Clear();
     }
 
-    private void CleanupExpired()
+    internal void SweepExpired(DateTimeOffset now)
     {
-        var cutoff = DateTimeOffset.UtcNow - HandleLifetime;
+        var cutoff = now - _policy.ContentTransferLifetime;
         foreach (var (id, entry) in _uploads)
         {
             if (entry.CreatedAtUtc < cutoff)

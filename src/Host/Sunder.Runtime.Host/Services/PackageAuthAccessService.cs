@@ -4,24 +4,39 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageAuthAccessService(RuntimeSessionOwner sessions)
 {
-    public Task<PackageAuthStatusResponse?> GetStatusAsync(string packageId, CancellationToken cancellationToken = default)
-        => sessions.Auth.GetPackageAuthStatusAsync(packageId, cancellationToken);
+    public async Task<PackageAuthStatusResponse?> GetStatusAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        using var lease = sessions.State.AcquireLease();
+        return await sessions.Auth.GetPackageAuthStatusAsync(lease, packageId, cancellationToken);
+    }
 
-    public Task<PackageAuthSessionStartResponse?> StartAsync(
+    public async Task<PackageAuthSessionStartResponse?> StartAsync(
         string packageId,
-        PackageAuthCallbackServer callbackServer,
+        PackageCallbackServer callbackServer,
         CancellationToken cancellationToken = default)
-        => sessions.Auth.StartPackageAuthAsync(packageId, callbackServer, cancellationToken);
+    {
+        using var lease = sessions.State.AcquireLease();
+        return await sessions.Auth.StartPackageAuthAsync(lease, packageId, callbackServer, cancellationToken);
+    }
 
     public PackageAuthSessionStatusResponse? GetSessionStatus(string packageId, string authSessionId)
-        => sessions.Auth.GetPackageAuthSessionStatus(packageId, authSessionId);
+    {
+        using var lease = sessions.State.AcquireLease();
+        return sessions.Auth.GetPackageAuthSessionStatus(lease, packageId, authSessionId);
+    }
 
-    public Task<bool> CompleteAsync(
+    public async Task<bool> CompleteAsync(
         string authSessionId,
         IReadOnlyDictionary<string, string?> queryValues,
         CancellationToken cancellationToken = default)
-        => sessions.Auth.CompletePackageAuthSessionAsync(authSessionId, queryValues, cancellationToken);
+    {
+        using var lease = sessions.State.AcquireLease();
+        return await sessions.Auth.CompletePackageAuthSessionAsync(lease, authSessionId, queryValues, cancellationToken);
+    }
 
-    public Task<PackageAuthStatusResponse?> DisconnectAsync(string packageId, CancellationToken cancellationToken = default)
-        => sessions.Auth.DisconnectPackageAsync(packageId, cancellationToken);
+    public async Task<PackageAuthStatusResponse?> DisconnectAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        using var lease = sessions.State.AcquireLease();
+        return await sessions.Auth.DisconnectPackageAsync(lease, packageId, cancellationToken);
+    }
 }

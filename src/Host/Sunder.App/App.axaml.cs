@@ -15,10 +15,17 @@ public partial class App : Application
 {
     private PackageViewHostService _packageViewHostService = PackageViewHostService.Empty;
     private readonly AppPackageResourceAssemblyRegistry _packageResourceAssemblyRegistry = new();
+    private readonly OwnedTaskObserver _tasks = new("Sunder application");
+    private readonly AppShutdownCoordinator _shutdown;
     private ServiceProvider? _serviceProvider;
     private WindowLauncher? _windowLauncher;
     private RuntimeEventSubscriptionService? _runtimeEventSubscription;
     private AboutSunderWindow? _aboutSunderWindow;
+
+    public App()
+    {
+        _shutdown = new AppShutdownCoordinator(_tasks);
+    }
 
     public override void Initialize()
     {
@@ -43,23 +50,29 @@ public partial class App : Application
             var loadingViewModel = new LoadingWindowViewModel();
             var loadingWindow = new LoadingWindow { DataContext = loadingViewModel };
 
-            loadingWindow.Opened += async (_, _) =>
-            {
-                try
-                {
-                    await CompleteStartupAsync(desktop, loadingWindow, loadingViewModel);
-                }
-                catch (Exception ex)
-                {
-                    AppSessionLog.WriteError("Sunder startup failed.", ex);
-                    loadingViewModel.StatusMessage =
-                        "Startup failed. Check the Sunder app log for details.";
-                }
-            };
+            loadingWindow.Opened += (_, _) => _tasks.Run(
+                _ => CompleteStartupSafelyAsync(desktop, loadingWindow, loadingViewModel),
+                "completing startup");
             desktop.MainWindow = loadingWindow;
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private async Task CompleteStartupSafelyAsync(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        LoadingWindow loadingWindow,
+        LoadingWindowViewModel loadingViewModel)
+    {
+        try
+        {
+            await CompleteStartupAsync(desktop, loadingWindow, loadingViewModel);
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Sunder startup failed.", ex);
+            loadingViewModel.StatusMessage = "Startup failed. Check the Sunder app log for details.";
+        }
     }
 
     private async Task CompleteStartupAsync(
@@ -93,9 +106,9 @@ public partial class App : Application
             }
         }
 
-        _ = ActivateDeferredInitialHostedViewsAsync(mainWindowViewModel);
+        _tasks.Run(_ => ActivateDeferredInitialHostedViewsAsync(mainWindowViewModel), "activating initial package views");
         Program.SingleInstanceCoordinator?.SetLaunchRequestHandler(HandleForwardedLaunchRequestAsync);
-        _ = HandleInitialLaunchRequestAsync(Program.StartupOptions.LaunchRequest);
+        _tasks.Run(_ => HandleInitialLaunchRequestAsync(Program.StartupOptions.LaunchRequest), "handling the initial launch request");
     }
 
     private static async Task ShowMainWindowWhenReadyAsync(MainWindow mainWindow)
@@ -237,6 +250,9 @@ public partial class App : Application
     }
 
     private async void OnDesktopExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
+        => await _shutdown.ShutdownAsync(ShutdownCoreAsync);
+
+    private async Task ShutdownCoreAsync()
     {
         var windowLauncher = _windowLauncher;
         _windowLauncher = null;
@@ -244,7 +260,14 @@ public partial class App : Application
         _runtimeEventSubscription = null;
         if (runtimeEventSubscription is not null)
         {
-            await runtimeEventSubscription.DisposeAsync();
+            try
+            {
+                await runtimeEventSubscription.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to stop Runtime event subscription during shutdown.", ex);
+            }
         }
 
         if (windowLauncher is not null)
@@ -258,10 +281,24 @@ public partial class App : Application
                 AppSessionLog.WriteError("Failed to cancel background processes during shutdown.", ex);
             }
 
-            windowLauncher.CloseForShutdown();
+            try
+            {
+                windowLauncher.CloseForShutdown();
+            }
+            catch (Exception ex)
+            {
+                AppSessionLog.WriteError("Failed to close app windows during shutdown.", ex);
+            }
         }
 
-        _aboutSunderWindow?.Close();
+        try
+        {
+            _aboutSunderWindow?.Close();
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to close the About window during shutdown.", ex);
+        }
         _aboutSunderWindow = null;
 
         var hostService = _packageViewHostService;
@@ -290,7 +327,15 @@ public partial class App : Application
             }
         }
 
-        Program.SingleInstanceCoordinator?.Dispose();
+        try
+        {
+            Program.SingleInstanceCoordinator?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to dispose single-instance coordination during shutdown.", ex);
+        }
+        _tasks.Dispose();
 
         try
         {

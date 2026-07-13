@@ -6,9 +6,9 @@ internal static class SettingsPackageConfigurationFormFactory
 {
     public static IReadOnlyList<SettingsFieldSectionViewModel> Create(
         PackageConfigurationSchemaDescriptor schema,
-        PackageConfigurationValuesResponse? values)
+        PackageSettingsValuesResponse? values)
     {
-        var valueMap = values?.Values ?? new Dictionary<string, string?>();
+        var valueMap = values?.StoredValues ?? new Dictionary<string, string?>();
         var storedSecretKeys = values?.StoredSecretKeys ?? [];
 
         return schema.Sections

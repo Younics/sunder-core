@@ -1,14 +1,17 @@
 using Sunder.Package.Format;
 using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal static class SunderSdkCompatibilityProfile
 {
+    private const string SupportedSdkRange = ">=1.1.0 <1.2.0";
     private static readonly HashSet<int> SupportedApiVersions = [SunderSdkApiVersions.V1];
 
     private static readonly HashSet<string> SupportedCapabilities = new(StringComparer.Ordinal)
     {
+        SunderSdkCapabilities.Baseline11V1,
         SunderSdkCapabilities.CoreV1,
         SunderSdkCapabilities.PackagingV1,
         SunderSdkCapabilities.ContributionsV1,
@@ -21,14 +24,16 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ExtensionsV1,
         SunderSdkCapabilities.ExtensionChangesV1,
         SunderSdkCapabilities.ConfigurationSchemaV1,
-        SunderSdkCapabilities.ConfigurationValuesV1,
+        SunderSdkCapabilities.SettingsV1,
         SunderSdkCapabilities.StorageV1,
-        SunderSdkCapabilities.LocalWorkspaceV1,
+        SunderSdkCapabilities.RoleLocalWorkspaceV1,
         SunderSdkCapabilities.SecretsV1,
         SunderSdkCapabilities.LoggingV1,
         SunderSdkCapabilities.NotificationsV1,
         SunderSdkCapabilities.ShellViewV1,
-        SunderSdkCapabilities.PackageSessionsV1,
+        SunderSdkCapabilities.InstalledPackageSessionsV1,
+        SunderSdkCapabilities.DevelopmentPackageSessionsV1,
+        SunderSdkCapabilities.RuntimeOperationsV1,
         SunderSdkCapabilities.StacksV1,
         SunderSdkCapabilities.StackContributionsV1,
         SunderSdkCapabilities.CallbacksV1,
@@ -36,25 +41,19 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ThemingV1,
     };
 
-    public static IReadOnlyList<string> Validate(RuntimePackageManifest manifest)
-    {
-        return Validate(
-            manifest.Id,
-            manifest.SdkApiVersion,
-            manifest.RequiredSdkCapabilities);
-    }
-
     public static IReadOnlyList<string> Validate(SunderPackageManifest manifest)
     {
         return Validate(
             manifest.Id,
             manifest.SdkApiVersion,
+            manifest.SdkPackageVersion,
             manifest.RequiredSdkCapabilities);
     }
 
     private static IReadOnlyList<string> Validate(
         string? packageId,
         int? requiredSdkApiVersion,
+        string? sdkPackageVersion,
         IReadOnlyList<string>? requiredSdkCapabilities)
     {
         var errors = new List<string>();
@@ -66,6 +65,17 @@ internal static class SunderSdkCompatibilityProfile
         else if (!SupportedApiVersions.Contains(requiredSdkApiVersion.Value))
         {
             errors.Add($"Package '{packageLabel}' requires SDK API version {requiredSdkApiVersion}, but this Sunder Host supports {string.Join(", ", SupportedApiVersions.Order())}.");
+        }
+
+        if (!SemanticVersion.TryParse(sdkPackageVersion, out _)
+            || !PackageVersionRange.IsSatisfiedBy(sdkPackageVersion!, SupportedSdkRange))
+        {
+            errors.Add($"Package '{packageLabel}' was built with Sunder.Sdk '{sdkPackageVersion ?? "unknown"}', but this Host requires {SupportedSdkRange}. Rebuild all packages against the coordinated Sunder 1.1 SDK; 1.0 and 1.1 packages cannot be mixed.");
+        }
+
+        if (requiredSdkCapabilities?.Contains(SunderSdkCapabilities.Baseline11V1, StringComparer.Ordinal) != true)
+        {
+            errors.Add($"Package '{packageLabel}' does not declare the Sunder SDK 1.1 baseline capability '{SunderSdkCapabilities.Baseline11V1}'. Rebuild it with Sunder.Package.Build 1.1.x.");
         }
 
         foreach (var capability in requiredSdkCapabilities ?? [])

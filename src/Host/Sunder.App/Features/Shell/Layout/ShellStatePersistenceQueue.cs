@@ -1,35 +1,57 @@
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
 
 namespace Sunder.App.Features.Shell.Layout;
 
-internal sealed class ShellStatePersistenceQueue(
-    ShellStateService shellStateService,
-    Func<ShellState> createSnapshot,
-    TimeSpan saveDelay) : IDisposable
+internal sealed class ShellStatePersistenceQueue : IDisposable
 {
+    private readonly ShellStateService _shellStateService;
+    private readonly ShellState _liveState;
+    private readonly Func<CancellationToken, Task> _waitToSave;
     private readonly OwnedTaskObserver _tasks = new(nameof(ShellStatePersistenceQueue));
     private CancellationTokenSource? _pendingSaveCts;
     private bool _disposed;
 
-    public void QueueSave()
+    public ShellStatePersistenceQueue(
+        ShellStateService shellStateService,
+        ShellState liveState,
+        TimeSpan saveDelay)
+        : this(shellStateService, liveState, cancellationToken => Task.Delay(saveDelay, cancellationToken))
+    {
+    }
+
+    internal ShellStatePersistenceQueue(
+        ShellStateService shellStateService,
+        ShellState liveState,
+        Func<CancellationToken, Task> waitToSave)
+    {
+        _shellStateService = shellStateService;
+        _liveState = liveState;
+        _waitToSave = waitToSave;
+    }
+
+    public Task QueueSave()
     {
         if (_disposed)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         CancelPendingSave();
         var cancellationTokenSource = new CancellationTokenSource();
         _pendingSaveCts = cancellationTokenSource;
-        var snapshot = createSnapshot();
-        _tasks.Observe(SaveAfterDelayAsync(snapshot, cancellationTokenSource), "persisting shell state");
+        var saveTask = SaveAfterDelayAsync(cancellationTokenSource);
+        _tasks.Observe(saveTask, "persisting shell state");
+        return saveTask;
     }
 
     public void SaveImmediately()
     {
         CancelPendingSave();
-        shellStateService.Save(createSnapshot());
+        var snapshot = ShellStateSnapshotFactory.Clone(_liveState);
+        var revision = _shellStateService.SaveWithRevision(snapshot);
+        _liveState.Revision = Math.Max(_liveState.Revision, revision);
     }
 
     public void Dispose()
@@ -39,12 +61,14 @@ internal sealed class ShellStatePersistenceQueue(
         _tasks.Dispose();
     }
 
-    private async Task SaveAfterDelayAsync(ShellState snapshot, CancellationTokenSource cancellationTokenSource)
+    private async Task SaveAfterDelayAsync(CancellationTokenSource cancellationTokenSource)
     {
         try
         {
-            await Task.Delay(saveDelay, cancellationTokenSource.Token);
-            await shellStateService.SaveAsync(snapshot, cancellationTokenSource.Token);
+            await _waitToSave(cancellationTokenSource.Token);
+            var snapshot = ShellStateSnapshotFactory.Clone(_liveState);
+            var revision = await _shellStateService.SaveWithRevisionAsync(snapshot, cancellationTokenSource.Token);
+            _liveState.Revision = Math.Max(_liveState.Revision, revision);
         }
         catch (OperationCanceledException) when (cancellationTokenSource.IsCancellationRequested)
         {

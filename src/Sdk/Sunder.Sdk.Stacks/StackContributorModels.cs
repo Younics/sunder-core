@@ -267,7 +267,7 @@ public sealed record StackImportConflict(
 /// <param name="Fragments">Validated immutable fragments and temporary payload files.</param>
 /// <param name="InputValues">Resolved inputs keyed by input id.</param>
 /// <param name="IdRemaps">Approved source-to-target identity mappings.</param>
-/// <param name="SelectedActionIds">Action ids selected from the latest preview.</param>
+/// <param name="SelectedActionIds">Action ids selected from the host-owned import plan created by preview.</param>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackImportRequest(
     IReadOnlyList<StackFragmentImport> Fragments,
@@ -275,19 +275,31 @@ public sealed record StackImportRequest(
     IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> SelectedActionIds);
 
-/// <summary>Reports committed import effects and diagnostics.</summary>
-/// <param name="Success">Whether all required selected actions completed.</param>
+/// <summary>Reports committed import effects and diagnostics for this contributor. A failed result may follow successful mutations and must describe them in <paramref name="ImportedItems"/> because the host cannot provide cross-contributor rollback.</summary>
+/// <param name="Outcome">Whether the contributor completed, partially applied, or failed.</param>
 /// <param name="ImportedItems">Items created, updated, replaced, or reused.</param>
 /// <param name="IdRemaps">Final source-to-target identity mappings.</param>
 /// <param name="Warnings">Nonfatal diagnostics.</param>
 /// <param name="Errors">Failure diagnostics; empty on successful import.</param>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackImportResult(
-    bool Success,
+    StackImportOutcome Outcome,
     IReadOnlyList<StackImportedItem> ImportedItems,
     IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors);
+
+/// <summary>Describes the committed outcome of one contributor import.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+public enum StackImportOutcome
+{
+    /// <summary>All selected contributor actions completed.</summary>
+    Completed,
+    /// <summary>Some selected actions committed and some did not complete.</summary>
+    Partial,
+    /// <summary>No selected contributor actions completed.</summary>
+    Failed,
+}
 
 /// <summary>Identifies one logical item affected by import.</summary>
 /// <param name="ItemId">Final target item id.</param>

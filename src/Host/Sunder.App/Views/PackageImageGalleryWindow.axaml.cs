@@ -1,12 +1,14 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Sunder.App.Services;
 using Sunder.App.ViewModels;
 
 namespace Sunder.App.Views;
 
 public partial class PackageImageGalleryWindow : Window
 {
+    private readonly OwnedTaskObserver _tasks = new("Package image gallery");
     private readonly IReadOnlyList<RegistryPackageMediaItemViewModel> _media;
     private int _selectedIndex;
 
@@ -14,6 +16,7 @@ public partial class PackageImageGalleryWindow : Window
     {
         InitializeComponent();
         _media = [];
+        Closed += (_, _) => _tasks.Dispose();
     }
 
     public PackageImageGalleryWindow(
@@ -25,14 +28,14 @@ public partial class PackageImageGalleryWindow : Window
         _selectedIndex = Math.Clamp(selectedIndex, 0, Math.Max(0, media.Count - 1));
     }
 
-    protected override async void OnOpened(EventArgs e)
+    protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
         WindowState = WindowState.Maximized;
-        await ShowSelectedImageAsync();
+        _tasks.Run(_ => ShowSelectedImageAsync(), "showing the selected image");
     }
 
-    protected override async void OnKeyDown(KeyEventArgs e)
+    protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
         switch (e.Key)
@@ -42,11 +45,11 @@ public partial class PackageImageGalleryWindow : Window
                 e.Handled = true;
                 break;
             case Key.Left:
-                await ShowPreviousImageAsync();
+                _tasks.Run(_ => ShowPreviousImageAsync(), "showing the previous image");
                 e.Handled = true;
                 break;
             case Key.Right:
-                await ShowNextImageAsync();
+                _tasks.Run(_ => ShowNextImageAsync(), "showing the next image");
                 e.Handled = true;
                 break;
         }
@@ -58,9 +61,11 @@ public partial class PackageImageGalleryWindow : Window
 
     private void CloseButton_OnClick(object? sender, RoutedEventArgs e) => Close();
 
-    private async void PreviousButton_OnClick(object? sender, RoutedEventArgs e) => await ShowPreviousImageAsync();
+    private void PreviousButton_OnClick(object? sender, RoutedEventArgs e)
+        => _tasks.Run(_ => ShowPreviousImageAsync(), "showing the previous image");
 
-    private async void NextButton_OnClick(object? sender, RoutedEventArgs e) => await ShowNextImageAsync();
+    private void NextButton_OnClick(object? sender, RoutedEventArgs e)
+        => _tasks.Run(_ => ShowNextImageAsync(), "showing the next image");
 
     private async Task ShowPreviousImageAsync()
     {

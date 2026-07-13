@@ -2,7 +2,7 @@ namespace Sunder.Cli;
 
 internal sealed class DeveloperPublishCommandHandler(
     ICliRuntimeClient runtime,
-    IRegistryClient registry,
+    IRegistryManageClient registry,
     ArchiveValidationService archives,
     CliOutput output,
     ICliProgress progress,

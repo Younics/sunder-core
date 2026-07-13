@@ -16,7 +16,7 @@ public enum CreateStackWizardStep
 
 public sealed partial class CreateStackWizardViewModel(
     LocalStackLibraryService library,
-    IRuntimeApiClient runtimeApiClient,
+    IRuntimeStacksClient runtimeApiClient,
     CreateStackWizardEditContext? editContext = null) : ViewModelBase, IDisposable
 {
     private readonly CreateStackWizardEditContext? _editContext = editContext;

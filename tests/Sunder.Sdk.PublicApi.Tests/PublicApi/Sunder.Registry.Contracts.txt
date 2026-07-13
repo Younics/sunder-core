@@ -1,0 +1,991 @@
+type sealed class Sunder.Registry.Contracts.RegistryAddPackageMaintainerRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryAddPackageMaintainerRequest>
+  method .ctor(System.String UserId)
+  property System.String UserId { get; set; }
+  method Sunder.Registry.Contracts.RegistryAddPackageMaintainerRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryAddPackageMaintainerRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String UserId)
+type sealed class Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest>
+  method .ctor(System.String UserId)
+  property System.String UserId { get; set; }
+  method Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String UserId)
+type sealed class Sunder.Registry.Contracts.RegistryCliAuthorizeRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryCliAuthorizeRequest>
+  method .ctor(System.String RedirectUri, System.String State, System.String CodeChallenge, System.String? DisplayName = null)
+  property System.String CodeChallenge { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.String RedirectUri { get; set; }
+  property System.String State { get; set; }
+  method Sunder.Registry.Contracts.RegistryCliAuthorizeRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryCliAuthorizeRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String RedirectUri, out System.String State, out System.String CodeChallenge, out System.String? DisplayName)
+type sealed class Sunder.Registry.Contracts.RegistryCliAuthorizeResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCliAuthorizeResponse>
+  method .ctor(System.String RedirectUri, System.String Code, System.String State)
+  property System.String Code { get; set; }
+  property System.String RedirectUri { get; set; }
+  property System.String State { get; set; }
+  method Sunder.Registry.Contracts.RegistryCliAuthorizeResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryCliAuthorizeResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String RedirectUri, out System.String Code, out System.String State)
+type sealed class Sunder.Registry.Contracts.RegistryCliTokenRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryCliTokenRequest>
+  method .ctor(System.String Code, System.String CodeVerifier)
+  property System.String Code { get; set; }
+  property System.String CodeVerifier { get; set; }
+  method Sunder.Registry.Contracts.RegistryCliTokenRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryCliTokenRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Code, out System.String CodeVerifier)
+type sealed class Sunder.Registry.Contracts.RegistryCliTokenResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCliTokenResponse>
+  method .ctor(System.Boolean Success, System.String? Token, System.String? UserId, System.DateTimeOffset? ExpiresAtUtc, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.DateTimeOffset? ExpiresAtUtc { get; set; }
+  property System.Boolean Success { get; set; }
+  property System.String? Token { get; set; }
+  property System.String? UserId { get; set; }
+  method Sunder.Registry.Contracts.RegistryCliTokenResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryCliTokenResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Token, out System.String? UserId, out System.DateTimeOffset? ExpiresAtUtc, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryCurrentUserResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCurrentUserResponse>
+  method .ctor(System.String UserId, System.String? DisplayName, System.String? Email, System.String? Username = null, System.String? AvatarUrl = null, System.Boolean RequiresUsername = false)
+  property System.String? AvatarUrl { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.String? Email { get; set; }
+  property System.Boolean RequiresUsername { get; set; }
+  property System.String UserId { get; set; }
+  property System.String? Username { get; set; }
+  method Sunder.Registry.Contracts.RegistryCurrentUserResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryCurrentUserResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String UserId, out System.String? DisplayName, out System.String? Email, out System.String? Username, out System.String? AvatarUrl, out System.Boolean RequiresUsername)
+type sealed class Sunder.Registry.Contracts.RegistryDeprecatePackageVersionRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryDeprecatePackageVersionRequest>
+  method .ctor(System.String? Message)
+  property System.String? Message { get; set; }
+  method Sunder.Registry.Contracts.RegistryDeprecatePackageVersionRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryDeprecatePackageVersionRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String? Message)
+type sealed class Sunder.Registry.Contracts.RegistryInstalledPackage : System.IEquatable<Sunder.Registry.Contracts.RegistryInstalledPackage>
+  method .ctor(System.String PackageId, System.String Version)
+  property System.String PackageId { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryInstalledPackage <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryInstalledPackage? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Version)
+type sealed class Sunder.Registry.Contracts.RegistryInstalledPackageState : System.IEquatable<Sunder.Registry.Contracts.RegistryInstalledPackageState>
+  method .ctor(System.String PackageId, System.String Version, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryInstalledPackageState <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryInstalledPackageState? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Version, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn)
+type sealed class Sunder.Registry.Contracts.RegistryPackageArtifact : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageArtifact>
+  method .ctor(System.String Sha256, System.Int64? Size, System.String DownloadUrl)
+  property System.String DownloadUrl { get; set; }
+  property System.String Sha256 { get; set; }
+  property System.Int64? Size { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageArtifact <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageArtifact? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Sha256, out System.Int64? Size, out System.String DownloadUrl)
+type sealed class Sunder.Registry.Contracts.RegistryPackageChangeRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageChangeRequest>
+  method .ctor(System.String PackageId, System.String? Version, System.String? Tag = null)
+  property System.String PackageId { get; set; }
+  property System.String? Tag { get; set; }
+  property System.String? Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageChangeRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageChangeRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag)
+type sealed class Sunder.Registry.Contracts.RegistryPackageCompatibility : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageCompatibility>
+  method .ctor(System.Int32 SdkApiVersion, System.String SdkPackageVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredCapabilities, System.String? TargetFramework, System.Int32 ManifestFormatVersion, System.Int32 ArchiveFormatVersion)
+  property System.Int32 ArchiveFormatVersion { get; set; }
+  property System.Int32 ManifestFormatVersion { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> RequiredCapabilities { get; set; }
+  property System.Int32 SdkApiVersion { get; set; }
+  property System.String SdkPackageVersion { get; set; }
+  property System.String? TargetFramework { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageCompatibility <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageCompatibility? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Int32 SdkApiVersion, out System.String SdkPackageVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredCapabilities, out System.String? TargetFramework, out System.Int32 ManifestFormatVersion, out System.Int32 ArchiveFormatVersion)
+type sealed class Sunder.Registry.Contracts.RegistryPackageDependency : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDependency>
+  method .ctor(System.String PackageId, System.String VersionRange)
+  property System.String PackageId { get; set; }
+  property System.String VersionRange { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageDependency <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDependency? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String VersionRange)
+type sealed class Sunder.Registry.Contracts.RegistryPackageDependent : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDependent>
+  method .ctor(System.String PackageId, System.String Name, System.String VersionRange)
+  property System.String Name { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String VersionRange { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageDependent <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDependent? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String VersionRange)
+type sealed class Sunder.Registry.Contracts.RegistryPackageDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDetails>
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null, Sunder.Registry.Contracts.RegistryPackageStats? Stats = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers = null)
+  property System.DateTimeOffset CreatedAtUtc { get; set; }
+  property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents { get; set; }
+  property System.String? IconUrl { get; set; }
+  property System.String? LatestVersion { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers { get; set; }
+  property System.String Name { get; set; }
+  property System.String PackageId { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageStats? Stats { get; set; }
+  property System.String? Summary { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageDetails <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDetails? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile, out Sunder.Registry.Contracts.RegistryPackageStats? Stats, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers)
+type sealed class Sunder.Registry.Contracts.RegistryPackageDistTag : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDistTag>
+  method .ctor(System.String Tag, System.String Version, System.DateTimeOffset UpdatedAtUtc)
+  property System.String Tag { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageDistTag <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDistTag? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Tag, out System.String Version, out System.DateTimeOffset UpdatedAtUtc)
+type sealed class Sunder.Registry.Contracts.RegistryPackageDistTagsResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDistTagsResponse>
+  method .ctor(System.String PackageId, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags { get; set; }
+  property System.String PackageId { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageDistTagsResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDistTagsResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags)
+type sealed class Sunder.Registry.Contracts.RegistryPackageDownloadPoint : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDownloadPoint>
+  method .ctor(System.DateOnly Date, System.Int64 Count)
+  property System.Int64 Count { get; set; }
+  property System.DateOnly Date { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageDownloadPoint <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDownloadPoint? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.DateOnly Date, out System.Int64 Count)
+type sealed class Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict>
+  method .ctor(System.String PackageId, System.String? CurrentVersion, System.String? RequestedVersionRange, System.String? RequiredByPackageId, System.String Message)
+  property System.String? CurrentVersion { get; set; }
+  property System.String Message { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String? RequestedVersionRange { get; set; }
+  property System.String? RequiredByPackageId { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? CurrentVersion, out System.String? RequestedVersionRange, out System.String? RequiredByPackageId, out System.String Message)
+type sealed class Sunder.Registry.Contracts.RegistryPackageInstallPlanItem : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageInstallPlanItem>
+  method .ctor(System.String PackageId, System.String? CurrentVersion, System.String Version, System.Boolean IsUpdate, System.String? DeprecatedMessage, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn, Sunder.Registry.Contracts.RegistryPackageArtifact Artifact, Sunder.Registry.Contracts.RegistryPackageCompatibility? Compatibility = null)
+  property Sunder.Registry.Contracts.RegistryPackageArtifact Artifact { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageCompatibility? Compatibility { get; set; }
+  property System.String? CurrentVersion { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn { get; set; }
+  property System.String? DeprecatedMessage { get; set; }
+  property System.Boolean IsUpdate { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageInstallPlanItem <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageInstallPlanItem? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? CurrentVersion, out System.String Version, out System.Boolean IsUpdate, out System.String? DeprecatedMessage, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn, out Sunder.Registry.Contracts.RegistryPackageArtifact Artifact, out Sunder.Registry.Contracts.RegistryPackageCompatibility? Compatibility)
+type sealed class Sunder.Registry.Contracts.RegistryPackageMaintainer : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageMaintainer>
+  method .ctor(System.String UserId, System.Boolean IsOwner, System.DateTimeOffset AddedAtUtc, System.String? Username = null, System.String? DisplayName = null, System.String? Email = null, System.String? AvatarUrl = null)
+  property System.DateTimeOffset AddedAtUtc { get; set; }
+  property System.String? AvatarUrl { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.String? Email { get; set; }
+  property System.Boolean IsOwner { get; set; }
+  property System.String UserId { get; set; }
+  property System.String? Username { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageMaintainer <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageMaintainer? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String UserId, out System.Boolean IsOwner, out System.DateTimeOffset AddedAtUtc, out System.String? Username, out System.String? DisplayName, out System.String? Email, out System.String? AvatarUrl)
+type sealed class Sunder.Registry.Contracts.RegistryPackageMaintainerOperationResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageMaintainerOperationResponse>
+  method .ctor(System.Boolean Success, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageMaintainerOperationResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageMaintainerOperationResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryPackageMaintainersResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageMaintainersResponse>
+  method .ctor(System.String PackageId, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers { get; set; }
+  property System.String PackageId { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageMaintainersResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageMaintainersResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers)
+type sealed class Sunder.Registry.Contracts.RegistryPackageManagementOperationResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageManagementOperationResponse>
+  method .ctor(System.Boolean Success, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageManagementOperationResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageManagementOperationResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryPackageMedia : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageMedia>
+  method .ctor(System.Guid MediaId, System.String FileName, System.String ContentType, System.Int64 Size, System.String? AltText, System.Int32 SortOrder, System.String Url)
+  property System.String? AltText { get; set; }
+  property System.String ContentType { get; set; }
+  property System.String FileName { get; set; }
+  property System.Guid MediaId { get; set; }
+  property System.Int64 Size { get; set; }
+  property System.Int32 SortOrder { get; set; }
+  property System.String Url { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageMedia <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageMedia? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Guid MediaId, out System.String FileName, out System.String ContentType, out System.Int64 Size, out System.String? AltText, out System.Int32 SortOrder, out System.String Url)
+type sealed class Sunder.Registry.Contracts.RegistryPackageProfile : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageProfile>
+  method .ctor(System.String PackageId, System.String? ShortDescription, System.String? ReadmeMarkdown, System.String? WebsiteUrl, System.String? SourceUrl, System.String? IssueTrackerUrl, System.String? License, System.Collections.Generic.IReadOnlyList<System.String> Tags, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMedia> Media, System.DateTimeOffset? UpdatedAtUtc)
+  property System.String? IssueTrackerUrl { get; set; }
+  property System.String? License { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMedia> Media { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String? ReadmeMarkdown { get; set; }
+  property System.String? ShortDescription { get; set; }
+  property System.String? SourceUrl { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Tags { get; set; }
+  property System.DateTimeOffset? UpdatedAtUtc { get; set; }
+  property System.String? WebsiteUrl { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageProfile <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageProfile? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? ShortDescription, out System.String? ReadmeMarkdown, out System.String? WebsiteUrl, out System.String? SourceUrl, out System.String? IssueTrackerUrl, out System.String? License, out System.Collections.Generic.IReadOnlyList<System.String> Tags, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMedia> Media, out System.DateTimeOffset? UpdatedAtUtc)
+type sealed class Sunder.Registry.Contracts.RegistryPackageProfileOperationResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageProfileOperationResponse>
+  method .ctor(System.Boolean Success, System.String? Message, Sunder.Registry.Contracts.RegistryPackageProfile? Profile, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageProfileOperationResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageProfileOperationResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryPackageResolveResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageResolveResponse>
+  method .ctor(System.String PackageId, System.String Version, System.String? DeprecatedMessage, Sunder.Registry.Contracts.RegistryPackageArtifact Artifact)
+  property Sunder.Registry.Contracts.RegistryPackageArtifact Artifact { get; set; }
+  property System.String? DeprecatedMessage { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageResolveResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageResolveResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Version, out System.String? DeprecatedMessage, out Sunder.Registry.Contracts.RegistryPackageArtifact Artifact)
+type sealed class Sunder.Registry.Contracts.RegistryPackageSearchResult : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageSearchResult>
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageSummary> Items, System.Int32 TotalCount, System.Int32 Skip, System.Int32 Take)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageSummary> Items { get; set; }
+  property System.Int32 Skip { get; set; }
+  property System.Int32 Take { get; set; }
+  property System.Int32 TotalCount { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageSearchResult <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageSearchResult? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageSummary> Items, out System.Int32 TotalCount, out System.Int32 Skip, out System.Int32 Take)
+type sealed class Sunder.Registry.Contracts.RegistryPackageStarResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageStarResponse>
+  method .ctor(System.Boolean Success, System.String? Message, Sunder.Registry.Contracts.RegistryPackageStats? Stats, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageStats? Stats { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageStarResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageStarResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out Sunder.Registry.Contracts.RegistryPackageStats? Stats, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryPackageStats : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageStats>
+  method .ctor(System.Int64 TotalDownloads, System.Int64 WeeklyDownloads, System.Int64 TotalViews, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDownloadPoint> DailyDownloads, System.Int64 Stars = 0, System.Boolean IsStarred = false)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDownloadPoint> DailyDownloads { get; set; }
+  property System.Boolean IsStarred { get; set; }
+  property System.Int64 Stars { get; set; }
+  property System.Int64 TotalDownloads { get; set; }
+  property System.Int64 TotalViews { get; set; }
+  property System.Int64 WeeklyDownloads { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageStats <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageStats? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Int64 TotalDownloads, out System.Int64 WeeklyDownloads, out System.Int64 TotalViews, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDownloadPoint> DailyDownloads, out System.Int64 Stars, out System.Boolean IsStarred)
+type sealed class Sunder.Registry.Contracts.RegistryPackageSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageSummary>
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.Boolean IsYanked, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageStats? Stats = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null)
+  property System.DateTimeOffset CreatedAtUtc { get; set; }
+  property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { get; set; }
+  property System.String? IconUrl { get; set; }
+  property System.Boolean IsYanked { get; set; }
+  property System.String? LatestVersion { get; set; }
+  property System.String Name { get; set; }
+  property System.String PackageId { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageStats? Stats { get; set; }
+  property System.String? Summary { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageSummary <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageSummary? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.Boolean IsYanked, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageStats? Stats, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator)
+type sealed class Sunder.Registry.Contracts.RegistryPackageUpdate : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageUpdate>
+  method .ctor(System.String PackageId, System.String CurrentVersion, System.String AvailableVersion, System.String? DeprecatedMessage, Sunder.Registry.Contracts.RegistryPackageArtifact Artifact)
+  property Sunder.Registry.Contracts.RegistryPackageArtifact Artifact { get; set; }
+  property System.String AvailableVersion { get; set; }
+  property System.String CurrentVersion { get; set; }
+  property System.String? DeprecatedMessage { get; set; }
+  property System.String PackageId { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageUpdate <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageUpdate? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String CurrentVersion, out System.String AvailableVersion, out System.String? DeprecatedMessage, out Sunder.Registry.Contracts.RegistryPackageArtifact Artifact)
+type sealed class Sunder.Registry.Contracts.RegistryPackageVersionDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageVersionDetails>
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String Version, System.String? Icon, System.String EntryAssembly, Sunder.Registry.Contracts.RegistryPackageCompatibility Compatibility, System.Boolean IsYanked, System.String? DeprecatedMessage, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn, Sunder.Registry.Contracts.RegistryPackageArtifact Artifact, System.DateTimeOffset PublishedAtUtc)
+  property Sunder.Registry.Contracts.RegistryPackageArtifact Artifact { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageCompatibility Compatibility { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn { get; set; }
+  property System.String? DeprecatedMessage { get; set; }
+  property System.String EntryAssembly { get; set; }
+  property System.String? Icon { get; set; }
+  property System.Boolean IsYanked { get; set; }
+  property System.String Name { get; set; }
+  property System.String PackageId { get; set; }
+  property System.DateTimeOffset PublishedAtUtc { get; set; }
+  property System.String? Summary { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageVersionDetails <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageVersionDetails? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String Version, out System.String? Icon, out System.String EntryAssembly, out Sunder.Registry.Contracts.RegistryPackageCompatibility Compatibility, out System.Boolean IsYanked, out System.String? DeprecatedMessage, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependency> DependsOn, out Sunder.Registry.Contracts.RegistryPackageArtifact Artifact, out System.DateTimeOffset PublishedAtUtc)
+type sealed class Sunder.Registry.Contracts.RegistryPackageVersionSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageVersionSummary>
+  method .ctor(System.String Version, System.Boolean IsYanked, System.String? DeprecatedMessage, System.DateTimeOffset PublishedAtUtc)
+  property System.String? DeprecatedMessage { get; set; }
+  property System.Boolean IsYanked { get; set; }
+  property System.DateTimeOffset PublishedAtUtc { get; set; }
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageVersionSummary <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageVersionSummary? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Version, out System.Boolean IsYanked, out System.String? DeprecatedMessage, out System.DateTimeOffset PublishedAtUtc)
+type sealed class Sunder.Registry.Contracts.RegistryPackageViewResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageViewResponse>
+  method .ctor(System.Int64 Views)
+  property System.Int64 Views { get; set; }
+  method Sunder.Registry.Contracts.RegistryPackageViewResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageViewResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Int64 Views)
+type sealed class Sunder.Registry.Contracts.RegistryProblemDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryProblemDetails>
+  method .ctor(System.String Type, System.String Title, System.Int32 Status, System.String Detail, System.String Instance, System.String Code, System.String TraceId, System.String CorrelationId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String[]>? Errors = null)
+  property System.String Code { get; set; }
+  property System.String CorrelationId { get; set; }
+  property System.String Detail { get; set; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String[]>? Errors { get; set; }
+  property System.String Instance { get; set; }
+  property System.Int32 Status { get; set; }
+  property System.String Title { get; set; }
+  property System.String TraceId { get; set; }
+  property System.String Type { get; set; }
+  method Sunder.Registry.Contracts.RegistryProblemDetails <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryProblemDetails? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Type, out System.String Title, out System.Int32 Status, out System.String Detail, out System.String Instance, out System.String Code, out System.String TraceId, out System.String CorrelationId, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String[]>? Errors)
+type sealed class Sunder.Registry.Contracts.RegistryPublishLocalPackageRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishLocalPackageRequest>
+  method .ctor(System.String PackagePath, System.Boolean SetLatest = true)
+  property System.String PackagePath { get; set; }
+  property System.Boolean SetLatest { get; set; }
+  method Sunder.Registry.Contracts.RegistryPublishLocalPackageRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishLocalPackageRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackagePath, out System.Boolean SetLatest)
+type sealed class Sunder.Registry.Contracts.RegistryPublishLocalStackRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishLocalStackRequest>
+  method .ctor(System.String StackPath)
+  property System.String StackPath { get; set; }
+  method Sunder.Registry.Contracts.RegistryPublishLocalStackRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishLocalStackRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String StackPath)
+type sealed class Sunder.Registry.Contracts.RegistryPublishPackageResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishPackageResponse>
+  method .ctor(System.Boolean Success, System.String? PackageId, System.String? Version, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.String? ErrorCode { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property System.String? PackageId { get; set; }
+  property System.Boolean Success { get; set; }
+  property System.String? Version { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; set; }
+  method Sunder.Registry.Contracts.RegistryPublishPackageResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishPackageResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? PackageId, out System.String? Version, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryPublishStackResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishStackResponse>
+  method .ctor(System.Boolean Success, System.String? StackId, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property System.String? StackId { get; set; }
+  property System.Boolean Success { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; set; }
+  method Sunder.Registry.Contracts.RegistryPublishStackResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishStackResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? StackId, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest>
+  method .ctor(System.String PackageId, System.String? Version, System.String? Tag, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
+  property System.Boolean AllowDowngrade { get; set; }
+  property System.Boolean IncludePrerelease { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages { get; set; }
+  property System.String PackageId { get; set; }
+  property System.Boolean Reinstall { get; set; }
+  property System.String? Tag { get; set; }
+  property System.String? Version { get; set; }
+  method Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
+type sealed class Sunder.Registry.Contracts.RegistryResolveInstallPlanResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveInstallPlanResponse>
+  method .ctor(System.Boolean Success, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageInstallPlanItem> Items, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict> Conflicts)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict> Conflicts { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageInstallPlanItem> Items { get; set; }
+  property System.Boolean Success { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; set; }
+  method Sunder.Registry.Contracts.RegistryResolveInstallPlanResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveInstallPlanResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageInstallPlanItem> Items, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict> Conflicts)
+type sealed class Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest>
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
+  property System.Boolean AllowDowngrade { get; set; }
+  property System.Boolean IncludePrerelease { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages { get; set; }
+  property System.Boolean Reinstall { get; set; }
+  method Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
+type sealed class Sunder.Registry.Contracts.RegistryResolveUpdatesRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveUpdatesRequest>
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages, System.Boolean IncludePrerelease = false)
+  property System.Boolean IncludePrerelease { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages { get; set; }
+  method Sunder.Registry.Contracts.RegistryResolveUpdatesRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveUpdatesRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages, out System.Boolean IncludePrerelease)
+type sealed class Sunder.Registry.Contracts.RegistryResolveUpdatesResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveUpdatesResponse>
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageUpdate> Updates)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageUpdate> Updates { get; set; }
+  method Sunder.Registry.Contracts.RegistryResolveUpdatesResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveUpdatesResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageUpdate> Updates)
+type enum Sunder.Registry.Contracts.RegistrySearchSort : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field Sunder.Registry.Contracts.RegistrySearchSort Downloads = 1
+  field Sunder.Registry.Contracts.RegistrySearchSort Stars = 2
+  field Sunder.Registry.Contracts.RegistrySearchSort Updated = 0
+  field System.Int32 value__
+type sealed class Sunder.Registry.Contracts.RegistrySetPackageDistTagRequest : System.IEquatable<Sunder.Registry.Contracts.RegistrySetPackageDistTagRequest>
+  method .ctor(System.String Version)
+  property System.String Version { get; set; }
+  method Sunder.Registry.Contracts.RegistrySetPackageDistTagRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistrySetPackageDistTagRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Version)
+type sealed class Sunder.Registry.Contracts.RegistrySetPackageVersionYankRequest : System.IEquatable<Sunder.Registry.Contracts.RegistrySetPackageVersionYankRequest>
+  method .ctor(System.Boolean IsYanked = true)
+  property System.Boolean IsYanked { get; set; }
+  method Sunder.Registry.Contracts.RegistrySetPackageVersionYankRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistrySetPackageVersionYankRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean IsYanked)
+type sealed class Sunder.Registry.Contracts.RegistryStackArtifact : System.IEquatable<Sunder.Registry.Contracts.RegistryStackArtifact>
+  method .ctor(System.String Sha256, System.Int64? Size, System.String DownloadUrl)
+  property System.String DownloadUrl { get; set; }
+  property System.String Sha256 { get; set; }
+  property System.Int64? Size { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackArtifact <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackArtifact? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Sha256, out System.Int64? Size, out System.String DownloadUrl)
+type sealed class Sunder.Registry.Contracts.RegistryStackDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryStackDetails>
+  method .ctor(System.String StackId, System.String Name, System.String? Summary, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackPackageRequirement> Packages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentSummary> Fragments, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackRequiredInput> RequiredInputs, Sunder.Registry.Contracts.RegistryStackArtifact Artifact, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryStackStats? Stats = null, Sunder.Registry.Contracts.RegistryStackProfile? Profile = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers = null)
+  property Sunder.Registry.Contracts.RegistryStackArtifact Artifact { get; set; }
+  property System.DateTimeOffset CreatedAtUtc { get; set; }
+  property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentSummary> Fragments { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers { get; set; }
+  property System.String Name { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackPackageRequirement> Packages { get; set; }
+  property Sunder.Registry.Contracts.RegistryStackProfile? Profile { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackRequiredInput> RequiredInputs { get; set; }
+  property System.String StackId { get; set; }
+  property Sunder.Registry.Contracts.RegistryStackStats? Stats { get; set; }
+  property System.String? Summary { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackDetails <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackDetails? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String StackId, out System.String Name, out System.String? Summary, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackPackageRequirement> Packages, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentSummary> Fragments, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackRequiredInput> RequiredInputs, out Sunder.Registry.Contracts.RegistryStackArtifact Artifact, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryStackStats? Stats, out Sunder.Registry.Contracts.RegistryStackProfile? Profile, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers)
+type sealed class Sunder.Registry.Contracts.RegistryStackDownloadPoint : System.IEquatable<Sunder.Registry.Contracts.RegistryStackDownloadPoint>
+  method .ctor(System.DateOnly Date, System.Int64 Count)
+  property System.Int64 Count { get; set; }
+  property System.DateOnly Date { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackDownloadPoint <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackDownloadPoint? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.DateOnly Date, out System.Int64 Count)
+type sealed class Sunder.Registry.Contracts.RegistryStackFragmentDetail : System.IEquatable<Sunder.Registry.Contracts.RegistryStackFragmentDetail>
+  method .ctor(System.String Label, System.String Value, System.String? Behavior)
+  property System.String? Behavior { get; set; }
+  property System.String Label { get; set; }
+  property System.String Value { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackFragmentDetail <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackFragmentDetail? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String Label, out System.String Value, out System.String? Behavior)
+type sealed class Sunder.Registry.Contracts.RegistryStackFragmentSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryStackFragmentSummary>
+  method .ctor(System.String FragmentId, System.String OwnerPackageId, System.String ContributorId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String? Description, System.Boolean DefaultSelected, System.String? SourceItemId = null, System.String? Kind = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentDetail>? DisplayDetails = null)
+  property System.String ContributorId { get; set; }
+  property System.Boolean DefaultSelected { get; set; }
+  property System.String? Description { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentDetail>? DisplayDetails { get; set; }
+  property System.String DisplayName { get; set; }
+  property System.String FragmentId { get; set; }
+  property System.String? Kind { get; set; }
+  property System.String OwnerPackageId { get; set; }
+  property System.String SchemaId { get; set; }
+  property System.Int32 SchemaVersion { get; set; }
+  property System.String? SourceItemId { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackFragmentSummary <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackFragmentSummary? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String FragmentId, out System.String OwnerPackageId, out System.String ContributorId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String? Description, out System.Boolean DefaultSelected, out System.String? SourceItemId, out System.String? Kind, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentDetail>? DisplayDetails)
+type sealed class Sunder.Registry.Contracts.RegistryStackMaintainer : System.IEquatable<Sunder.Registry.Contracts.RegistryStackMaintainer>
+  method .ctor(System.String UserId, System.Boolean IsOwner, System.DateTimeOffset AddedAtUtc, System.String? Username = null, System.String? DisplayName = null, System.String? Email = null, System.String? AvatarUrl = null)
+  property System.DateTimeOffset AddedAtUtc { get; set; }
+  property System.String? AvatarUrl { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.String? Email { get; set; }
+  property System.Boolean IsOwner { get; set; }
+  property System.String UserId { get; set; }
+  property System.String? Username { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackMaintainer <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackMaintainer? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String UserId, out System.Boolean IsOwner, out System.DateTimeOffset AddedAtUtc, out System.String? Username, out System.String? DisplayName, out System.String? Email, out System.String? AvatarUrl)
+type sealed class Sunder.Registry.Contracts.RegistryStackMaintainerOperationResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryStackMaintainerOperationResponse>
+  method .ctor(System.Boolean Success, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackMaintainerOperationResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackMaintainerOperationResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryStackMaintainersResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryStackMaintainersResponse>
+  method .ctor(System.String StackId, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackMaintainer> Maintainers)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackMaintainer> Maintainers { get; set; }
+  property System.String StackId { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackMaintainersResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackMaintainersResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String StackId, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackMaintainer> Maintainers)
+type sealed class Sunder.Registry.Contracts.RegistryStackManagementOperationResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryStackManagementOperationResponse>
+  method .ctor(System.Boolean Success, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackManagementOperationResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackManagementOperationResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryStackMedia : System.IEquatable<Sunder.Registry.Contracts.RegistryStackMedia>
+  method .ctor(System.Guid MediaId, System.String FileName, System.String ContentType, System.Int64 Size, System.String? AltText, System.Int32 SortOrder, System.String Url)
+  property System.String? AltText { get; set; }
+  property System.String ContentType { get; set; }
+  property System.String FileName { get; set; }
+  property System.Guid MediaId { get; set; }
+  property System.Int64 Size { get; set; }
+  property System.Int32 SortOrder { get; set; }
+  property System.String Url { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackMedia <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackMedia? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Guid MediaId, out System.String FileName, out System.String ContentType, out System.Int64 Size, out System.String? AltText, out System.Int32 SortOrder, out System.String Url)
+type sealed class Sunder.Registry.Contracts.RegistryStackPackageRequirement : System.IEquatable<Sunder.Registry.Contracts.RegistryStackPackageRequirement>
+  method .ctor(System.String PackageId, System.String InstallTag, System.String? CreatedWithVersion, System.String? MinimumVersion, System.Boolean Required, System.String? Name = null, System.String? IconUrl = null)
+  property System.String? CreatedWithVersion { get; set; }
+  property System.String? IconUrl { get; set; }
+  property System.String InstallTag { get; set; }
+  property System.String? MinimumVersion { get; set; }
+  property System.String? Name { get; set; }
+  property System.String PackageId { get; set; }
+  property System.Boolean Required { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackPackageRequirement <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackPackageRequirement? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String InstallTag, out System.String? CreatedWithVersion, out System.String? MinimumVersion, out System.Boolean Required, out System.String? Name, out System.String? IconUrl)
+type sealed class Sunder.Registry.Contracts.RegistryStackProfile : System.IEquatable<Sunder.Registry.Contracts.RegistryStackProfile>
+  method .ctor(System.String StackId, System.String? ShortDescription, System.String? ReadmeMarkdown, System.String? WebsiteUrl, System.String? SourceUrl, System.String? IssueTrackerUrl, System.String? License, System.Collections.Generic.IReadOnlyList<System.String> Tags, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackMedia> Media, System.DateTimeOffset? UpdatedAtUtc)
+  property System.String? IssueTrackerUrl { get; set; }
+  property System.String? License { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackMedia> Media { get; set; }
+  property System.String? ReadmeMarkdown { get; set; }
+  property System.String? ShortDescription { get; set; }
+  property System.String? SourceUrl { get; set; }
+  property System.String StackId { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Tags { get; set; }
+  property System.DateTimeOffset? UpdatedAtUtc { get; set; }
+  property System.String? WebsiteUrl { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackProfile <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackProfile? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String StackId, out System.String? ShortDescription, out System.String? ReadmeMarkdown, out System.String? WebsiteUrl, out System.String? SourceUrl, out System.String? IssueTrackerUrl, out System.String? License, out System.Collections.Generic.IReadOnlyList<System.String> Tags, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackMedia> Media, out System.DateTimeOffset? UpdatedAtUtc)
+type sealed class Sunder.Registry.Contracts.RegistryStackProfileOperationResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryStackProfileOperationResponse>
+  method .ctor(System.Boolean Success, System.String? Message, Sunder.Registry.Contracts.RegistryStackProfile? Profile, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property Sunder.Registry.Contracts.RegistryStackProfile? Profile { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackProfileOperationResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackProfileOperationResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out Sunder.Registry.Contracts.RegistryStackProfile? Profile, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryStackRequiredInput : System.IEquatable<Sunder.Registry.Contracts.RegistryStackRequiredInput>
+  method .ctor(System.String InputId, System.String Label, System.String? Description, System.Boolean Required)
+  property System.String? Description { get; set; }
+  property System.String InputId { get; set; }
+  property System.String Label { get; set; }
+  property System.Boolean Required { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackRequiredInput <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackRequiredInput? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String InputId, out System.String Label, out System.String? Description, out System.Boolean Required)
+type sealed class Sunder.Registry.Contracts.RegistryStackSearchResult : System.IEquatable<Sunder.Registry.Contracts.RegistryStackSearchResult>
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackSummary> Items, System.Int32 TotalCount, System.Int32 Skip, System.Int32 Take)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackSummary> Items { get; set; }
+  property System.Int32 Skip { get; set; }
+  property System.Int32 Take { get; set; }
+  property System.Int32 TotalCount { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackSearchResult <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackSearchResult? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackSummary> Items, out System.Int32 TotalCount, out System.Int32 Skip, out System.Int32 Take)
+type sealed class Sunder.Registry.Contracts.RegistryStackStarResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryStackStarResponse>
+  method .ctor(System.Boolean Success, System.String? Message, Sunder.Registry.Contracts.RegistryStackStats? Stats, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
+  property System.Boolean Forbidden { get; set; }
+  property System.String? Message { get; set; }
+  property Sunder.Registry.Contracts.RegistryStackStats? Stats { get; set; }
+  property System.Boolean Success { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackStarResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackStarResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out Sunder.Registry.Contracts.RegistryStackStats? Stats, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+type sealed class Sunder.Registry.Contracts.RegistryStackStats : System.IEquatable<Sunder.Registry.Contracts.RegistryStackStats>
+  method .ctor(System.Int64 TotalDownloads, System.Int64 Stars, System.Boolean IsStarred, System.Int64 WeeklyDownloads = 0, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackDownloadPoint>? DailyDownloads = null, System.Int64 TotalViews = 0)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackDownloadPoint>? DailyDownloads { get; set; }
+  property System.Boolean IsStarred { get; set; }
+  property System.Int64 Stars { get; set; }
+  property System.Int64 TotalDownloads { get; set; }
+  property System.Int64 TotalViews { get; set; }
+  property System.Int64 WeeklyDownloads { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackStats <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackStats? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Int64 TotalDownloads, out System.Int64 Stars, out System.Boolean IsStarred, out System.Int64 WeeklyDownloads, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackDownloadPoint>? DailyDownloads, out System.Int64 TotalViews)
+type sealed class Sunder.Registry.Contracts.RegistryStackSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryStackSummary>
+  method .ctor(System.String StackId, System.String Name, System.String? Summary, System.Int32 PackageCount, System.Int32 FragmentCount, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryStackStats? Stats = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null)
+  property System.DateTimeOffset CreatedAtUtc { get; set; }
+  property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { get; set; }
+  property System.Int32 FragmentCount { get; set; }
+  property System.String Name { get; set; }
+  property System.Int32 PackageCount { get; set; }
+  property System.String StackId { get; set; }
+  property Sunder.Registry.Contracts.RegistryStackStats? Stats { get; set; }
+  property System.String? Summary { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackSummary <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackSummary? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String StackId, out System.String Name, out System.String? Summary, out System.Int32 PackageCount, out System.Int32 FragmentCount, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryStackStats? Stats, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator)
+type sealed class Sunder.Registry.Contracts.RegistryStackViewResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryStackViewResponse>
+  method .ctor(System.Int64 Views)
+  property System.Int64 Views { get; set; }
+  method Sunder.Registry.Contracts.RegistryStackViewResponse <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackViewResponse? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Int64 Views)
+type sealed class Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest>
+  method .ctor(System.String? Username, System.String? DisplayName, System.String? Email, System.String? AvatarUrl)
+  property System.String? AvatarUrl { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.String? Email { get; set; }
+  property System.String? Username { get; set; }
+  method Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String? Username, out System.String? DisplayName, out System.String? Email, out System.String? AvatarUrl)
+type sealed class Sunder.Registry.Contracts.RegistryUpdatePackageProfileRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryUpdatePackageProfileRequest>
+  method .ctor(System.String? ShortDescription, System.String? ReadmeMarkdown, System.String? WebsiteUrl, System.String? SourceUrl, System.String? IssueTrackerUrl, System.String? License, System.Collections.Generic.IReadOnlyList<System.String>? Tags)
+  property System.String? IssueTrackerUrl { get; set; }
+  property System.String? License { get; set; }
+  property System.String? ReadmeMarkdown { get; set; }
+  property System.String? ShortDescription { get; set; }
+  property System.String? SourceUrl { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String>? Tags { get; set; }
+  property System.String? WebsiteUrl { get; set; }
+  method Sunder.Registry.Contracts.RegistryUpdatePackageProfileRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUpdatePackageProfileRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String? ShortDescription, out System.String? ReadmeMarkdown, out System.String? WebsiteUrl, out System.String? SourceUrl, out System.String? IssueTrackerUrl, out System.String? License, out System.Collections.Generic.IReadOnlyList<System.String>? Tags)
+type sealed class Sunder.Registry.Contracts.RegistryUpdateStackProfileRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryUpdateStackProfileRequest>
+  method .ctor(System.String? ShortDescription, System.String? ReadmeMarkdown, System.String? WebsiteUrl, System.String? SourceUrl, System.String? IssueTrackerUrl, System.String? License, System.Collections.Generic.IReadOnlyList<System.String>? Tags)
+  property System.String? IssueTrackerUrl { get; set; }
+  property System.String? License { get; set; }
+  property System.String? ReadmeMarkdown { get; set; }
+  property System.String? ShortDescription { get; set; }
+  property System.String? SourceUrl { get; set; }
+  property System.Collections.Generic.IReadOnlyList<System.String>? Tags { get; set; }
+  property System.String? WebsiteUrl { get; set; }
+  method Sunder.Registry.Contracts.RegistryUpdateStackProfileRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUpdateStackProfileRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String? ShortDescription, out System.String? ReadmeMarkdown, out System.String? WebsiteUrl, out System.String? SourceUrl, out System.String? IssueTrackerUrl, out System.String? License, out System.Collections.Generic.IReadOnlyList<System.String>? Tags)
+type sealed class Sunder.Registry.Contracts.RegistryUserAttribution : System.IEquatable<Sunder.Registry.Contracts.RegistryUserAttribution>
+  method .ctor(System.String? Username, System.String? DisplayName, System.DateTimeOffset? AddedAtUtc = null, System.Boolean IsOwner = false, System.String? AvatarUrl = null)
+  property System.DateTimeOffset? AddedAtUtc { get; set; }
+  property System.String? AvatarUrl { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.Boolean IsOwner { get; set; }
+  property System.String? Username { get; set; }
+  method Sunder.Registry.Contracts.RegistryUserAttribution <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUserAttribution? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String? Username, out System.String? DisplayName, out System.DateTimeOffset? AddedAtUtc, out System.Boolean IsOwner, out System.String? AvatarUrl)
+type sealed class Sunder.Registry.Contracts.RegistryUserPackageDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryUserPackageDetails>
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.String Role, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null)
+  property System.DateTimeOffset CreatedAtUtc { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags { get; set; }
+  property System.String? IconUrl { get; set; }
+  property System.String? LatestVersion { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers { get; set; }
+  property System.String Name { get; set; }
+  property System.String PackageId { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { get; set; }
+  property System.String Role { get; set; }
+  property System.String? Summary { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions { get; set; }
+  method Sunder.Registry.Contracts.RegistryUserPackageDetails <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUserPackageDetails? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.String Role, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile)
+type sealed class Sunder.Registry.Contracts.RegistryUserPackageSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryUserPackageSummary>
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.String Role, System.Int32 VersionCount, System.Int32 YankedVersionCount, System.Int32 DeprecatedVersionCount, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, Sunder.Registry.Contracts.RegistryPackageStats? Stats = null, System.Boolean IsYanked = false)
+  property System.DateTimeOffset CreatedAtUtc { get; set; }
+  property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { get; set; }
+  property System.Int32 DeprecatedVersionCount { get; set; }
+  property System.String? IconUrl { get; set; }
+  property System.Boolean IsYanked { get; set; }
+  property System.String? LatestVersion { get; set; }
+  property System.String Name { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String Role { get; set; }
+  property Sunder.Registry.Contracts.RegistryPackageStats? Stats { get; set; }
+  property System.String? Summary { get; set; }
+  property System.DateTimeOffset UpdatedAtUtc { get; set; }
+  property System.Int32 VersionCount { get; set; }
+  property System.Int32 YankedVersionCount { get; set; }
+  method Sunder.Registry.Contracts.RegistryUserPackageSummary <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUserPackageSummary? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.String Role, out System.Int32 VersionCount, out System.Int32 YankedVersionCount, out System.Int32 DeprecatedVersionCount, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator, out Sunder.Registry.Contracts.RegistryPackageStats? Stats, out System.Boolean IsYanked)
+type sealed class Sunder.Registry.Contracts.RegistryUserProfileSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryUserProfileSummary>
+  method .ctor(System.String UserId, System.String? Username, System.String? DisplayName, System.String? Email, System.DateTimeOffset LastSeenAtUtc, System.String? AvatarUrl = null)
+  property System.String? AvatarUrl { get; set; }
+  property System.String? DisplayName { get; set; }
+  property System.String? Email { get; set; }
+  property System.DateTimeOffset LastSeenAtUtc { get; set; }
+  property System.String UserId { get; set; }
+  property System.String? Username { get; set; }
+  method Sunder.Registry.Contracts.RegistryUserProfileSummary <Clone>$()
+  method System.Boolean Equals(Sunder.Registry.Contracts.RegistryUserProfileSummary? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String UserId, out System.String? Username, out System.String? DisplayName, out System.String? Email, out System.DateTimeOffset LastSeenAtUtc, out System.String? AvatarUrl)
+type sealed class Sunder.Registry.Contracts.RegistryV1ErrorCodes
+  field System.String Conflict = registry.v1.resource.conflict
+  field System.String Forbidden = registry.v1.auth.forbidden
+  field System.String Internal = registry.v1.internal
+  field System.String InvalidRequest = registry.v1.request.invalid
+  field System.String NotFound = registry.v1.resource.not_found
+  field System.String PackageVersionExists = registry.v1.package.version_exists
+  field System.String Unauthorized = registry.v1.auth.unauthorized

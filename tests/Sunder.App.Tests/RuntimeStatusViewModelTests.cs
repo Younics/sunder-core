@@ -159,14 +159,14 @@ public sealed class RuntimeStatusViewModelTests
 
         public int CreateCount { get; private set; }
 
-        public IRuntimeApiClient CreateClient()
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
         {
             CreateCount++;
-            return _createClient();
+            return (TClient)(object)_createClient();
         }
     }
 
-    private sealed class FakeRuntimeApiClient : IRuntimeApiClient
+    private sealed class FakeRuntimeApiClient : IRuntimeConnectionClient
     {
         public Func<CancellationToken, Task<SystemStatusResponse?>> GetSystemStatus { get; init; }
             = _ => Task.FromResult<SystemStatusResponse?>(null);
@@ -183,78 +183,6 @@ public sealed class RuntimeStatusViewModelTests
 
         public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
             => IsRuntimeHealthy(cancellationToken);
-
-        public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Uri CreatePackageAssetUri(string packageId, string assetPath)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(
-            string packageId,
-            string packagePath,
-            bool allowDowngrade = false,
-            bool reinstall = false,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task SavePackageConfigurationValuesAsync(
-            string packageId,
-            IReadOnlyDictionary<string, string?> values,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(
-            string packageId,
-            string authSessionId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task ReportPackageFaultAsync(
-            string packageId,
-            PackageFailureOrigin origin,
-            string message,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
 
         public Task ShutdownAsync(CancellationToken cancellationToken = default)
         {

@@ -31,7 +31,7 @@ public sealed class RuntimeEventSubscriptionService(
         _windowLauncher = windowLauncher;
         _appliedGeneration = initialGeneration;
         _knownPackageIds = initialPackageIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        using (var client = runtimeApiClientFactory.CreateClient())
+        using (var client = runtimeApiClientFactory.CreateClient<IRuntimeEventClient>())
         {
             await client.SetDevPackageWatchIntentAsync(watchDevPackages, cancellationToken).ConfigureAwait(false);
         }
@@ -68,7 +68,7 @@ public sealed class RuntimeEventSubscriptionService(
         {
             try
             {
-                using var client = runtimeApiClientFactory.CreateClient();
+                using var client = runtimeApiClientFactory.CreateClient<IRuntimeEventClient>();
                 var snapshot = await client.GetRuntimeEventSnapshotAsync(sequenceId, cancellationToken).ConfigureAwait(false);
                 sequenceId = snapshot.SequenceId;
                 await ApplyGenerationAsync(snapshot.SessionGeneration, snapshot.ActivePackageIds, cancellationToken).ConfigureAwait(false);

@@ -4,7 +4,7 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.App.ViewModels;
 
 internal sealed class SettingsPackageSectionLoader(
-    IRuntimeApiClient runtimeApiClient,
+    IRuntimePackageSettingsClient runtimeApiClient,
     PackageViewHostService packageViewHostService)
 {
     public async Task<SettingsPackageSectionsLoadResult> LoadAsync(CancellationToken cancellationToken)

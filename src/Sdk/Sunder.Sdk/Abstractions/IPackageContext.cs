@@ -17,10 +17,13 @@ public interface IPackageContext
     string InstallPath { get; }
     /// <summary>Gets package-scoped storage for the current host role.</summary>
     IPackageStorageContext Storage { get; }
-    /// <summary>Gets host-owned package configuration.</summary>
-    IPackageConfiguration Configuration { get; }
+    /// <summary>Gets writable, schema-declared package settings stored independently from package state.</summary>
+    IPackageSettings Settings { get; }
     /// <summary>Gets host-protected package secrets.</summary>
     IPackageSecrets Secrets { get; }
+    /// <summary>Gets the App callback-session client; Runtime and preflight contexts return an unavailable client.</summary>
+    [SunderSdkCapability(SunderSdkCapabilities.CallbacksV1)]
+    IPackageCallbackClient Callbacks => NullPackageCallbackClient.Instance;
     /// <summary>Gets the package-scoped Microsoft logger factory.</summary>
     ILoggerFactory LoggerFactory { get; }
     /// <summary>Gets package logging capabilities.</summary>

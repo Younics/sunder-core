@@ -1,3 +1,4 @@
+using Sunder.Package.Format;
 using Sunder.Runtime.Host.Services;
 using Xunit;
 
@@ -8,13 +9,13 @@ public sealed class RuntimePackageManifestValidatorTests
     [Fact]
     public void Validate_WhenRequiredFieldsAreMissing_ReturnsExpectedErrors()
     {
-        var errors = RuntimePackageManifestValidator.Validate(new RuntimePackageManifest(), CreateTempDirectory());
+        var errors = Validate(new SunderPackageManifest(), CreateTempDirectory());
 
-        Assert.Contains(errors, error => error.Contains("'manifestVersion' 1", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("invalid 'id'", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("missing 'name'", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("SemVer 2.0 'version'", StringComparison.Ordinal));
-        Assert.Contains(errors, error => error.Contains("missing 'entryAssembly'", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("manifestVersion 1", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("Package id", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("missing name", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("SemVer 2.0", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("missing entryAssembly", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -23,7 +24,7 @@ public sealed class RuntimePackageManifestValidatorTests
         var shadowFolder = CreateTempDirectory();
         var manifest = CreateManifest(entryAssembly: "Missing.Package.dll");
 
-        var errors = RuntimePackageManifestValidator.Validate(manifest, shadowFolder);
+        var errors = Validate(manifest, shadowFolder);
 
         Assert.Contains(errors, error => error.Contains("missing entry assembly 'Missing.Package.dll'", StringComparison.Ordinal));
     }
@@ -35,7 +36,7 @@ public sealed class RuntimePackageManifestValidatorTests
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
         File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
 
-        var errors = RuntimePackageManifestValidator.Validate(CreateManifest(), shadowFolder);
+        var errors = Validate(CreateManifest(), shadowFolder);
 
         Assert.Empty(errors);
     }
@@ -47,7 +48,7 @@ public sealed class RuntimePackageManifestValidatorTests
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
         File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
 
-        var errors = RuntimePackageManifestValidator.Validate(CreateManifest(sdkApiVersion: 2), shadowFolder);
+        var errors = Validate(CreateManifest(sdkApiVersion: 2), shadowFolder);
 
         Assert.Contains(errors, error => error.Contains("requires SDK API version 2", StringComparison.Ordinal));
     }
@@ -59,14 +60,14 @@ public sealed class RuntimePackageManifestValidatorTests
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
         File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
 
-        var errors = RuntimePackageManifestValidator.Validate(
+        var errors = Validate(
             CreateManifest(requiredSdkCapabilities: ["callbacks.v2"]),
             shadowFolder);
 
         Assert.Contains(errors, error => error.Contains("requires SDK capability 'callbacks.v2'", StringComparison.Ordinal));
     }
 
-    private static RuntimePackageManifest CreateManifest(
+    private static SunderPackageManifest CreateManifest(
         string entryAssembly = "Test.Package.dll",
         int? sdkApiVersion = 1,
         IReadOnlyList<string>? requiredSdkCapabilities = null)
@@ -78,9 +79,14 @@ public sealed class RuntimePackageManifestValidatorTests
             Version = "1.0.0",
             EntryAssembly = entryAssembly,
             SdkApiVersion = sdkApiVersion,
-            SdkPackageVersion = "1.0.0",
-            RequiredSdkCapabilities = requiredSdkCapabilities ?? ["core.v1"],
+            SdkPackageVersion = "1.1.0",
+            RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", .. requiredSdkCapabilities ?? ["core.v1"]],
         };
+
+    private static IReadOnlyList<string> Validate(SunderPackageManifest manifest, string rootPath)
+        => SunderPackageManifestValidator.Validate(manifest, rootPath, SunderPackageManifestLayout.Activation)
+            .Concat(SunderSdkCompatibilityProfile.Validate(manifest))
+            .ToArray();
 
     private static string CreateTempDirectory()
     {

@@ -16,7 +16,7 @@ public sealed class PackageRuntimeFaultReporter(IRuntimeApiClientFactory runtime
     {
         try
         {
-            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageSessionClient>();
             await runtimeApiClient.ReportPackageFaultAsync(packageId, origin, message);
         }
         catch (Exception ex)

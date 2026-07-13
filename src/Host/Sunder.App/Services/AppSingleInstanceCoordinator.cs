@@ -8,8 +8,10 @@ namespace Sunder.App.Services;
 internal sealed class AppSingleInstanceCoordinator : IDisposable
 {
     private static readonly TimeSpan DefaultForwardTimeout = TimeSpan.FromSeconds(5);
+    internal const int MaxLaunchPayloadCharacters = 64 * 1024;
     private readonly object _gate = new();
     private readonly Queue<AppLaunchRequest> _pendingLaunchRequests = [];
+    private readonly HashSet<Task> _dispatchTasks = [];
     private readonly Mutex _mutex;
     private readonly bool _ownsMutex;
     private readonly string _pipeName;
@@ -80,6 +82,10 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
 
         var deadline = DateTimeOffset.UtcNow + (timeout ?? DefaultForwardTimeout);
         var payload = JsonSerializer.Serialize(new LaunchArgumentsEnvelope([.. args]));
+        if (payload.Length > MaxLaunchPayloadCharacters)
+        {
+            throw new ArgumentException("Forwarded launch arguments exceed the single-instance payload limit.", nameof(args));
+        }
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -151,7 +157,7 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
                     detectEncodingFromByteOrderMarks: false,
                     bufferSize: 1024,
                     leaveOpen: false);
-                var payload = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                var payload = await ReadBoundedPayloadAsync(reader, cancellationToken).ConfigureAwait(false);
                 var envelope = JsonSerializer.Deserialize<LaunchArgumentsEnvelope>(payload);
                 DispatchLaunchRequest(AppLaunchRequestParser.Parse(envelope?.Arguments ?? []));
             }
@@ -172,6 +178,27 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
         }
     }
 
+    private static async Task<string> ReadBoundedPayloadAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var buffer = new char[4096];
+        var payload = new StringBuilder();
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return payload.ToString();
+            }
+
+            if (payload.Length + read > MaxLaunchPayloadCharacters)
+            {
+                throw new InvalidDataException("Forwarded launch arguments exceed the single-instance payload limit.");
+            }
+
+            payload.Append(buffer, 0, read);
+        }
+    }
+
     private void DispatchLaunchRequest(AppLaunchRequest request)
     {
         Func<AppLaunchRequest, CancellationToken, Task>? handler;
@@ -185,17 +212,26 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
             }
         }
 
-        _ = Task.Run(async () =>
+        var cancellationToken = _serverCancellation?.Token ?? CancellationToken.None;
+        var task = Task.Run(async () =>
         {
             try
             {
-                await handler(request, CancellationToken.None).ConfigureAwait(false);
+                await handler(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {
                 AppSessionLog.WriteError("Failed to handle forwarded Sunder launch request.", ex);
             }
-        });
+        }, cancellationToken);
+        lock (_gate)
+        {
+            _dispatchTasks.RemoveWhere(candidate => candidate.IsCompleted);
+            _dispatchTasks.Add(task);
+        }
     }
 
     private static string BuildCurrentUserScope()
@@ -220,9 +256,16 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
 
         _disposed = true;
         _serverCancellation?.Cancel();
+        Task[] dispatchTasks;
+        lock (_gate)
+        {
+            dispatchTasks = _dispatchTasks.ToArray();
+            _dispatchTasks.Clear();
+        }
         try
         {
             _serverTask?.Wait(TimeSpan.FromSeconds(1));
+            Task.WaitAll(dispatchTasks, TimeSpan.FromSeconds(1));
         }
         catch
         {

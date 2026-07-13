@@ -19,7 +19,7 @@ Generated package projects reference:
 - `Sunder.Sdk`
 - `Sunder.Package.Build`
 
-All Sunder references use exact version `1.0.0`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are added only by their matching opt-ins.
+All Sunder references use exact version `1.1.0`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are added only by their matching opt-ins.
 
 You can build the generated package with:
 
@@ -31,6 +31,10 @@ Then load `MyPackage/bin/Debug/net10.0/sunder-dev` into an installed Sunder app 
 
 Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder.Package.Build` generates `sunder-package.json` during build.
 
+Use `Sunder.Sdk.Packaging.PackageId`, `SemanticVersion`, and `PackageVersionRange` for package identity/version validation. If the package needs a local filesystem path, use `context.Storage.RoleLocalWorkspace`; the current App or Runtime activation owns that capability and package code must not dispose it.
+
+`PackageRuntimeState` demonstrates opaque operational data in `context.Storage.State`. For user preferences, register a `PackageConfigurationSchema` and use `context.Settings`; settings are validated and persisted separately. Sensitive schema fields use `context.Secrets`.
+
 Use `--withHostDependency` when the generated package should declare a dependency on another package and scaffold integration notes.
 
 Use `--withHostContracts` together with `--hostPackageId`, `--hostContractsPackageId`, and `--hostContractsVersion` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately. This also adds runtime host dependency metadata.
@@ -38,3 +42,5 @@ Use `--withHostContracts` together with `--hostPackageId`, `--hostContractsPacka
 Use `--createInPlace` when the specified output folder should be the package project folder itself.
 
 `--packageId` and `--packageName` are required so generated packages do not keep template runtime identity metadata.
+
+Development output is normally supplied at Runtime startup with `--dev-package`. Package UI that integrates development loading must resolve optional `IPackageDevelopmentSessionControl`, check `Availability`, and keep Load/Watch controls disabled with `UnavailableReason` when App-local paths cannot reach Runtime.

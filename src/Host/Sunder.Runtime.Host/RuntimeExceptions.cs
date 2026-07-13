@@ -29,8 +29,8 @@ internal sealed class RuntimeStaleGenerationException(string detail)
 internal sealed class RuntimeNotFoundException(string detail)
     : RuntimeException(RuntimeErrorCodes.NotFound, "Runtime resource not found", StatusCodes.Status404NotFound, detail);
 
-internal sealed class RuntimeUnavailableException(string detail)
-    : RuntimeException(RuntimeErrorCodes.Unavailable, "Runtime service unavailable", StatusCodes.Status503ServiceUnavailable, detail);
+internal sealed class RuntimeUnavailableException(string detail, Exception? innerException = null)
+    : RuntimeException(RuntimeErrorCodes.Unavailable, "Runtime service unavailable", StatusCodes.Status503ServiceUnavailable, detail, innerException);
 
 internal sealed class RuntimeCancellationException(string detail = "The Runtime operation was cancelled.")
     : RuntimeException(RuntimeErrorCodes.Cancellation, "Runtime operation cancelled", 499, detail);

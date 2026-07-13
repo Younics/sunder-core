@@ -17,10 +17,36 @@ public sealed partial class PackagesWindowViewModel
         PackageOperationResult? operationResult = null,
         bool updateSelection = true)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        await RefreshInstalledCoreAsync(preferredPackageId, operationResult, updateSelection, _tasks.Token);
+    }
+
+    private async Task RefreshInstalledCoreAsync(
+        string? preferredPackageId,
+        PackageOperationResult? operationResult,
+        bool updateSelection,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_disposed)
+        {
+            return;
+        }
+
         IsBusy = true;
         try
         {
-            await _installedPackages.RefreshAsync(AddWarningLine);
+            await _installedPackages.RefreshAsync(AddWarningLine, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_disposed)
+            {
+                return;
+            }
+
             NotifyUpdateStateChanged();
             StatusText = PackageOperationMessageFormatter.BuildInstalledStatusText(
                 operationResult,
@@ -32,18 +58,35 @@ public sealed partial class PackagesWindowViewModel
             RebuildInstalledPackageList(preferredPackageId, updateSelection);
             RefreshMarketplaceInstalledBadges();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            if (!_disposed)
+            {
+                StatusText = ex.Message;
+            }
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
     private async Task RefreshMarketplaceAsync(CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
+        cancellationToken.ThrowIfCancellationRequested();
         var searchVersion = ++_marketplaceSearchVersion;
         IsBusy = true;
         try
@@ -58,7 +101,7 @@ public sealed partial class PackagesWindowViewModel
                 item => SelectMarketplacePackageAsync(item),
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (searchVersion != _marketplaceSearchVersion)
+            if (_disposed || searchVersion != _marketplaceSearchVersion)
             {
                 return;
             }
@@ -91,14 +134,14 @@ public sealed partial class PackagesWindowViewModel
         }
         catch (Exception ex)
         {
-            if (searchVersion == _marketplaceSearchVersion)
+            if (!_disposed && searchVersion == _marketplaceSearchVersion)
             {
                 StatusText = ex.Message;
             }
         }
         finally
         {
-            if (searchVersion == _marketplaceSearchVersion)
+            if (!_disposed && searchVersion == _marketplaceSearchVersion)
             {
                 IsBusy = false;
             }
@@ -255,9 +298,7 @@ public sealed partial class PackagesWindowViewModel
         ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);
         ApplySelectedPackageDetails(PackageSelectionDetails.FromMarketplaceLoading(item));
-        MarketplacePackageDetailsError = string.Empty;
-        MarketplacePackageDetailsLoaded = false;
-        IsMarketplacePackageDetailsLoading = true;
+        SetMarketplacePackageDetailsState(PresentationOperationState.Running);
         QueueMarketplacePackageDetailsSpinner(item, selectionVersion);
         NotifyMarketplacePackageDetailsStateChanged();
     }
@@ -266,20 +307,20 @@ public sealed partial class PackagesWindowViewModel
     {
         CancelMarketplacePackageDetailsSpinnerDelay();
         ShowMarketplacePackageDetailsSpinner = false;
-        MarketplacePackageDetailsError = errorMessage ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(errorMessage))
         {
             SelectedPackageSummary = "Package details could not be loaded.";
         }
 
-        MarketplacePackageDetailsLoaded = string.IsNullOrWhiteSpace(errorMessage);
-        IsMarketplacePackageDetailsLoading = false;
+        SetMarketplacePackageDetailsState(string.IsNullOrWhiteSpace(errorMessage)
+            ? PresentationOperationState.Succeeded
+            : PresentationOperationState.Failed(errorMessage));
         NotifyMarketplacePackageDetailsStateChanged();
     }
 
     private void QueueMarketplacePackageDetailsSpinner(RegistryPackageSearchItemViewModel item, int selectionVersion)
     {
-        var spinnerCancellation = new CancellationTokenSource();
+        var spinnerCancellation = CancellationTokenSource.CreateLinkedTokenSource(_tasks.Token);
         _marketplacePackageDetailsSpinnerCancellation = spinnerCancellation;
         _tasks.Observe(
             ShowMarketplacePackageDetailsSpinnerAfterDelayAsync(item, selectionVersion, spinnerCancellation),
@@ -365,9 +406,7 @@ public sealed partial class PackagesWindowViewModel
         ApplyMarketplaceProfile(null);
         ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);
-        MarketplacePackageDetailsError = string.Empty;
-        MarketplacePackageDetailsLoaded = false;
-        IsMarketplacePackageDetailsLoading = false;
+        SetMarketplacePackageDetailsState(PresentationOperationState.Idle);
         ShowMarketplacePackageDetailsSpinner = false;
         ApplySelectedPackageDetails(PackageSelectionDetails.NoMarketplaceMatch());
         ClearWarnings();
@@ -379,5 +418,18 @@ public sealed partial class PackagesWindowViewModel
 
     private void QueueMarketplaceSearch(TimeSpan? delay = null)
         => _marketplaceSearchScheduler.Queue(delay);
+
+    private void SetMarketplacePackageDetailsState(PresentationOperationState state)
+    {
+        if (_marketplacePackageDetailsState == state)
+        {
+            return;
+        }
+
+        _marketplacePackageDetailsState = state;
+        OnPropertyChanged(nameof(IsMarketplacePackageDetailsLoading));
+        OnPropertyChanged(nameof(MarketplacePackageDetailsLoaded));
+        OnPropertyChanged(nameof(MarketplacePackageDetailsError));
+    }
 
 }

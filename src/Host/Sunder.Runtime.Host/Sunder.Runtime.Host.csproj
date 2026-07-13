@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />

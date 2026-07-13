@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.App.Features.Shell.Layout;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.Themes;
@@ -142,6 +143,59 @@ public sealed class ShellStateServiceTests
         Assert.Equal(520, useStackWizardPlacement.X);
         Assert.Equal(1060, useStackWizardPlacement.Width);
         Assert.Equal("http://127.0.0.1:5280/", reloaded.PreferredRuntimeUrl);
+    }
+
+    [Fact]
+    public async Task QueuedLayoutSave_InterleavedWithWindowPatch_PreservesBothChanges()
+    {
+        var statePath = Path.Combine(CreateTempDirectory(), "shell-state.json");
+        var service = new ShellStateService(statePath);
+        var liveState = service.Load();
+        var releaseSave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var queue = new ShellStatePersistenceQueue(service, liveState, _ => releaseSave.Task);
+
+        liveState.ViewPlacements["agent.chat"] = RailPlacement.Middle;
+        liveState.HiddenHotbarViewIds.Add("agent.subsessions");
+        liveState.LeftPanelWidth = 475;
+        var queuedSave = queue.QueueSave();
+
+        service.Update(liveState, state => state.SettingsWindowPlacement = new ShellWindowPlacement
+        {
+            X = 80,
+            Y = 90,
+            Width = 1200,
+            Height = 800,
+        });
+
+        Assert.Equal(RailPlacement.Middle, liveState.ViewPlacements["agent.chat"]);
+        Assert.Contains("agent.subsessions", liveState.HiddenHotbarViewIds);
+        Assert.Equal(475, liveState.LeftPanelWidth);
+        Assert.Equal(1200, liveState.SettingsWindowPlacement?.Width);
+
+        var patchedPersisted = service.Load();
+        Assert.Empty(patchedPersisted.ViewPlacements);
+        Assert.Empty(patchedPersisted.HiddenHotbarViewIds);
+        Assert.Equal(ShellState.DefaultLeftPanelWidth, patchedPersisted.LeftPanelWidth);
+        Assert.Equal(1200, patchedPersisted.SettingsWindowPlacement?.Width);
+
+        releaseSave.SetResult();
+        await queuedSave;
+
+        var persisted = service.Load();
+        Assert.Equal(RailPlacement.Middle, persisted.ViewPlacements["agent.chat"]);
+        Assert.Contains("agent.subsessions", persisted.HiddenHotbarViewIds);
+        Assert.Equal(475, persisted.LeftPanelWidth);
+        Assert.Equal(1200, persisted.SettingsWindowPlacement?.Width);
+        Assert.Equal(persisted.Revision, liveState.Revision);
+        Assert.Equal(2, persisted.Revision);
+
+        liveState.RightPanelWidth = 525;
+        await queue.QueueSave();
+
+        persisted = service.Load();
+        Assert.Equal(525, persisted.RightPanelWidth);
+        Assert.Equal(persisted.Revision, liveState.Revision);
+        Assert.Equal(3, persisted.Revision);
     }
 
     [Fact]

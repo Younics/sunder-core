@@ -8,14 +8,21 @@ public sealed class RuntimePackageDataClient : IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
+    private readonly RuntimeHttpResponseReader _responses;
 
     public RuntimePackageDataClient(
         Func<RuntimeConnectionInfo?> getConnectionInfo,
-        HttpMessageHandler? innerHandler = null)
+        HttpMessageHandler? innerHandler = null,
+        RuntimeClientPolicyOptions? policy = null)
     {
         ArgumentNullException.ThrowIfNull(getConnectionInfo);
+        var clientPolicy = policy ?? new RuntimeClientPolicyOptions();
         _getConnectionInfo = getConnectionInfo;
-        _httpClient = new HttpClient(new RuntimeAuthenticatedHttpMessageHandler(getConnectionInfo, innerHandler));
+        _httpClient = new HttpClient(new RuntimeAuthenticatedHttpMessageHandler(getConnectionInfo, innerHandler, clientPolicy))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        _responses = new RuntimeHttpResponseReader(clientPolicy);
     }
 
     public Task<PackageDataValueResponse?> GetStateAsync(
@@ -43,11 +50,49 @@ public sealed class RuntimePackageDataClient : IDisposable
         CancellationToken cancellationToken = default)
         => ListKeysAsync(packageId, "state", prefix, cancellationToken);
 
-    public Task<PackageDataValueResponse?> GetConfigurationAsync(
+    public async Task<PackageSettingValueResponse?> GetSettingAsync(
         string packageId,
         string key,
         CancellationToken cancellationToken = default)
-        => GetValueAsync(packageId, "configuration", key, cancellationToken);
+    {
+        using var response = await _httpClient.GetAsync(
+            CreatePackageUri(packageId, $"settings/{Uri.EscapeDataString(key)}"),
+            cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await _responses.ReadJsonAsync<PackageSettingValueResponse>(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SetSettingAsync(
+        string packageId,
+        string key,
+        string value,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PutAsJsonAsync(
+            CreatePackageUri(packageId, $"settings/{Uri.EscapeDataString(key)}"),
+            new SetPackageSettingValueRequest(value),
+            cancellationToken).ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteSettingAsync(
+        string packageId,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreatePackageUri(packageId, $"settings/{Uri.EscapeDataString(key)}"),
+            cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode != HttpStatusCode.NotFound)
+        {
+            await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     public Task<PackageDataValueResponse?> GetSecretAsync(
         string packageId,
@@ -81,8 +126,8 @@ public sealed class RuntimePackageDataClient : IDisposable
             return null;
         }
 
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await _responses.ReadBinaryAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task WriteFileAsync(
@@ -96,7 +141,7 @@ public sealed class RuntimePackageDataClient : IDisposable
             CreateUri(packageId, $"files/{EscapeRelativePath(relativePath)}"),
             requestContent,
             cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteFileAsync(
@@ -109,7 +154,7 @@ public sealed class RuntimePackageDataClient : IDisposable
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.NotFound)
         {
-            response.EnsureSuccessStatusCode();
+            await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -127,9 +172,8 @@ public sealed class RuntimePackageDataClient : IDisposable
             return null;
         }
 
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<PackageDataValueResponse>(cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await _responses.ReadJsonAsync<PackageDataValueResponse>(response, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SetValueAsync(
@@ -143,7 +187,7 @@ public sealed class RuntimePackageDataClient : IDisposable
             CreateUri(packageId, $"{area}/{Uri.EscapeDataString(key)}"),
             new SetPackageDataValueRequest(value),
             cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task DeleteValueAsync(
@@ -157,7 +201,7 @@ public sealed class RuntimePackageDataClient : IDisposable
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode != HttpStatusCode.NotFound)
         {
-            response.EnsureSuccessStatusCode();
+            await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -175,9 +219,8 @@ public sealed class RuntimePackageDataClient : IDisposable
             return [];
         }
 
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<PackageDataKeysResponse>(cancellationToken: cancellationToken)
-            .ConfigureAwait(false))?.Keys ?? [];
+        await _responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return (await _responses.ReadJsonAsync<PackageDataKeysResponse>(response, cancellationToken).ConfigureAwait(false))?.Keys ?? [];
     }
 
     private static string EscapeRelativePath(string relativePath)
@@ -185,12 +228,15 @@ public sealed class RuntimePackageDataClient : IDisposable
             .Select(Uri.EscapeDataString));
 
     private Uri CreateUri(string packageId, string relativePath)
+        => CreatePackageUri(packageId, $"data/{relativePath}");
+
+    private Uri CreatePackageUri(string packageId, string relativePath)
     {
         var connection = _getConnectionInfo()
             ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
         return new Uri(
             RuntimeConnectionInfo.Normalize(connection.RuntimeUrl),
-            $"api/v1/packages/{Uri.EscapeDataString(packageId)}/data/{relativePath}");
+            $"api/v1/packages/{Uri.EscapeDataString(packageId)}/{relativePath}");
     }
 
     public void Dispose() => _httpClient.Dispose();

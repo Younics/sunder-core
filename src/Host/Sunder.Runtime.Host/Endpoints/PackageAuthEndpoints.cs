@@ -17,9 +17,9 @@ internal static class PackageAuthEndpoints
 
         group.MapPost(
             "{packageId}/auth/start",
-            async (string packageId, PackageAuthAccessService packageAuth, PackageAuthCallbackServer packageAuthCallbackServer, CancellationToken cancellationToken) =>
+            async (string packageId, PackageAuthAccessService packageAuth, PackageCallbackServer packageCallbackServer, CancellationToken cancellationToken) =>
             {
-                var session = await packageAuth.StartAsync(packageId, packageAuthCallbackServer, cancellationToken);
+                var session = await packageAuth.StartAsync(packageId, packageCallbackServer, cancellationToken);
                 return Results.Ok(RuntimeEndpointErrors.Required(session, $"Package '{packageId}' authentication handler"));
             });
 

@@ -1,0 +1,79 @@
+{
+  "preview": {
+    "success": true,
+    "planId": "opaque-plan",
+    "expiresAtUtc": "2026-01-02T03:04:05+00:00",
+    "actions": [
+      {
+        "actionId": "profile.create",
+        "contributorId": "profiles",
+        "displayName": "Create profile",
+        "kind": "Create",
+        "defaultSelected": true,
+        "description": null,
+        "ownerPackageId": "test.package"
+      }
+    ],
+    "requiredInputs": [],
+    "conflicts": [],
+    "warnings": [],
+    "errors": []
+  },
+  "import": {
+    "outcome": "Partial",
+    "importedItems": [
+      {
+        "itemId": "profile-1",
+        "contributorId": "profiles",
+        "displayName": "Profile",
+        "kind": "profile",
+        "ownerPackageId": "test.package"
+      }
+    ],
+    "idRemaps": {
+      "source-profile": "profile-1"
+    },
+    "contributorResults": [
+      {
+        "ownerPackageId": "test.package",
+        "contributorId": "profiles",
+        "fragmentIds": [
+          "profile-fragment"
+        ],
+        "outcome": "Completed",
+        "importedItems": [
+          {
+            "itemId": "profile-1",
+            "contributorId": "profiles",
+            "displayName": "Profile",
+            "kind": "profile",
+            "ownerPackageId": "test.package"
+          }
+        ],
+        "idRemaps": {
+          "source-profile": "profile-1"
+        },
+        "warnings": [],
+        "errors": []
+      },
+      {
+        "ownerPackageId": "other.package",
+        "contributorId": "settings",
+        "fragmentIds": [
+          "settings-fragment"
+        ],
+        "outcome": "Failed",
+        "importedItems": [],
+        "idRemaps": {},
+        "warnings": [],
+        "errors": [
+          "Settings import failed."
+        ]
+      }
+    ],
+    "warnings": [],
+    "errors": [
+      "Settings import failed."
+    ]
+  }
+}

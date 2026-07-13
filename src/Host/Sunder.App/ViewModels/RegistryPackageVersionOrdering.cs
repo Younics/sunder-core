@@ -1,34 +1,32 @@
-using Sunder.Package.Format;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.App.ViewModels;
 
 internal static class RegistryPackageVersionOrdering
 {
-    public static SemanticVersion? TryParse(string value)
-        => SemanticVersion.TryParse(value, out var version) ? version : null;
+    public static IComparer<string> Comparer { get; } = new VersionComparer();
 
-    public static IComparer<SemanticVersion?> Comparer { get; } = new NullableVersionComparer();
-
-    private sealed class NullableVersionComparer : IComparer<SemanticVersion?>
+    private sealed class VersionComparer : IComparer<string>
     {
-        public int Compare(SemanticVersion? x, SemanticVersion? y)
+        public int Compare(string? x, string? y)
         {
-            if (x is null && y is null)
+            if (string.Equals(x, y, StringComparison.Ordinal))
             {
                 return 0;
             }
 
-            if (x is null)
+            if (!SemanticVersion.TryParse(x, out var left))
             {
-                return -1;
+                return SemanticVersion.TryParse(y, out _) ? -1 : string.CompareOrdinal(x, y);
             }
 
-            if (y is null)
+            if (!SemanticVersion.TryParse(y, out var right))
             {
                 return 1;
             }
 
-            return x.Value.CompareTo(y.Value);
+            var precedence = left.CompareTo(right);
+            return precedence != 0 ? precedence : string.CompareOrdinal(x, y);
         }
     }
 }

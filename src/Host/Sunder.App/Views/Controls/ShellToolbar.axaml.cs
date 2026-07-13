@@ -21,6 +21,7 @@ public partial class ShellToolbar : UserControl
             MiddlePackageIconBar,
             ToolbarLeftMenuHost,
             () => ViewModel);
+        DetachedFromVisualTree += (_, _) => _toolbarMainMenuController.Dispose();
     }
 
     public void HideMenuIfPointerOutside(PointerPressedEventArgs e)

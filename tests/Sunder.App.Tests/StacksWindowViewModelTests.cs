@@ -316,6 +316,58 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task ImportSelectedRegistryStackAsLocalAsync_WhenDownloadIsCancelled_DoesNotPublishPartialImport()
+    {
+        var root = CreateTempDirectory();
+        var downloadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registryClient = new FakeRegistryApiClient
+        {
+            StackSearchResults = [CreateRegistryStackSummary("team-stack", "Team Stack")],
+            StackDetails = CreateRegistryStackDetails("team-stack", "Team Stack"),
+            StackDownloadFactory = async (_, _, cancellationToken) =>
+            {
+                downloadStarted.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+        };
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        using var viewModel = CreateViewModel(root, registryClient, library);
+        await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
+        using var cancellation = new CancellationTokenSource();
+
+        var importTask = viewModel.ImportSelectedRegistryStackAsLocalAsync(cancellationToken: cancellation.Token);
+        await downloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        Assert.False(await importTask);
+        Assert.Empty(await library.ListAsync());
+        Assert.Empty(viewModel.Stacks);
+        Assert.False(viewModel.IsBusy);
+        Assert.NotNull(registryClient.LastStackDownloadDestination);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(registryClient.LastStackDownloadDestination)!));
+    }
+
+    [Fact]
+    public void StackSelectionCoordinator_RapidSelectionsCancelEveryStaleRequest()
+    {
+        using var lifetime = new CancellationTokenSource();
+        using var coordinator = new StackSelectionCoordinator(lifetime.Token);
+        var requests = Enumerable.Range(0, 100)
+            .Select(_ => coordinator.BeginRegistry(hasSelection: true))
+            .ToArray();
+
+        Assert.All(requests[..^1], request => Assert.True(request.Token.IsCancellationRequested));
+        Assert.All(requests[..^1], request => Assert.False(coordinator.IsCurrent(request)));
+        Assert.False(requests[^1].Token.IsCancellationRequested);
+        Assert.True(coordinator.IsCurrent(requests[^1]));
+
+        coordinator.Dispose();
+
+        Assert.True(requests[^1].Token.IsCancellationRequested);
+        Assert.False(coordinator.IsCurrent(requests[^1]));
+    }
+
+    [Fact]
     public async Task CreateStackWizard_InitializesItemsGroupedByOwnerPackage()
     {
         var root = CreateTempDirectory();
@@ -789,6 +841,8 @@ public sealed class StacksWindowViewModelTests
         {
             ImportPreviewResponse = new RuntimeStackImportPreviewResponse(
                 true,
+                "plan-1",
+                DateTimeOffset.UtcNow.AddMinutes(15),
                 [
                     new RuntimeStackImportActionDescriptor("profile", "agent", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
                 ],
@@ -797,9 +851,10 @@ public sealed class StacksWindowViewModelTests
                 [],
                 []),
             ImportResponse = new RuntimeStackImportResponse(
-                true,
+                RuntimeStackImportOutcome.Completed,
                 [new RuntimeStackImportedItemDescriptor("profile", "agent", "Agent profile", "Profile")],
                 new Dictionary<string, string>(),
+                [],
                 [],
                 []),
         };
@@ -835,7 +890,8 @@ public sealed class StacksWindowViewModelTests
         Assert.NotNull(runtimeApiClient.LastImportRequest);
         Assert.Equal(["agent-profile"], runtimeApiClient.LastImportRequest.SelectedFragmentIds);
         Assert.Equal(["profile"], runtimeApiClient.LastImportRequest.SelectedActionIds);
-        Assert.Equal("secret-local-value", runtimeApiClient.LastImportRequest.InputValues["api-key"]);
+        Assert.Equal("plan-1", runtimeApiClient.LastImportRequest.PlanId);
+        Assert.Equal("secret-local-value", runtimeApiClient.LastPreviewRequest?.InputValues["api-key"]);
     }
 
     [Fact]
@@ -906,15 +962,18 @@ public sealed class StacksWindowViewModelTests
         {
             ImportPreviewResponse = new RuntimeStackImportPreviewResponse(
                 true,
+                "plan-1",
+                DateTimeOffset.UtcNow.AddMinutes(15),
                 [new RuntimeStackImportActionDescriptor("profile", "agent", "Agent profile", "Profile", DefaultSelected: false, "Import profile.")],
                 [],
                 [],
                 [],
                 []),
             ImportResponse = new RuntimeStackImportResponse(
-                true,
+                RuntimeStackImportOutcome.Completed,
                 [new RuntimeStackImportedItemDescriptor("profile", "agent", "Agent profile", "Profile")],
                 new Dictionary<string, string>(),
+                [],
                 [],
                 []),
             RegistryPlan = installPlan,
@@ -1144,7 +1203,11 @@ public sealed class StacksWindowViewModelTests
 
         public string? StackDownloadSourcePath { get; init; }
 
+        public Func<string, string, CancellationToken, Task>? StackDownloadFactory { get; init; }
+
         public string? LastStackSearchQuery { get; private set; }
+
+        public string? LastStackDownloadDestination { get; private set; }
 
         public List<string?> StackSearchQueries { get; } = [];
 
@@ -1222,9 +1285,16 @@ public sealed class StacksWindowViewModelTests
         public Task DownloadArtifactAsync(RegistryPackageArtifact artifact, string packageId, string version, string destinationPath, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken cancellationToken = default)
+        public async Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken cancellationToken = default)
         {
             LastDownloadedStackId = stackId;
+            LastStackDownloadDestination = destinationPath;
+            if (StackDownloadFactory is not null)
+            {
+                await StackDownloadFactory(stackId, destinationPath, cancellationToken);
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(StackDownloadSourcePath))
             {
                 throw new InvalidOperationException("No Stack download source configured.");
@@ -1232,7 +1302,6 @@ public sealed class StacksWindowViewModelTests
 
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
             File.Copy(StackDownloadSourcePath, destinationPath, overwrite: true);
-            return Task.CompletedTask;
         }
 
         public Task<RegistryPublishStackResponse> PublishStackAsync(string stackPath, string bearerToken, CancellationToken cancellationToken = default)
@@ -1268,14 +1337,14 @@ public sealed class StacksWindowViewModelTests
         }
     }
 
-    private sealed class FakeRuntimeApiClient : IRuntimeApiClient
+    private sealed class FakeRuntimeApiClient : IRuntimeStacksClient
     {
         private string? _exportPath;
         public RuntimeStackExportDiscoveryResponse ExportDiscoveryResponse { get; init; } = new([], [], []);
 
-        public RuntimeStackImportPreviewResponse ImportPreviewResponse { get; init; } = new(true, [], [], [], [], []);
+        public RuntimeStackImportPreviewResponse ImportPreviewResponse { get; init; } = new(true, "plan-1", DateTimeOffset.UtcNow.AddMinutes(15), [], [], [], [], []);
 
-        public RuntimeStackImportResponse ImportResponse { get; init; } = new(true, [], new Dictionary<string, string>(), [], []);
+        public RuntimeStackImportResponse ImportResponse { get; init; } = new(RuntimeStackImportOutcome.Completed, [], new Dictionary<string, string>(), [], [], []);
 
         public RegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], []);
 
@@ -1290,6 +1359,8 @@ public sealed class StacksWindowViewModelTests
         public RuntimeStackExportRequest? LastExportRequest { get; private set; }
 
         public RuntimeStackImportRequest? LastImportRequest { get; private set; }
+
+        public RuntimeStackImportPreviewRequest? LastPreviewRequest { get; private set; }
 
         public PackageStoreStageRequest? LastPackageStoreStageRequest { get; private set; }
 
@@ -1306,6 +1377,30 @@ public sealed class StacksWindowViewModelTests
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default) => Task.FromResult(SessionPackages);
 
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+
+        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
+            => Task.FromResult<PackageSessionStatus?>(null);
+
+        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
+            => Task.FromResult(Success() with { ImpactedPackageIds = impactedPackageIds });
+
+        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
+
+        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
+
+        public Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default) => Task.FromResult(InstalledPackages);
 
@@ -1327,7 +1422,44 @@ public sealed class StacksWindowViewModelTests
                 RegistryPlan.Items));
         }
 
+        public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Installed package.", true, false, [], [], [request.PackageId], []));
+
+        public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Updated packages.", true, false, [], [], [], []));
+
+        public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RegistryPackageStarResponse(true, "Updated package star.", null, []));
+
+        public Task<RegistryStackStarResponse> SetRegistryStackStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RegistryStackStarResponse(true, "Updated Stack star.", new RegistryStackStats(0, request.Starred ? 1 : 0, request.Starred), []));
+
+        public Task<RegistryPublishStackResponse> PublishRegistryStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RegistryPublishStackResponse(true, "team-stack", "Published Stack 'team-stack'.", [], []));
+
+        public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RegistryStackManagementOperationResponse(true, "Deleted Stack.", []));
+
         public Uri CreatePackageAssetUri(string packageId, string assetPath) => new($"file:///packages/{packageId}/{assetPath}");
+
+        public Task<ContentUploadDescriptor> UploadPackageAsync(string packagePath, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContentUploadDescriptor("package-upload", "test-hash", 0, Path.GetFileName(packagePath), "application/vnd.sunder.package"));
+
+        public Task<ContentUploadDescriptor> UploadStackAsync(string stackPath, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContentUploadDescriptor(
+                "stack-upload",
+                "test-hash",
+                new FileInfo(stackPath).Length,
+                Path.GetFileName(stackPath),
+                "application/vnd.sunder.stack"));
+
+        public Task<ContentUploadDescriptor> UploadStackMediaAsync(string mediaPath, string contentType, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContentUploadDescriptor(
+                "media-upload",
+                "test-hash",
+                new FileInfo(mediaPath).Length,
+                Path.GetFileName(mediaPath),
+                contentType));
 
         public Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default) => Task.FromResult(Success());
 
@@ -1366,9 +1498,9 @@ public sealed class StacksWindowViewModelTests
 
         public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageConfigurationSchemaDescriptor>>([]);
 
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult<PackageConfigurationValuesResponse?>(null);
+        public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult<PackageSettingsValuesResponse?>(null);
 
-        public Task SavePackageConfigurationValuesAsync(string packageId, IReadOnlyDictionary<string, string?> values, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SavePackageSettingsValuesAsync(string packageId, IReadOnlyDictionary<string, string?> values, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult<PackageAuthStatusResponse?>(null);
 
@@ -1444,6 +1576,7 @@ public sealed class StacksWindowViewModelTests
 
         public Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken cancellationToken = default)
         {
+            LastPreviewRequest = request;
             Events.Add("preview");
             return Task.FromResult(ImportPreviewResponse);
         }

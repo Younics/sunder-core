@@ -7,7 +7,7 @@ using Sunder.Sdk.Notifications;
 namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesOperationCommandCoordinator(
-    IRuntimeApiClient runtimeApiClient,
+    IRuntimePackagesClient runtimeApiClient,
     IPackageArchivePicker packageArchivePicker,
     PackageRegistryClientProvider registryClientProvider,
     RegistryPackageInstallService registryInstallService,
@@ -375,7 +375,7 @@ internal sealed class PackagesOperationCommandCoordinator(
     }
 
     private async Task ExecuteRegistryInstallAsync(
-        Func<IRegistryApiClient, Task<RegistryPackageInstallExecutionResult>> executeAsync,
+        Func<IRegistryPackageBrowseClient, Task<RegistryPackageInstallExecutionResult>> executeAsync,
         string? selectedPackageIdForRefresh,
         string successTitle,
         string successFallbackMessage)
@@ -437,7 +437,7 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
     }
 
-    private bool TryCreateRegistryClient(out IRegistryApiClient registryClient)
+    private bool TryCreateRegistryClient(out IRegistryPackageBrowseClient registryClient)
     {
         if (!registryClientProvider.TryCreate(out registryClient, out var errorMessage))
         {

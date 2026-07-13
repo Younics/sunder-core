@@ -40,7 +40,6 @@ internal static class CliUsage
         Global options:
           --registry-api-url <url>  Registry API URL
           --registry-web-url <url>  Registry Web URL used for browser auth
-          --registry-url <url>      Alias that sets both Registry URLs
           --runtime-url <url>       Authenticated local Runtime URL
           --timeout <duration>      Request timeout; default 15m
           --json                    Emit one deterministic JSON result

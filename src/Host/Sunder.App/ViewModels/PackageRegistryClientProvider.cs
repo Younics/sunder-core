@@ -4,9 +4,9 @@ namespace Sunder.App.ViewModels;
 
 internal sealed class PackageRegistryClientProvider(
     Func<string> getRegistryUrlText,
-    Func<Uri, IRegistryApiClient> createRegistryClient)
+    Func<Uri, IRegistryPackageBrowseClient> createRegistryClient)
 {
-    public bool TryCreate(out IRegistryApiClient registryClient, out string? errorMessage)
+    public bool TryCreate(out IRegistryPackageBrowseClient registryClient, out string? errorMessage)
     {
         registryClient = null!;
         if (!TryResolve(out var registryUrl, out errorMessage) || registryUrl is null)

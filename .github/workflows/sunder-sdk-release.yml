@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DOTNET_VERSION: "10.0.x"
+  DOTNET_VERSION: "10.0.100"
   NUGET_SOURCE: https://api.nuget.org/v3/index.json
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
 
           tag="${GITHUB_REF_NAME}"
           if [[ ! "$tag" =~ ^sdk/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
-            echo "SDK release tags must use SemVer format, for example sdk/v1.0.0 or sdk/v1.1.0-beta.1." >&2
+            echo "SDK release tags must use SemVer format, for example sdk/v1.1.0 or sdk/v1.1.1-beta.1." >&2
             exit 1
           fi
 
@@ -67,7 +67,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore runtime storage tests
-        run: dotnet restore tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj
+        run: dotnet restore tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
 
       - name: Run runtime storage tests
         env:
@@ -93,7 +93,7 @@ jobs:
 
       - name: Restore solution
         shell: bash
-        run: dotnet restore Sunder.Core.slnx
+        run: dotnet restore Sunder.Core.slnx --locked-mode
 
       - name: Build SDK packages
         shell: bash
@@ -285,6 +285,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -308,27 +311,30 @@ jobs:
           shopt -s nullglob
 
           tag="sdk/v$VERSION"
-          assets=(release-assets/*.nupkg)
-          if [[ ${#assets[@]} -ne 5 ]]; then
-            echo "Expected exactly five NuGet release assets, found ${#assets[@]}." >&2
+          packages=(release-assets/*.nupkg)
+          if [[ ${#packages[@]} -ne 5 ]]; then
+            echo "Expected exactly five NuGet release assets, found ${#packages[@]}." >&2
             exit 1
           fi
 
+          bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f | sort)
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" --clobber
-          else
-            create_args=(
-              release create "$tag"
-              --title "Sunder SDK $VERSION"
-              --notes "Automated Sunder SDK, package build tooling, and package templates release for $VERSION."
-            )
-
-            if [[ "$IS_PRERELEASE" == "true" ]]; then
-              create_args+=(--prerelease)
-            fi
-
-            gh "${create_args[@]}" "${assets[@]}"
+            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+            exit 1
           fi
+
+          create_args=(
+            release create "$tag"
+            --title "Sunder SDK $VERSION"
+            --notes "Automated Sunder SDK, package build tooling, and package templates release for $VERSION."
+          )
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            create_args+=(--prerelease)
+          fi
+
+          gh "${create_args[@]}" "${assets[@]}"
 
       - name: Push packages to NuGet.org
         shell: bash

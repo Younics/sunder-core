@@ -349,6 +349,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
     private sealed class WatchRegistration : IDisposable
     {
         private readonly Action<string, bool> _onChanged;
+        private readonly object _syncRoot = new();
         private FileSystemWatcher? _folderWatcher;
         private readonly FileSystemWatcher? _parentWatcher;
         private bool _disposed;
@@ -372,41 +373,47 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
         public void RefreshFolderWatcher(bool recreate = false)
         {
-            if (_disposed)
+            lock (_syncRoot)
             {
-                return;
-            }
-
-            if (recreate || !Directory.Exists(Folder))
-            {
-                _folderWatcher?.Dispose();
-                _folderWatcher = null;
-                if (!Directory.Exists(Folder))
+                if (_disposed)
                 {
                     return;
                 }
-            }
 
-            _folderWatcher ??= CreateFolderWatcher();
+                if (recreate || !Directory.Exists(Folder))
+                {
+                    _folderWatcher?.Dispose();
+                    _folderWatcher = null;
+                    if (!Directory.Exists(Folder))
+                    {
+                        return;
+                    }
+                }
+
+                _folderWatcher ??= CreateFolderWatcher();
+            }
         }
 
         public void Dispose()
         {
-            if (_disposed)
+            lock (_syncRoot)
             {
-                return;
-            }
+                if (_disposed)
+                {
+                    return;
+                }
 
-            _disposed = true;
-            _folderWatcher?.Dispose();
-            _folderWatcher = null;
-            _parentWatcher?.Dispose();
+                _disposed = true;
+                _folderWatcher?.Dispose();
+                _folderWatcher = null;
+                _parentWatcher?.Dispose();
+            }
         }
 
         private FileSystemWatcher? CreateFolderWatcher()
             => Directory.Exists(Folder) ? CreateWatcher(Folder, includeSubdirectories: true, filter: null) : null;
 
-        private FileSystemWatcher CreateWatcher(string path, bool includeSubdirectories, string? filter)
+        private FileSystemWatcher? CreateWatcher(string path, bool includeSubdirectories, string? filter)
         {
             var watcher = new FileSystemWatcher(path)
             {
@@ -426,12 +433,27 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
             watcher.Deleted += OnChanged;
             watcher.Renamed += OnRenamed;
             watcher.Error += OnError;
-            watcher.EnableRaisingEvents = true;
-            return watcher;
+            try
+            {
+                watcher.EnableRaisingEvents = true;
+                return watcher;
+            }
+            catch (Exception exception) when (exception is DirectoryNotFoundException or IOException or ArgumentException)
+            {
+                watcher.Dispose();
+                return null;
+            }
         }
 
         private void OnChanged(object sender, FileSystemEventArgs e)
         {
+            lock (_syncRoot)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+            }
             if (ReferenceEquals(sender, _parentWatcher) && !IsTargetFolder(e.FullPath))
             {
                 return;
@@ -445,6 +467,13 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
         private void OnRenamed(object sender, RenamedEventArgs e)
         {
+            lock (_syncRoot)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+            }
             if (ReferenceEquals(sender, _parentWatcher)
                 && !IsTargetFolder(e.FullPath)
                 && !IsTargetFolder(e.OldFullPath))
@@ -459,7 +488,16 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         }
 
         private void OnError(object sender, ErrorEventArgs e)
-            => _onChanged(PackageId, true);
+        {
+            lock (_syncRoot)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+            }
+            _onChanged(PackageId, true);
+        }
 
         private bool IsTargetFolder(string path)
             => string.Equals(Path.GetFullPath(path), Folder, PathComparison);

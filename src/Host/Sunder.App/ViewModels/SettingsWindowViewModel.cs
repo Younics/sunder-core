@@ -11,17 +11,19 @@ namespace Sunder.App.ViewModels;
 
 public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 {
-    private readonly IRuntimeApiClient _runtimeApiClient;
+    private readonly IRuntimePackageSettingsClient _runtimeApiClient;
     private readonly SettingsCliViewModel _cli;
     private readonly SettingsUpdateViewModel _updates;
     private readonly SettingsPackageSectionsViewModel _packageSettings;
     private readonly SettingsPackageSectionRefreshCoordinator _packageSectionRefresh;
     private readonly SettingsSectionSelectionState _selection = new();
+    private readonly LatestAsyncRequest _selectionLoadRequest = new();
+    private readonly OwnedTaskObserver _tasks = new(nameof(SettingsWindowViewModel));
     private readonly CancellationTokenSource _disposeCts = new();
     private bool _disposed;
 
     public SettingsWindowViewModel(
-        IRuntimeApiClient runtimeApiClient,
+        IRuntimePackageSettingsClient runtimeApiClient,
         PackageViewHostService packageViewHostService,
         CliInstallationService cliInstallationService,
         SunderUpdateService? updateService = null,
@@ -72,7 +74,9 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         _selection.PreserveSelection(CoreSections[0]);
         ApplyCoreSelection(CoreSections[0]);
-        _packageSectionRefresh.RefreshAsync(preserveSelection: false, _disposeCts.Token);
+        _tasks.Observe(
+            _packageSectionRefresh.RefreshAsync(preserveSelection: false, _disposeCts.Token),
+            "loading package settings sections");
     }
 
     public ObservableCollection<SettingsSectionItemViewModel> CoreSections { get; }
@@ -229,6 +233,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        _selectionLoadRequest.Invalidate();
         ApplyCoreSelection(item);
         if (IsCliSelection)
         {
@@ -238,6 +243,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public async Task<bool> ApplyAsync()
     {
+        if (_disposed)
+        {
+            return false;
+        }
+
         if (IsUpdatesSelection)
         {
             return await SaveUpdateSettingsAsync();
@@ -253,17 +263,22 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         var packageId = selectedSection.PackageId;
         var selectedTitle = SelectedTitle;
         var selectionVersion = _selection.Version;
+        var cancellationToken = _disposeCts.Token;
         IsBusy = true;
         try
         {
             var values = PackageConfigurationFormSerializer.Serialize(SelectedPackageSections);
-            await _runtimeApiClient.SavePackageConfigurationValuesAsync(packageId, values);
+            await _runtimeApiClient.SavePackageSettingsValuesAsync(packageId, values, cancellationToken);
             if (IsCurrentSelection(selectedSection, selectionVersion))
             {
                 StatusText = $"Applied settings for {selectedTitle}.";
                 return true;
             }
 
+            return false;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
             return false;
         }
         catch (Exception ex)
@@ -314,11 +329,14 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         if (_disposed)
         {
             return false;
         }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token);
+        cancellationToken = lifetimeCancellation.Token;
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(packageId))
         {
@@ -329,8 +347,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         var item = _packageSettings.FindSection(packageId);
         if (item is null)
         {
-            using var reloadCts = CreateLifetimeCancellationTokenSource(cancellationToken, out var reloadToken);
-            await _packageSectionRefresh.RefreshAsync(preserveSelection: true, reloadToken).WaitAsync(cancellationToken);
+            await _packageSectionRefresh.RefreshAsync(preserveSelection: true, cancellationToken).WaitAsync(cancellationToken);
             item = _packageSettings.FindSection(packageId);
         }
 
@@ -358,52 +375,76 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public async Task RefreshCliStatusAsync(bool showSuccessStatus = true)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         IsBusy = true;
         try
         {
             var statusText = await _cli.RefreshStatusAsync(showSuccessStatus);
-            if (!string.IsNullOrWhiteSpace(statusText))
+            if (!_disposed && !string.IsNullOrWhiteSpace(statusText))
             {
                 StatusText = statusText;
             }
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
     public async Task InstallOrRepairCliAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         IsBusy = true;
         try
         {
             var statusText = await _cli.InstallOrRepairAsync();
-            if (!string.IsNullOrWhiteSpace(statusText))
+            if (!_disposed && !string.IsNullOrWhiteSpace(statusText))
             {
                 StatusText = statusText;
             }
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
     public async Task UninstallCliAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         IsBusy = true;
         try
         {
             var statusText = await _cli.UninstallAsync();
-            if (!string.IsNullOrWhiteSpace(statusText))
+            if (!_disposed && !string.IsNullOrWhiteSpace(statusText))
             {
                 StatusText = statusText;
             }
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
@@ -414,18 +455,26 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public async Task CheckForAppUpdatesAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         IsBusy = true;
         try
         {
             var statusText = await _updates.CheckForUpdatesAsync();
-            if (!string.IsNullOrWhiteSpace(statusText))
+            if (!_disposed && !string.IsNullOrWhiteSpace(statusText))
             {
                 StatusText = statusText;
             }
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
@@ -438,8 +487,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         _disposed = true;
         _selection.Dispose();
+        _selectionLoadRequest.Dispose();
         _packageSectionRefresh.Invalidate();
         _disposeCts.Cancel();
+        _tasks.Dispose();
         HostedSettingsView = null;
         _cli.PropertyChanged -= Cli_OnPropertyChanged;
         _updates.PropertyChanged -= Updates_OnPropertyChanged;
@@ -449,6 +500,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
 
         _runtimeApiClient.Dispose();
+        _disposeCts.Dispose();
     }
 
     private async Task NotifyHostedSettingsNavigatedAsync(
@@ -533,6 +585,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        using var request = _selectionLoadRequest.Start(_disposeCts.Token);
         IsBusy = true;
         try
         {
@@ -545,8 +598,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             var result = await _packageSettings.LoadSelectionAsync(
                 item.PackageId,
                 hasSchema ? schema : null,
-                _disposeCts.Token);
-            if (!IsCurrentSelection(item, selectionVersion))
+                request.Token);
+            if (!request.IsCurrent || !IsCurrentSelection(item, selectionVersion))
             {
                 return;
             }
@@ -556,12 +609,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
             StatusText = result.StatusText;
         }
-        catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            if (IsCurrentSelection(item, selectionVersion))
+            if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
             {
                 StatusText = ex.Message;
                 ApplyCoreSelection(CoreSections[0]);
@@ -569,7 +622,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
         finally
         {
-            if (IsCurrentSelection(item, selectionVersion))
+            if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
             {
                 IsBusy = false;
             }
@@ -606,90 +659,5 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     private bool IsCurrentSelection(SettingsSectionItemViewModel item, int? selectionVersion = null)
         => !_disposed && _selection.IsCurrent(item, selectionVersion);
-
-    private void Cli_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        switch (e.PropertyName)
-        {
-            case nameof(SettingsCliViewModel.StatusText):
-                OnPropertyChanged(nameof(CliStatusText));
-                break;
-            case nameof(SettingsCliViewModel.StatusDescription):
-                OnPropertyChanged(nameof(CliStatusDescription));
-                break;
-            case nameof(SettingsCliViewModel.PlatformText):
-                OnPropertyChanged(nameof(CliPlatformText));
-                break;
-            case nameof(SettingsCliViewModel.BundledPath):
-                OnPropertyChanged(nameof(CliBundledPath));
-                break;
-            case nameof(SettingsCliViewModel.InstalledPath):
-                OnPropertyChanged(nameof(CliInstalledPath));
-                break;
-            case nameof(SettingsCliViewModel.ShimPath):
-                OnPropertyChanged(nameof(CliShimPath));
-                break;
-            case nameof(SettingsCliViewModel.WarningText):
-                OnPropertyChanged(nameof(CliWarningText));
-                break;
-            case nameof(SettingsCliViewModel.PathInstructions):
-                OnPropertyChanged(nameof(CliPathInstructions));
-                break;
-            case nameof(SettingsCliViewModel.HasWarning):
-                OnPropertyChanged(nameof(HasCliWarning));
-                break;
-            case nameof(SettingsCliViewModel.HasPathInstructions):
-                OnPropertyChanged(nameof(HasCliPathInstructions));
-                break;
-            case nameof(SettingsCliViewModel.CanInstallOrRepair):
-                OnPropertyChanged(nameof(CanInstallOrRepairCli));
-                break;
-            case nameof(SettingsCliViewModel.CanUninstall):
-                OnPropertyChanged(nameof(CanUninstallCli));
-                break;
-        }
-    }
-
-    private void Updates_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        switch (e.PropertyName)
-        {
-            case nameof(SettingsUpdateViewModel.DownloadUpdatesAutomatically):
-                OnPropertyChanged(nameof(DownloadUpdatesAutomatically));
-                break;
-            case nameof(SettingsUpdateViewModel.CurrentVersionText):
-                OnPropertyChanged(nameof(UpdateCurrentVersionText));
-                break;
-            case nameof(SettingsUpdateViewModel.SourceText):
-                OnPropertyChanged(nameof(UpdateSourceText));
-                break;
-            case nameof(SettingsUpdateViewModel.StatusText):
-                OnPropertyChanged(nameof(UpdateStatusText));
-                break;
-            case nameof(SettingsUpdateViewModel.CanCheckForAppUpdates):
-                OnPropertyChanged(nameof(CanCheckForAppUpdates));
-                break;
-        }
-    }
-
-    private void ApplyUpdateSettings()
-    {
-        _updates.LoadSettings();
-    }
-
-    private async Task<bool> SaveUpdateSettingsAsync()
-    {
-        IsBusy = true;
-        try
-        {
-            var result = await _updates.SaveSettingsAsync();
-            StatusText = result.StatusText;
-            return result.Success;
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
 
 }

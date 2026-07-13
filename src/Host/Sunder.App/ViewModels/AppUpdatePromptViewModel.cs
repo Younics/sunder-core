@@ -3,8 +3,9 @@ using Sunder.App.Services;
 
 namespace Sunder.App.ViewModels;
 
-internal sealed partial class AppUpdatePromptViewModel(AppUpdatePromptCoordinator updatePromptCoordinator) : ViewModelBase
+internal sealed partial class AppUpdatePromptViewModel(AppUpdatePromptCoordinator updatePromptCoordinator) : ViewModelBase, IDisposable
 {
+    private readonly LatestAsyncRequest _request = new();
     [ObservableProperty]
     private bool _showUpdatePrompt;
 
@@ -25,28 +26,43 @@ internal sealed partial class AppUpdatePromptViewModel(AppUpdatePromptCoordinato
 
     partial void OnIsUpdateActionBusyChanged(bool value) => OnPropertyChanged(nameof(CanInstallAppUpdate));
 
-    public async Task CheckForStartupPromptAsync(Action<Action> runOnUiThread)
+    public async Task CheckForStartupPromptAsync(Action<Action> runOnUiThread, CancellationToken cancellationToken)
     {
-        var update = await updatePromptCoordinator.CheckForStartupPromptAsync();
-        if (update is not null)
+        using var request = _request.Start(cancellationToken);
+        var update = await updatePromptCoordinator.CheckForStartupPromptAsync(request.Token);
+        if (update is not null && request.IsCurrent)
         {
-            runOnUiThread(() => ShowPrompt(update));
+            runOnUiThread(() =>
+            {
+                if (request.IsCurrent)
+                {
+                    ShowPrompt(update);
+                }
+            });
         }
     }
 
-    public async Task InstallAvailableUpdateAsync(Action<Action> runOnUiThread)
+    public async Task InstallAvailableUpdateAsync(Action<Action> runOnUiThread, CancellationToken cancellationToken)
     {
         if (_availableAppUpdate is null || IsUpdateActionBusy)
         {
             return;
         }
 
+        using var request = _request.Start(cancellationToken);
         IsUpdateActionBusy = true;
         UpdatePromptStatus = "Downloading update...";
         var failureStatus = await updatePromptCoordinator.InstallUpdateAndRestartAsync(
             _availableAppUpdate,
-            progress => runOnUiThread(() => UpdatePromptStatus = $"Downloading update... {progress}%"));
-        if (failureStatus is not null)
+            progress => runOnUiThread(() =>
+            {
+                if (request.IsCurrent)
+                {
+                    UpdatePromptStatus = $"Downloading update... {progress}%";
+                }
+            }),
+            request.Token);
+        if (failureStatus is not null && request.IsCurrent)
         {
             UpdatePromptStatus = failureStatus;
             IsUpdateActionBusy = false;
@@ -74,4 +90,6 @@ internal sealed partial class AppUpdatePromptViewModel(AppUpdatePromptCoordinato
         ShowUpdatePrompt = true;
         IsUpdateActionBusy = false;
     }
+
+    public void Dispose() => _request.Dispose();
 }

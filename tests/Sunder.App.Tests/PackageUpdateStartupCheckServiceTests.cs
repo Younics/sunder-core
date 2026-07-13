@@ -116,6 +116,28 @@ public sealed class PackageUpdateStartupCheckServiceTests
         Assert.Empty(notificationCenter.ListNotifications());
     }
 
+    [Fact]
+    public async Task EnqueueStartupCheck_WhenPlanFails_DoesNotReportUpdates()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var notificationCenter = CreateNotificationCenter();
+        var service = CreateService(
+            queue,
+            new FakeRuntimeApiClient([CreateInstalledPackage("agent", "1.0.0")]),
+            new FakeRegistryApiClient
+            {
+                PlanSuccess = false,
+                Updates = [CreateUpdate("agent", "1.0.0", "1.1.0")],
+            },
+            notificationCenter);
+
+        var snapshot = service.EnqueueStartupCheck();
+
+        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        Assert.Equal(BackgroundProcessState.Completed, queue.GetProcess(snapshot.ProcessId)?.State);
+        Assert.Empty(notificationCenter.ListNotifications());
+    }
+
     private static PackageUpdateStartupCheckService CreateService(
         BackgroundProcessQueueService queue,
         FakeRuntimeApiClient runtimeApiClient,
@@ -123,6 +145,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
         NotificationCenterService notificationCenter)
     {
         runtimeApiClient.Updates = registryApiClient.Updates;
+        runtimeApiClient.PlanSuccess = registryApiClient.PlanSuccess;
         runtimeApiClient.ThrowOnResolveUpdates = registryApiClient.ThrowOnResolveUpdates;
         return new(
             queue,
@@ -157,65 +180,34 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient() => runtimeApiClient;
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => (TClient)(object)runtimeApiClient;
     }
 
-    private sealed class FakeRegistryApiClient : IRegistryApiClient
+    private sealed class FakeRegistryApiClient : IRegistryClient
     {
         public Uri RegistryUrl { get; } = new("https://registry.example/");
 
         public IReadOnlyList<RegistryPackageUpdate> Updates { get; init; } = [];
 
+        public bool PlanSuccess { get; init; } = true;
+
         public bool ThrowOnResolveUpdates { get; init; }
 
         public int ResolveUpdatesCallCount { get; private set; }
-
-        public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(
-            RegistryResolveUpdatesRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ResolveUpdatesCallCount++;
-            if (ThrowOnResolveUpdates)
-            {
-                throw new InvalidOperationException("registry unavailable");
-            }
-
-            return Task.FromResult(new RegistryResolveUpdatesResponse(Updates));
-        }
-
-        public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
-            RegistryResolveInstallPlanRequest request,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task DownloadArtifactAsync(
-            RegistryPackageArtifact artifact,
-            string packageId,
-            string version,
-            string destinationPath,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
 
         public void Dispose()
         {
         }
     }
 
-    private sealed class FakeRuntimeApiClient(IReadOnlyList<InstalledPackageDescriptor>? installedPackages = null) : IRuntimeApiClient
+    private sealed class FakeRuntimeApiClient(IReadOnlyList<InstalledPackageDescriptor>? installedPackages = null) : IRuntimePackageUpdateClient
     {
         private readonly IReadOnlyList<InstalledPackageDescriptor> _installedPackages = installedPackages ?? [];
 
         public IReadOnlyList<RegistryPackageUpdate> Updates { get; set; } = [];
+
+        public bool PlanSuccess { get; set; } = true;
 
         public bool ThrowOnResolveUpdates { get; set; }
 
@@ -223,97 +215,15 @@ public sealed class PackageUpdateStartupCheckServiceTests
         {
             if (ThrowOnResolveUpdates) throw new InvalidOperationException("registry unavailable");
             return Task.FromResult(new RegistryResolveInstallPlanResponse(
-                true,
+                PlanSuccess,
                 Updates.Select(update => new RegistryPackageInstallPlanItem(update.PackageId, update.CurrentVersion, update.AvailableVersion, true, update.DeprecatedMessage, [], update.Artifact)).ToArray(),
                 [],
-                [],
+                PlanSuccess ? [] : ["Registry is not reachable."],
                 []));
         }
 
-        public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(_installedPackages);
-
-        public Uri CreatePackageAssetUri(string packageId, string assetPath)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(
-            string packageId,
-            string packagePath,
-            bool allowDowngrade = false,
-            bool reinstall = false,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
-            PackageLifecycleLoadRequest request,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(
-            string packageId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task SavePackageConfigurationValuesAsync(
-            string packageId,
-            IReadOnlyDictionary<string, string?> values,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(
-            string packageId,
-            string authSessionId,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task ReportPackageFaultAsync(
-            string packageId,
-            PackageFailureOrigin origin,
-            string message,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task ShutdownAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
 
         public void Dispose()
         {

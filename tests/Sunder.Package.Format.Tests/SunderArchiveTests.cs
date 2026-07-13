@@ -28,6 +28,23 @@ public sealed class SunderArchiveTests
     public void ArchiveRelativePath_RejectsNonPortablePaths(string value)
         => Assert.False(ArchiveRelativePath.TryParse(value, 240, 32, out _, out _));
 
+    [Fact]
+    public void ArchiveRelativePath_GeneratedMalformedPathsNeverParse()
+    {
+        var random = new Random(7419);
+        var unsafeFragments = new[] { "..", ".", "CON", "name.", "name ", "a\\b", "a:b", "naïve" };
+        for (var index = 0; index < 250; index++)
+        {
+            var prefix = new string(Enumerable.Range(0, random.Next(1, 12)).Select(_ => (char)random.Next('a', 'z' + 1)).ToArray());
+            var fragment = unsafeFragments[random.Next(unsafeFragments.Length)];
+            var value = $"{prefix}/{fragment}/file-{index}";
+
+            Assert.False(
+                ArchiveRelativePath.TryParse(value, 240, 32, out _, out _),
+                $"Generated unsafe path was accepted: {value}");
+        }
+    }
+
     [Theory]
     [InlineData("../outside")]
     [InlineData("/absolute")]
@@ -58,6 +75,23 @@ public sealed class SunderArchiveTests
         await Assert.ThrowsAsync<InvalidDataException>(() => SunderArchive.ExtractAtomicAsync(archivePath, destination));
 
         Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public async Task ExtractAtomicAsync_GeneratedCaseCollisionsNeverPublishDestination()
+    {
+        var root = CreateTempDirectory();
+        for (var index = 0; index < 40; index++)
+        {
+            var stem = $"payload/group-{index}/item";
+            var first = index % 2 == 0 ? stem + ".json" : stem.ToUpperInvariant() + ".json";
+            var second = index % 2 == 0 ? stem.ToUpperInvariant() + ".json" : stem + ".json";
+            var archivePath = CreateArchive(root, (first, "first", 0), (second, "second", 0));
+            var destination = Path.Combine(root, "collision-" + index);
+
+            await Assert.ThrowsAsync<InvalidDataException>(() => SunderArchive.ExtractAtomicAsync(archivePath, destination));
+            Assert.False(Directory.Exists(destination));
+        }
     }
 
     [Fact]
@@ -198,6 +232,49 @@ public sealed class SunderArchiveTests
         using var archive = ZipFile.OpenRead(first);
         Assert.Equal(["payload/a.txt", "z.txt"], archive.Entries.Select(entry => entry.FullName).ToArray());
         Assert.All(archive.Entries, entry => Assert.Equal(1980, entry.LastWriteTime.Year));
+    }
+
+    [Fact]
+    public async Task WriteDeterministicAsync_SourceGrowthIsBlockedOrFailsWithoutPublishingArchive()
+    {
+        var root = CreateTempDirectory();
+        var source = Path.Combine(root, "source");
+        Directory.CreateDirectory(source);
+        var sourcePath = Path.Combine(source, "payload.bin");
+        await using (var sourceStream = File.Create(sourcePath))
+        {
+            var buffer = new byte[1024 * 1024];
+            for (var index = 0; index < 64; index++)
+            {
+                Random.Shared.NextBytes(buffer);
+                await sourceStream.WriteAsync(buffer);
+            }
+        }
+
+        var archivePath = Path.Combine(root, "result.zip");
+        var write = SunderArchive.WriteDeterministicAsync(source, archivePath);
+        while (!write.IsCompleted
+               && !Directory.EnumerateFiles(root, ".result.zip.write-*").Any())
+        {
+            await Task.Delay(1);
+        }
+
+        Assert.False(write.IsCompleted, "Archive writing completed before the mutation race could be exercised.");
+        try
+        {
+            await using var append = new FileStream(sourcePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            await append.WriteAsync(new byte[] { 0x42 });
+        }
+        catch (IOException)
+        {
+            await write;
+            Assert.True(File.Exists(archivePath));
+            return;
+        }
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => write);
+        Assert.Contains("changed after it was inspected", error.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(archivePath));
     }
 
     private static string CreateArchive(string root, params (string Path, string Content, int ExternalAttributes)[] entries)

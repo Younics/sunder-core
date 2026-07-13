@@ -33,5 +33,5 @@ public sealed class PackageStackContributor : IPackageStackContributor
     public ValueTask<StackImportResult> ImportAsync(
         StackImportRequest request,
         CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new StackImportResult(true, [], new Dictionary<string, string>(), [], []));
+        => ValueTask.FromResult(new StackImportResult(StackImportOutcome.Completed, [], new Dictionary<string, string>(), [], []));
 }

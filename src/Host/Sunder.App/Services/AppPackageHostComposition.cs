@@ -27,7 +27,7 @@ internal sealed class AppPackageHostComposition : IDisposable
         AppPackageExtensionCatalog? extensionCatalog,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
-        IPackageSessionService? packageSessionService,
+        AppPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
@@ -198,10 +198,10 @@ internal sealed class AppPackageHostComposition : IDisposable
         return true;
     }
 
-    public async Task DisposeLegacyOwnedInstancesAsync()
+    public async Task DisposeRemainingOwnedResourcesAsync()
     {
-        var (ownedDisposables, loadContexts) = _state.SnapshotLegacyResources();
-        await _unloadCoordinator.DisposeLegacyOwnedInstancesAsync(ownedDisposables, loadContexts);
+        var (ownedDisposables, loadContexts) = _state.SnapshotOwnedResources();
+        await _unloadCoordinator.DisposeOwnedResourcesAsync(ownedDisposables, loadContexts);
     }
 
     public void RegisterPackageAssembly(string packageId, Assembly assembly)

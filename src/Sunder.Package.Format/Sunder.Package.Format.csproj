@@ -8,4 +8,8 @@
     <RootNamespace>Sunder.Package.Format</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
+  </ItemGroup>
+
 </Project>

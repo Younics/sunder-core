@@ -22,6 +22,7 @@ public sealed class RuntimeApiClientTransferTests
             requests.Add((request.Method, request.RequestUri!.AbsolutePath, request.Headers.Authorization?.ToString(), body));
             return request.RequestUri.AbsolutePath switch
             {
+                "/api/handshake" => Json(CreateHandshake()),
                 "/api/v1/packages/installed" => Json(Array.Empty<InstalledPackageDescriptor>()),
                 "/api/v1/uploads/packages" => Json(new ContentUploadDescriptor("upload-1", "hash", body.Length, "demo.sunderpkg", "application/vnd.sunder.package")),
                 "/api/v1/packages/store/stage" => Json(new PackageStoreStageResult(
@@ -38,9 +39,9 @@ public sealed class RuntimeApiClientTransferTests
                 () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"), handler);
             var result = await client.ApplyLocalPackageAsync(path, "demo", false, false);
             Assert.True(result.Success);
-            Assert.Equal(["/api/v1/packages/installed", "/api/v1/uploads/packages", "/api/v1/packages/store/stage", "/api/v1/packages/store/stage/stage-1/commit"], requests.Select(item => item.Path));
+            Assert.Equal(["/api/handshake", "/api/v1/packages/installed", "/api/v1/uploads/packages", "/api/v1/packages/store/stage", "/api/v1/packages/store/stage/stage-1/commit"], requests.Select(item => item.Path));
             Assert.All(requests, request => Assert.Equal("Bearer runtime-secret", request.Authorization));
-            Assert.Equal("archive", Encoding.UTF8.GetString(requests[1].Body));
+            Assert.Equal("archive", Encoding.UTF8.GetString(requests[2].Body));
         }
         finally
         {
@@ -70,6 +71,62 @@ public sealed class RuntimeApiClientTransferTests
         }
     }
 
+    [Fact]
+    public async Task Runtime_client_rejects_oversized_json_response()
+    {
+        var handler = new DelegateHandler(request => Task.FromResult(
+            request.RequestUri?.AbsolutePath == "/api/handshake"
+                ? Json(CreateHandshake())
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"service\":\"oversized\"}"),
+                }));
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
+            handler,
+            new RuntimeClientPolicyOptions { MaxJsonResponseBytes = 8 });
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetSystemStatusAsync());
+    }
+
+    [Fact]
+    public async Task Runtime_client_rejects_incompatible_handshake_before_versioned_request()
+    {
+        var paths = new List<string>();
+        var incompatible = CreateHandshake() with
+        {
+            ProtocolRevision = 2,
+            MinimumSupportedRevision = 2,
+            MaximumSupportedRevision = 2,
+        };
+        var handler = new DelegateHandler(request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            return Task.FromResult(request.RequestUri.AbsolutePath == "/api/handshake"
+                ? Json(incompatible)
+                : throw new InvalidOperationException("Versioned call must not be sent."));
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "runtime-secret"),
+            handler);
+
+        await Assert.ThrowsAsync<RuntimeProtocolException>(() => client.GetSystemStatusAsync());
+
+        Assert.Equal(["/api/handshake"], paths);
+    }
+
+    [Fact]
+    public async Task Registry_content_reader_rejects_chunked_content_past_limit()
+    {
+        using var content = new StreamContent(new MemoryStream("123456789"u8.ToArray()));
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => CliHttpContentReader.ReadJsonAsync<object>(
+            content,
+            maxBytes: 8,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            CancellationToken.None));
+    }
+
     private static HttpResponseMessage Json<T>(T value)
         => new(HttpStatusCode.OK)
         {
@@ -78,6 +135,16 @@ public sealed class RuntimeApiClientTransferTests
                 Headers = { ContentType = new MediaTypeHeaderValue("application/json") },
             },
         };
+
+    private static RuntimeHandshakeResponse CreateHandshake()
+        => new(
+            RuntimeProtocol.Identity,
+            RuntimeProtocol.CurrentRevision,
+            RuntimeProtocol.MinimumSupportedRevision,
+            RuntimeProtocol.MaximumSupportedRevision,
+            Guid.NewGuid(),
+            [RuntimeProtocolFeatures.VersionedApiV1],
+            new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 
     private sealed class DelegateHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {

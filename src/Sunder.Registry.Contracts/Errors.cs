@@ -7,6 +7,7 @@ public static class RegistryV1ErrorCodes
     public const string Forbidden = "registry.v1.auth.forbidden";
     public const string NotFound = "registry.v1.resource.not_found";
     public const string Conflict = "registry.v1.resource.conflict";
+    public const string PackageVersionExists = "registry.v1.package.version_exists";
     public const string Internal = "registry.v1.internal";
 }
 

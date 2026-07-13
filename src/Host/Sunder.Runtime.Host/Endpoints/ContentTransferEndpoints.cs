@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using Microsoft.AspNetCore.Mvc;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -9,11 +10,14 @@ internal static class ContentTransferEndpoints
     {
         var uploads = endpoints.MapGroup("/uploads");
         uploads.MapPost("packages", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
-            => UploadAsync(request, transfers, RuntimeUploadKind.Package, cancellationToken));
+                => UploadAsync(request, transfers, RuntimeUploadKind.Package, cancellationToken))
+            .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxPackageUploadBytes));
         uploads.MapPost("stacks", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
-            => UploadAsync(request, transfers, RuntimeUploadKind.Stack, cancellationToken));
+                => UploadAsync(request, transfers, RuntimeUploadKind.Stack, cancellationToken))
+            .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxStackUploadBytes));
         uploads.MapPost("stack-media", (HttpRequest request, RuntimeContentTransferService transfers, CancellationToken cancellationToken)
-            => UploadAsync(request, transfers, RuntimeUploadKind.StackMedia, cancellationToken));
+                => UploadAsync(request, transfers, RuntimeUploadKind.StackMedia, cancellationToken))
+            .WithMetadata(new RequestSizeLimitAttribute(RuntimeContentTransferStore.MaxMediaUploadBytes));
 
         endpoints.MapGet("/downloads/{downloadId}", async (
             string downloadId,

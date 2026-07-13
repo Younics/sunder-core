@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Stacks;
+using Sunder.Package.Hosting;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -20,11 +21,11 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
     private readonly Dictionary<string, Assembly> _packageSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _sharedAssemblyPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AssemblyName> _sharedAssemblyNames = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SharedPackageAssemblyLoadContext _sharedAssemblyLoadContext;
+    private readonly SharedContractLoadContext _sharedAssemblyLoadContext;
 
     public RuntimeSharedAssemblyRegistry(IEnumerable<string> probeDirectories)
     {
-        _sharedAssemblyLoadContext = new SharedPackageAssemblyLoadContext(ResolveHostSharedAssembly);
+        _sharedAssemblyLoadContext = new SharedContractLoadContext("Runtime", ResolveHostSharedAssembly);
 
         var candidateAssemblies = IndexCandidateAssemblies(probeDirectories);
         foreach (var candidate in SelectPreferredSharedContractCandidates(candidateAssemblies))
@@ -46,6 +47,7 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         {
             // Host-owned boundary assemblies are authoritative for the session.
             // Packages may reference older patch/minor versions of the same host-shared assembly.
+            ValidateSharedContractCompatibility(assemblyName, hostAssembly);
             return hostAssembly;
         }
 
@@ -60,7 +62,7 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
             return null;
         }
 
-        var loadedAssembly = _sharedAssemblyLoadContext.LoadPackageSharedAssembly(sharedAssemblyPath);
+        var loadedAssembly = _sharedAssemblyLoadContext.LoadSharedAssembly(sharedAssemblyPath);
         ValidateSharedContractCompatibility(assemblyName, loadedAssembly);
         _packageSharedAssemblies[assemblyName.Name] = loadedAssembly;
         return loadedAssembly;
@@ -128,10 +130,17 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         var selected = candidates[0];
         foreach (var candidate in candidates.Skip(1))
         {
-            if (!SharedAssemblyFamiliesMatch(selected.Name, candidate.Name))
+            if (!SharedContractAssemblyPolicy.FamiliesMatch(selected.Name, candidate.Name)
+                || NormalizeVersion(selected.Name.Version).Major != NormalizeVersion(candidate.Name.Version).Major)
             {
                 throw new InvalidOperationException(
-                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{selected.Path}' and '{candidate.Path}'. Shared contract dependencies must use a single public key and culture per session.");
+                    $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{selected.Path}' and '{candidate.Path}'. Shared contract dependencies must use one identity family and major version per session.");
+            }
+            if (SharedAssemblyIdentitiesMatch(selected.Name, candidate.Name)
+                && !SharedContractAssemblyPolicy.FilesRepresentSameDefinition(selected.Path, candidate.Path))
+            {
+                throw new InvalidOperationException(
+                    $"Conflicting shared assembly '{candidate.Name.Name}' uses the same unsigned identity for different binary definitions in '{selected.Path}' and '{candidate.Path}'.");
             }
 
             if (CompareAssemblyVersions(candidate.Name.Version, selected.Name.Version) > 0)
@@ -193,7 +202,7 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         }
 
         var requestedAssemblyName = _sharedAssemblyNames[assemblyName];
-        var loadedAssembly = _sharedAssemblyLoadContext.LoadPackageSharedAssembly(_sharedAssemblyPaths[assemblyName]);
+        var loadedAssembly = _sharedAssemblyLoadContext.LoadSharedAssembly(_sharedAssemblyPaths[assemblyName]);
         ValidateSharedContractCompatibility(requestedAssemblyName, loadedAssembly);
         _packageSharedAssemblies[assemblyName] = loadedAssembly;
         return loadedAssembly;
@@ -224,6 +233,13 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
                     $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use a single public key and culture per session.");
             }
 
+            if (SharedAssemblyIdentitiesMatch(existingName, candidate.Name)
+                && !SharedContractAssemblyPolicy.FilesRepresentSameDefinition(existingPath, candidate.Path))
+            {
+                throw new InvalidOperationException(
+                    $"Conflicting shared assembly '{candidate.Name.Name}' uses the same unsigned identity for different binary definitions in '{existingPath}' and '{candidate.Path}'.");
+            }
+
             if (CompareAssemblyVersions(candidate.Name.Version, existingName.Version) <= 0)
             {
                 return;
@@ -239,7 +255,7 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
 
         _sharedAssemblyPaths[candidate.Name.Name] = candidate.Path;
         _sharedAssemblyNames[candidate.Name.Name] = candidate.Name;
-        _sharedAssemblyLoadContext.RegisterPackageSharedAssembly(candidate.Name.Name, candidate.Path);
+        _sharedAssemblyLoadContext.Register(candidate.Name.Name, candidate.Path);
     }
 
     private static AssemblyCandidate? FindCandidate(
@@ -274,20 +290,17 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
     }
 
     internal static bool IsSharedAssemblyReferenceSatisfiedBy(AssemblyName requestedAssemblyName, AssemblyName loadedAssemblyName)
-        => SharedAssemblyFamiliesMatch(requestedAssemblyName, loadedAssemblyName)
-           && CompareAssemblyVersions(loadedAssemblyName.Version, requestedAssemblyName.Version) >= 0;
+        => SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(requestedAssemblyName, loadedAssemblyName);
 
     private static bool SharedAssemblyFamiliesMatch(AssemblyName left, AssemblyName right)
-        => string.Equals(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
-           && string.Equals(left.CultureName ?? string.Empty, right.CultureName ?? string.Empty, StringComparison.OrdinalIgnoreCase)
-           && (left.GetPublicKeyToken() ?? []).SequenceEqual(right.GetPublicKeyToken() ?? []);
+        => SharedContractAssemblyPolicy.FamiliesMatch(left, right)
+           && NormalizeVersion(left.Version).Major == NormalizeVersion(right.Version).Major;
 
     private static bool SharedAssemblyIdentitiesMatch(AssemblyName left, AssemblyName right)
-        => SharedAssemblyFamiliesMatch(left, right)
-           && CompareAssemblyVersions(left.Version, right.Version) == 0;
+        => SharedContractAssemblyPolicy.IdentitiesMatch(left, right);
 
     private static int CompareAssemblyVersions(Version? left, Version? right)
-        => NormalizeVersion(left).CompareTo(NormalizeVersion(right));
+        => SharedContractAssemblyPolicy.CompareVersions(left, right);
 
     private static Version NormalizeVersion(Version? version)
         => version is null
@@ -299,7 +312,7 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
                 Math.Max(version.Revision, 0));
 
     private static bool IsSharedContractAssemblyName(string? assemblyName)
-        => assemblyName?.EndsWith(".Contracts", StringComparison.OrdinalIgnoreCase) == true;
+        => SharedContractAssemblyPolicy.IsSharedContract(assemblyName);
 
     private Assembly? ResolveHostSharedAssembly(AssemblyName assemblyName)
     {
@@ -318,28 +331,4 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
 
     private readonly record struct AssemblyCandidate(string Path, AssemblyName Name);
 
-    private sealed class SharedPackageAssemblyLoadContext(Func<AssemblyName, Assembly?> resolveHostAssembly)
-        : AssemblyLoadContext($"Sunder.Runtime.SharedContracts.{Guid.NewGuid():N}", isCollectible: true)
-    {
-        private readonly Dictionary<string, string> _assemblyPaths = new(StringComparer.OrdinalIgnoreCase);
-
-        public void RegisterPackageSharedAssembly(string assemblyName, string path)
-            => _assemblyPaths[assemblyName] = path;
-
-        public Assembly LoadPackageSharedAssembly(string path)
-            => LoadFromAssemblyPath(path);
-
-        protected override Assembly? Load(AssemblyName assemblyName)
-        {
-            var hostAssembly = resolveHostAssembly(assemblyName);
-            if (hostAssembly is not null)
-            {
-                return hostAssembly;
-            }
-
-            return assemblyName.Name is not null && _assemblyPaths.TryGetValue(assemblyName.Name, out var path)
-                ? LoadFromAssemblyPath(path)
-                : null;
-        }
-    }
 }

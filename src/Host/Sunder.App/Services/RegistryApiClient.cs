@@ -8,6 +8,9 @@ namespace Sunder.App.Services;
 public sealed class RegistryApiClient : IRegistryApiClient
 {
     private const string ApiRoot = "api/v1";
+    private const long MaxJsonResponseBytes = 4L * 1024 * 1024;
+    private const long MaxStackDownloadBytes = 256L * 1024 * 1024;
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new(System.Text.Json.JsonSerializerDefaults.Web);
     private readonly HttpClient _httpClient;
     private readonly bool _disposeHttpClient;
 
@@ -24,7 +27,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
     {
         var path = $"{ApiRoot}/packages?skip={skip}&take={take}&sort={FormatSort(sort)}";
         if (!string.IsNullOrWhiteSpace(query)) path += $"&query={Uri.EscapeDataString(query.Trim())}";
-        return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryPackageSummary>>(CreateUri(path), cancellationToken) ?? [];
+        return await GetJsonAsync<IReadOnlyList<RegistryPackageSummary>>(path, cancellationToken) ?? [];
     }
 
     public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)
@@ -34,7 +37,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
     {
         var path = $"{ApiRoot}/stacks?skip={skip}&take={take}&sort={FormatSort(sort)}";
         if (!string.IsNullOrWhiteSpace(query)) path += $"&query={Uri.EscapeDataString(query.Trim())}";
-        return await _httpClient.GetFromJsonAsync<IReadOnlyList<RegistryStackSummary>>(CreateUri(path), cancellationToken) ?? [];
+        return await GetJsonAsync<IReadOnlyList<RegistryStackSummary>>(path, cancellationToken) ?? [];
     }
 
     public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken cancellationToken = default)
@@ -46,19 +49,33 @@ public sealed class RegistryApiClient : IRegistryApiClient
     public Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken cancellationToken = default)
         => DownloadAsync(artifact.DownloadUrl, artifact.Size, artifact.Sha256, $"Stack '{stackId}'", destinationPath, cancellationToken);
 
-    private async Task DownloadAsync(string url, long size, string hash, string label, string destinationPath, CancellationToken cancellationToken)
+    private async Task DownloadAsync(string url, long? size, string hash, string label, string destinationPath, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         using var response = await _httpClient.GetAsync(CreateUri(url), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
-        await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
-        await using (var destination = File.Create(destinationPath))
+        if (size < 0 || size > MaxStackDownloadBytes)
         {
-            await source.CopyToAsync(destination, cancellationToken);
+            throw new InvalidDataException($"Downloaded {label} exceeds the Stack download limit.");
+        }
+
+        try
+        {
+            await using var destination = File.Create(destinationPath);
+            await BoundedHttpContentReader.CopyToAsync(
+                response.Content,
+                destination,
+                size ?? MaxStackDownloadBytes,
+                cancellationToken);
+        }
+        catch
+        {
+            File.Delete(destinationPath);
+            throw;
         }
 
         var actualSize = new FileInfo(destinationPath).Length;
-        if (size > 0 && actualSize != size) throw new InvalidDataException($"Downloaded {label} size mismatch.");
+        if (size is { } expectedSize && actualSize != expectedSize) throw new InvalidDataException($"Downloaded {label} size mismatch.");
         if (!string.IsNullOrWhiteSpace(hash))
         {
             await using var stream = File.OpenRead(destinationPath);
@@ -72,7 +89,14 @@ public sealed class RegistryApiClient : IRegistryApiClient
         using var response = await _httpClient.GetAsync(CreateUri(path), cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) return default;
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken);
+        return await BoundedHttpContentReader.ReadJsonAsync<T>(response.Content, MaxJsonResponseBytes, JsonOptions, cancellationToken);
+    }
+
+    private async Task<T?> GetJsonAsync<T>(string path, CancellationToken cancellationToken)
+    {
+        using var response = await _httpClient.GetAsync(CreateUri(path), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await BoundedHttpContentReader.ReadJsonAsync<T>(response.Content, MaxJsonResponseBytes, JsonOptions, cancellationToken);
     }
 
     private Uri CreateUri(string path) => Uri.TryCreate(path, UriKind.Absolute, out var absolute) ? absolute : new Uri(RegistryUrl, path);

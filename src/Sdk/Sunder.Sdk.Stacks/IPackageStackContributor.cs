@@ -3,7 +3,7 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Stacks;
 
 /// <summary>Discovers, exports, previews, and imports Stack content owned by one package feature.</summary>
-/// <remarks>Contributor instances are activation-scoped and may be called concurrently. Preview must be side-effect free. Import owns committed mutations but not host-provided fragment collections or temporary files.</remarks>
+/// <remarks>Contributor instances are activation-scoped and may be called concurrently. Preview must be side-effect free. The host binds a preview to an expiring, single-use import plan. Import owns committed mutations but not host-provided fragment collections or temporary files. Imports are atomic only within the guarantees made by each contributor; the host cannot roll back another contributor.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 [SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
 public interface IPackageStackContributor

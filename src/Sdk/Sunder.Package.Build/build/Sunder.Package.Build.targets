@@ -62,9 +62,11 @@
                                         ProjectDirectory="$(MSBuildProjectDirectory)"
                                         TargetFramework="$(TargetFramework)"
                                         SdkVersion="$(SunderSdkVersion)"
-                                        SdkApiVersion="$(SunderSdkApiVersion)"
-                                        SdkPackageVersion="$(SunderSdkPackageVersion)"
-                                        SdkCapabilities="@(SunderSdkCapability)" />
+                                         SdkApiVersion="$(SunderSdkApiVersion)"
+                                         SdkPackageVersion="$(SunderSdkPackageVersion)"
+                                         SdkCapabilities="@(SunderSdkCapability)"
+                                         ReferencePaths="@(ReferencePath)"
+                                         RuntimeCopyLocalPaths="@(ReferenceCopyLocalPaths)" />
   </Target>
 
   <Target Name="EmitSunderDevOutput"
@@ -157,7 +159,7 @@
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
-      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.0.0</_SunderPackageVersion>
+      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
       <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
       <SunderPackageOutputPath Condition="'$(SunderPackageOutputPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(TargetDir)', '$(SunderPackageFileName)'))))</SunderPackageOutputPath>
     </PropertyGroup>
@@ -172,7 +174,7 @@
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
-      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.0.0</_SunderPackageVersion>
+      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
       <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
       <SunderPublishPackageOutputPath Condition="'$(SunderPublishPackageOutputPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(PublishDir)', '$(SunderPackageFileName)'))))</SunderPublishPackageOutputPath>
     </PropertyGroup>

@@ -6,99 +6,47 @@ using Sunder.Registry.Contracts;
 
 namespace Sunder.Cli;
 
-internal interface IRegistryClient : IDisposable
+internal interface IRegistryConnection : IDisposable
 {
     Uri RegistryUrl { get; }
+}
+
+internal interface IRegistryBrowseClient : IRegistryConnection
+{
     Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken token);
     Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, CancellationToken token);
     Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken token);
     Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken token);
     Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken token);
     Task<RegistryPackageDistTagsResponse?> GetDistTagsAsync(string packageId, CancellationToken token);
-    Task<RegistryPublishPackageResponse> PublishLocalPackageAsync(string packagePath, bool setLatest, CancellationToken token);
-    Task<RegistryPublishStackResponse> PublishLocalStackAsync(string stackPath, CancellationToken token);
     Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken token);
 }
 
-internal sealed class RegistryClient : IRegistryClient
+internal interface IRegistryManageClient : IRegistryConnection
+{
+    Task<RegistryPublishPackageResponse> PublishLocalPackageAsync(string packagePath, bool setLatest, CancellationToken token);
+    Task<RegistryPublishStackResponse> PublishLocalStackAsync(string stackPath, CancellationToken token);
+}
+
+internal interface IRegistryClient : IRegistryBrowseClient, IRegistryManageClient;
+
+internal sealed partial class RegistryClient : IRegistryClient
 {
     private const string ApiRoot = "api/v1";
+    private const long MaxJsonResponseBytes = 4L * 1024 * 1024;
+    private const long MaxErrorResponseBytes = 64L * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _httpClient;
 
     public RegistryClient(Uri registryUrl, HttpMessageHandler? handler = null)
     {
-        RegistryUrl = registryUrl;
+        RegistryUrl = CliHttpUrl.Require(registryUrl, "Registry");
         _httpClient = handler is null ? new HttpClient() : new HttpClient(handler);
         _httpClient.BaseAddress = registryUrl;
         _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public Uri RegistryUrl { get; }
-
-    public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken token)
-    {
-        var path = $"{ApiRoot}/packages?skip={skip}&take={take}" + (string.IsNullOrWhiteSpace(query) ? string.Empty : $"&query={Uri.EscapeDataString(query.Trim())}");
-        return GetRequiredAsync<IReadOnlyList<RegistryPackageSummary>>(path, token);
-    }
-
-    public Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, CancellationToken token)
-    {
-        var path = $"{ApiRoot}/stacks?skip={skip}&take={take}" + (string.IsNullOrWhiteSpace(query) ? string.Empty : $"&query={Uri.EscapeDataString(query.Trim())}");
-        return GetRequiredAsync<IReadOnlyList<RegistryStackSummary>>(path, token);
-    }
-
-    public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken token)
-        => GetOrNullAsync<RegistryPackageDetails>($"{ApiRoot}/packages/{Uri.EscapeDataString(packageId)}", token);
-
-    public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken token)
-        => GetOrNullAsync<RegistryPackageVersionDetails>($"{ApiRoot}/packages/{Uri.EscapeDataString(packageId)}/versions/{Uri.EscapeDataString(version)}", token);
-
-    public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken token)
-        => GetOrNullAsync<RegistryStackDetails>($"{ApiRoot}/stacks/{Uri.EscapeDataString(stackId)}", token);
-
-    public Task<RegistryPackageDistTagsResponse?> GetDistTagsAsync(string packageId, CancellationToken token)
-        => GetOrNullAsync<RegistryPackageDistTagsResponse>($"{ApiRoot}/packages/{Uri.EscapeDataString(packageId)}/dist-tags", token);
-
-    public Task<RegistryPublishPackageResponse> PublishLocalPackageAsync(string packagePath, bool setLatest, CancellationToken token)
-        => PostAsync<RegistryPublishLocalPackageRequest, RegistryPublishPackageResponse>(
-            $"{ApiRoot}/dev/packages/publish/local", new(packagePath, setLatest), token, acceptErrorPayload: true);
-
-    public Task<RegistryPublishStackResponse> PublishLocalStackAsync(string stackPath, CancellationToken token)
-        => PostAsync<RegistryPublishLocalStackRequest, RegistryPublishStackResponse>(
-            $"{ApiRoot}/dev/stacks/publish/local", new(stackPath), token, acceptErrorPayload: true);
-
-    public async Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken token)
-    {
-        var fullPath = Path.GetFullPath(destinationPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        var temporaryPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            using var response = await _httpClient.GetAsync(CreateUri(artifact.DownloadUrl), HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            await EnsureSuccessAsync(response, token).ConfigureAwait(false);
-            await using (var source = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
-            await using (var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                await source.CopyToAsync(destination, token).ConfigureAwait(false);
-            }
-
-            var length = new FileInfo(temporaryPath).Length;
-            if (artifact.Size > 0 && length != artifact.Size) throw new InvalidDataException($"Downloaded Stack '{stackId}' size mismatch.");
-            if (!string.IsNullOrWhiteSpace(artifact.Sha256))
-            {
-                await using var stream = File.OpenRead(temporaryPath);
-                var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false)).ToLowerInvariant();
-                if (!string.Equals(hash, artifact.Sha256, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException($"Downloaded Stack '{stackId}' SHA-256 mismatch.");
-            }
-            File.Move(temporaryPath, fullPath, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
-        }
-    }
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken token)
     {
@@ -125,7 +73,8 @@ internal sealed class RegistryClient : IRegistryClient
         {
             try
             {
-                var value = await response.Content.ReadFromJsonAsync<T>(JsonOptions, token).ConfigureAwait(false);
+                var value = await CliHttpContentReader.ReadJsonAsync<T>(
+                    response.Content, MaxJsonResponseBytes, JsonOptions, token).ConfigureAwait(false);
                 if (value is not null) return value;
             }
             catch (JsonException) when (!response.IsSuccessStatusCode)
@@ -145,7 +94,8 @@ internal sealed class RegistryClient : IRegistryClient
         Problem? problem = null;
         try
         {
-            problem = await response.Content.ReadFromJsonAsync<Problem>(JsonOptions, token).ConfigureAwait(false);
+            problem = await CliHttpContentReader.ReadJsonAsync<Problem>(
+                response.Content, MaxErrorResponseBytes, JsonOptions, token).ConfigureAwait(false);
         }
         catch (JsonException)
         {
@@ -157,7 +107,7 @@ internal sealed class RegistryClient : IRegistryClient
             problem?.Code);
     }
 
-    private Uri CreateUri(string path) => Uri.TryCreate(path, UriKind.Absolute, out var absolute) ? absolute : new Uri(RegistryUrl, path);
+    private Uri CreateUri(string path) => CliHttpUrl.Require(Uri.TryCreate(path, UriKind.Relative, out _) ? new Uri(RegistryUrl, path) : new Uri(path, UriKind.Absolute), "Registry request");
     public void Dispose() => _httpClient.Dispose();
     private sealed record Problem(string? Title, string? Detail, string? Code);
 }

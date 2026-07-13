@@ -82,7 +82,7 @@ public sealed class WindowLauncherTests
 
     private sealed class ThrowingRuntimeApiClientFactory : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient()
-            => throw new NotSupportedException("Runtime API is not used by these tests.");
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => throw new InvalidOperationException("Runtime API is not used by these tests.");
     }
 }

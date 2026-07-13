@@ -59,17 +59,21 @@ public sealed class ShellStateService
     }
 
     public void Save(ShellState state)
+        => SaveWithRevision(state);
+
+    internal long SaveWithRevision(ShellState state)
     {
         lock (_syncRoot)
         {
             var persisted = Load();
             if (state.Revision < persisted.Revision)
             {
-                return;
+                return persisted.Revision;
             }
 
             state.Revision = Math.Max(state.Revision, persisted.Revision) + 1;
             WriteCore(state);
+            return state.Revision;
         }
     }
 
@@ -81,15 +85,19 @@ public sealed class ShellStateService
             update(persisted);
             persisted.Revision = Math.Max(persisted.Revision, liveState.Revision) + 1;
             WriteCore(persisted);
-            ShellStateSnapshotFactory.CopyFrom(persisted, liveState);
+            update(liveState);
+            liveState.Revision = persisted.Revision;
         }
     }
 
-    public Task SaveAsync(ShellState state, CancellationToken cancellationToken = default)
+    public async Task SaveAsync(ShellState state, CancellationToken cancellationToken = default)
+        => await SaveWithRevisionAsync(state, cancellationToken);
+
+    internal Task<long> SaveWithRevisionAsync(ShellState state, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = ShellStateSnapshotFactory.Clone(state);
-        return Task.Run(() => Save(snapshot), cancellationToken);
+        return Task.Run(() => SaveWithRevision(snapshot), cancellationToken);
     }
 
     private void WriteCore(ShellState state)

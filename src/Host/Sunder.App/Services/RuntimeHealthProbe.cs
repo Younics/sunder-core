@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+using System.Text.Json;
 using System.Net.Sockets;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -9,6 +9,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
 {
     private readonly RuntimeConnectionState _connectionState;
     private readonly HttpClient _httpClient;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public RuntimeHealthProbe(RuntimeConnectionState connectionState)
     {
@@ -25,9 +26,45 @@ internal sealed class RuntimeHealthProbe : IDisposable
     {
         try
         {
-            return await _httpClient.GetFromJsonAsync<SystemStatusResponse>(
+            using var response = await _httpClient.GetAsync(
                 new Uri(runtimeUrl, "api/v1/system"),
+                HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return await BoundedHttpContentReader.ReadJsonAsync<SystemStatusResponse>(
+                response.Content,
+                64 * 1024,
+                JsonOptions,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<RuntimeHandshakeResponse?> TryGetRuntimeHandshakeAsync(
+        Uri runtimeUrl,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(2));
+            using var response = await _httpClient.GetAsync(
+                new Uri(runtimeUrl, "api/handshake"),
+                HttpCompletionOption.ResponseHeadersRead,
+                deadline.Token);
+            response.EnsureSuccessStatusCode();
+            return await BoundedHttpContentReader.ReadJsonAsync<RuntimeHandshakeResponse>(
+                response.Content,
+                64 * 1024,
+                JsonOptions,
+                deadline.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -95,9 +95,11 @@ Generated package projects reference:
 - `Sunder.Sdk.Avalonia` and Avalonia only with `--withAvalonia`
 - `Sunder.Sdk.Stacks` only with `--withStacks`
 
-Generated projects use exact `1.0.0` versions for all Sunder SDK and build packages.
+Generated projects use exact `1.1.0` versions for all Sunder SDK and build packages.
 
 Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder.Package.Build` generates `sunder-package.json` during build.
+
+Generated code can use `Sunder.Sdk.Packaging.PackageId`, `SemanticVersion`, and `PackageVersionRange` as the canonical validators. Local-path integrations use `context.Storage.RoleLocalWorkspace`; the host activation owns its lifecycle and package code does not dispose it.
 
 ## Build And Run
 

@@ -788,7 +788,7 @@ public sealed class PackagesWindowViewModelTests
     private static PackagesWindowViewModel CreateViewModel(
         FakeRuntimeApiClient runtimeClient,
         NotificationCenterService notificationCenter,
-        Func<Uri, IRegistryApiClient>? registryClientFactory = null,
+        Func<Uri, IRegistryPackageBrowseClient>? registryClientFactory = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
         Func<Uri, object?>? tokenProvider = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null
@@ -893,10 +893,11 @@ public sealed class PackagesWindowViewModelTests
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient() => runtimeApiClient;
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => (TClient)(object)runtimeApiClient;
     }
 
-    private sealed class FakeRegistryApiClient : IRegistryApiClient
+    private sealed class FakeRegistryApiClient : IRegistryPackageBrowseClient
     {
         private readonly object _gate = new();
         private readonly List<string?> _searchQueries = [];
@@ -984,7 +985,7 @@ public sealed class PackagesWindowViewModelTests
             string packageId,
             string version,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        ) => Task.FromResult<RegistryPackageVersionDetails?>(null);
 
         public Task<RegistryPackageStarResponse> StarPackageAsync(
             string packageId,
@@ -1042,7 +1043,7 @@ public sealed class PackagesWindowViewModelTests
 
     private sealed class FakeRuntimeApiClient(
         IReadOnlyList<InstalledPackageDescriptor> installedPackages
-    ) : IRuntimeApiClient
+    ) : IRuntimePackagesClient
     {
         private readonly List<InstalledPackageDescriptor> _installedPackages =
             installedPackages.ToList();
@@ -1108,6 +1109,30 @@ public sealed class PackagesWindowViewModelTests
             CancellationToken cancellationToken = default
         ) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
 
+        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
+            => Task.FromResult<PackageSessionStatus?>(null);
+
+        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
+            => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
+
+        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
+
+        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
+
+        public Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(
             CancellationToken cancellationToken = default
         )
@@ -1122,6 +1147,18 @@ public sealed class PackagesWindowViewModelTests
             new(
                 $"file:///packages/{Uri.EscapeDataString(packageId)}/assets/{assetPath.Replace('\\', '/')}"
             );
+
+        public Task<ContentUploadDescriptor> UploadPackageAsync(string packagePath, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContentUploadDescriptor("package-upload", "test-hash", 0, Path.GetFileName(packagePath), "application/vnd.sunder.package"));
+
+        public Task<ContentUploadDescriptor> UploadStackAsync(string stackPath, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContentUploadDescriptor("stack-upload", "test-hash", 0, Path.GetFileName(stackPath), "application/vnd.sunder.stack"));
+
+        public Task<ContentUploadDescriptor> UploadStackMediaAsync(string mediaPath, string contentType, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ContentUploadDescriptor("media-upload", "test-hash", 0, Path.GetFileName(mediaPath), contentType));
+
+        public Task DownloadContentAsync(ContentDownloadDescriptor download, string destinationPath, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
 
         public Task<PackageOperationResult> InstallPackageFromPathAsync(
             string packagePath,
@@ -1154,7 +1191,7 @@ public sealed class PackagesWindowViewModelTests
             bool allowDowngrade = false,
             bool reinstall = false,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        ) => Task.FromResult(new PackageOperationResult(true, $"Upgraded {packageId}.", true, false, [], []));
 
         public Task<PackageOperationResult> EnableInstalledPackageAsync(
             string packageId,
@@ -1186,12 +1223,12 @@ public sealed class PackagesWindowViewModelTests
         public Task<PackageOperationResult> DisableInstalledPackageAsync(
             string packageId,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        ) => Task.FromResult(new PackageOperationResult(true, $"Disabled {packageId}.", true, false, [], []));
 
         public Task<PackageOperationResult> UninstallPackageAsync(
             string packageId,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        ) => Task.FromResult(new PackageOperationResult(true, $"Uninstalled {packageId}.", true, false, [], []));
 
         public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
             PackageStoreStageRequest request,
@@ -1261,54 +1298,20 @@ public sealed class PackagesWindowViewModelTests
         public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
             PackageLifecycleLoadRequest request,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        ) => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
 
-        public Task<
-            IReadOnlyList<PackageConfigurationSchemaDescriptor>
-        > GetConfigurationSchemasAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Applied package plan.", true, false, [], [], request.Packages.Select(package => package.PackageId).ToArray(), []));
 
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
-        public Task SavePackageConfigurationValuesAsync(
-            string packageId,
-            IReadOnlyDictionary<string, string?> values,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(
-            string packageId,
-            string authSessionId,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
+        public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Updated packages.", true, false, [], [], [], []));
 
         public Task ReportPackageFaultAsync(
             string packageId,
             PackageFailureOrigin origin,
             string message,
             CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
-        public Task ShutdownAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        ) => Task.CompletedTask;
 
         public void Dispose() { }
 

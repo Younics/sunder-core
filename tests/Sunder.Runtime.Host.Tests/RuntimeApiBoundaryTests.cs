@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -7,6 +8,76 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class RuntimeApiBoundaryTests
 {
+    [Fact]
+    public void RuntimeHandshakeContract_JsonMatchesGoldenFixture()
+    {
+        var handshake = new RuntimeHandshakeResponse(
+            RuntimeProtocol.Identity,
+            RuntimeProtocol.CurrentRevision,
+            RuntimeProtocol.MinimumSupportedRevision,
+            RuntimeProtocol.MaximumSupportedRevision,
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.PackageRuntimeStreamEnvelopesV1],
+            new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.2.3", "1.2.3+test"));
+        var actual = JsonSerializer.SerializeToNode(handshake, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "RuntimeProtocolContracts.golden.json");
+        var expected = JsonNode.Parse(File.ReadAllText(fixturePath));
+
+        Assert.Equal(expected?.ToJsonString(), actual?.ToJsonString());
+    }
+
+    [Fact]
+    public void StackImportContracts_JsonMatchesGoldenFixture()
+    {
+        var importedItem = new RuntimeStackImportedItemDescriptor("profile-1", "profiles", "Profile", "profile")
+        {
+            OwnerPackageId = "test.package",
+        };
+        var preview = new RuntimeStackImportPreviewResponse(
+            true,
+            "opaque-plan",
+            new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),
+            [new RuntimeStackImportActionDescriptor("profile.create", "profiles", "Create profile", "Create", true)
+            {
+                OwnerPackageId = "test.package",
+            }],
+            [],
+            [],
+            [],
+            []);
+        var import = new RuntimeStackImportResponse(
+            RuntimeStackImportOutcome.Partial,
+            [importedItem],
+            new Dictionary<string, string> { ["source-profile"] = "profile-1" },
+            [
+                new RuntimeStackImportContributorResultDescriptor(
+                    "test.package",
+                    "profiles",
+                    ["profile-fragment"],
+                    RuntimeStackImportOutcome.Completed,
+                    [importedItem],
+                    new Dictionary<string, string> { ["source-profile"] = "profile-1" },
+                    [],
+                    []),
+                new RuntimeStackImportContributorResultDescriptor(
+                    "other.package",
+                    "settings",
+                    ["settings-fragment"],
+                    RuntimeStackImportOutcome.Failed,
+                    [],
+                    new Dictionary<string, string>(),
+                    [],
+                    ["Settings import failed."]),
+            ],
+            [],
+            ["Settings import failed."]);
+        var actual = JsonSerializer.SerializeToNode(new { Preview = preview, Import = import }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "StackImportContracts.golden.json");
+        var expected = JsonNode.Parse(File.ReadAllText(fixturePath));
+
+        Assert.Equal(expected?.ToJsonString(), actual?.ToJsonString());
+    }
+
     [Fact]
     public void PackageUiSnapshotDescriptor_JsonDoesNotExposeRuntimeRoot()
     {
@@ -122,6 +193,60 @@ public sealed class RuntimeApiBoundaryTests
     }
 
     [Fact]
+    public async Task ContentTransferStore_ConsumedUploadHasExactlyOneOwner()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        using var store = new RuntimeContentTransferStore(paths);
+        await using var content = new MemoryStream([1, 2, 3]);
+        var upload = await store.CreateUploadAsync(
+            RuntimeUploadKind.Package,
+            content,
+            content.Length,
+            expectedHash: null,
+            "test.sunderpkg",
+            "application/vnd.sunder.package",
+            generation: 2,
+            CancellationToken.None);
+        using var start = new ManualResetEventSlim();
+        var acquisitions = Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(() =>
+            {
+                start.Wait();
+                return store.AcquireUpload(upload.UploadId, RuntimeUploadKind.Package, generation: 2, consume: true);
+            }))
+            .ToArray();
+
+        start.Set();
+        var leases = await Task.WhenAll(acquisitions);
+
+        var lease = Assert.Single(leases, value => value is not null);
+        store.ReleaseUpload(lease!);
+        Assert.Empty(Directory.EnumerateFiles(paths.TransferRootPath));
+    }
+
+    [Fact]
+    public async Task ContentTransferStore_SweepRemovesExpiredHandlesAndFiles()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        using var store = new RuntimeContentTransferStore(paths);
+        await using var content = new MemoryStream([1, 2, 3]);
+        var upload = await store.CreateUploadAsync(
+            RuntimeUploadKind.Stack,
+            content,
+            content.Length,
+            expectedHash: null,
+            "test.sunderstack",
+            "application/vnd.sunder.stack",
+            generation: 1,
+            CancellationToken.None);
+
+        store.SweepExpired(DateTimeOffset.UtcNow.AddHours(1));
+
+        Assert.Null(store.AcquireUpload(upload.UploadId, RuntimeUploadKind.Stack, generation: 1, consume: true));
+        Assert.Empty(Directory.EnumerateFiles(paths.TransferRootPath));
+    }
+
+    [Fact]
     public void RuntimeContractTypes_DoNotExposeFilesystemShapedMembers()
     {
         var forbiddenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -141,6 +266,17 @@ public sealed class RuntimeApiBoundaryTests
             .ToArray();
 
         Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void StackImportContracts_ExposeOutcomeWithoutCompatibilityProjections()
+    {
+        Assert.NotNull(typeof(RuntimeStackImportResponse).GetProperty(nameof(RuntimeStackImportResponse.Outcome)));
+        Assert.Null(typeof(RuntimeStackImportResponse).GetProperty("Success"));
+        Assert.Null(typeof(RuntimeStackImportResponse).GetProperty("AppliedContributions"));
+        Assert.Equal(
+            typeof(Sunder.Sdk.Stacks.StackImportOutcome),
+            typeof(Sunder.Sdk.Stacks.StackImportResult).GetProperty(nameof(Sunder.Sdk.Stacks.StackImportResult.Outcome))?.PropertyType);
     }
 
     private static string CreateSnapshotSource(string root)

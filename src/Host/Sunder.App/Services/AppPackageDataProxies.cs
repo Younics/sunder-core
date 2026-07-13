@@ -6,13 +6,13 @@ namespace Sunder.App.Services;
 internal sealed class AppRuntimePackageStorageContext(
     string packageId,
     RuntimePackageDataClient client,
-    IPackageLocalWorkspaceLease localWorkspace) : IPackageStorageContext
+    IPackageRoleLocalWorkspace roleLocalWorkspace) : IPackageStorageContext
 {
     public IPackageFileStore Files { get; } = new AppRuntimePackageFileStore(packageId, client);
 
     public IPackageKeyValueStore State { get; } = new AppRuntimePackageStateStore(packageId, client);
 
-    public IPackageLocalWorkspaceLease LocalWorkspace { get; } = localWorkspace;
+    public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; } = roleLocalWorkspace;
 }
 
 internal sealed class AppRuntimePackageStateStore(
@@ -37,12 +37,21 @@ internal sealed class AppRuntimePackageStateStore(
         => client.ListStateKeysAsync(packageId, prefix, cancellationToken);
 }
 
-internal sealed class AppRuntimePackageConfiguration(
+internal sealed class AppRuntimePackageSettings(
     string packageId,
-    RuntimePackageDataClient client) : IPackageConfiguration
+    RuntimePackageDataClient client) : IPackageSettings
 {
     public async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
-        => (await client.GetConfigurationAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.Value;
+        => (await client.GetSettingAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.EffectiveValue;
+
+    public async Task<string?> GetStoredValueAsync(string key, CancellationToken cancellationToken = default)
+        => (await client.GetSettingAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.StoredValue;
+
+    public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
+        => client.SetSettingAsync(packageId, key, value, cancellationToken);
+
+    public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
+        => client.DeleteSettingAsync(packageId, key, cancellationToken);
 }
 
 internal sealed class AppRuntimePackageSecrets(
@@ -76,15 +85,12 @@ internal sealed class AppRuntimePackageFileStore(
         => client.DeleteFileAsync(packageId, relativePath, cancellationToken);
 }
 
-internal sealed class AppPackageLocalWorkspaceLease(string packageId) : IPackageLocalWorkspaceLease
+internal sealed class AppPackageRoleLocalWorkspace(string packageId) : IPackageRoleLocalWorkspace
 {
-    private int _disposed;
-
     public string WorkspaceRootPath { get; } = CreateWorkspaceRoot(packageId);
 
     public string GetLocalPath(string relativePath)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
         if (Path.IsPathRooted(relativePath))
         {
@@ -111,12 +117,6 @@ internal sealed class AppPackageLocalWorkspaceLease(string packageId) : IPackage
         return path;
     }
 
-    public ValueTask DisposeAsync()
-    {
-        Interlocked.Exchange(ref _disposed, 1);
-        return ValueTask.CompletedTask;
-    }
-
     private static string CreateWorkspaceRoot(string packageId)
     {
         var invalid = Path.GetInvalidFileNameChars();
@@ -127,15 +127,13 @@ internal sealed class AppPackageLocalWorkspaceLease(string packageId) : IPackage
     }
 }
 
-internal sealed class AppUnavailablePackageLocalWorkspaceLease : IPackageLocalWorkspaceLease
+internal sealed class AppUnavailablePackageRoleLocalWorkspace : IPackageRoleLocalWorkspace
 {
-    internal static AppUnavailablePackageLocalWorkspaceLease Instance { get; } = new();
+    internal static AppUnavailablePackageRoleLocalWorkspace Instance { get; } = new();
 
     public string WorkspaceRootPath => throw Unavailable();
 
     public string GetLocalPath(string relativePath) => throw Unavailable();
-
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     private static InvalidOperationException Unavailable()
         => new("The package local workspace is unavailable because the local Runtime is not connected.");
@@ -147,7 +145,7 @@ internal sealed class AppPreflightPackageStorageContext : IPackageStorageContext
 
     public IPackageFileStore Files { get; } = new AppPreflightPackageFileStore();
     public IPackageKeyValueStore State { get; } = new AppPreflightPackageStateStore();
-    public IPackageLocalWorkspaceLease LocalWorkspace => throw PersistenceUnavailable();
+    public IPackageRoleLocalWorkspace RoleLocalWorkspace => throw PersistenceUnavailable();
 
     internal static InvalidOperationException PersistenceUnavailable()
         => new("Package persistence and local workspaces are unavailable during App package preflight.");
@@ -165,10 +163,16 @@ internal sealed class AppPreflightPackageStateStore : IPackageKeyValueStore
     private static InvalidOperationException Reject() => AppPreflightPackageStorageContext.PersistenceUnavailable();
 }
 
-internal sealed class AppPreflightPackageConfiguration : IPackageConfiguration
+internal sealed class AppPreflightPackageSettings : IPackageSettings
 {
-    internal static AppPreflightPackageConfiguration Instance { get; } = new();
+    internal static AppPreflightPackageSettings Instance { get; } = new();
     public Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
+        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
+    public Task<string?> GetStoredValueAsync(string key, CancellationToken cancellationToken = default)
+        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
+    public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
+        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
+    public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
         => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
 }
 

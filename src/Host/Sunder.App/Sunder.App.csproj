@@ -30,6 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
     <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />

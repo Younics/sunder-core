@@ -82,7 +82,7 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public void RuntimeSharedAssemblyRegistry_WhenSameIdentityContractExistsAtDifferentPaths_DoesNotThrow()
+    public void RuntimeSharedAssemblyRegistry_WhenSameUnsignedIdentityHasDifferentBinaryDefinition_RejectsIt()
     {
         using var registry = new RuntimeSharedAssemblyRegistry([]);
         var registerMethod = typeof(RuntimeSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -94,7 +94,8 @@ public sealed class PackageSessionOverlayTests
         var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderRuntimePackageModule).Assembly.Location, assemblyName);
 
         registerMethod.Invoke(registry, [firstCandidate, null]);
-        registerMethod.Invoke(registry, [secondCandidate, null]);
+        var error = Assert.Throws<TargetInvocationException>(() => registerMethod.Invoke(registry, [secondCandidate, null]));
+        Assert.IsType<InvalidOperationException>(error.InnerException);
     }
 
     [Fact]
@@ -140,12 +141,23 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
+    public void RuntimeSharedAssemblyRegistry_RejectsHigherMajorAndDifferentContractIdentity()
+    {
+        var requested = new AssemblyName("Example.Contracts, Version=1.2.0.0, Culture=neutral, PublicKeyToken=0011223344556677");
+        var higherMajor = new AssemblyName("Example.Contracts, Version=2.0.0.0, Culture=neutral, PublicKeyToken=0011223344556677");
+        var unrelated = new AssemblyName("Example.Contracts, Version=1.3.0.0, Culture=neutral, PublicKeyToken=8899aabbccddeeff");
+
+        Assert.False(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, higherMajor));
+        Assert.False(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, unrelated));
+    }
+
+    [Fact]
     public async Task DevPackageOverlayUnload_RestoresInstalledPackageWithSameId()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "test.package", "1.0.0", PackageSourceKind.Installed);
         var devFolder = CreatePackageLayout(paths.RootPath, "dev", "test.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -184,7 +196,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -221,7 +233,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "installed.package", "1.0.0", PackageSourceKind.Installed);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -250,7 +262,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "test.package", "1.0.0", PackageSourceKind.Installed);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "test.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -284,7 +296,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "installed.package", "1.0.0", PackageSourceKind.Installed);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -318,7 +330,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var goodPackage = CreatePackageLayout(paths.RootPath, "installed", "good.package", "1.0.0", PackageSourceKind.Installed);
         var badPackage = CreatePackageLayout(paths.RootPath, "installed", "bad.package", "1.0.0", PackageSourceKind.Installed);
 
@@ -351,7 +363,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -397,7 +409,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "shared.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "shared.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -450,7 +462,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -480,7 +492,7 @@ public sealed class PackageSessionOverlayTests
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
         var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
         var builderDevFolder = CreatePackageLayout(paths.RootPath, "builder-dev", "builder.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
 
@@ -570,8 +582,8 @@ public sealed class PackageSessionOverlayTests
               "name": "{{packageId}}",
               "version": "{{version}}",
               "sdkApiVersion": 1,
-              "sdkPackageVersion": "1.0.0",
-              "requiredSdkCapabilities": ["core.v1"],
+              "sdkPackageVersion": "1.1.0",
+              "requiredSdkCapabilities": ["sdk-baseline-1-1.v1", "core.v1"],
               "entryAssembly": "{{entryAssemblyFileName}}"{{dependencyJson}}
             }
             """);
@@ -689,5 +701,5 @@ internal sealed class PackageSessionOverlayTestStackContributor(
     public ValueTask<StackImportResult> ImportAsync(
         StackImportRequest request,
         CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new StackImportResult(true, [], new Dictionary<string, string>(), [], []));
+        => ValueTask.FromResult(new StackImportResult(StackImportOutcome.Completed, [], new Dictionary<string, string>(), [], []));
 }

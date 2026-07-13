@@ -1,6 +1,6 @@
 namespace Sunder.Cli;
 
-internal sealed class RegistryBrowseCommandHandler(IRegistryClient registry, CliOutput output)
+internal sealed class RegistryBrowseCommandHandler(IRegistryBrowseClient registry, CliOutput output)
 {
     public async Task<int> ExecuteAsync(SearchPackagesCommand command, CancellationToken token)
     {

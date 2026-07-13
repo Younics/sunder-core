@@ -24,7 +24,8 @@ public sealed class RuntimeApiClientTests
 
         Assert.NotNull(status);
         Assert.Equal("Runtime", status.Name);
-        var request = Assert.Single(handler.Requests);
+        Assert.Equal("/api/handshake", handler.Requests[0].RequestUri?.AbsolutePath);
+        var request = handler.Requests[1];
         Assert.Equal(HttpMethod.Get, request.Method);
         Assert.Equal(new Uri("http://127.0.0.1:5275/api/v1/system"), request.RequestUri);
         Assert.Equal("Bearer", request.AuthorizationScheme);
@@ -40,6 +41,27 @@ public sealed class RuntimeApiClientTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => runtimeApiClient.GetSystemStatusAsync());
 
         Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task VersionedRequest_WhenHandshakeRangeIsIncompatible_FailsBeforeVersionedCall()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => throw new InvalidOperationException("Versioned call must not be sent."))
+        {
+            Handshake = CreateHandshake() with
+            {
+                ProtocolRevision = 2,
+                MinimumSupportedRevision = 2,
+                MaximumSupportedRevision = 2,
+            },
+        };
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");
+        using var runtimeApiClient = new RuntimeApiClient(() => connection, handler);
+
+        await Assert.ThrowsAsync<RuntimeProtocolException>(() => runtimeApiClient.GetSystemStatusAsync());
+
+        Assert.Single(handler.Requests);
+        Assert.Equal("/api/handshake", handler.Requests[0].RequestUri?.AbsolutePath);
     }
 
     [Fact]
@@ -69,7 +91,8 @@ public sealed class RuntimeApiClientTests
         var receivedEvent = Assert.Single(received);
         Assert.Equal(43, receivedEvent.SequenceId);
         Assert.Equal(8, receivedEvent.SessionGeneration);
-        var request = Assert.Single(handler.Requests);
+        Assert.Equal("/api/handshake", handler.Requests[0].RequestUri?.AbsolutePath);
+        var request = handler.Requests[1];
         Assert.Equal("42", request.LastEventId);
         Assert.Equal("Bearer", request.AuthorizationScheme);
     }
@@ -80,6 +103,8 @@ public sealed class RuntimeApiClientTests
 
         public IReadOnlyList<RecordedRequest> Requests => _requests.ToArray();
 
+        public RuntimeHandshakeResponse Handshake { get; init; } = CreateHandshake();
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Add(new RecordedRequest(
@@ -88,9 +113,21 @@ public sealed class RuntimeApiClientTests
                 request.Headers.Authorization?.Scheme,
                 !string.IsNullOrWhiteSpace(request.Headers.Authorization?.Parameter),
                 request.Headers.TryGetValues("Last-Event-ID", out var values) ? values.SingleOrDefault() : null));
-            return Task.FromResult(send(request));
+            return Task.FromResult(request.RequestUri?.AbsolutePath == "/api/handshake"
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(Handshake) }
+                : send(request));
         }
     }
+
+    private static RuntimeHandshakeResponse CreateHandshake()
+        => new(
+            RuntimeProtocol.Identity,
+            RuntimeProtocol.CurrentRevision,
+            RuntimeProtocol.MinimumSupportedRevision,
+            RuntimeProtocol.MaximumSupportedRevision,
+            Guid.NewGuid(),
+            [RuntimeProtocolFeatures.VersionedApiV1],
+            new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 
     private sealed record RecordedRequest(
         HttpMethod Method,

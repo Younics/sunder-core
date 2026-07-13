@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
+using Sunder.Sdk.Runtime;
 
 namespace Sunder.App.Services;
 
@@ -10,7 +11,7 @@ internal sealed class AppPackageServiceProviderFactory(
     AppPackageExtensionCatalog extensionCatalog,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
-    IPackageSessionService? packageSessionService,
+    AppPackageSessionService? packageSessionService,
     NotificationCenterService? notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue)
 {
@@ -21,12 +22,21 @@ internal sealed class AppPackageServiceProviderFactory(
     {
         var services = new ServiceCollection();
         services.AddSingleton<IPackageContext>(_ => packageContext);
+        services.AddSingleton<IPackageRuntimeClient>(packageContext.Runtime);
+        services.AddSingleton<IPackageCallbackClient>(packageContext.Callbacks);
         services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
         services.AddSingleton<IPackageSettingsNavigationService>(settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
-        services.AddSingleton<IPackageSessionService>(packageSessionService ?? NullPackageSessionService.Instance);
+        services.AddSingleton<IPackageDevelopmentSessionControl>(
+            packageSessionService is null
+                ? UnavailablePackageDevelopmentSessionControl.Instance
+                : packageSessionService);
+        if (packageSessionService is not null)
+        {
+            services.AddSingleton<IPackageInstalledSessionControl>(packageSessionService);
+        }
         services.AddSingleton<IBackgroundProcessQueue>(_ =>
         {
             var packageBackgroundProcessQueue = new PackageScopedBackgroundProcessQueue(package.PackageId, package.DisplayName, backgroundProcessQueue);

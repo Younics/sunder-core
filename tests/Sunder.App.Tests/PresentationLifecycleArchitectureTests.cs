@@ -11,6 +11,8 @@ public sealed class PresentationLifecycleArchitectureTests
     [InlineData("StacksWindowViewModel")]
     [InlineData("CreateStackWizardViewModel")]
     [InlineData("UseStackWizardViewModel")]
+    [InlineData("SettingsWindowViewModel")]
+    [InlineData("MainWindowViewModel")]
     public void HotspotFamilies_StayBelowFileSizeRatchet(string familyName)
     {
         var directory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "ViewModels");
@@ -19,8 +21,23 @@ public sealed class PresentationLifecycleArchitectureTests
         Assert.NotEmpty(files);
         Assert.All(files, path =>
             Assert.True(
-                File.ReadLines(path).Count() < 700,
-                $"{Path.GetFileName(path)} exceeded the 700-line presentation ratchet."));
+                File.ReadLines(path).Count() < 675,
+                $"{Path.GetFileName(path)} exceeded the 675-line presentation ratchet."));
+    }
+
+    [Fact]
+    public void StacksWindow_OwnsPresentationOnly_NotCoordinatorLifecycleState()
+    {
+        var directory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "ViewModels");
+        var source = string.Join('\n', Directory.EnumerateFiles(directory, "StacksWindowViewModel*.cs").Select(File.ReadAllText));
+
+        Assert.DoesNotContain("_selectedStackCancellation", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("_registryStackDetailsCancellation", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("_selectedImportPlanId", source, StringComparison.Ordinal);
+        Assert.Contains("StackLibraryCoordinator", source, StringComparison.Ordinal);
+        Assert.Contains("StackSelectionCoordinator", source, StringComparison.Ordinal);
+        Assert.Contains("StackDetailLoadCoordinator", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("StackImportPresentationCoordinator", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -35,6 +52,49 @@ public sealed class PresentationLifecycleArchitectureTests
         Assert.Contains("_settingsWindowFactory.Create", source, StringComparison.Ordinal);
         Assert.Contains("_packagesWindowFactory.Create", source, StringComparison.Ordinal);
         Assert.Contains("_stacksWindowFactory.Create", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PackageCatalogSources_UseSharedProjectionPipeline()
+    {
+        var directory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "ViewModels");
+        var installed = File.ReadAllText(Path.Combine(directory, "InstalledPackageCatalogProjector.cs"));
+        var marketplace = File.ReadAllText(Path.Combine(directory, "MarketplacePackageSearchProjector.cs"));
+
+        Assert.Contains("PackageCatalogProjection.Project", installed, StringComparison.Ordinal);
+        Assert.Contains("PackageCatalogProjection.Project", marketplace, StringComparison.Ordinal);
+        Assert.Contains("PackageCatalogInstallationIndex", installed, StringComparison.Ordinal);
+        Assert.Contains("PackageCatalogInstallationIndex", marketplace, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PresentationHotspots_HaveNoUnownedMutationPatterns()
+    {
+        var directory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "ViewModels");
+        var families = new[]
+        {
+            "PackagesWindowViewModel",
+            "SettingsWindowViewModel",
+            "StacksWindowViewModel",
+            "UseStackWizardViewModel",
+            "MainWindowViewModel",
+        };
+        var source = string.Join('\n', families.SelectMany(family =>
+            Directory.EnumerateFiles(directory, family + "*.cs").Select(File.ReadAllText)));
+
+        Assert.DoesNotContain("CancellationToken.None", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("async void", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("_ = ", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainWindowView_DelegatesLayoutPolicyToPresentationComponents()
+    {
+        var path = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "Views", "MainWindow.axaml.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.DoesNotContain("CalculateTopColumnWidths", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CalculateResizableExtent", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -121,6 +181,94 @@ public sealed class PresentationLifecycleArchitectureTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             PackageIconImageLoader.LoadAsync(new Uri("https://127.0.0.1:1/icon.png"), cancellation.Token));
+    }
+
+    [Fact]
+    public void AppExternalPayloadReaders_AreBounded()
+    {
+        var services = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "Services");
+        var singleInstance = File.ReadAllText(Path.Combine(services, "AppSingleInstanceCoordinator.cs"));
+        var asyncImages = File.ReadAllText(Path.Combine(services, "SunderAsyncImageLoader.cs"));
+        var runtimeClient = File.ReadAllText(Path.Combine(services, "RuntimeApiClient.cs"));
+        var registryClient = File.ReadAllText(Path.Combine(services, "RegistryApiClient.cs"));
+
+        Assert.Contains("MaxLaunchPayloadCharacters", singleInstance, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadToEndAsync", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("BoundedImageContentLoader.LoadAsync", asyncImages, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadAsByteArrayAsync", asyncImages, StringComparison.Ordinal);
+        Assert.Contains("BoundedHttpContentReader", runtimeClient, StringComparison.Ordinal);
+        Assert.Contains("BoundedHttpContentReader", registryClient, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadFromJsonAsync", runtimeClient, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetFromJsonAsync", registryClient, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeClientInterface_DoesNotExposeRemovedSessionApplicationSwitchesOrPathHandles()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(), "src", "Host", "Sunder.App", "Services", "IRuntimeApiClient.cs"));
+
+        Assert.DoesNotContain("applyRuntimeSession", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("new ContentUploadDescriptor(packagePath", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("new ContentUploadDescriptor(stackPath", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClientCapabilityInterfaces_HaveNoDefaultImplementations()
+    {
+        var interfaces = typeof(IRuntimeClient).Assembly.GetTypes()
+            .Where(type => type.IsInterface
+                           && (typeof(IRuntimeClient).IsAssignableFrom(type)
+                               || typeof(IRegistryClient).IsAssignableFrom(type)))
+            .ToArray();
+
+        Assert.NotEmpty(interfaces);
+        Assert.All(
+            interfaces.SelectMany(type => type.GetMethods(
+                System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.DeclaredOnly)),
+            method => Assert.True(method.IsAbstract, $"{method.DeclaringType?.Name}.{method.Name} has a default implementation."));
+    }
+
+    [Fact]
+    public void RuntimeClientEndpointFamilies_StayReviewedAndConsumersAvoidTheComposite()
+    {
+        var services = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "Services");
+        var runtimeFiles = Directory.GetFiles(services, "RuntimeApiClient*.cs")
+            .Where(path => !path.EndsWith("RuntimeApiClientFactory.cs", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.All(runtimeFiles, path => Assert.True(
+            File.ReadLines(path).Count() < 500,
+            $"{Path.GetFileName(path)} exceeded the 500-line Runtime client ratchet."));
+
+        var appDirectory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App");
+        var broadDependencies = Directory.GetFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.EndsWith("IRuntimeApiClient.cs", StringComparison.Ordinal)
+                           && !path.Contains("RuntimeApiClient.", StringComparison.Ordinal)
+                           && !path.EndsWith("RuntimeApiClient.cs", StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(path).Contains("IRuntimeApiClient ", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Empty(broadDependencies);
+
+        var broadRegistryDependencies = Directory.GetFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.EndsWith("IRegistryApiClient.cs", StringComparison.Ordinal)
+                           && !path.EndsWith("RegistryApiClient.cs", StringComparison.Ordinal)
+                           && !path.EndsWith("StacksWindowViewModel.State.cs", StringComparison.Ordinal)
+                           && !path.EndsWith("UseStackWizardViewModel.State.cs", StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(path).Contains("IRegistryApiClient ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Empty(broadRegistryDependencies);
+
+        var testDirectory = Path.Combine(GetRepositoryRoot(), "tests", "Sunder.App.Tests");
+        var broadTestDoubles = Directory.GetFiles(testDirectory, "*.cs")
+            .Where(path => System.Text.RegularExpressions.Regex.IsMatch(
+                File.ReadAllText(path),
+                @":\s*IRuntimeApiClient(?:\s|$)"))
+            .ToArray();
+        Assert.Empty(broadTestDoubles);
     }
 
     private static string GetRepositoryRoot()

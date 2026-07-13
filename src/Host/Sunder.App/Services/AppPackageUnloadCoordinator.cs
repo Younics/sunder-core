@@ -72,7 +72,7 @@ internal sealed class AppPackageUnloadCoordinator(
         AppPackageSourcePreparer.TryDeleteDirectory(handle.Folder);
     }
 
-    public async Task DisposeLegacyOwnedInstancesAsync(
+    public async Task DisposeOwnedResourcesAsync(
         IReadOnlyList<object> ownedDisposables,
         IReadOnlyList<AppPackageLoadContext> loadContexts)
     {

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -13,8 +12,6 @@ public sealed record RuntimeV1ResetResult(IReadOnlyList<RuntimeV1ResetCategoryRe
 
 public static class RuntimeV1StateReset
 {
-    private const string MacOsService = "io.sunder.runtime.v1.package-storage.master-key";
-    private const string LinuxAttribute = "sunder-runtime-v1-master-key";
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
@@ -35,6 +32,8 @@ public static class RuntimeV1StateReset
         CancellationToken cancellationToken,
         string rootPath)
     {
+        var policy = new RuntimeV1ResetPolicyOptions();
+        var timeProvider = TimeProvider.System;
         var root = Path.GetFullPath(rootPath);
         RuntimeLocalState.Validate(root);
         if (!Directory.Exists(root))
@@ -48,25 +47,32 @@ public static class RuntimeV1StateReset
         }
 
         var leasePath = ContainedPath(root, RuntimeLocalState.LeaseFileName);
-        await using var lease = await AcquireLeaseAsync(leasePath, leaseWait, cancellationToken).ConfigureAwait(false);
+        await using var lease = await AcquireLeaseAsync(leasePath, leaseWait, policy, timeProvider, cancellationToken).ConfigureAwait(false);
         RuntimeLocalState.Validate(root);
+        var hasUnknownEntries = Directory.EnumerateFileSystemEntries(root)
+            .Select(Path.GetFileName)
+            .Any(entry => entry is null || !RuntimeV1StateDescriptor.KnownRootEntries.Contains(entry));
 
         var results = new List<RuntimeV1ResetCategoryResult>();
-        ResetCategory(results, "package-catalog-and-payloads", root, ["catalog", "installed", "staging", "transactions", "tombstones"]);
-        var packageDataCredentialsDeleted = ResetCredentialCategory(results, root);
+        var packageCategory = GetCategory("package-catalog-and-payloads");
+        ResetCategory(results, packageCategory.Id, root, packageCategory.RelativePaths);
+        var packageDataCredentialsDeleted = ResetCredentialCategory(results, root, policy);
         if (packageDataCredentialsDeleted)
         {
-            ResetCategory(results, "package-state-files-secrets-and-logs", root, ["package-data"]);
+            var packageDataCategory = GetCategory("package-state-files-secrets-and-logs");
+            ResetCategory(results, packageDataCategory.Id, root, packageDataCategory.RelativePaths);
         }
         else
         {
             results.Add(new("package-state-files-secrets-and-logs", "partial"));
         }
-        ResetCategory(results, "uploads-and-snapshots", root, ["transfers"]);
-        ResetCategory(results, "runtime-connection", root, ["connection.json"]);
+        var transferCategory = GetCategory("uploads-and-snapshots");
+        ResetCategory(results, transferCategory.Id, root, transferCategory.RelativePaths);
+        var connectionCategory = GetCategory("runtime-connection");
+        ResetCategory(results, connectionCategory.Id, root, connectionCategory.RelativePaths);
 
         await lease.DisposeAsync().ConfigureAwait(false);
-        if (results.All(result => result.Status is "reset" or "already-empty"))
+        if (!hasUnknownEntries && results.All(result => result.Status is "reset" or "already-empty"))
         {
             results.Add(new("runtime-v1-root", TryDeleteRoot(root) ? "reset" : "partial"));
         }
@@ -78,18 +84,19 @@ public static class RuntimeV1StateReset
         return new RuntimeV1ResetResult(results);
     }
 
-    private static RuntimeV1ResetResult EmptyResult() => new([
-        new("package-catalog-and-payloads", "already-empty"),
-        new("package-state-files-secrets-and-logs", "already-empty"),
-        new("uploads-and-snapshots", "already-empty"),
-        new("registry-credentials", "already-empty"),
-        new("runtime-connection", "already-empty"),
-        new("runtime-v1-root", "already-empty"),
-    ]);
+    private static RuntimeV1ResetResult EmptyResult() => new(
+        RuntimeV1StateDescriptor.ResetCategories
+            .Select(static category => new RuntimeV1ResetCategoryResult(category.Id, "already-empty"))
+            .ToArray());
 
-    private static async Task<FileStream> AcquireLeaseAsync(string leasePath, TimeSpan wait, CancellationToken cancellationToken)
+    private static async Task<FileStream> AcquireLeaseAsync(
+        string leasePath,
+        TimeSpan wait,
+        RuntimeV1ResetPolicyOptions policy,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
     {
-        var expiresAt = DateTimeOffset.UtcNow + wait;
+        var expiresAt = timeProvider.GetUtcNow() + wait;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -97,13 +104,13 @@ public static class RuntimeV1StateReset
             {
                 return new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.WriteThrough);
             }
-            catch (IOException) when (DateTimeOffset.UtcNow < expiresAt)
+            catch (IOException) when (timeProvider.GetUtcNow() < expiresAt)
             {
-                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(policy.LeaseRetryDelay, timeProvider, cancellationToken).ConfigureAwait(false);
             }
-            catch (UnauthorizedAccessException) when (DateTimeOffset.UtcNow < expiresAt)
+            catch (UnauthorizedAccessException) when (timeProvider.GetUtcNow() < expiresAt)
             {
-                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(policy.LeaseRetryDelay, timeProvider, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -112,10 +119,13 @@ public static class RuntimeV1StateReset
         }
     }
 
-    private static bool ResetCredentialCategory(List<RuntimeV1ResetCategoryResult> results, string root)
+    private static bool ResetCredentialCategory(
+        List<RuntimeV1ResetCategoryResult> results,
+        string root,
+        RuntimeV1ResetPolicyOptions policy)
     {
-        var credentialPath = ContainedPath(root, "credentials");
-        var credentialKeysDeleted = TryDeleteRegistryExternalKey(credentialPath, out var foundCredentials);
+        var credentialPath = ContainedPath(root, RuntimeV1StateDescriptor.CredentialsDirectory);
+        var credentialKeysDeleted = TryDeleteRegistryExternalKey(credentialPath, policy, out var foundCredentials);
         if (credentialKeysDeleted && Directory.Exists(credentialPath))
         {
             foundCredentials = true;
@@ -129,14 +139,15 @@ public static class RuntimeV1StateReset
             }
         }
 
-        var packageDataKeysDeleted = TryDeletePackageExternalKeys(ContainedPath(root, "package-data"));
+        var packageDataKeysDeleted = TryDeletePackageExternalKeys(
+            ContainedPath(root, RuntimeV1StateDescriptor.PackageDataDirectory), policy);
         results.Add(new(
             "registry-credentials",
             !credentialKeysDeleted ? "partial" : foundCredentials ? "reset" : "already-empty"));
         return packageDataKeysDeleted;
     }
 
-    private static bool TryDeleteRegistryExternalKey(string root, out bool found)
+    private static bool TryDeleteRegistryExternalKey(string root, RuntimeV1ResetPolicyOptions policy, out bool found)
     {
         found = Directory.Exists(root);
         if (!found)
@@ -148,17 +159,17 @@ public static class RuntimeV1StateReset
             return false;
         }
 
-        var registryRoot = Path.Combine(root, "registry");
+        var registryRoot = Path.Combine(root, RuntimeV1StateDescriptor.RegistryCredentialNamespace);
         if (Directory.Exists(registryRoot) && IsReparsePoint(registryRoot))
         {
             return false;
         }
 
-        var keyFile = Path.Combine(registryRoot, "credentials.enc.json.key");
-        return !File.Exists(keyFile) || TryDeleteExternalKey(keyFile);
+        var keyFile = Path.Combine(registryRoot, RuntimeV1StateDescriptor.RegistryCredentialsKeyFile);
+        return !File.Exists(keyFile) || TryDeleteExternalKey(keyFile, policy);
     }
 
-    private static bool TryDeletePackageExternalKeys(string root)
+    private static bool TryDeletePackageExternalKeys(string root, RuntimeV1ResetPolicyOptions policy)
     {
         if (!Directory.Exists(root))
         {
@@ -187,8 +198,8 @@ public static class RuntimeV1StateReset
                     continue;
                 }
 
-                var keyFile = Path.Combine(dataRoot, "secrets.json.key");
-                succeeded &= !File.Exists(keyFile) || TryDeleteExternalKey(keyFile);
+                var keyFile = Path.Combine(dataRoot, RuntimeV1StateDescriptor.PackageSecretsKeyFile);
+                succeeded &= !File.Exists(keyFile) || TryDeleteExternalKey(keyFile, policy);
             }
 
             return succeeded;
@@ -199,7 +210,7 @@ public static class RuntimeV1StateReset
         }
     }
 
-    private static bool TryDeleteExternalKey(string keyFile)
+    private static bool TryDeleteExternalKey(string keyFile, RuntimeV1ResetPolicyOptions policy)
     {
         try
         {
@@ -232,14 +243,14 @@ public static class RuntimeV1StateReset
             if (scheme == "macos-keychain")
             {
                 return !OperatingSystem.IsMacOS()
-                    || Run("/usr/bin/security", ["delete-generic-password", "-a", identifier, "-s", MacOsService]);
+                    || Run("/usr/bin/security", ["delete-generic-password", "-a", identifier, "-s", RuntimeV1StateDescriptor.MacOsMasterKeyService], policy.CredentialCommandTimeout);
             }
 
             if (scheme == "linux-secret-service")
             {
                 var secretTool = FindExecutable("secret-tool");
                 return !OperatingSystem.IsLinux()
-                    || secretTool is not null && Run(secretTool, ["clear", LinuxAttribute, identifier]);
+                    || secretTool is not null && Run(secretTool, ["clear", RuntimeV1StateDescriptor.LinuxMasterKeyAttribute, identifier], policy.CredentialCommandTimeout);
             }
 
             return false;
@@ -312,24 +323,12 @@ public static class RuntimeV1StateReset
         return path;
     }
 
-    private static bool Run(string fileName, IReadOnlyList<string> arguments)
+    private static bool Run(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout)
     {
         try
         {
-            var startInfo = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            foreach (var argument in arguments)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(startInfo);
-            return process is not null && process.WaitForExit(5000) && process.ExitCode is 0 or 44;
+            var result = CapturedProcessRunner.Run(fileName, arguments, standardInput: null, timeout);
+            return !result.TimedOut && !result.OutputTruncated && result.ExitCode is 0 or 44;
         }
         catch
         {
@@ -365,4 +364,7 @@ public static class RuntimeV1StateReset
             return false;
         }
     }
+
+    private static RuntimeV1StateCategoryDescriptor GetCategory(string id)
+        => RuntimeV1StateDescriptor.ResetCategories.Single(category => category.Id == id);
 }

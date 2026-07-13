@@ -12,15 +12,15 @@ internal sealed class RuntimePackagePaths
     public RuntimePackagePaths(string rootPath)
     {
         RootPath = Path.GetFullPath(rootPath);
-        CatalogRootPath = Path.Combine(RootPath, "catalog");
-        InstalledRootPath = Path.Combine(RootPath, "installed");
-        StagingRootPath = Path.Combine(RootPath, "staging");
-        TransactionRootPath = Path.Combine(RootPath, "transactions");
-        TombstoneRootPath = Path.Combine(RootPath, "tombstones");
-        TransferRootPath = Path.Combine(RootPath, "transfers");
-        PackageDataRootPath = Path.Combine(RootPath, "package-data");
-        RegistryCredentialRootPath = Path.Combine(RootPath, "credentials", "registry");
-        RegistryCredentialFilePath = Path.Combine(RegistryCredentialRootPath, "credentials.enc.json");
+        CatalogRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.CatalogDirectory);
+        InstalledRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.InstalledDirectory);
+        StagingRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.StagingDirectory);
+        TransactionRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TransactionsDirectory);
+        TombstoneRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TombstonesDirectory);
+        TransferRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TransfersDirectory);
+        PackageDataRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.PackageDataDirectory);
+        RegistryCredentialRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.RegistryCredentialsDirectory);
+        RegistryCredentialFilePath = Path.Combine(RegistryCredentialRootPath, RuntimeV1StateDescriptor.RegistryCredentialFile);
         StateFilePath = Path.Combine(CatalogRootPath, "installed-packages.json");
         SchemaFilePath = Path.Combine(RootPath, RuntimeLocalState.SchemaFileName);
         LeaseFilePath = Path.Combine(RootPath, RuntimeLocalState.LeaseFileName);

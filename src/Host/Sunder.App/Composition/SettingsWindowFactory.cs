@@ -19,7 +19,7 @@ public sealed class SettingsWindowFactory(
         => new(shellStateService, shellState)
         {
             DataContext = new SettingsWindowViewModel(
-                runtimeApiClientFactory.CreateClient(),
+                runtimeApiClientFactory.CreateClient<IRuntimePackageSettingsClient>(),
                 packageViewHostService,
                 cliInstallationService,
                 updateService,

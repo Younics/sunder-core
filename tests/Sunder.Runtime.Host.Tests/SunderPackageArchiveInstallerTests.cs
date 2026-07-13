@@ -74,7 +74,7 @@ public sealed class SunderPackageArchiveInstallerTests
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
         var transfers = new RuntimeContentTransferStore(paths);
-        var service = new RuntimePackageSessionService(NullLogger<RuntimePackageSessionService>.Instance, store, installer, transferStore: transfers);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer, transferStore: transfers);
         var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
         await using var archive = File.OpenRead(archivePath);
         var upload = await transfers.CreateUploadAsync(RuntimeUploadKind.Package, archive, archive.Length, null, Path.GetFileName(archivePath), "application/vnd.sunder.package", 0, CancellationToken.None);
@@ -162,7 +162,7 @@ public sealed class SunderPackageArchiveInstallerTests
         Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "lib"));
 
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new RuntimePackageManifest
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
         {
             ManifestVersion = 1,
             Id = packageId,
@@ -170,8 +170,8 @@ public sealed class SunderPackageArchiveInstallerTests
             Version = version,
             EntryAssembly = "Test.Package.dll",
             SdkApiVersion = 1,
-            SdkPackageVersion = "1.0.0",
-            RequiredSdkCapabilities = ["core.v1"],
+            SdkPackageVersion = "1.1.0",
+            RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
         }));
 
         var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "lib", "Test.Package.dll");

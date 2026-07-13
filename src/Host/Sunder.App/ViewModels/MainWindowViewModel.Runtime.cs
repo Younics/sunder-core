@@ -48,19 +48,39 @@ public partial class MainWindowViewModel
 
     [RelayCommand]
     private async Task RefreshRuntimeAsync()
-        => await _runtimeStatus.RefreshRuntimeAsync();
+    {
+        if (!_disposed)
+        {
+            await _runtimeStatus.RefreshRuntimeAsync(_tasks.Token);
+        }
+    }
 
     [RelayCommand]
     private async Task ApplyRuntimeAddressAsync()
-        => await _runtimeStatus.ApplyRuntimeAddressAsync();
+    {
+        if (!_disposed)
+        {
+            await _runtimeStatus.ApplyRuntimeAddressAsync(_tasks.Token);
+        }
+    }
 
     [RelayCommand]
     private async Task StartRuntimeAsync()
-        => await _runtimeStatus.StartRuntimeAsync();
+    {
+        if (!_disposed)
+        {
+            await _runtimeStatus.StartRuntimeAsync(_tasks.Token);
+        }
+    }
 
     [RelayCommand]
     private async Task StopRuntimeAsync()
-        => await _runtimeStatus.StopRuntimeAsync();
+    {
+        if (!_disposed)
+        {
+            await _runtimeStatus.StopRuntimeAsync(_tasks.Token);
+        }
+    }
 
     private void RuntimeStatus_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

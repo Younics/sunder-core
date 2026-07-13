@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Host/">
+    <Project Path="src/Host/Sunder.Package.Hosting/Sunder.Package.Hosting.csproj" />
     <Project Path="src/Host/Sunder.App/Sunder.App.csproj" />
     <Project Path="src/Host/Sunder.Cli/Sunder.Cli.csproj" />
     <Project Path="src/Host/Sunder.Runtime.Client/Sunder.Runtime.Client.csproj" />

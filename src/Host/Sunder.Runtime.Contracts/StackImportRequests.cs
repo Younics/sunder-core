@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Sunder.Runtime.Contracts;
 
 public sealed record RuntimeStackImportPreviewRequest(
@@ -8,6 +10,8 @@ public sealed record RuntimeStackImportPreviewRequest(
 
 public sealed record RuntimeStackImportPreviewResponse(
     bool Success,
+    string? PlanId,
+    DateTimeOffset? ExpiresAtUtc,
     IReadOnlyList<RuntimeStackImportActionDescriptor> Actions,
     IReadOnlyList<RuntimeStackRequiredInputDescriptor> RequiredInputs,
     IReadOnlyList<RuntimeStackImportConflictDescriptor> Conflicts,
@@ -15,21 +19,35 @@ public sealed record RuntimeStackImportPreviewResponse(
     IReadOnlyList<string> Errors);
 
 public sealed record RuntimeStackImportRequest(
-    string UploadId,
+    string PlanId,
     IReadOnlyList<string> SelectedFragmentIds,
-    IReadOnlyDictionary<string, string> InputValues,
-    IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> SelectedActionIds);
 
+[JsonConverter(typeof(JsonStringEnumConverter<RuntimeStackImportOutcome>))]
+public enum RuntimeStackImportOutcome
+{
+    Completed,
+    Partial,
+    Failed,
+}
+
 public sealed record RuntimeStackImportResponse(
-    bool Success,
+    RuntimeStackImportOutcome Outcome,
+    IReadOnlyList<RuntimeStackImportedItemDescriptor> ImportedItems,
+    IReadOnlyDictionary<string, string> IdRemaps,
+    IReadOnlyList<RuntimeStackImportContributorResultDescriptor> ContributorResults,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
+
+public sealed record RuntimeStackImportContributorResultDescriptor(
+    string OwnerPackageId,
+    string ContributorId,
+    IReadOnlyList<string> FragmentIds,
+    RuntimeStackImportOutcome Outcome,
     IReadOnlyList<RuntimeStackImportedItemDescriptor> ImportedItems,
     IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors)
-{
-    public IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> AppliedContributions { get; init; } = [];
-}
+    IReadOnlyList<string> Errors);
 
 public sealed record RuntimeStackImportAppliedContributionDescriptor(
     string OwnerPackageId,

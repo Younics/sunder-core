@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DOTNET_VERSION: "10.0.x"
-  SDK_VERSION: "1.0.0"
+  DOTNET_VERSION: "10.0.100"
+  SDK_VERSION: "1.1.0"
 
 jobs:
   build-test-pack:
@@ -31,7 +31,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore Sunder.Core.slnx
+        run: dotnet restore Sunder.Core.slnx --locked-mode
 
       - name: Build forced Release
         run: dotnet build Sunder.Core.slnx -c Release --no-restore --no-incremental -p:GeneratePackageOnBuild=false

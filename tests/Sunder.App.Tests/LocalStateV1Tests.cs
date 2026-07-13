@@ -124,10 +124,11 @@ public sealed class LocalStateV1Tests
         var first = await RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, runtimeRoot);
         var second = await RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, runtimeRoot);
 
-        Assert.True(first.Success);
-        Assert.True(second.Success);
-        Assert.False(Directory.Exists(runtimeRoot));
-        Assert.All(second.Categories, category => Assert.Equal("already-empty", category.Status));
+        Assert.False(first.Success);
+        Assert.False(second.Success);
+        Assert.True(Directory.Exists(runtimeRoot));
+        Assert.Equal("stale", File.ReadAllText(Path.Combine(runtimeRoot, "stale-internal.tmp")));
+        Assert.Equal("partial", second.Categories.Single(category => category.Category == "runtime-v1-root").Status);
         Assert.Equal("legacy", File.ReadAllText(Path.Combine(legacyRoot, "installed-packages.json")));
     }
 

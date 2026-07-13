@@ -13,6 +13,7 @@ public sealed record RegistryPublishPackageResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public string? ErrorCode { get; init; } = Success ? null : RegistryV1ErrorCodes.InvalidRequest;
 }
 
 public sealed record RegistryPackageMaintainer(

@@ -1,7 +1,10 @@
+using Sunder.Sdk.Packaging;
+
 namespace Sunder.Cli;
 
 internal static class CliCommandParser
 {
+    private const int MaximumPageSize = 100;
     public static CliInvocation Parse(IReadOnlyList<string> arguments)
     {
         var args = arguments.ToList();
@@ -69,14 +72,16 @@ internal static class CliCommandParser
     private static CliCommand ParseSearchPackages(List<string> args)
     {
         var skip = TakeInt(args, "--skip", 0);
-        var take = TakeInt(args, "--take", 20);
+        var take = Math.Clamp(TakeInt(args, "--take", 20), 1, MaximumPageSize);
         return new SearchPackagesCommand(ZeroOrOne(args, "sunder search [query] [--skip <count>] [--take <count>]"), skip, take);
     }
 
     private static CliCommand ParsePackageInfo(List<string> args)
     {
         var version = TakeOption(args, "--version");
-        return new PackageInfoCommand(One(args, "sunder info <package-id> [--version <version>]"), version);
+        return new PackageInfoCommand(
+            PackageIdArgument(One(args, "sunder info <package-id> [--version <version>]")),
+            version is null ? null : SemanticVersionArgument(version));
     }
 
     private static CliCommand ParseInstall(List<string> args)
@@ -99,8 +104,8 @@ internal static class CliCommandParser
             return new InstallLocalPackageCommand(file, allowDowngrade, reinstall);
         }
         return new InstallRegistryPackageCommand(
-            One(args, "sunder install <package-id> [--version <version>|--tag <tag>] [--allow-downgrade] [--reinstall]"),
-            version,
+            PackageIdArgument(One(args, "sunder install <package-id> [--version <version>|--tag <tag>] [--allow-downgrade] [--reinstall]")),
+            version is null ? null : SemanticVersionArgument(version),
             version is null ? explicitTag ?? "latest" : null,
             allowDowngrade,
             reinstall);
@@ -115,7 +120,7 @@ internal static class CliCommandParser
         {
             throw Usage("Usage: sunder update [package-id|--all] [--include-prerelease]");
         }
-        return new UpdatePackagesCommand(packageId, all, prerelease);
+        return new UpdatePackagesCommand(packageId is null ? null : PackageIdArgument(packageId), all, prerelease);
     }
 
     private static CliCommand ParsePublishPackage(List<string> args)
@@ -129,7 +134,7 @@ internal static class CliCommandParser
     private static CliCommand ParseYank(List<string> args, bool value)
     {
         EnsureCount(args, 2, $"sunder {(value ? "yank" : "unyank")} <package-id> <version>");
-        return new SetYankCommand(args[0], args[1], value);
+        return new SetYankCommand(PackageIdArgument(args[0]), SemanticVersionArgument(args[1]), value);
     }
 
     private static CliCommand ParseDeprecation(List<string> args, bool clear)
@@ -142,7 +147,7 @@ internal static class CliCommandParser
         {
             throw Usage("Usage: sunder deprecate <package-id> <version> --message <message>");
         }
-        return new SetDeprecationCommand(args[0], args[1], message);
+        return new SetDeprecationCommand(PackageIdArgument(args[0]), SemanticVersionArgument(args[1]), message);
     }
 
     private static CliCommand ParseDistTag(List<string> args)
@@ -151,7 +156,7 @@ internal static class CliCommandParser
         var action = TakeFirst(args).ToLowerInvariant();
         return action switch
         {
-            "list" => new ListDistTagsCommand(One(args, "sunder dist-tag list <package-id>")),
+            "list" => new ListDistTagsCommand(PackageIdArgument(One(args, "sunder dist-tag list <package-id>"))),
             "set" => ParseSetTag(args),
             "delete" or "rm" => ParseDeleteTag(args),
             _ => throw Usage("Usage: sunder dist-tag <list|set|delete> ...")
@@ -161,13 +166,13 @@ internal static class CliCommandParser
     private static CliCommand ParseSetTag(List<string> args)
     {
         EnsureCount(args, 3, "sunder dist-tag set <package-id> <tag> <version>");
-        return new SetDistTagCommand(args[0], args[1], args[2]);
+        return new SetDistTagCommand(PackageIdArgument(args[0]), args[1], SemanticVersionArgument(args[2]));
     }
 
     private static CliCommand ParseDeleteTag(List<string> args)
     {
         EnsureCount(args, 2, "sunder dist-tag delete <package-id> <tag>");
-        return new SetDistTagCommand(args[0], args[1], null);
+        return new SetDistTagCommand(PackageIdArgument(args[0]), args[1], null);
     }
 
     private static CliCommand ParsePackage(List<string> args)
@@ -199,7 +204,7 @@ internal static class CliCommandParser
     private static CliCommand ParseStackSearch(List<string> args)
     {
         var skip = TakeInt(args, "--skip", 0);
-        var take = TakeInt(args, "--take", 20);
+        var take = Math.Clamp(TakeInt(args, "--take", 20), 1, MaximumPageSize);
         return new SearchStacksCommand(ZeroOrOne(args, "sunder stack search [query] [--skip <count>] [--take <count>]"), skip, take);
     }
 
@@ -287,6 +292,16 @@ internal static class CliCommandParser
     {
         if (args.Count != count || args.Any(string.IsNullOrWhiteSpace)) throw Usage($"Usage: {usage}");
     }
+
+    private static string PackageIdArgument(string value)
+        => PackageId.TryParse(value, out _)
+            ? value
+            : throw Usage($"Package id '{value}' must be a lowercase dot-separated ASCII id of at most {PackageId.MaximumLength} characters.");
+
+    private static string SemanticVersionArgument(string value)
+        => SemanticVersion.TryParse(value, out _)
+            ? value
+            : throw Usage($"Version '{value}' must be strict SemVer 2.0 and at most {SemanticVersion.MaximumLength} characters.");
 
     private static CliUsageException Usage(string message) => new(message);
 }

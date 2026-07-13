@@ -5,5 +5,8 @@
         <Nullable>enable</Nullable>
         <AnalysisLevel>latest</AnalysisLevel>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <SunderDeveloperPackageVersion>1.1.0</SunderDeveloperPackageVersion>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+        <RestoreLockedMode Condition="'$(CI)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
     </PropertyGroup>
 </Project>

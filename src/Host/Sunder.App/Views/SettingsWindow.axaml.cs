@@ -14,6 +14,7 @@ public partial class SettingsWindow : Window
     private SettingsWindowViewModel? ViewModel => DataContext as SettingsWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
     private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private readonly OwnedTaskObserver _tasks = new("Settings window");
 
     public SettingsWindow()
     {
@@ -24,6 +25,7 @@ public partial class SettingsWindow : Window
             () => _stateController?.PersistWindowState(),
             OnLifecycleClosed);
         Opened += OnOpened;
+        Closed += (_, _) => _tasks.Dispose();
     }
 
     public SettingsWindow(ShellStateService shellStateService, ShellState shellState)
@@ -45,15 +47,18 @@ public partial class SettingsWindow : Window
     public void CloseForShutdown()
         => _lifecycleController.CloseForShutdown();
 
-    private async void SectionButton_OnClick(object? sender, RoutedEventArgs e)
+    private void SectionButton_OnClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Control { DataContext: SettingsSectionItemViewModel item } && ViewModel is not null)
         {
-            await ViewModel.SelectSectionAsync(item);
+            _tasks.Run(_ => ViewModel.SelectSectionAsync(item), "selecting a settings section");
         }
     }
 
-    private async void SaveButton_OnClick(object? sender, RoutedEventArgs e)
+    private void SaveButton_OnClick(object? sender, RoutedEventArgs e)
+        => _tasks.Run(_ => SaveAndCloseAsync(), "saving settings");
+
+    private async Task SaveAndCloseAsync()
     {
         if (ViewModel is not null)
         {
@@ -66,7 +71,10 @@ public partial class SettingsWindow : Window
         Close();
     }
 
-    private async void CopyCliPathInstructionsButton_OnClick(object? sender, RoutedEventArgs e)
+    private void CopyCliPathInstructionsButton_OnClick(object? sender, RoutedEventArgs e)
+        => _tasks.Run(_ => CopyCliPathInstructionsAsync(), "copying CLI path instructions");
+
+    private async Task CopyCliPathInstructionsAsync()
     {
         if (ViewModel is null || string.IsNullOrWhiteSpace(ViewModel.CliPathInstructions))
         {

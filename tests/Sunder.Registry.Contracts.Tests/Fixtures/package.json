@@ -9,7 +9,7 @@
     "sdkApiVersion": 1,
     "sdkPackageVersion": "0.8.0",
     "requiredCapabilities": [
-      "app-ui.v1",
+      "views.v1",
       "core.v1"
     ],
     "targetFramework": "net10.0",

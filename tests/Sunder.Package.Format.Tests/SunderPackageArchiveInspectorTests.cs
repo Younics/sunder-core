@@ -90,6 +90,47 @@ public sealed class SunderPackageArchiveInspectorTests
         Assert.Contains(result.Errors, error => error.Contains("lowercase SHA-256", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ValidateExtractedPackageAsync_PreservesCrossValidatorErrorOrder()
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
+        var stagingPath = Path.Combine(root, "staging");
+        SunderPackageArchiveInspector.ExtractArchive(archivePath, stagingPath);
+        File.Delete(Path.Combine(stagingPath, "payload", "lib", "Test.Package.dll"));
+
+        var result = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(stagingPath);
+
+        Assert.Equal(
+            [
+                "Package 'test.package' is missing entry assembly 'Test.Package.dll' under payload/lib/.",
+                "Package content index references missing file 'payload/lib/Test.Package.dll'.",
+            ],
+            result.Errors);
+    }
+
+    [Fact]
+    public void PackageArchiveValidation_UsesFocusedCollaboratorsAndSizeRatchets()
+    {
+        var sourceDirectory = FindFormatDirectory();
+        var expectedFiles = new[]
+        {
+            "PackageArchiveManifestValidator.cs",
+            "PackageDependencyValidator.cs",
+            "PackageAssetValidator.cs",
+            "PackageContentIndexValidator.cs",
+            "PackageContentSignatureValidator.cs",
+            "PackageArchivePathValidator.cs",
+        };
+
+        Assert.True(File.ReadLines(Path.Combine(sourceDirectory, "SunderPackageArchiveInspector.cs")).Count() < 120);
+        foreach (var file in expectedFiles)
+        {
+            Assert.True(File.Exists(Path.Combine(sourceDirectory, file)), $"Missing package archive validator {file}.");
+            Assert.True(File.ReadLines(Path.Combine(sourceDirectory, file)).Count() < 150, $"{file} exceeded its size ratchet.");
+        }
+    }
+
     private static string CreatePackageArchive(
         string root,
         string packageId,
@@ -162,5 +203,20 @@ public sealed class SunderPackageArchiveInspectorTests
         var path = Path.Combine(Path.GetTempPath(), "sunder-package-management-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static string FindFormatDirectory()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "src", "Sunder.Package.Format");
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+            directory = directory.Parent;
+        }
+        throw new DirectoryNotFoundException("Could not locate Sunder.Package.Format.");
     }
 }

@@ -9,7 +9,7 @@
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificContentInPackage>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
-    <Version>1.0.0</Version>
+    <Version>$(SunderDeveloperPackageVersion)</Version>
     <Title>Sunder.Package.Build</Title>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>

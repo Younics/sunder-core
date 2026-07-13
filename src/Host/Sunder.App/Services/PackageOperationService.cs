@@ -77,7 +77,7 @@ internal sealed class PackageOperationService : IDisposable
     public const string PackageStoreGroupKey = "package-store";
     private readonly BackgroundProcessQueueService _backgroundProcesses;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
-    private readonly Func<Uri, IRegistryApiClient> _createRegistryClient;
+    private readonly Func<Uri, IRegistryClient> _createRegistryClient;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly PackageOperationFinalizer _operationFinalizer;
     private readonly Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? _preflightPackageLifecycleChangesAsync;
@@ -90,7 +90,7 @@ internal sealed class PackageOperationService : IDisposable
         Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
         NotificationCenterService notificationCenter,
         RegistryPackageInstallService? registryInstallService = null,
-        Func<Uri, IRegistryApiClient>? registryClientFactory = null,
+        Func<Uri, IRegistryClient>? registryClientFactory = null,
         Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task>? preflightPackageLifecycleChangesAsync = null)
     {
         _backgroundProcesses = backgroundProcesses;
@@ -171,7 +171,7 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportProgress(0, $"Installing {displayName}...");
                 using var registryClient = _createRegistryClient(registryUrl);
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await _registryInstallService.InstallPackageAsync(
                     packageId,
                     version,
@@ -200,7 +200,7 @@ internal sealed class PackageOperationService : IDisposable
             async context =>
             {
                 context.ReportIndeterminate($"Installing {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var upload = await runtimeApiClient.UploadPackageAsync(packagePath, context.CancellationToken).ConfigureAwait(false);
                 var result = await StagePreflightCommitPackageStoreAsync(
                     runtimeApiClient,
@@ -226,7 +226,7 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportProgress(0, $"Updating {displayName}...");
                 using var registryClient = _createRegistryClient(registryUrl);
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await _registryInstallService.InstallPackageAsync(
                     packageId,
                     version,
@@ -254,7 +254,7 @@ internal sealed class PackageOperationService : IDisposable
             async context =>
             {
                 context.ReportIndeterminate($"Enabling {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await StagePreflightCommitPackageStoreAsync(
                     runtimeApiClient,
                     new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Enable, packageId)]),
@@ -274,7 +274,7 @@ internal sealed class PackageOperationService : IDisposable
             async context =>
             {
                 context.ReportIndeterminate($"Disabling {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await StagePreflightCommitPackageStoreAsync(
                     runtimeApiClient,
                     new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Disable, packageId)]),
@@ -294,7 +294,7 @@ internal sealed class PackageOperationService : IDisposable
             async context =>
             {
                 context.ReportIndeterminate($"Uninstalling {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await StagePreflightCommitPackageStoreAsync(
                     runtimeApiClient,
                     new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Uninstall, packageId)]),
@@ -315,7 +315,7 @@ internal sealed class PackageOperationService : IDisposable
             {
                 context.ReportProgress(0, "Updating installed packages...");
                 using var registryClient = _createRegistryClient(registryUrl);
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await _registryInstallService.UpdateAllAsync(
                     registryClient,
                     runtimeApiClient,
@@ -334,7 +334,7 @@ internal sealed class PackageOperationService : IDisposable
     }
 
     private async Task<PackageOperationResult> StagePreflightCommitPackageStoreAsync(
-        IRuntimeApiClient runtimeApiClient,
+        IRuntimePackageStoreClient runtimeApiClient,
         PackageStoreStageRequest request,
         CancellationToken cancellationToken)
     {

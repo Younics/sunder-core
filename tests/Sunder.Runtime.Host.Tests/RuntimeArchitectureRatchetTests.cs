@@ -2,15 +2,53 @@ using System.Reflection;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Compatibility;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed class RuntimeArchitectureRatchetTests
 {
+    [Fact]
+    public void RuntimeCompatibilityProfile_SupportsEveryPublishedV1SdkCapability()
+    {
+        var publishedCapabilities = typeof(SunderSdkCapabilities)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(static field => field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
+            .Select(static field => (string)field.GetRawConstantValue()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var manifest = new SunderPackageManifest
+        {
+            Id = "test.package",
+            SdkApiVersion = SunderSdkApiVersions.V1,
+            SdkPackageVersion = "1.1.0",
+            RequiredSdkCapabilities = publishedCapabilities,
+        };
+
+        Assert.Empty(SunderSdkCompatibilityProfile.Validate(manifest));
+    }
+
+    [Theory]
+    [InlineData("1.0.0")]
+    [InlineData("1.2.0")]
+    public void RuntimeCompatibilityProfile_RejectsPackagesOutsideCoordinated11Baseline(string sdkVersion)
+    {
+        var errors = SunderSdkCompatibilityProfile.Validate(new SunderPackageManifest
+        {
+            Id = "test.package",
+            SdkApiVersion = SunderSdkApiVersions.V1,
+            SdkPackageVersion = sdkVersion,
+            RequiredSdkCapabilities = [SunderSdkCapabilities.Baseline11V1],
+        });
+
+        Assert.Contains(errors, error => error.Contains("1.0 and 1.1 packages cannot be mixed", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void RuntimeProductionFiles_StayWithinFamilySizeRatchet()
     {
@@ -27,7 +65,112 @@ public sealed class RuntimeArchitectureRatchetTests
             .ToArray();
 
         Assert.Empty(offenders);
-        Assert.True(File.ReadLines(Path.Combine(runtimeRoot, "Services", "RuntimePackageSessionService.cs")).Count() < 200);
+    }
+
+    [Fact]
+    public void FocusedRuntimeOrchestrators_DoNotRegrowPastCurrentBaselines()
+    {
+        var services = Path.Combine(LocateRepositoryRoot(), "src", "Host", "Sunder.Runtime.Host", "Services");
+        var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["PackageSessionLoadService.cs"] = 270,
+            ["PackageSessionLifecycleService.cs"] = 405,
+            ["RuntimeStackImportService.cs"] = 362,
+            ["RuntimeStackExportService.cs"] = 141,
+            ["PackageAuthSessionCoordinator.cs"] = 325,
+            ["RegistryAuthCoordinator.cs"] = 364,
+            ["RegistryPackageChangeOrchestrator.cs"] = 216,
+            ["RegistryAuthenticatedOperations.cs"] = 209,
+        };
+
+        var offenders = baselines
+            .Select(pair => new { pair.Key, Lines = File.ReadLines(Path.Combine(services, pair.Key)).Count(), Limit = pair.Value })
+            .Where(file => file.Lines > file.Limit)
+            .Select(file => $"{file.Key}: {file.Lines} > {file.Limit}")
+            .ToArray();
+        Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void SecuritySensitiveStorageOrchestrators_StaySmallAndDelegatePlatformAndPersistenceWork()
+    {
+        var root = LocateRepositoryRoot();
+        var runtimeRoot = Path.Combine(root, "src", "Host", "Sunder.Runtime.Host");
+        var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["Infrastructure/Storage/MasterKeyProtection.cs"] = 310,
+            ["Infrastructure/Storage/JsonPackageSecretsStore.cs"] = 205,
+            ["Infrastructure/Storage/JsonPackageKeyValueStore.cs"] = 140,
+            ["Services/PackageStoreCoordinator.cs"] = 100,
+            ["Services/PackageStoreStageManager.cs"] = 260,
+            ["Services/PackageStoreTransactionManager.cs"] = 255,
+            ["Services/PackageStoreRecovery.cs"] = 275,
+        };
+        var offenders = baselines
+            .Select(pair => new
+            {
+                pair.Key,
+                Lines = File.ReadLines(Path.Combine(runtimeRoot, pair.Key.Replace('/', Path.DirectorySeparatorChar))).Count(),
+                Limit = pair.Value,
+            })
+            .Where(file => file.Lines > file.Limit)
+            .Select(file => $"{file.Key}: {file.Lines} > {file.Limit}")
+            .ToArray();
+        Assert.Empty(offenders);
+
+        var protection = File.ReadAllText(Path.Combine(
+            runtimeRoot, "Infrastructure", "Storage", "MasterKeyProtection.cs"));
+        Assert.DoesNotContain("ProtectedData.", protection, StringComparison.Ordinal);
+        Assert.DoesNotContain("/usr/bin/security", protection, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-tool", protection, StringComparison.Ordinal);
+        Assert.DoesNotContain("CapturedProcessRunner", protection, StringComparison.Ordinal);
+
+        var stores = File.ReadAllText(Path.Combine(
+                runtimeRoot, "Infrastructure", "Storage", "JsonPackageSecretsStore.cs"))
+            + File.ReadAllText(Path.Combine(
+                runtimeRoot, "Infrastructure", "Storage", "JsonPackageKeyValueStore.cs"));
+        Assert.DoesNotContain("JsonDocument", stores, StringComparison.Ordinal);
+        Assert.DoesNotContain("cipher.Encrypt(", stores, StringComparison.Ordinal);
+        Assert.DoesNotContain("cipher.Decrypt(", stores, StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateAssociatedData", stores, StringComparison.Ordinal);
+        Assert.DoesNotContain("JsonSerializer", stores, StringComparison.Ordinal);
+        Assert.DoesNotContain("File.Move", stores, StringComparison.Ordinal);
+
+        var coordinator = File.ReadAllText(Path.Combine(runtimeRoot, "Services", "PackageStoreCoordinator.cs"));
+        Assert.DoesNotContain("JsonSerializer", coordinator, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory.Move", coordinator, StringComparison.Ordinal);
+        Assert.Contains(nameof(PackageStoreStageManager), coordinator, StringComparison.Ordinal);
+        Assert.Contains(nameof(PackageStoreTransactionManager), coordinator, StringComparison.Ordinal);
+        Assert.Contains(nameof(PackageStoreRecovery), coordinator, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeTransportFlows_UseCentralBoundedResponseReaders()
+    {
+        var root = LocateRepositoryRoot();
+        var registryFiles = new[]
+        {
+            "RegistryAuthCoordinator.cs",
+            "RegistryAuthenticatedOperations.cs",
+            "RegistryPackageChangeOrchestrator.cs",
+        };
+        var registrySource = string.Join('\n', registryFiles.Select(file => File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Runtime.Host", "Services", file))));
+        Assert.DoesNotContain("ReadFromJsonAsync", registrySource, StringComparison.Ordinal);
+        Assert.DoesNotContain("EnsureSuccessStatusCode", registrySource, StringComparison.Ordinal);
+        Assert.Contains(nameof(RegistryHttpClient), registrySource, StringComparison.Ordinal);
+
+        var clientRoot = Path.Combine(root, "src", "Host", "Sunder.Runtime.Client");
+        var clientSource = string.Join('\n', Directory.EnumerateFiles(clientRoot, "*.cs")
+            .Where(path => Path.GetFileName(path) != "RuntimeHttpResponseReader.cs")
+            .Select(File.ReadAllText));
+        Assert.DoesNotContain("ReadFromJsonAsync", clientSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("EnsureSuccessStatusCode", clientSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadAsByteArrayAsync", clientSource, StringComparison.Ordinal);
+
+        var processSource = File.ReadAllText(Path.Combine(clientRoot, "CapturedProcessRunner.cs"));
+        Assert.Contains("MaxCapturedCharactersPerStream", processSource, StringComparison.Ordinal);
+        Assert.Contains("OutputTruncated", processSource, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -36,14 +179,14 @@ public sealed class RuntimeArchitectureRatchetTests
         var endpointRoot = Path.Combine(LocateRepositoryRoot(), "src", "Host", "Sunder.Runtime.Host", "Endpoints");
         var source = string.Join('\n', Directory.EnumerateFiles(endpointRoot, "*.cs").Select(File.ReadAllText));
 
-        Assert.DoesNotContain(nameof(RuntimePackageSessionService), source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RuntimePackageSessionService", source, StringComparison.Ordinal);
         Assert.DoesNotContain(nameof(RuntimeSessionOwner), source, StringComparison.Ordinal);
         Assert.DoesNotContain(nameof(PackageSessionState), source, StringComparison.Ordinal);
         Assert.Contains(nameof(PackageSessionLifecycleService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(InstalledPackageLifecycleService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(RuntimeStackExportService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(RuntimeStackImportService), source, StringComparison.Ordinal);
-        Assert.Contains(nameof(PackageConfigurationAccessService), source, StringComparison.Ordinal);
+        Assert.Contains(nameof(PackageSettingsAccessService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(PackageAuthAccessService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(PackageFaultService), source, StringComparison.Ordinal);
     }
@@ -58,7 +201,7 @@ public sealed class RuntimeArchitectureRatchetTests
             .ToArray();
 
         Assert.Equal(new[] { "PackageSessionState.cs" }, owners);
-        Assert.Single(typeof(PackageSessionState).GetMethods(BindingFlags.Instance | BindingFlags.Public), method => method.Name == nameof(PackageSessionState.PublishSession));
+        Assert.Single(typeof(PackageSessionState).GetMethods(BindingFlags.Instance | BindingFlags.Public), method => method.Name == nameof(PackageSessionState.PublishSessionAsync));
     }
 
     [Fact]
@@ -82,11 +225,72 @@ public sealed class RuntimeArchitectureRatchetTests
         var stableRoutes = new[]
         {
             "session/load", "session/reload-installed", "session/stage", "store/stage",
-            "ui-snapshots", "auth/status", "config/values", "export/items", "import/preview",
+            "ui-snapshots", "auth/status", "settings/values", "export/items", "import/preview",
             "/downloads/{downloadId}", "/dev-packages/watch", "runtime-events", "package-logs",
         };
 
         foreach (var route in stableRoutes) Assert.Contains(route, source, StringComparison.Ordinal);
+        Assert.DoesNotContain("config/values", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("data/configuration", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeProtocolHandshake_PrecedesVersionedRoutesAndProductSemVerIsNotCompatibility()
+    {
+        var root = LocateRepositoryRoot();
+        var program = File.ReadAllText(Path.Combine(root, "src", "Host", "Sunder.Runtime.Host", "Program.cs"));
+        var handshakeIndex = program.IndexOf("MapRuntimeHandshakeEndpoint", StringComparison.Ordinal);
+        var versionedGroupIndex = program.IndexOf("MapGroup(\"/api/v1\")", StringComparison.Ordinal);
+        var appServices = Path.Combine(root, "src", "Host", "Sunder.App", "Services");
+
+        Assert.True(handshakeIndex >= 0 && handshakeIndex < versionedGroupIndex);
+        Assert.False(File.Exists(Path.Combine(appServices, "RuntimeHostVersionComparer.cs")));
+        Assert.Contains(
+            "RuntimeProtocolCompatibility.IsCompatible",
+            File.ReadAllText(Path.Combine(appServices, "RuntimeHostProcessManager.cs")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PackageSettings_DoNotEnumerateOpaqueState()
+    {
+        var root = LocateRepositoryRoot();
+        var settingsSource = File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Runtime.Host", "Services", "PackageSettingsService.cs"));
+        var dataEndpointSource = File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Runtime.Host", "Endpoints", "PackageDataEndpoints.cs"));
+
+        Assert.DoesNotContain("StateStore", settingsSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("configuration", dataEndpointSource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RuntimeShutdown_IsOwnedByResponseCompletion()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            LocateRepositoryRoot(), "src", "Host", "Sunder.Runtime.Host", "Endpoints", "SystemEndpoints.cs"));
+
+        Assert.Contains("OnCompleted", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Run", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ResponseDrainDelay", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void V1Sources_DoNotReintroduceRemovedCompatibilityNames()
+    {
+        var root = LocateRepositoryRoot();
+        var paths = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(root, "docs"), "*.md", SearchOption.AllDirectories));
+        var source = string.Join('\n', paths.Where(path => !IsBuildOutput(path)).Select(File.ReadAllText));
+
+        foreach (var removed in new[]
+                 {
+                     "SUNDER_REGISTRY_URL", "--registry-url", "DisposeLegacyOwnedInstances",
+                     "SnapshotLegacyResources", "config/values", "data/configuration",
+                 })
+        {
+            Assert.DoesNotContain(removed, source, StringComparison.Ordinal);
+        }
     }
 
     private static bool IsBuildOutput(string path)

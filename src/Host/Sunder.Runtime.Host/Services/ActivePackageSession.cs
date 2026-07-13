@@ -15,8 +15,15 @@ internal sealed record ActiveLoadedPackage(
     IReadOnlyDictionary<string, IPackageCallbackHandler> CallbackHandlers,
     IReadOnlyList<IPackageBackgroundService> BackgroundServices,
     IServiceProvider ServiceProvider,
-    RuntimePackageLoadContext LoadContext)
+    RuntimePackageLoadContext LoadContext,
+    IPackageSettings Settings)
 {
+    public IReadOnlyDictionary<string, RuntimePackageOperationRegistration> RuntimeOperations { get; init; }
+        = new Dictionary<string, RuntimePackageOperationRegistration>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, RuntimePackageStreamRegistration> RuntimeStreams { get; init; }
+        = new Dictionary<string, RuntimePackageStreamRegistration>(StringComparer.Ordinal);
+
     public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
         => CallbackHandlers.TryGetValue(callbackHandlerId, out var handler) ? handler : null;
 }

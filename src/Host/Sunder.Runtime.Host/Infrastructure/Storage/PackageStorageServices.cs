@@ -1,4 +1,5 @@
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Configuration;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
@@ -24,7 +25,8 @@ internal sealed class LocalPackageStorageContext : IPackageStorageContext
 
         Files = new LocalPackageFileStore(filesRootPath);
         State = new JsonPackageKeyValueStore(Path.Combine(DataRootPath, "state.json"));
-        LocalWorkspace = new LocalPackageWorkspaceLease(workspaceRootPath);
+        SettingsStore = new JsonPackageKeyValueStore(Path.Combine(DataRootPath, "settings.json"));
+        RoleLocalWorkspace = new LocalPackageRoleLocalWorkspace(workspaceRootPath);
     }
 
     internal string DataRootPath { get; }
@@ -35,7 +37,9 @@ internal sealed class LocalPackageStorageContext : IPackageStorageContext
 
     public IPackageKeyValueStore State { get; }
 
-    public IPackageLocalWorkspaceLease LocalWorkspace { get; }
+    internal JsonPackageKeyValueStore SettingsStore { get; }
+
+    public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
 
     private static string SanitizePathSegment(string value)
     {
@@ -46,10 +50,78 @@ internal sealed class LocalPackageStorageContext : IPackageStorageContext
     }
 }
 
-internal sealed class PackageStateConfiguration(IPackageKeyValueStore stateStore) : IPackageConfiguration
+internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackageSettings
 {
-    public Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
-        => stateStore.GetValueAsync(key, cancellationToken);
+    internal PackageConfigurationSchema? Schema { private get; set; }
+
+    public async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
+    {
+        var field = GetField(key);
+        return await store.GetValueAsync(key, cancellationToken).ConfigureAwait(false) ?? field.DefaultValue;
+    }
+
+    public Task<string?> GetStoredValueAsync(string key, CancellationToken cancellationToken = default)
+    {
+        GetField(key);
+        return store.GetValueAsync(key, cancellationToken);
+    }
+
+    public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var field = GetField(key);
+        ValidateValue(field, value);
+        return store.SetValueAsync(key, value, cancellationToken);
+    }
+
+    public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
+    {
+        var field = GetField(key);
+        if (field.IsRequired && string.IsNullOrWhiteSpace(field.DefaultValue))
+        {
+            throw new ArgumentException($"Setting '{field.Key}' requires a stored value.", nameof(key));
+        }
+
+        return store.DeleteValueAsync(key, cancellationToken);
+    }
+
+    private PackageConfigurationField GetField(string key)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        var field = Schema?.Sections
+            .SelectMany(section => section.Fields)
+            .FirstOrDefault(candidate => string.Equals(candidate.Key, key, StringComparison.Ordinal));
+        if (field is null)
+        {
+            throw new ArgumentException($"Setting '{key}' is not declared by the package configuration schema.", nameof(key));
+        }
+
+        if (field.Kind == PackageConfigurationFieldKind.Secret)
+        {
+            throw new ArgumentException($"Setting '{key}' is secret and must be accessed through package secrets.", nameof(key));
+        }
+
+        return field;
+    }
+
+    private static void ValidateValue(PackageConfigurationField field, string value)
+    {
+        if (field.IsRequired && string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"Setting '{field.Key}' requires a value.", nameof(value));
+        }
+
+        if (field.Kind == PackageConfigurationFieldKind.Boolean && !bool.TryParse(value, out _))
+        {
+            throw new ArgumentException($"Setting '{field.Key}' must be 'true' or 'false'.", nameof(value));
+        }
+
+        if (field.Kind == PackageConfigurationFieldKind.Select
+            && !(field.Options ?? []).Any(option => string.Equals(option.Value, value, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException($"Setting '{field.Key}' is not one of its declared options.", nameof(value));
+        }
+    }
 }
 
 internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
@@ -87,14 +159,13 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
     internal string ResolvePath(string relativePath) => PackageWorkspacePath.Resolve(_rootPath, relativePath);
 }
 
-internal sealed class LocalPackageWorkspaceLease(string rootPath) : IPackageLocalWorkspaceLease
+internal sealed class LocalPackageRoleLocalWorkspace(string rootPath) : IPackageRoleLocalWorkspace
 {
     public string WorkspaceRootPath { get; } = Path.GetFullPath(rootPath);
 
     public string GetLocalPath(string relativePath)
         => PackageWorkspacePath.Resolve(WorkspaceRootPath, relativePath);
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
 internal static class PackageWorkspacePath
@@ -116,6 +187,7 @@ internal static class PackageWorkspacePath
         }
 
         var canonicalRoot = Path.GetFullPath(rootPath);
+        EnsureNoReparsePoints(canonicalRoot, segments);
         var fullPath = Path.GetFullPath(Path.Combine([canonicalRoot, .. segments]));
         var rootPrefix = canonicalRoot.EndsWith(Path.DirectorySeparatorChar)
             ? canonicalRoot
@@ -126,5 +198,35 @@ internal static class PackageWorkspacePath
         }
 
         return fullPath;
+    }
+
+    private static void EnsureNoReparsePoints(string rootPath, IReadOnlyList<string> segments)
+    {
+        var current = rootPath;
+        EnsureNotReparsePoint(current);
+        foreach (var segment in segments)
+        {
+            current = Path.Combine(current, segment);
+            EnsureNotReparsePoint(current);
+        }
+    }
+
+    private static void EnsureNotReparsePoint(string path)
+    {
+        try
+        {
+            if (new FileInfo(path).LinkTarget is not null
+                || new DirectoryInfo(path).LinkTarget is not null
+                || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new ArgumentException("Package workspace paths must not traverse symbolic links or reparse points.");
+            }
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
     }
 }

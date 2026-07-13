@@ -285,6 +285,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private void RunOnUiThread(Action action)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         if (_uiDispatcher.CheckAccess())
         {
             action();
@@ -302,6 +307,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
+        _registryAuthRequest.Dispose();
+        _appUpdatePrompt.Dispose();
         _tasks.Dispose();
         _hotbarCoordinator.Dispose();
         _subscriptionScope.Dispose();
@@ -315,10 +322,29 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IReadOnlyCollection<string>? impactedPackageIds = null,
         CancellationToken cancellationToken = default,
         bool deferHostedViewCreation = false)
-        => await _packageLifecycleRefreshCoordinator.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation);
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        await _packageLifecycleRefreshCoordinator.ApplyPackageLifecycleChangesAsync(
+            impactedPackageIds,
+            lifetimeCancellation.Token,
+            deferHostedViewCreation);
+    }
 
     public async Task ActivateDeferredInitialHostedViewsAsync(CancellationToken cancellationToken = default)
-        => await _deferredHostedViewActivator.ActivateInitialHostedViewsAsync(cancellationToken);
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        await _deferredHostedViewActivator.ActivateInitialHostedViewsAsync(lifetimeCancellation.Token);
+    }
 
     public void ActivatePackageView(string viewId)
         => _tasks.Observe(OpenPackageViewPanelAsync(viewId).AsTask(), "opening a package view");

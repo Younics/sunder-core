@@ -22,6 +22,18 @@ public sealed class RuntimePackageExtensionCatalogTests
         Assert.Equal(["first", "second"], catalog.GetExtensions(TestPoint).Select(contribution => contribution.Name).ToArray());
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("Package.Owner")]
+    public void Add_RejectsMissingOrNoncanonicalOwnershipBeforeMutation(string packageId)
+    {
+        var catalog = new RuntimePackageExtensionCatalog();
+
+        Assert.Throws<ArgumentException>(() => catalog.Add(packageId, TestPoint, new TestContribution("invalid")));
+
+        Assert.Empty(catalog.GetExtensions(TestPoint));
+    }
+
     [Fact]
     public void RemovePackage_RemovesOnlyMatchingPackageContributions()
     {

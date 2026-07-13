@@ -20,4 +20,10 @@ public interface IPackageCallbackHandler
     Task<PackageCallbackCompletionResult> CompleteCallbackAsync(
         PackageCallbackCompletionContext context,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Cancels and releases package-owned work for a pending callback session.</summary>
+    Task CancelCallbackAsync(
+        PackageCallbackCancellationContext context,
+        CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }

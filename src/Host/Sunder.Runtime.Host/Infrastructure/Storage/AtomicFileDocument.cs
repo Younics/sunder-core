@@ -24,6 +24,7 @@ internal class AtomicFileSystem
 
     internal virtual void CreateDirectory(string path, bool sensitive)
     {
+        EnsureNotReparsePoint(path);
         if (sensitive && !OperatingSystem.IsWindows() && !Directory.Exists(path))
         {
             Directory.CreateDirectory(path, PrivateDirectoryMode);
@@ -37,14 +38,30 @@ internal class AtomicFileSystem
         {
             RestrictDirectory(path);
         }
+
+        EnsureNotReparsePoint(path);
     }
 
-    internal virtual bool FileExists(string path) => File.Exists(path);
+    internal virtual bool FileExists(string path)
+    {
+        var exists = File.Exists(path);
+        if (exists)
+        {
+            EnsureNotReparsePoint(path);
+        }
 
-    internal virtual byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
+        return exists;
+    }
+
+    internal virtual byte[] ReadAllBytes(string path)
+    {
+        EnsureNotReparsePoint(path);
+        return File.ReadAllBytes(path);
+    }
 
     internal virtual IDisposable OpenExclusiveLock(string path, bool sensitive)
     {
+        EnsureNotReparsePoint(path);
         var options = new FileStreamOptions
         {
             Mode = FileMode.OpenOrCreate,
@@ -76,6 +93,7 @@ internal class AtomicFileSystem
 
     internal virtual void WriteTempFile(string path, byte[] contents, bool sensitive)
     {
+        EnsureNotReparsePoint(Path.GetDirectoryName(path)!);
         var options = new FileStreamOptions
         {
             Mode = FileMode.CreateNew,
@@ -105,6 +123,8 @@ internal class AtomicFileSystem
 
     internal virtual void ReplaceFile(string sourcePath, string destinationPath)
     {
+        EnsureNotReparsePoint(sourcePath);
+        EnsureNotReparsePoint(destinationPath);
         if (File.Exists(destinationPath))
         {
             File.Replace(sourcePath, destinationPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
@@ -118,6 +138,7 @@ internal class AtomicFileSystem
 
     internal virtual void RestrictDirectory(string path)
     {
+        EnsureNotReparsePoint(path);
         if (OperatingSystem.IsWindows())
         {
             RestrictWindowsDirectory(path);
@@ -129,6 +150,7 @@ internal class AtomicFileSystem
 
     internal virtual void RestrictFile(string path)
     {
+        EnsureNotReparsePoint(path);
         if (OperatingSystem.IsWindows())
         {
             RestrictWindowsFile(path);
@@ -140,6 +162,7 @@ internal class AtomicFileSystem
 
     internal virtual void SyncDirectory(string path)
     {
+        EnsureNotReparsePoint(path);
         if (OperatingSystem.IsWindows())
         {
             return;
@@ -170,6 +193,25 @@ internal class AtomicFileSystem
         finally
         {
             NativeMethods.Close(descriptor);
+        }
+    }
+
+    internal virtual void EnsureNotReparsePoint(string path)
+    {
+        try
+        {
+            if (new FileInfo(path).LinkTarget is not null
+                || new DirectoryInfo(path).LinkTarget is not null
+                || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException($"Package storage path '{path}' must not be a symbolic link or reparse point.");
+            }
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
         }
     }
 
@@ -368,7 +410,7 @@ internal sealed class AtomicFileTransaction(
             DateTimeOffset.UtcNow);
         WriteFile(
             filePath,
-            JsonSerializer.SerializeToUtf8Bytes(marker, StorageFailureMarker.JsonOptions),
+            JsonSerializer.SerializeToUtf8Bytes(marker, PackageStorageJson.Options),
             sensitive,
             StorageCommitPhase.FailureMarker);
         return quarantinePath;
@@ -441,12 +483,6 @@ internal sealed record StorageFailureMarker(
 {
     internal const string FormatName = "sunder.package-storage-failure";
     internal const int CurrentVersion = 1;
-
-    internal static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-    };
 
     internal static bool IsMarker(JsonElement root) =>
         root.ValueKind == JsonValueKind.Object

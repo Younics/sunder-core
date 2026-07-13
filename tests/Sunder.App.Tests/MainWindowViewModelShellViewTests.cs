@@ -583,7 +583,7 @@ public sealed class MainWindowViewModelShellViewTests
     [Fact]
     public void CalculateTopColumnWidths_PreservesRequestedSideWidthsWhenSpaceAllows()
     {
-        var widths = MainWindow.CalculateTopColumnWidths(
+        var widths = ShellLayoutCalculator.CalculateTopColumnWidths(
             totalWidth: 1476,
             requestedLeftWidth: 360,
             requestedRightWidth: 360,
@@ -597,7 +597,7 @@ public sealed class MainWindowViewModelShellViewTests
     [Fact]
     public void CalculateTopColumnWidths_ClampsVisualWidthsWhenMiddleNeedsSpace()
     {
-        var widths = MainWindow.CalculateTopColumnWidths(
+        var widths = ShellLayoutCalculator.CalculateTopColumnWidths(
             totalWidth: 900,
             requestedLeftWidth: 360,
             requestedRightWidth: 360,
@@ -919,13 +919,14 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class ThrowingRuntimeApiClientFactory : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient()
-            => throw new NotSupportedException("Runtime API is not used by these tests.");
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => throw new InvalidOperationException("Runtime API is not used by these tests.");
     }
 
     private sealed class EmptyRuntimeApiClientFactory : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient([], []);
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => (TClient)(object)new StaticRuntimeApiClient([], []);
     }
 
     private sealed class MutableRuntimeApiClientFactory : IRuntimeApiClientFactory
@@ -934,7 +935,8 @@ public sealed class MainWindowViewModelShellViewTests
 
         public IReadOnlyList<PackageUiSnapshotDescriptor> PackageSources { get; set; } = [];
 
-        public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(ActivePackages, PackageSources);
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => (TClient)(object)new StaticRuntimeApiClient(ActivePackages, PackageSources);
     }
 
     private sealed class StaticRuntimeApiClientFactory(
@@ -945,13 +947,14 @@ public sealed class MainWindowViewModelShellViewTests
         Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
         Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient() => new StaticRuntimeApiClient(
-            activePackages,
-            packageSources,
-            getSystemStatusAsync,
-            isRuntimeHealthyAsync,
-            getActivePackagesAsync,
-            getActivePackageSourcesAsync);
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => (TClient)(object)new StaticRuntimeApiClient(
+                activePackages,
+                packageSources,
+                getSystemStatusAsync,
+                isRuntimeHealthyAsync,
+                getActivePackagesAsync,
+                getActivePackageSourcesAsync);
     }
 
     private sealed class StaticRuntimeApiClient(
@@ -960,7 +963,7 @@ public sealed class MainWindowViewModelShellViewTests
         Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
         Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
         Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClient
+        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeShellClient
     {
         public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
             => getSystemStatusAsync?.Invoke(cancellationToken) ?? Task.FromResult<SystemStatusResponse?>(null);
@@ -977,56 +980,41 @@ public sealed class MainWindowViewModelShellViewTests
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
             => getActivePackageSourcesAsync?.Invoke(cancellationToken) ?? Task.FromResult(packageSources);
 
-        public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
+        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
+            => Task.FromResult<PackageSessionStatus?>(null);
 
-        public Uri CreatePackageAssetUri(string packageId, string assetPath)
-            => throw new NotSupportedException();
+        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
 
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
 
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
+            => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
 
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
 
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
 
-        public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task SavePackageConfigurationValuesAsync(string packageId, IReadOnlyDictionary<string, string?> values, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(string packageId, string authSessionId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        public Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
 
         public Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+            => Task.CompletedTask;
+
+        public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Uri CreatePackageAssetUri(string packageId, string assetPath)
+            => new($"https://runtime.test/api/v1/packages/{packageId}/assets/{assetPath}");
+
+        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
 
         public Task ShutdownAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+            => Task.CompletedTask;
 
         public void Dispose()
         {
@@ -1107,9 +1095,9 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 
     public const string ThrowAfterViewMarkerFileName = "throw-after-view";
 
-    public const string RequirePackageSessionServiceMarkerFileName = "require-package-session-service";
+    public const string ResolveDevelopmentSessionControlMarkerFileName = "resolve-development-session-control";
 
-    public const string PackageSessionServiceResolvedFileName = "package-session-service-resolved";
+    public const string DevelopmentSessionControlResolvedFileName = "development-session-control-resolved";
 
     private string? _packageFolder;
 
@@ -1139,10 +1127,12 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
             throw new InvalidOperationException("Test package requested activation failure after registering contributions.");
         }
 
-        if (HasMarker(RequirePackageSessionServiceMarkerFileName))
+        if (HasMarker(ResolveDevelopmentSessionControlMarkerFileName))
         {
-            _ = services.GetRequiredService<IPackageSessionService>();
-            File.WriteAllText(Path.Combine(_packageFolder!, PackageSessionServiceResolvedFileName), string.Empty);
+            if (services.GetService<IPackageDevelopmentSessionControl>() is not null)
+            {
+                File.WriteAllText(Path.Combine(_packageFolder!, DevelopmentSessionControlResolvedFileName), string.Empty);
+            }
         }
     }
 

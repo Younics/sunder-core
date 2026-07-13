@@ -39,7 +39,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly PackageRuntimeFaultReporter? _faultReporter;
     private readonly IPackageShellViewService? _shellViewService;
     private readonly IPackageSettingsNavigationService? _settingsNavigationService;
-    private readonly IPackageSessionService? _packageSessionService;
+    private readonly AppPackageSessionService? _packageSessionService;
     private readonly NotificationCenterService? _notificationCenter;
     private readonly BackgroundProcessQueueService? _backgroundProcessQueue;
     private string? _sessionFolder;
@@ -56,7 +56,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         AppPackageExtensionCatalog? extensionCatalog = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
-        IPackageSessionService? packageSessionService = null,
+        AppPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null,
@@ -108,7 +108,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         PackageRuntimeFaultReporter? faultReporter = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
-        IPackageSessionService? packageSessionService = null,
+        AppPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         CancellationToken cancellationToken = default)
@@ -131,7 +131,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         PackageRuntimeFaultReporter? faultReporter,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
-        IPackageSessionService? packageSessionService,
+        AppPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry resourceAssemblyRegistry,
@@ -156,7 +156,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         PackageRuntimeFaultReporter? faultReporter,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
-        IPackageSessionService? packageSessionService,
+        AppPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
@@ -411,7 +411,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             await composition.UnloadPackageAsync(packageId);
         }
 
-        await composition.DisposeLegacyOwnedInstancesAsync();
+        await composition.DisposeRemainingOwnedResourcesAsync();
         composition.DisposeSharedAssemblies();
         composition.Dispose();
     }

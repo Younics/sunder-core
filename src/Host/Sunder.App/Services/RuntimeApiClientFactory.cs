@@ -4,5 +4,15 @@ public sealed class RuntimeApiClientFactory(RuntimeConnectionState runtimeConnec
 {
     private readonly RuntimeConnectionState _runtimeConnectionState = runtimeConnectionState;
 
-    public IRuntimeApiClient CreateClient() => new RuntimeApiClient(_runtimeConnectionState);
+    public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+    {
+        var client = new RuntimeApiClient(_runtimeConnectionState);
+        if (client is TClient capability)
+        {
+            return capability;
+        }
+
+        client.Dispose();
+        throw new InvalidOperationException($"Runtime client does not provide {typeof(TClient).Name}.");
+    }
 }

@@ -243,46 +243,6 @@ public sealed class StackPackageInstallPlanItemViewModel(RegistryPackageInstallP
     public string DeprecatedMessage { get; } = item.DeprecatedMessage ?? string.Empty;
 }
 
-public sealed partial class StackImportActionViewModel(RuntimeStackImportActionDescriptor action) : ViewModelBase
-{
-    public string ActionId { get; } = action.ActionId;
-
-    public string DisplayName { get; } = action.DisplayName;
-
-    public string Subtitle { get; } = $"{action.ContributorId} · {action.Kind}";
-
-    public string Description { get; } = string.IsNullOrWhiteSpace(action.Description) ? "No description provided." : action.Description;
-
-    [ObservableProperty]
-    private bool _isSelected = action.DefaultSelected;
-}
-
-public sealed partial class StackRequiredInputValueViewModel(RuntimeStackRequiredInputDescriptor input, string? currentValue, Action valueChanged) : ViewModelBase
-{
-    public string InputId { get; } = input.InputId;
-
-    public string Label { get; } = input.Label;
-
-    public string ContributorId { get; } = input.ContributorId;
-
-    public bool Required { get; } = input.Required;
-
-    public string Description { get; } = string.IsNullOrWhiteSpace(input.Description) ? "Provide this value locally before import." : input.Description;
-
-    public string Placeholder { get; } = input.Required ? "Required" : "Optional";
-
-    public bool IsMissingRequiredValue => Required && string.IsNullOrWhiteSpace(Value);
-
-    [ObservableProperty]
-    private string _value = currentValue ?? input.DefaultValue ?? string.Empty;
-
-    partial void OnValueChanged(string value)
-    {
-        OnPropertyChanged(nameof(IsMissingRequiredValue));
-        valueChanged();
-    }
-}
-
 public sealed partial class StackFragmentViewModel(SunderStackFragmentManifest fragment) : ViewModelBase
 {
     public string FragmentId { get; } = fragment.FragmentId ?? string.Empty;

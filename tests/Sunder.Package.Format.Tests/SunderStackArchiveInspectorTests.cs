@@ -181,6 +181,79 @@ public sealed class SunderStackArchiveInspectorTests
         Assert.Contains(result.Errors, error => error.Contains("api key", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ExtractAndValidateAsync_GeneratedMalformedIndexPathsReturnErrors()
+    {
+        var malformedPaths = new[]
+        {
+            "../payload.json",
+            "/payload.json",
+            "C:/payload.json",
+            "payload\\fragment.json",
+            "payload//fragment.json",
+            "payload/./fragment.json",
+            "payload/CON.json",
+            "payload/naïve.json",
+        };
+
+        for (var index = 0; index < malformedPaths.Length; index++)
+        {
+            var root = CreateTempDirectory();
+            var archivePath = CreateStackArchive(
+                root,
+                indexTransform: contentIndex => contentIndex with
+                {
+                    Files = contentIndex.Files!
+                        .Select((entry, entryIndex) => entryIndex == 0 ? entry with { Path = malformedPaths[index] } : entry)
+                        .ToArray(),
+                });
+
+            var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
+
+            Assert.False(result.Success);
+            Assert.Contains(result.Errors, error => error.Contains("unsafe", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "duplicate")]
+    [InlineData(true, "case-colliding")]
+    public async Task ExtractAndValidateAsync_WhenIndexContainsPortableDuplicate_ReturnsError(bool changeCase, string expectedError)
+    {
+        var root = CreateTempDirectory();
+        var archivePath = CreateStackArchive(
+            root,
+            indexTransform: contentIndex =>
+            {
+                var entries = contentIndex.Files!.ToList();
+                var duplicate = entries[0] with
+                {
+                    Path = changeCase ? entries[0].Path!.ToUpperInvariant() : entries[0].Path,
+                };
+                entries.Add(duplicate);
+                return contentIndex with { Files = entries };
+            });
+
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(archivePath, Path.Combine(root, "staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains(expectedError, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExtractAndValidateAsync_ReturnsDeepReadOnlyManifestProjection()
+    {
+        var root = CreateTempDirectory();
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root),
+            Path.Combine(root, "staging"));
+
+        Assert.True(result.Success);
+        Assert.True(Assert.IsAssignableFrom<ICollection<SunderStackPackageRequirement>>(result.Manifest!.Packages!).IsReadOnly);
+        Assert.True(Assert.IsAssignableFrom<ICollection<SunderStackFragmentManifest>>(result.Manifest.Fragments!).IsReadOnly);
+        Assert.True(Assert.IsAssignableFrom<ICollection<string>>(result.Errors).IsReadOnly);
+    }
+
     private static SunderStackManifest CreateManifest(
         string summary = "Agent setup for coding.",
         string? readmeMarkdown = null,
@@ -229,7 +302,8 @@ public sealed class SunderStackArchiveInspectorTests
         SunderStackManifest? manifest = null,
         bool corruptHash = false,
         string payloadContent = "{\"profileId\":\"fullstack\"}",
-        string? extraIndexedPath = null)
+        string? extraIndexedPath = null,
+        Func<SunderStackContentIndex, SunderStackContentIndex>? indexTransform = null)
     {
         var sourceRoot = Path.Combine(root, "stack-source-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
@@ -255,7 +329,9 @@ public sealed class SunderStackArchiveInspectorTests
                 .Where(path => !path.EndsWith("content-index.json", StringComparison.OrdinalIgnoreCase))
                 .Select(path => CreateIndexEntry(sourceRoot, path, corruptHash && path == payloadPath))
                 .ToArray());
-        File.WriteAllText(Path.Combine(sourceRoot, "manifest", "content-index.json"), JsonSerializer.Serialize(contentIndex));
+        File.WriteAllText(
+            Path.Combine(sourceRoot, "manifest", "content-index.json"),
+            JsonSerializer.Serialize(indexTransform?.Invoke(contentIndex) ?? contentIndex));
 
         var archivePath = Path.Combine(root, $"stack.{Guid.NewGuid():N}.sunderstack");
         ZipFile.CreateFromDirectory(sourceRoot, archivePath);

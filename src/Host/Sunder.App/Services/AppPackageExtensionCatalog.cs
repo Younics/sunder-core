@@ -1,4 +1,5 @@
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.App.Services;
 
@@ -14,6 +15,13 @@ internal sealed class AppPackageExtensionCatalog : IPackageExtensionCatalog, IPa
 
     public void Add<TContract>(string packageId, PackageExtensionPoint<TContract> extensionPoint, TContract contribution)
     {
+        if (!PackageId.TryParse(packageId, out _))
+        {
+            throw new ArgumentException("Extension contribution ownership requires a canonical package id.", nameof(packageId));
+        }
+        ArgumentNullException.ThrowIfNull(extensionPoint);
+        ArgumentNullException.ThrowIfNull(contribution);
+
         lock (_syncRoot)
         {
             if (!_extensions.TryGetValue(extensionPoint.Id, out var contributions))
@@ -22,7 +30,7 @@ internal sealed class AppPackageExtensionCatalog : IPackageExtensionCatalog, IPa
                 _extensions[extensionPoint.Id] = contributions;
             }
 
-            contributions.Add(new AppPackageExtensionContribution(packageId, contribution!));
+            contributions.Add(new AppPackageExtensionContribution(packageId, contribution));
         }
 
         RaiseChanged(

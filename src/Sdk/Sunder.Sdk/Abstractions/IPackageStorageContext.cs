@@ -13,10 +13,10 @@ public interface IPackageStorageContext
     IPackageKeyValueStore State { get; }
 
     /// <summary>
-    /// Gets the package-scoped local workspace lease owned by the current host role.
+    /// Gets the package-scoped workspace owned by the current activation and host role.
     /// This capability is intended only for APIs that require local paths, including SQLite,
     /// process working directories, container mounts, and atomic directory trees.
     /// It is unavailable during package preflight and on non-local Runtime transports.
     /// </summary>
-    IPackageLocalWorkspaceLease LocalWorkspace { get; }
+    IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
 }

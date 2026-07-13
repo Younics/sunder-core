@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\src\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+</Project>

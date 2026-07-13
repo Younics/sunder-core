@@ -10,65 +10,61 @@ namespace Sunder.App.ViewModels;
 
 public sealed partial class StacksWindowViewModel
 {
-    private int BeginSelectedRegistryStackDetailsLoad(RegistryStackSearchItemViewModel? value)
+    private StackSelectionRequest BeginSelectedRegistryStackDetailsLoad(RegistryStackSearchItemViewModel? value)
     {
-        CancelSelectedRegistryStackDetailsLoad();
         CancelRegistryStackDetailsSpinnerDelay();
-        var selectionVersion = ++_registrySelectionVersion;
+        var selectionRequest = _selection.BeginRegistry(value is not null && !_disposed);
         ApplySelectedRegistryStackSummary(value);
 
-        RegistryStackDetailsError = string.Empty;
-        RegistryStackDetailsLoaded = false;
         ShowRegistryStackDetailsSpinner = false;
         if (value is null)
         {
-            IsRegistryStackDetailsLoading = false;
+            SetRegistryStackDetailsState(PresentationOperationState.Idle);
         }
         else
         {
-            _registryStackDetailsCancellation = CancellationTokenSource.CreateLinkedTokenSource(_tasks.Token);
-            IsRegistryStackDetailsLoading = true;
-            QueueRegistryStackDetailsSpinner(value, selectionVersion);
+            SetRegistryStackDetailsState(PresentationOperationState.Running);
+            QueueRegistryStackDetailsSpinner(value, selectionRequest);
         }
 
         NotifyRegistryStackDetailsStateChanged();
-        return selectionVersion;
+        return selectionRequest;
     }
 
     private void CompleteSelectedRegistryStackDetailsLoad(string? errorMessage = null)
     {
         CancelRegistryStackDetailsSpinnerDelay();
         ShowRegistryStackDetailsSpinner = false;
-        RegistryStackDetailsError = errorMessage ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(errorMessage))
         {
             SelectedRegistryStackSummary = "Stack details could not be loaded.";
         }
 
-        RegistryStackDetailsLoaded = string.IsNullOrWhiteSpace(errorMessage);
-        IsRegistryStackDetailsLoading = false;
+        SetRegistryStackDetailsState(string.IsNullOrWhiteSpace(errorMessage)
+            ? PresentationOperationState.Succeeded
+            : PresentationOperationState.Failed(errorMessage));
         NotifyRegistryStackDetailsStateChanged();
     }
 
-    private void QueueRegistryStackDetailsSpinner(RegistryStackSearchItemViewModel stack, int selectionVersion)
+    private void QueueRegistryStackDetailsSpinner(RegistryStackSearchItemViewModel stack, StackSelectionRequest selectionRequest)
     {
-        var spinnerCancellation = new CancellationTokenSource();
+        var spinnerCancellation = CancellationTokenSource.CreateLinkedTokenSource(_tasks.Token);
         _registryStackDetailsSpinnerCancellation = spinnerCancellation;
         _tasks.Observe(
-            ShowRegistryStackDetailsSpinnerAfterDelayAsync(stack, selectionVersion, spinnerCancellation),
+            ShowRegistryStackDetailsSpinnerAfterDelayAsync(stack, selectionRequest, spinnerCancellation),
             "delaying Registry Stack details spinner");
     }
 
     private async Task ShowRegistryStackDetailsSpinnerAfterDelayAsync(
         RegistryStackSearchItemViewModel stack,
-        int selectionVersion,
+        StackSelectionRequest selectionRequest,
         CancellationTokenSource spinnerCancellation)
     {
         try
         {
             await Task.Delay(_registryDetailSpinnerDelay, spinnerCancellation.Token);
             if (!_disposed
-                && selectionVersion == _registrySelectionVersion
+                && _selection.IsCurrent(selectionRequest)
                 && ReferenceEquals(SelectedRegistryStack, stack)
                 && IsRegistryStackDetailsLoading
                 && !RegistryStackDetailsLoaded)
@@ -103,18 +99,6 @@ public sealed partial class StacksWindowViewModel
         spinnerCancellation.Cancel();
     }
 
-    private void CancelSelectedRegistryStackDetailsLoad()
-    {
-        var selectionCancellation = _registryStackDetailsCancellation;
-        if (selectionCancellation is null)
-        {
-            return;
-        }
-
-        _registryStackDetailsCancellation = null;
-        selectionCancellation.Cancel();
-    }
-
     private void ApplySelectedRegistryStackSummary(RegistryStackSearchItemViewModel? value)
     {
         RegistrySelectedPackages.Clear();
@@ -146,10 +130,9 @@ public sealed partial class StacksWindowViewModel
 
     private async Task LoadSelectedRegistryStackDetailsAsync(
         string stackId,
-        int selectionVersion,
-        CancellationTokenSource selectionCancellation)
+        StackSelectionRequest selectionRequest)
     {
-        var cancellationToken = selectionCancellation.Token;
+        var cancellationToken = selectionRequest.Token;
         if (!TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             CompleteSelectedRegistryStackDetailsLoad("Enter a valid HTTP Registry URL before using Registry Stacks.");
@@ -159,49 +142,31 @@ public sealed partial class StacksWindowViewModel
         try
         {
             using var registryClient = _registryClientFactory(registryUrl);
-            var details = await registryClient.GetStackAsync(stackId, cancellationToken);
-            if (selectionVersion != _registrySelectionVersion)
+            var loadResult = await _detailLoader.LoadRegistryAsync(stackId, registryClient, cancellationToken);
+            if (!_selection.IsCurrent(selectionRequest))
             {
                 return;
             }
 
-            if (details is null)
+            if (loadResult is null)
             {
                 CompleteSelectedRegistryStackDetailsLoad($"Registry Stack '{stackId}' was not found.");
                 StatusText = RegistryStackDetailsError;
                 return;
             }
 
-            var packageInfo = await LoadRegistryDetailPackageInfoAsync(
-                registryClient,
-                details.Fragments,
-                cancellationToken);
-            if (selectionVersion != _registrySelectionVersion)
-            {
-                return;
-            }
-
-            ApplySelectedRegistryStackDetails(details, packageInfo);
+            ApplySelectedRegistryStackDetails(loadResult.Details, loadResult.PackageInfo);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            if (selectionVersion == _registrySelectionVersion)
+            if (_selection.IsCurrent(selectionRequest))
             {
                 CompleteSelectedRegistryStackDetailsLoad(ex.Message);
                 StatusText = ex.Message;
             }
-        }
-        finally
-        {
-            if (ReferenceEquals(_registryStackDetailsCancellation, selectionCancellation))
-            {
-                _registryStackDetailsCancellation = null;
-            }
-
-            selectionCancellation.Dispose();
         }
     }
 
@@ -288,6 +253,19 @@ public sealed partial class StacksWindowViewModel
         SelectedRegistryStackStarActionText = stats.IsStarred ? "Unstar" : "Star";
         NotifyRegistrySelectedDetailsChanged();
         NotifyCommandStateChanged();
+    }
+
+    private void SetRegistryStackDetailsState(PresentationOperationState state)
+    {
+        if (_registryStackDetailsState == state)
+        {
+            return;
+        }
+
+        _registryStackDetailsState = state;
+        OnPropertyChanged(nameof(IsRegistryStackDetailsLoading));
+        OnPropertyChanged(nameof(RegistryStackDetailsLoaded));
+        OnPropertyChanged(nameof(RegistryStackDetailsError));
     }
 
 }

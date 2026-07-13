@@ -100,6 +100,155 @@ public sealed class PackageStoreCoordinatorTests
         Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
     }
 
+    [Theory]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 2)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 2)]
+    public async Task SameVersionReinstall_WhenCommitMoveCrashes_RecoveryPreservesOriginal(
+        int faultPointValue,
+        int occurrence)
+    {
+        var fixture = await CreateFixtureAsync();
+        var original = CreatePackageArchive(fixture.Root, "test.package", "1.0.0", payloadContent: "original");
+        Assert.True((await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: original),
+        ])).Success);
+        var crashing = CreateCoordinator(
+            fixture.Paths,
+            fixture.Store,
+            new NthFaultInjector((PackageStoreFaultPoint)faultPointValue, occurrence));
+        await crashing.InitializeAsync();
+        var replacement = CreatePackageArchive(fixture.Root, "test.package", "1.0.0", payloadContent: "replacement");
+        var preparation = await crashing.PrepareStageAsync([
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Upgrade,
+                PackageId: "test.package",
+                ArchiveFilePath: replacement,
+                Reinstall: true),
+        ]);
+
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(
+            () => crashing.CommitStageAsync(preparation.Stage!.StageId));
+
+        var recovery = CreateCoordinator(fixture.Paths, fixture.Store);
+        await recovery.InitializeAsync();
+        await recovery.InitializeAsync();
+
+        Assert.Equal("original", ReadPackagePayload(fixture.Paths, "test.package", "1.0.0"));
+        Assert.Single(await fixture.Store.ListAsync());
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
+    }
+
+    [Theory]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 2)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 2)]
+    public async Task SameVersionReinstall_WhenRecoveryMoveCrashes_RepeatedRecoveryPreservesOriginal(
+        int faultPointValue,
+        int occurrence)
+    {
+        var fixture = await CreateFixtureAsync();
+        var original = CreatePackageArchive(fixture.Root, "test.package", "1.0.0", payloadContent: "original");
+        Assert.True((await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: original),
+        ])).Success);
+        var replacement = CreatePackageArchive(fixture.Root, "test.package", "1.0.0", payloadContent: "replacement");
+        var crashingCommit = CreateCoordinator(
+            fixture.Paths,
+            fixture.Store,
+            new NthFaultInjector(PackageStoreFaultPoint.DirectoryMoveAfter, 2));
+        await crashingCommit.InitializeAsync();
+        var preparation = await crashingCommit.PrepareStageAsync([
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Upgrade,
+                PackageId: "test.package",
+                ArchiveFilePath: replacement,
+                Reinstall: true),
+        ]);
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(
+            () => crashingCommit.CommitStageAsync(preparation.Stage!.StageId));
+        var crashingRecovery = CreateCoordinator(
+            fixture.Paths,
+            fixture.Store,
+            new NthFaultInjector((PackageStoreFaultPoint)faultPointValue, occurrence));
+
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(() => crashingRecovery.InitializeAsync());
+
+        var recovery = CreateCoordinator(fixture.Paths, fixture.Store);
+        await recovery.InitializeAsync();
+        await recovery.InitializeAsync();
+        Assert.Equal("original", ReadPackagePayload(fixture.Paths, "test.package", "1.0.0"));
+        Assert.Single(await fixture.Store.ListAsync());
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
+    }
+
+    [Theory]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 2)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 2)]
+    public async Task MultiPackageCommit_WhenMoveCrashes_RepeatedRecoveryRollsBackWholeTransaction(
+        int faultPointValue,
+        int occurrence)
+    {
+        var fixture = await CreateFixtureAsync(
+            new NthFaultInjector((PackageStoreFaultPoint)faultPointValue, occurrence));
+        var first = CreatePackageArchive(fixture.Root, "test.first", "1.0.0");
+        var second = CreatePackageArchive(fixture.Root, "test.second", "1.0.0");
+        var preparation = await fixture.Coordinator.PrepareStageAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: first),
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: second),
+        ]);
+
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(
+            () => fixture.Coordinator.CommitStageAsync(preparation.Stage!.StageId));
+
+        var recovery = CreateCoordinator(fixture.Paths, fixture.Store);
+        await recovery.InitializeAsync();
+        await recovery.InitializeAsync();
+        Assert.Empty(await fixture.Store.ListAsync());
+        Assert.False(Directory.Exists(fixture.Paths.GetInstalledPackagePath("test.first", "1.0.0")));
+        Assert.False(Directory.Exists(fixture.Paths.GetInstalledPackagePath("test.second", "1.0.0")));
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
+    }
+
+    [Theory]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 1)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveBefore, 2)]
+    [InlineData((int)PackageStoreFaultPoint.DirectoryMoveAfter, 2)]
+    public async Task MultiPackageRecovery_WhenMoveCrashes_RepeatedRecoveryRollsBackWholeTransaction(
+        int faultPointValue,
+        int occurrence)
+    {
+        var fixture = await CreateFixtureAsync(
+            new NthFaultInjector(PackageStoreFaultPoint.DirectoryMoveAfter, 2));
+        var first = CreatePackageArchive(fixture.Root, "test.first", "1.0.0");
+        var second = CreatePackageArchive(fixture.Root, "test.second", "1.0.0");
+        var preparation = await fixture.Coordinator.PrepareStageAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: first),
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: second),
+        ]);
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(
+            () => fixture.Coordinator.CommitStageAsync(preparation.Stage!.StageId));
+        var crashingRecovery = CreateCoordinator(
+            fixture.Paths,
+            fixture.Store,
+            new NthFaultInjector((PackageStoreFaultPoint)faultPointValue, occurrence));
+
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(() => crashingRecovery.InitializeAsync());
+
+        var recovery = CreateCoordinator(fixture.Paths, fixture.Store);
+        await recovery.InitializeAsync();
+        await recovery.InitializeAsync();
+        Assert.Empty(await fixture.Store.ListAsync());
+        Assert.False(Directory.Exists(fixture.Paths.GetInstalledPackagePath("test.first", "1.0.0")));
+        Assert.False(Directory.Exists(fixture.Paths.GetInstalledPackagePath("test.second", "1.0.0")));
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
+    }
+
     [Fact]
     public async Task Commit_WhenCancelledBeforeJournal_LeavesCatalogAndPayloadUntouched()
     {
@@ -178,7 +327,7 @@ public sealed class PackageStoreCoordinatorTests
         Directory.CreateDirectory(transactionDirectory);
         Directory.CreateDirectory(outsidePath);
         var journal = new PackageStoreTransactionJournal(
-            1,
+            2,
             transactionId,
             PackageStoreTransactionPhase.PayloadsCommitting,
             [],
@@ -201,6 +350,94 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
+    public async Task Recovery_WhenJournalMetadataIsMalformed_RejectsBeforeFilesystemMutation()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var transactionId = Guid.NewGuid().ToString("N");
+        var transactionDirectory = Path.Combine(paths.TransactionRootPath, transactionId);
+        Directory.CreateDirectory(transactionDirectory);
+        await File.WriteAllTextAsync(Path.Combine(transactionDirectory, "journal.json"), $$"""
+            {
+              "schemaVersion": 2,
+              "transactionId": "{{transactionId}}",
+              "phase": 999,
+              "previousPackages": [],
+              "desiredPackages": [],
+              "actions": []
+            }
+            """);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => CreateCoordinator(paths, new InstalledPackageStore(paths)).InitializeAsync());
+
+        Assert.True(File.Exists(Path.Combine(transactionDirectory, "journal.json")));
+    }
+
+    [Fact]
+    public async Task Recovery_IgnoresInterruptedJournalTempAndRemovesUnpreparedTransaction()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var transactionDirectory = Path.Combine(paths.TransactionRootPath, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(transactionDirectory);
+        await File.WriteAllTextAsync(Path.Combine(transactionDirectory, "journal.json.tmp-interrupted"), "{truncated");
+
+        await CreateCoordinator(paths, new InstalledPackageStore(paths)).InitializeAsync();
+
+        Assert.False(Directory.Exists(transactionDirectory));
+    }
+
+    [Fact]
+    public async Task ConcurrentRecovery_OfInterruptedPayloadMoveIsSerializedAndIdempotent()
+    {
+        var fixture = await CreateFixtureAsync(
+            new OneShotFaultInjector(PackageStoreFaultPoint.PayloadMoved, simulatedCrash: true));
+        var archive = CreatePackageArchive(fixture.Root, "test.package", "1.0.0");
+        var preparation = await fixture.Coordinator.PrepareStageAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archive),
+        ]);
+        await Assert.ThrowsAsync<PackageStoreSimulatedCrashException>(
+            () => fixture.Coordinator.CommitStageAsync(preparation.Stage!.StageId));
+        var first = CreateCoordinator(fixture.Paths, fixture.Store);
+        var second = CreateCoordinator(fixture.Paths, fixture.Store);
+
+        await Task.WhenAll(first.InitializeAsync(), second.InitializeAsync());
+
+        Assert.Empty(await fixture.Store.ListAsync());
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
+        Assert.False(Directory.Exists(fixture.Paths.GetInstalledPackagePath("test.package", "1.0.0")));
+    }
+
+    [Fact]
+    public async Task Commit_WhenTransactionDirectoryIsSymbolicLink_RejectsWithoutWritingOutsideRoot()
+    {
+        var fixture = await CreateFixtureAsync();
+        var archive = CreatePackageArchive(fixture.Root, "test.package", "1.0.0");
+        var preparation = await fixture.Coordinator.PrepareStageAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archive),
+        ]);
+        var outsidePath = Path.Combine(fixture.Root, "outside-transaction");
+        Directory.CreateDirectory(outsidePath);
+        var transactionPath = Path.Combine(fixture.Paths.TransactionRootPath, preparation.Stage!.StageId);
+        try
+        {
+            Directory.CreateSymbolicLink(transactionPath, outsidePath);
+        }
+        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+        {
+            await fixture.Coordinator.DiscardStageAsync(preparation.Stage.StageId);
+            return;
+        }
+
+        var result = await fixture.Coordinator.CommitStageAsync(preparation.Stage.StageId);
+
+        Assert.False(result.Success);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(outsidePath));
+        Assert.Empty(await fixture.Store.ListAsync());
+    }
+
+    [Fact]
     public async Task ConcurrentFacadeMutations_AreSerializedByOneOperationGate()
     {
         var root = CreateTempDirectory();
@@ -209,8 +446,8 @@ public sealed class PackageStoreCoordinatorTests
         var installer = new SunderPackageArchiveInstaller(paths);
         var gate = new RuntimeOperationGate();
         var coordinator = new PackageStoreCoordinator(paths, store, installer);
-        var service = new RuntimePackageSessionService(
-            NullLogger<RuntimePackageSessionService>.Instance,
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
             store,
             installer,
             gate,
@@ -229,10 +466,12 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
-    public async Task OperationGate_ShutdownCancelsActiveLeaseDrainsAndRejectsNewWork()
+    public async Task OperationGate_ShutdownCancellationReachesActiveOperation()
     {
         var gate = new RuntimeOperationGate();
         await using var operation = await gate.EnterAsync();
+        var cancellationObserved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = operation.CancellationToken.Register(() => cancellationObserved.TrySetResult(true));
         var cleaned = false;
         var shutdown = gate.ShutdownAsync(() =>
         {
@@ -240,6 +479,7 @@ public sealed class PackageStoreCoordinatorTests
             return Task.CompletedTask;
         });
 
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await gate.EnterAsync());
         Assert.True(operation.CancellationToken.IsCancellationRequested);
         Assert.False(shutdown.IsCompleted);
@@ -247,6 +487,46 @@ public sealed class PackageStoreCoordinatorTests
         await operation.DisposeAsync();
         await shutdown;
         Assert.True(cleaned);
+    }
+
+    [Fact]
+    public async Task OperationGate_ShutdownDrainsAfterCanceledOperationReleasesLease()
+    {
+        var gate = new RuntimeOperationGate();
+        var operationEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOperation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeOperation = Task.Run(async () =>
+        {
+            await using var operation = await gate.EnterAsync();
+            operationEntered.SetResult(true);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, operation.CancellationToken);
+            }
+            catch (OperationCanceledException) when (operation.CancellationToken.IsCancellationRequested)
+            {
+                cancellationObserved.SetResult(true);
+                await releaseOperation.Task;
+            }
+        });
+        await operationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var cleanupStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var shutdown = gate.ShutdownAsync(() =>
+        {
+            cleanupStarted.SetResult(true);
+            return Task.CompletedTask;
+        });
+
+        await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(cleanupStarted.Task.IsCompleted);
+        Assert.False(shutdown.IsCompleted);
+        releaseOperation.SetResult(true);
+        await activeOperation.WaitAsync(TimeSpan.FromSeconds(2));
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(cleanupStarted.Task.IsCompletedSuccessfully);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await gate.EnterAsync());
     }
 
     [Fact]
@@ -262,7 +542,7 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
-    public void PackageFault_WhenGenerationIsStale_CannotFaultReplacementSession()
+    public async Task PackageFault_WhenGenerationIsStale_CannotFaultReplacementSession()
     {
         var state = new PackageSessionState(
             NullLogger.Instance,
@@ -286,8 +566,12 @@ public sealed class PackageStoreCoordinatorTests
                     LastFailureAtUtc: null,
                     FailureCount: 0),
             });
-        state.PublishSession(ActivePackageSession.Empty);
-        Assert.Equal(2, state.PublishSession(session));
+        await state.PublishSessionAsync(new ActivePackageSession(
+            sessionFolder: null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)));
+        var publication = await state.PublishSessionAsync(session);
+        Assert.Equal(2, publication.Generation);
 
         var stale = state.ReportPackageFault(
             "test.package",
@@ -320,13 +604,14 @@ public sealed class PackageStoreCoordinatorTests
         string root,
         string packageId,
         string version,
-        IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null)
+        IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null,
+        string payloadContent = "test")
     {
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "lib"));
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new RuntimePackageManifest
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
         {
             ManifestVersion = 1,
             Id = packageId,
@@ -334,15 +619,15 @@ public sealed class PackageStoreCoordinatorTests
             Version = version,
             EntryAssembly = packageId + ".dll",
             SdkApiVersion = 1,
-            SdkPackageVersion = "1.0.0",
-            RequiredSdkCapabilities = ["core.v1"],
-            DependsOn = (dependencies ?? []).Select(dependency => new RuntimePackageDependencyManifest
+            SdkPackageVersion = "1.1.0",
+            RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
+            DependsOn = (dependencies ?? []).Select(dependency => new SunderPackageDependencyManifest
             {
                 PackageId = dependency.PackageId,
                 VersionRange = dependency.VersionRange,
             }).ToArray(),
         }));
-        File.WriteAllText(Path.Combine(sourceRoot, "payload", "lib", packageId + ".dll"), "test");
+        File.WriteAllText(Path.Combine(sourceRoot, "payload", "lib", packageId + ".dll"), payloadContent);
         var entries = Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories)
             .Select(path => CreateIndexEntry(sourceRoot, path))
             .ToArray();
@@ -353,6 +638,16 @@ public sealed class PackageStoreCoordinatorTests
         ZipFile.CreateFromDirectory(sourceRoot, archivePath);
         return archivePath;
     }
+
+    private static string ReadPackagePayload(
+        RuntimePackagePaths paths,
+        string packageId,
+        string version) =>
+        File.ReadAllText(Path.Combine(
+            paths.GetInstalledPackagePath(packageId, version),
+            "payload",
+            "lib",
+            packageId + ".dll"));
 
     private static SunderPackageContentIndexEntry CreateIndexEntry(string sourceRoot, string path)
     {
@@ -395,6 +690,19 @@ public sealed class PackageStoreCoordinatorTests
             }
 
             throw new IOException($"Injected cleanup failure at {point}.");
+        }
+    }
+
+    private sealed class NthFaultInjector(PackageStoreFaultPoint point, int occurrence) : IPackageStoreFaultInjector
+    {
+        private int _hits;
+
+        public void Hit(PackageStoreFaultPoint candidate)
+        {
+            if (candidate == point && Interlocked.Increment(ref _hits) == occurrence)
+            {
+                throw new PackageStoreSimulatedCrashException(point);
+            }
         }
     }
 }

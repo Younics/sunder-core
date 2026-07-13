@@ -126,7 +126,7 @@ public sealed class ShellStartupCoordinator
 
                 await runtimeHostProcessManager.EnsureStartedAsync(runtimeConnectionState.RuntimeUrl).ConfigureAwait(false);
 
-                using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = runtimeApiClientFactory.CreateClient<IRuntimeShellClient>();
                 systemStatus = await runtimeApiClient.GetSystemStatusAsync().ConfigureAwait(false);
                 LogStartupPhase("runtime", phaseStopwatch);
 

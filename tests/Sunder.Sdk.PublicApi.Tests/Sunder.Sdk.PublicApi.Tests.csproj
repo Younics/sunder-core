@@ -5,6 +5,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />

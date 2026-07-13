@@ -7,6 +7,6 @@ internal sealed record PreparedRuntimePackage(
     string LibraryFolder,
     string PackageId,
     string Version,
-    RuntimePackageManifest Manifest,
+    RuntimePackageActivationState Activation,
     string EntryAssemblyPath,
     IReadOnlyList<string> Dependencies);

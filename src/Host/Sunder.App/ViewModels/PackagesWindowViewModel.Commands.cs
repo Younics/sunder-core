@@ -15,9 +15,14 @@ public sealed partial class PackagesWindowViewModel
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (_disposed)
+        {
+            return;
+        }
+
         if (_installedPackages.IsEmpty)
         {
-            await RefreshInstalledAsync();
+            await RefreshInstalledCoreAsync(null, null, updateSelection: true, cancellationToken);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -221,6 +226,11 @@ public sealed partial class PackagesWindowViewModel
     [RelayCommand(CanExecute = nameof(CanToggleSelectedMarketplacePackageStar))]
     private async Task ToggleSelectedMarketplacePackageStarAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         var selectedPackage = SelectedMarketplacePackage;
         if (selectedPackage is null)
         {
@@ -232,12 +242,17 @@ public sealed partial class PackagesWindowViewModel
             return;
         }
 
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
             var result = SelectedMarketplacePackageIsStarred
-                ? await _runtimeApiClient.SetRegistryPackageStarAsync(new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedPackage.PackageId, false))
-                : await _runtimeApiClient.SetRegistryPackageStarAsync(new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedPackage.PackageId, true));
+                ? await _runtimeApiClient.SetRegistryPackageStarAsync(new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedPackage.PackageId, false), cancellationToken)
+                : await _runtimeApiClient.SetRegistryPackageStarAsync(new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedPackage.PackageId, true), cancellationToken);
+            if (_disposed)
+            {
+                return;
+            }
             if (!result.Success)
             {
                 StatusText = result.Forbidden
@@ -250,15 +265,21 @@ public sealed partial class PackagesWindowViewModel
             ApplyMarketplacePackageStats(result.Stats);
             StatusText = result.Message ?? "Updated package star.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
             StatusText = ex.Message;
         }
         finally
         {
-            IsBusy = false;
-            NotifyDetailsChanged();
-            NotifyCommandStateChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifyDetailsChanged();
+                NotifyCommandStateChanged();
+            }
         }
     }
 

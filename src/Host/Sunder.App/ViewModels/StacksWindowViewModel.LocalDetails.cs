@@ -13,11 +13,7 @@ public sealed partial class StacksWindowViewModel
 
     private void RebuildStackList(string? preferredStackId = null)
     {
-        var query = SearchText.Trim();
-        var items = _allStacks
-            .Where(item => MatchesSearch(item, query))
-            .Select(item => new LocalStackLibraryItemViewModel(item))
-            .ToArray();
+        var items = _stackLibrary.Project(SearchText);
 
         Stacks.Clear();
         foreach (var item in items)
@@ -41,22 +37,24 @@ public sealed partial class StacksWindowViewModel
 
     private async Task LoadSelectedStackManifestAsync(
         LocalStackLibraryItem item,
-        int selectionVersion,
-        CancellationToken cancellationToken)
+        StackSelectionRequest selectionRequest)
     {
         try
         {
-            var manifest = await _library.ReadManifestAsync(item.LocalPath, cancellationToken);
-            if (selectionVersion != _selectionVersion)
+            var manifest = await _detailLoader.LoadLocalManifestAsync(item, selectionRequest.Token);
+            if (_disposed || !_selection.IsCurrent(selectionRequest))
             {
                 return;
             }
 
             ApplySelectedStackManifest(manifest);
         }
+        catch (OperationCanceledException) when (selectionRequest.Token.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            if (selectionVersion == _selectionVersion)
+            if (!_disposed && _selection.IsCurrent(selectionRequest))
             {
                 StatusText = ex.Message;
             }
@@ -65,8 +63,7 @@ public sealed partial class StacksWindowViewModel
 
     private async Task LoadSelectedPublishedStackStatsAsync(
         LocalStackLibraryItemViewModel stack,
-        int selectionVersion,
-        CancellationToken cancellationToken)
+        StackSelectionRequest selectionRequest)
     {
         if (string.IsNullOrWhiteSpace(stack.PublishedStackId)
             || !RegistryUrlHelper.TryParse(stack.RegistryUrl, out var registryUrl)
@@ -77,14 +74,16 @@ public sealed partial class StacksWindowViewModel
 
         try
         {
-            using var registryClient = _registryClientFactory(registryUrl);
-            var details = await registryClient.GetStackAsync(stack.PublishedStackId, cancellationToken);
-            if (selectionVersion != _selectionVersion || SelectedStack?.StackId != stack.StackId)
+            var stats = await _detailLoader.LoadPublishedStatsAsync(stack, _registryClientFactory, selectionRequest.Token);
+            if (_disposed || !_selection.IsCurrent(selectionRequest) || SelectedStack?.StackId != stack.StackId)
             {
                 return;
             }
 
-            ApplySelectedStackStats(details?.Stats);
+            ApplySelectedStackStats(stats);
+        }
+        catch (OperationCanceledException) when (selectionRequest.Token.IsCancellationRequested)
+        {
         }
         catch
         {
@@ -98,9 +97,6 @@ public sealed partial class StacksWindowViewModel
         DisposeSelectedLocalDetails();
         SelectedFragments.Clear();
         SelectedRequiredInputs.Clear();
-        ClearSelectedInstallPlan();
-        ClearSelectedImportPreview();
-        _selectedPackageRequirements = [];
 
         if (value is null)
         {
@@ -134,11 +130,13 @@ public sealed partial class StacksWindowViewModel
         }
 
         PopulateSelectedLocalDetails(value.Item, new Dictionary<string, Uri?>(StringComparer.OrdinalIgnoreCase));
-        var selectionVersion = _selectionVersion;
+        var selectionRequest = _localSelectionRequest;
         if (value.Item.Details?.Count > 0)
         {
             _tasks.Observe(
-                RefreshSelectedLocalDetailIconsAsync(value.Item, selectionVersion, _tasks.Token),
+                RefreshSelectedLocalDetailIconsAsync(
+                    value.Item,
+                    selectionRequest),
                 "loading local Stack package icons");
         }
 
@@ -170,7 +168,6 @@ public sealed partial class StacksWindowViewModel
 
     private void ApplySelectedStackManifest(SunderStackManifest manifest)
     {
-        _selectedPackageRequirements = manifest.Packages ?? [];
         SelectedPackages.Clear();
         foreach (var package in manifest.Packages ?? [])
         {
@@ -190,13 +187,12 @@ public sealed partial class StacksWindowViewModel
 
     private async Task RefreshSelectedLocalDetailIconsAsync(
         LocalStackLibraryItem item,
-        int selectionVersion,
-        CancellationToken cancellationToken)
+        StackSelectionRequest selectionRequest)
     {
         try
         {
-            var packageIcons = await LoadLocalDetailPackageIconsAsync(cancellationToken);
-            if (selectionVersion != _selectionVersion || _disposed || SelectedStack?.StackId != item.StackId)
+            var packageIcons = await _detailLoader.LoadLocalPackageIconsAsync(selectionRequest.Token);
+            if (!_selection.IsCurrent(selectionRequest) || _disposed || SelectedStack?.StackId != item.StackId)
             {
                 return;
             }
@@ -220,75 +216,6 @@ public sealed partial class StacksWindowViewModel
         {
             SelectedLocalDetails.Add(detail);
         }
-    }
-
-    private async Task<IReadOnlyDictionary<string, Uri?>> LoadLocalDetailPackageIconsAsync(CancellationToken cancellationToken)
-    {
-        var packages = new Dictionary<string, Uri?>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var package in await _runtimeApiClient.GetInstalledPackagesAsync(cancellationToken))
-        {
-            AddPackageIcon(packages, package.PackageId, package.Icon);
-        }
-
-        foreach (var package in await _runtimeApiClient.GetSessionPackagesAsync(cancellationToken))
-        {
-            AddPackageIcon(packages, package.PackageId, package.Icon);
-        }
-
-        foreach (var package in await _runtimeApiClient.GetActivePackagesAsync(cancellationToken))
-        {
-            AddPackageIcon(packages, package.PackageId, package.Icon);
-        }
-
-        return packages;
-    }
-
-    private void AddPackageIcon(IDictionary<string, Uri?> packages, string packageId, PackageIconDescriptor? icon)
-    {
-        if (string.IsNullOrWhiteSpace(packageId))
-        {
-            return;
-        }
-
-        packages[packageId] = PackageIconUriResolver.Resolve(packageId, icon, _runtimeApiClient.CreatePackageAssetUri);
-    }
-
-    private static async Task<IReadOnlyDictionary<string, StackPackageInfo>> LoadRegistryDetailPackageInfoAsync(
-        IRegistryApiClient registryClient,
-        IReadOnlyList<RegistryStackFragmentSummary> fragments,
-        CancellationToken cancellationToken)
-    {
-        var packages = new Dictionary<string, StackPackageInfo>(StringComparer.OrdinalIgnoreCase);
-        foreach (var packageId in fragments
-                     .Select(GetRegistryFragmentPackageId)
-                     .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var package = await registryClient.GetPackageAsync(packageId, cancellationToken);
-                if (package is null)
-                {
-                    continue;
-                }
-
-                packages[packageId] = new StackPackageInfo(
-                    string.IsNullOrWhiteSpace(package.Name) ? packageId : package.Name,
-                    null,
-                    ResolveRegistryPackageIconUri(registryClient.RegistryUrl, package.IconUrl));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-                // Registry package metadata is decorative; keep package-id fallback details.
-            }
-        }
-
-        return packages;
     }
 
     private void PopulateRegistrySelectedDetails(
@@ -368,22 +295,6 @@ public sealed partial class StacksWindowViewModel
         => packageInfo.TryGetValue(packageId, out var info) && !string.IsNullOrWhiteSpace(info.DisplayName)
             ? info.DisplayName
             : packageId;
-
-    private static Uri? ResolveRegistryPackageIconUri(Uri registryUrl, string? iconUrl)
-    {
-        if (string.IsNullOrWhiteSpace(iconUrl))
-        {
-            return null;
-        }
-
-        var trimmed = iconUrl.Trim();
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
-        {
-            return absoluteUri;
-        }
-
-        return Uri.TryCreate(registryUrl, trimmed, out var relativeUri) ? relativeUri : null;
-    }
 
     private static string BuildPackageGlyph(string packageId)
     {

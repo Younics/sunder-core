@@ -1,0 +1,16 @@
+{
+  "protocolIdentity": "dev.sunder.runtime",
+  "protocolRevision": 1,
+  "minimumSupportedRevision": 1,
+  "maximumSupportedRevision": 1,
+  "runtimeInstanceId": "11111111-1111-1111-1111-111111111111",
+  "supportedFeatures": [
+    "api.v1",
+    "package-runtime-stream-envelopes.v1"
+  ],
+  "product": {
+    "productName": "Sunder.Runtime.Host",
+    "productVersion": "1.2.3",
+    "informationalVersion": "1.2.3+test"
+  }
+}

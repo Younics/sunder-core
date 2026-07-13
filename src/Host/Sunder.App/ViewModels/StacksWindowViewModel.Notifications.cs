@@ -88,12 +88,6 @@ public sealed partial class StacksWindowViewModel
         OnPropertyChanged(nameof(HasRegistryMaintainers));
     }
 
-    private void NotifyImportRequiredInputChanged()
-    {
-        NotifySelectedDetailsChanged();
-        NotifyCommandStateChanged();
-    }
-
     private void DisposeSelectedLocalDetails()
     {
         foreach (var detail in SelectedLocalDetails)
@@ -137,16 +131,6 @@ public sealed partial class StacksWindowViewModel
         OnPropertyChanged(nameof(HasSelectedFragments));
         OnPropertyChanged(nameof(ShowSelectedFragments));
         OnPropertyChanged(nameof(HasSelectedRequiredInputs));
-        OnPropertyChanged(nameof(HasSelectedInstallPlanItems));
-        OnPropertyChanged(nameof(HasSelectedInstallPlanWarnings));
-        OnPropertyChanged(nameof(HasSelectedInstallPlanErrors));
-        OnPropertyChanged(nameof(HasSelectedImportActions));
-        OnPropertyChanged(nameof(HasSelectedImportRequiredInputs));
-        OnPropertyChanged(nameof(HasSelectedImportWarnings));
-        OnPropertyChanged(nameof(HasSelectedImportErrors));
-        OnPropertyChanged(nameof(ShowSelectedInstallPlan));
-        OnPropertyChanged(nameof(ShowNoSelectedInstallPlanChanges));
-        OnPropertyChanged(nameof(ShowSelectedImportPreview));
         OnPropertyChanged(nameof(ShowPublishSelectedStack));
         OnPropertyChanged(nameof(ShowUnpublishSelectedStack));
         OnPropertyChanged(nameof(ShowSelectedStackStats));
@@ -210,20 +194,6 @@ public sealed partial class StacksWindowViewModel
                     new Uri(media.LocalPath).AbsoluteUri))
                 .ToArray(),
             item.UpdatedAtUtc);
-
-    private Dictionary<string, string> GetImportInputValues(bool includeEmptyValues = false)
-    {
-        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var input in SelectedImportRequiredInputs)
-        {
-            if (includeEmptyValues || !string.IsNullOrWhiteSpace(input.Value))
-            {
-                values[input.InputId] = input.Value;
-            }
-        }
-
-        return values;
-    }
 
     private static void TryDeleteDirectory(string path)
     {

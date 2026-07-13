@@ -23,13 +23,13 @@ public enum PackageConfigurationFieldKind
 public sealed record PackageConfigurationOption(string Value, string Label);
 
 /// <summary>Defines one host-rendered package configuration field.</summary>
-/// <param name="Key">Case-sensitive key used by <see cref="Abstractions.IPackageConfiguration"/>.</param>
+/// <param name="Key">Case-sensitive key used by <see cref="Abstractions.IPackageSettings"/>.</param>
 /// <param name="Label">User-facing field label.</param>
 /// <param name="Kind">Rendering and storage behavior.</param>
 /// <param name="Description">Optional explanatory text; <see langword="null"/> omits it.</param>
 /// <param name="IsRequired">Whether the host rejects an empty value; defaults to optional.</param>
 /// <param name="Placeholder">Optional non-persisted input hint.</param>
-/// <param name="DefaultValue">Optional value shown when no value has been persisted.</param>
+/// <param name="DefaultValue">Optional effective value returned when no setting has been persisted.</param>
 /// <param name="Options">Options for <see cref="PackageConfigurationFieldKind.Select"/>; otherwise normally <see langword="null"/>.</param>
 [SunderSdkCapability(SunderSdkCapabilities.ConfigurationSchemaV1)]
 public sealed record PackageConfigurationField(

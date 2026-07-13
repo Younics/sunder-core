@@ -27,6 +27,7 @@ var listenUrls = RuntimeListenUrlValidator.ParseAndValidate(
 builder.WebHost.UseUrls(listenUrls.ToArray());
 
 var packagePaths = new RuntimePackagePaths();
+Environment.SetEnvironmentVariable(RuntimeLocalState.StateRootEnvironmentVariable, null);
 RuntimeLocalState.Validate(packagePaths.RootPath);
 using var runtimeRootLease = RuntimeRootLease.Acquire(packagePaths);
 RuntimeLocalState.EnsureInitialized(packagePaths.RootPath);
@@ -54,12 +55,15 @@ try
     app.UseMiddleware<RuntimeBearerAuthenticationMiddleware>();
 
     var startedAtUtc = DateTimeOffset.UtcNow;
+    app.MapRuntimeHandshakeEndpoint();
     var api = app.MapGroup("/api/v1");
     api.MapSystemEndpoints(startedAtUtc)
         .MapPackageSessionEndpoints()
         .MapContentTransferEndpoints()
         .MapPackageDataEndpoints()
-        .MapPackageConfigurationEndpoints()
+        .MapPackageRuntimeOperationEndpoints()
+        .MapPackageSettingsEndpoints()
+        .MapPackageCallbackEndpoints()
         .MapPackageAuthEndpoints()
         .MapPackageFaultEndpoints()
         .MapInstalledPackageEndpoints()
@@ -72,13 +76,21 @@ try
     var devPackageWatchService = app.Services.GetRequiredService<DevPackageWatchService>();
     var packageLogStreamService = app.Services.GetRequiredService<PackageLogStreamService>();
     var runtimeEventStreamService = app.Services.GetRequiredService<RuntimeEventStreamService>();
+    var runtimeSessionOwner = app.Services.GetRequiredService<RuntimeSessionOwner>();
     try
     {
         packageLogStreamService.Start();
         await installedPackageService.InitializeAsync();
         if (startupOptions.DevPackageFolders.Count > 0)
         {
-            await packageSessionService.LoadStartupDevPackagesAsync(startupOptions.DevPackageFolders);
+            var startupLoad = await packageSessionService.LoadStartupDevPackagesAsync(startupOptions.DevPackageFolders);
+            if (!startupLoad.Success)
+            {
+                var details = startupLoad.Errors.Count > 0
+                    ? string.Join(Environment.NewLine, startupLoad.Errors)
+                    : startupLoad.Message ?? "The Runtime rejected the startup dev packages.";
+                throw new InvalidOperationException($"Failed to load startup dev packages:{Environment.NewLine}{details}");
+            }
         }
         else
         {
@@ -89,6 +101,7 @@ try
     }
     finally
     {
+        await runtimeSessionOwner.Callbacks.ShutdownAsync();
         await devPackageWatchService.DisposeAsync();
         await installedPackageService.ShutdownAsync(packageSessionService);
         await packageLogStreamService.DisposeAsync();

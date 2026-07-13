@@ -349,6 +349,11 @@ public sealed partial class PackagesWindowViewModel
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
         if (_packageOperationService is not null)
         {

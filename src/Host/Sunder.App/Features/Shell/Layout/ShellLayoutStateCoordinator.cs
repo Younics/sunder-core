@@ -1,4 +1,3 @@
-using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
 
@@ -17,7 +16,7 @@ internal sealed class ShellLayoutStateCoordinator : IDisposable
         _shellState = shellState;
         _shellStatePersistenceQueue = new ShellStatePersistenceQueue(
             shellStateService,
-            () => ShellStateSnapshotFactory.Clone(_shellState),
+            _shellState,
             saveDelay);
     }
 
@@ -45,20 +44,20 @@ internal sealed class ShellLayoutStateCoordinator : IDisposable
         _shellState.RightPanelWidth = rightPanelWidth;
         _shellState.TopRowHeightRatio = topRowHeightRatio;
         _shellState.BottomSplitRatio = bottomSplitRatio;
-        _shellStatePersistenceQueue.QueueSave();
+        _ = _shellStatePersistenceQueue.QueueSave();
     }
 
     public void PersistPreferredRuntimeUrl(Uri runtimeUrl)
     {
         _shellState.PreferredRuntimeUrl = runtimeUrl.AbsoluteUri;
-        _shellStatePersistenceQueue.QueueSave();
+        _ = _shellStatePersistenceQueue.QueueSave();
     }
 
     public void PersistBackgroundProcessPopoverSize(double width, double height)
     {
         _shellState.BackgroundProcessPopoverWidth = width;
         _shellState.BackgroundProcessPopoverHeight = height;
-        _shellStatePersistenceQueue.QueueSave();
+        _ = _shellStatePersistenceQueue.QueueSave();
     }
 
     public void Dispose()

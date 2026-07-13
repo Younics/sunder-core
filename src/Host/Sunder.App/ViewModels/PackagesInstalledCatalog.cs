@@ -5,7 +5,7 @@ using Sunder.Registry.Contracts;
 namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesInstalledCatalog(
-    IRuntimeApiClient runtimeApiClient,
+    IRuntimePackagesClient runtimeApiClient,
     PackageRegistryClientProvider registryClientProvider)
 {
     private readonly List<SessionPackageDescriptor> _sessionPackages = [];

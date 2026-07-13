@@ -30,6 +30,10 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     public ITaskItem[] SdkCapabilities { get; set; } = [];
 
+    public ITaskItem[] ReferencePaths { get; set; } = [];
+
+    public ITaskItem[] RuntimeCopyLocalPaths { get; set; } = [];
+
     public override bool Execute()
     {
         var generator = new PackageManifestGenerator
@@ -46,6 +50,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             SdkApiVersion = SdkApiVersion,
             SdkPackageVersion = SdkPackageVersion,
             SdkCapabilities = SdkCapabilities,
+            ReferencePaths = ReferencePaths,
+            RuntimeCopyLocalPaths = RuntimeCopyLocalPaths,
         };
         return generator.Execute();
     }

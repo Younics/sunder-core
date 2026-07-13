@@ -66,7 +66,7 @@ public sealed record RegistryPackageDependency(
 
 public sealed record RegistryPackageArtifact(
     string Sha256,
-    long Size,
+    long? Size,
     string DownloadUrl);
 
 public sealed record RegistryPackageCompatibility(

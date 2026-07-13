@@ -4,6 +4,7 @@ namespace Sunder.Runtime.Client;
 
 public static class RuntimeLocalState
 {
+    public const string StateRootEnvironmentVariable = "SUNDER_RUNTIME_STATE_ROOT";
     public const int SchemaVersion = 1;
     public const string Product = "Sunder";
     public const string Api = "sunder.runtime.local-state";
@@ -17,13 +18,28 @@ public static class RuntimeLocalState
 
     public static string GetV1RootPath()
     {
+        var configuredRoot = Environment.GetEnvironmentVariable(StateRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            if (!Path.IsPathFullyQualified(configuredRoot))
+            {
+                throw new InvalidOperationException($"{StateRootEnvironmentVariable} must be an absolute path.");
+            }
+
+            return Path.GetFullPath(configuredRoot);
+        }
+
         var localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(localApplicationData))
         {
             throw new InvalidOperationException("The current user's local application data directory is unavailable.");
         }
 
-        return Path.Combine(localApplicationData, "Sunder", "runtime", "v1");
+        return Path.Combine(
+            localApplicationData,
+            RuntimeV1StateDescriptor.RootProductDirectory,
+            RuntimeV1StateDescriptor.RootRuntimeDirectory,
+            RuntimeV1StateDescriptor.RootVersionDirectory);
     }
 
     public static void EnsureInitialized(string? rootPath = null)

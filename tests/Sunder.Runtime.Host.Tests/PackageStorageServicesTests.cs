@@ -178,6 +178,30 @@ public sealed class PackageStorageServicesTests
     }
 
     [Fact]
+    public async Task JsonPackageKeyValueStore_SymbolicLinkDocumentIsRejectedWithoutMutatingTarget()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var outsidePath = Path.Combine(CreateTempDirectory(), "outside.json");
+        var statePath = Path.Combine(tempDirectory, "state.json");
+        await new JsonPackageKeyValueStore(outsidePath).SetValueAsync("stable", "outside");
+        try
+        {
+            File.CreateSymbolicLink(statePath, outsidePath);
+        }
+        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        var original = File.ReadAllBytes(outsidePath);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => new JsonPackageKeyValueStore(statePath).SetValueAsync("new", "value"));
+
+        Assert.Equal(original, File.ReadAllBytes(outsidePath));
+        Assert.Equal("outside", await new JsonPackageKeyValueStore(outsidePath).GetValueAsync("stable"));
+    }
+
+    [Fact]
     public async Task JsonPackageKeyValueStore_CorruptionMarkerFailsClosedUntilExplicitReset()
     {
         var tempDirectory = CreateTempDirectory();
@@ -542,6 +566,21 @@ public sealed class PackageStorageServicesTests
         Assert.Equal(canonicalBytes, File.ReadAllBytes(secretsPath));
         Assert.Equal(unsupportedKeyBytes, File.ReadAllBytes($"{secretsPath}.key"));
         Assert.Empty(Directory.GetFiles(tempDirectory, "*.corrupt.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_MalformedProtectionMetadataFailsClosed()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var secretsPath = Path.Combine(tempDirectory, "secrets.json");
+        File.WriteAllText(secretsPath, """
+            {"format":"sunder.package-secrets-encrypted","version":1,"protection":{"scheme":"aes-gcm","version":1}}
+            """);
+
+        var exception = await Assert.ThrowsAsync<PackageStorageRecoveryRequiredException>(
+            () => CreateSecretsStore(secretsPath).GetSecretAsync("key"));
+
+        AssertFailureMarker(secretsPath, exception.QuarantinePath, "aes-gcm-master-key");
     }
 
     [Fact]

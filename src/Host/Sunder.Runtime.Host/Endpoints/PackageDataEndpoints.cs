@@ -1,5 +1,6 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Endpoints;
 
@@ -16,7 +17,6 @@ internal static class PackageDataEndpoints
         group.MapGet("state", ListStateAsync);
         group.MapPut("state/{key}", SetStateAsync);
         group.MapDelete("state/{key}", DeleteStateAsync);
-        group.MapGet("configuration/{key}", GetConfigurationAsync);
         group.MapGet("secrets/{key}", GetSecretAsync);
         group.MapPut("secrets/{key}", SetSecretAsync);
         group.MapDelete("secrets/{key}", DeleteSecretAsync);
@@ -81,18 +81,6 @@ internal static class PackageDataEndpoints
             throw new RuntimeNotFoundException($"Package '{packageId}' is not active.");
         }
         return Results.NoContent();
-    }
-
-    private static async Task<IResult> GetConfigurationAsync(
-        string packageId, string key, RuntimePackageDataService service, CancellationToken cancellationToken)
-    {
-        if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key))
-        {
-            throw new RuntimeValidationException("The package id or configuration key is invalid.");
-        }
-
-        var result = await service.GetStateAsync(packageId, key, cancellationToken);
-        return Results.Ok(RuntimeEndpointErrors.Required(result, "Package configuration value"));
     }
 
     private static Task<IResult> GetSecretAsync(
@@ -216,7 +204,7 @@ internal static class PackageDataEndpoints
 internal static class PackageDataInputValidator
 {
     internal static bool IsPackageId(string value)
-        => IsToken(value, 128, allowDot: true);
+        => PackageId.TryParse(value, out _);
 
     internal static bool IsKey(string value)
         => IsToken(value, 256, allowDot: true);

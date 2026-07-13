@@ -21,7 +21,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private const int MarketplaceSearchThrottleDelayMilliseconds = 300;
     private static readonly TimeSpan MarketplaceDetailSpinnerDelay = TimeSpan.FromSeconds(1);
 
-    private readonly IRuntimeApiClient _runtimeApiClient;
+    private readonly IRuntimePackagesClient _runtimeApiClient;
     private readonly PackageOperationService? _packageOperationService;
     private readonly PackageRegistryClientProvider _registryClientProvider;
     private readonly InstalledPackagesPaneViewModel _installedPackages;
@@ -44,6 +44,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private PackageCatalogItemViewModel? _selectedInstalledPackage;
     private RegistryPackageSearchItemViewModel? _selectedMarketplacePackage;
     private RegistryPackageVersionItemViewModel? _selectedMarketplaceVersion;
+    private PresentationOperationState _marketplacePackageDetailsState = PresentationOperationState.Idle;
 
     public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? MarketplaceImageGalleryRequested
     {
@@ -52,14 +53,14 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     }
 
     internal PackagesWindowViewModel(
-        IRuntimeApiClient runtimeApiClient,
+        IRuntimePackagesClient runtimeApiClient,
         IPackageArchivePicker packageArchivePicker,
         Func<IReadOnlyList<string>, CancellationToken, Task>? applyPackageLifecycleChangesAsync = null,
         PackageOperationService? packageOperationService = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         RegistryPackageInstallService? registryInstallService = null,
         NotificationCenterService? notificationCenter = null,
-        Func<Uri, IRegistryApiClient>? registryClientFactory = null,
+        Func<Uri, IRegistryPackageBrowseClient>? registryClientFactory = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null,
         double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
@@ -219,6 +220,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public bool ShowNoMarketplacePackages => IsMarketplaceMode && !HasMarketplacePackages;
 
     public bool HasMarketplacePackageDetailsError => !string.IsNullOrWhiteSpace(MarketplacePackageDetailsError);
+
+    public bool IsMarketplacePackageDetailsLoading => _marketplacePackageDetailsState.IsRunning;
+
+    public bool MarketplacePackageDetailsLoaded => _marketplacePackageDetailsState.IsSucceeded;
+
+    public string MarketplacePackageDetailsError => _marketplacePackageDetailsState.ErrorMessage;
 
     public bool ShowMarketplacePackageDetailsLoading => ShowMarketplaceDetails && IsMarketplacePackageDetailsLoading && ShowMarketplacePackageDetailsSpinner;
 
@@ -421,16 +428,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private bool _selectedMarketplacePackageIsStarred;
 
     [ObservableProperty]
-    private bool _isMarketplacePackageDetailsLoading;
-
-    [ObservableProperty]
-    private bool _marketplacePackageDetailsLoaded;
-
-    [ObservableProperty]
     private bool _showMarketplacePackageDetailsSpinner;
-
-    [ObservableProperty]
-    private string _marketplacePackageDetailsError = string.Empty;
 
     partial void OnModeChanged(PackageWindowMode value)
     {

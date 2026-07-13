@@ -14,8 +14,8 @@ Typical package project reference:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk" Version="1.0.0" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Sdk" Version="1.1.0" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.1.0" PrivateAssets="all" />
 </ItemGroup>
 ```
 

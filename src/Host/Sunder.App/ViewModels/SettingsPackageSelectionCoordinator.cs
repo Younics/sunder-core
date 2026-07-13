@@ -5,7 +5,7 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.App.ViewModels;
 
 internal sealed class SettingsPackageSelectionCoordinator(
-    IRuntimeApiClient runtimeApiClient,
+    IRuntimePackageSettingsClient runtimeApiClient,
     PackageViewHostService packageViewHostService)
 {
     public async Task<SettingsPackageSelectionResult> LoadAsync(
@@ -33,7 +33,7 @@ internal sealed class SettingsPackageSelectionCoordinator(
                 StatusText: "This package does not provide configurable settings.");
         }
 
-        var values = await runtimeApiClient.GetPackageConfigurationValuesAsync(packageId, cancellationToken);
+        var values = await runtimeApiClient.GetPackageSettingsValuesAsync(packageId, cancellationToken);
         return new SettingsPackageSelectionResult(
             HostedSettingsView: null,
             PackageSections: SettingsPackageConfigurationFormFactory.Create(schema, values),

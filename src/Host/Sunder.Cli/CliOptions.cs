@@ -10,21 +10,17 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
     public static CliOptions Parse(List<string> args)
     {
         var settings = CliAppSettings.Load();
-        var legacyRegistryUrl = Environment.GetEnvironmentVariable("SUNDER_REGISTRY_URL");
         var registryApiUrl = Environment.GetEnvironmentVariable("SUNDER_REGISTRY_API_URL")
-            ?? legacyRegistryUrl
             ?? settings.RegistryApiUrl;
         var registryWebUrl = Environment.GetEnvironmentVariable("SUNDER_REGISTRY_WEB_URL")
-            ?? legacyRegistryUrl
             ?? settings.RegistryWebUrl
             ?? registryApiUrl;
         var runtimeUrl = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_URL")
             ?? settings.RuntimeUrl
             ?? "http://127.0.0.1:5275/";
 
-        var registryUrlAlias = ConsumeOption(args, "--registry-url");
-        registryApiUrl = ConsumeOption(args, "--registry-api-url") ?? registryUrlAlias ?? registryApiUrl;
-        registryWebUrl = ConsumeOption(args, "--registry-web-url") ?? registryUrlAlias ?? registryWebUrl;
+        registryApiUrl = ConsumeOption(args, "--registry-api-url") ?? registryApiUrl;
+        registryWebUrl = ConsumeOption(args, "--registry-web-url") ?? registryWebUrl;
         runtimeUrl = ConsumeOption(args, "--runtime-url") ?? runtimeUrl;
         var timeout = ParseTimeout(ConsumeOption(args, "--timeout"));
         var json = ConsumeFlag(args, "--json");
@@ -138,6 +134,11 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
             throw new ArgumentException($"Invalid {label} URL '{value}'.");
+        }
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException($"Invalid {label} URL '{value}': only HTTP and HTTPS URLs are supported.");
         }
 
         var builder = new UriBuilder(uri);

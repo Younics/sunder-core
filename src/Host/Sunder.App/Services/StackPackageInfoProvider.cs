@@ -3,7 +3,7 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
-public sealed class StackPackageInfoProvider(IRuntimeApiClient runtimeApiClient)
+public sealed class StackPackageInfoProvider(IRuntimeStacksClient runtimeApiClient)
 {
     public async Task<IReadOnlyDictionary<string, StackPackageInfo>> LoadAsync(CancellationToken cancellationToken = default)
     {

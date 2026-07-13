@@ -25,16 +25,26 @@ public sealed partial class StacksWindowViewModel
 
     private async Task RefreshLocalStacksAsync(CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
         IsBusy = true;
         try
         {
             var preferredStackId = SelectedStack?.StackId;
-            _allStacks = await _library.ListAsync(cancellationToken);
+            await _stackLibrary.RefreshAsync(cancellationToken);
             RebuildStackList(preferredStackId);
-            if (_allStacks.Count == 0)
+            if (_stackLibrary.Count == 0)
             {
                 StatusText = "No local Stacks yet. Import a .sunderstack file to start.";
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -42,7 +52,10 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
@@ -159,11 +172,13 @@ public sealed partial class StacksWindowViewModel
         AppLaunchRequestKind launchKind = AppLaunchRequestKind.StackDetails,
         CancellationToken cancellationToken = default)
     {
-        if (SelectedRegistryStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        if (_disposed || SelectedRegistryStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return false;
         }
 
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
         return await ImportRegistryStackAsync(SelectedRegistryStack.StackId, registryUrl, launchKind, cancellationToken) is not null;
     }
 
@@ -173,6 +188,13 @@ public sealed partial class StacksWindowViewModel
 
     public async Task<bool> ImportStackWithPickerAsync(CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
         var path = await _archivePicker.PickStackPathAsync(cancellationToken);
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -185,12 +207,14 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanExportSelectedStack))]
     private async Task ExportSelectedStackAsync()
     {
-        if (SelectedStack is null)
+        var selectedStack = SelectedStack;
+        if (_disposed || selectedStack is null)
         {
             return;
         }
 
-        var path = await _archivePicker.PickStackSavePathAsync(SelectedStack.StackId + ".sunderstack");
+        var cancellationToken = _tasks.Token;
+        var path = await _archivePicker.PickStackSavePathAsync(selectedStack.StackId + ".sunderstack", cancellationToken);
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -199,8 +223,11 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            await _library.ExportAsync(SelectedStack.Item, path);
-            StatusText = $"Exported '{SelectedStack.Name}'.";
+            await _stackLibrary.ExportAsync(selectedStack.Item, path, cancellationToken);
+            StatusText = $"Exported '{selectedStack.Name}'.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -208,7 +235,10 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
@@ -216,16 +246,17 @@ public sealed partial class StacksWindowViewModel
     private async Task PublishSelectedStackAsync()
     {
         var selectedStack = SelectedStack;
-        if (selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        if (_disposed || selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
         }
 
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
-            var upload = await _runtimeApiClient.UploadStackAsync(selectedStack.LocalPath);
-            var result = await _runtimeApiClient.PublishRegistryStackAsync(new RuntimeRegistryPublishRequest(registryUrl.AbsoluteUri, upload.UploadId));
+            var upload = await _runtimeApiClient.UploadStackAsync(selectedStack.LocalPath, cancellationToken);
+            var result = await _runtimeApiClient.PublishRegistryStackAsync(new RuntimeRegistryPublishRequest(registryUrl.AbsoluteUri, upload.UploadId), cancellationToken);
             if (!result.Success)
             {
                 StatusText = result.Errors.FirstOrDefault() ?? "Registry Stack publish failed.";
@@ -239,10 +270,14 @@ public sealed partial class StacksWindowViewModel
                 registryUrl.ToString(),
                 publishedStackId,
                 now,
-                now);
-            _allStacks = await _library.ListAsync();
+                now,
+                cancellationToken);
+            await _stackLibrary.RefreshAsync(cancellationToken);
             RebuildStackList(selectedStack.StackId);
             StatusText = result.Message ?? $"Published Stack '{publishedStackId}'.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -250,8 +285,11 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
-            NotifySelectionChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifySelectionChanged();
+            }
         }
     }
 
@@ -260,7 +298,7 @@ public sealed partial class StacksWindowViewModel
     {
         var selectedStack = SelectedStack;
         var publishedStackId = selectedStack?.PublishedStackId;
-        if (selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
+        if (_disposed || selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
         {
             return;
         }
@@ -270,10 +308,11 @@ public sealed partial class StacksWindowViewModel
             return;
         }
 
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
-            var result = await _runtimeApiClient.DeleteRegistryStackAsync(new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, publishedStackId));
+            var result = await _runtimeApiClient.DeleteRegistryStackAsync(new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, publishedStackId), cancellationToken);
             if (!result.Success)
             {
                 StatusText = result.Forbidden
@@ -282,10 +321,13 @@ public sealed partial class StacksWindowViewModel
                 return;
             }
 
-            await _library.ClearPublishStateAsync(selectedStack.StackId);
-            _allStacks = await _library.ListAsync();
+            await _library.ClearPublishStateAsync(selectedStack.StackId, cancellationToken);
+            await _stackLibrary.RefreshAsync(cancellationToken);
             RebuildStackList(selectedStack.StackId);
             StatusText = result.Message ?? $"Unpublished Stack '{publishedStackId}'.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -293,8 +335,11 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
-            NotifySelectionChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifySelectionChanged();
+            }
         }
     }
 
@@ -303,7 +348,7 @@ public sealed partial class StacksWindowViewModel
     {
         var selectedStack = SelectedStack;
         var publishedStackId = selectedStack?.PublishedStackId;
-        if (selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
+        if (_disposed || selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
         {
             return;
         }
@@ -313,11 +358,13 @@ public sealed partial class StacksWindowViewModel
             return;
         }
 
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
             var result = await _runtimeApiClient.SetRegistryStackStarAsync(
-                new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, publishedStackId, !SelectedStackIsStarred));
+                new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, publishedStackId, !SelectedStackIsStarred),
+                cancellationToken);
             if (!result.Success)
             {
                 StatusText = result.Forbidden
@@ -329,14 +376,20 @@ public sealed partial class StacksWindowViewModel
             ApplySelectedStackStats(result.Stats);
             StatusText = result.Message ?? "Updated Stack star.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
             StatusText = ex.Message;
         }
         finally
         {
-            IsBusy = false;
-            NotifySelectionChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifySelectionChanged();
+            }
         }
     }
 
@@ -344,16 +397,18 @@ public sealed partial class StacksWindowViewModel
     private async Task ToggleSelectedRegistryStackStarAsync()
     {
         var selectedStack = SelectedRegistryStack;
-        if (selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        if (_disposed || selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
         }
 
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
             var result = await _runtimeApiClient.SetRegistryStackStarAsync(
-                new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedStack.StackId, !SelectedRegistryStackIsStarred));
+                new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedStack.StackId, !SelectedRegistryStackIsStarred),
+                cancellationToken);
             if (!result.Success)
             {
                 StatusText = result.Forbidden
@@ -365,31 +420,40 @@ public sealed partial class StacksWindowViewModel
             ApplySelectedRegistryStackStats(result.Stats);
             StatusText = result.Message ?? "Updated Stack star.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
             StatusText = ex.Message;
         }
         finally
         {
-            IsBusy = false;
-            NotifyRegistrySelectionChanged();
-            NotifyRegistryStackStateChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifyRegistrySelectionChanged();
+                NotifyRegistryStackStateChanged();
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanDeleteSelectedRegistryStack))]
     private async Task DeleteSelectedRegistryStackAsync()
     {
-        if (SelectedRegistryStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        if (_disposed || SelectedRegistryStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
         }
 
         var selectedStack = SelectedRegistryStack;
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
-            var result = await _runtimeApiClient.DeleteRegistryStackAsync(new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, selectedStack.StackId));
+            var result = await _runtimeApiClient.DeleteRegistryStackAsync(
+                new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, selectedStack.StackId),
+                cancellationToken);
             if (!result.Success)
             {
                 StatusText = result.Forbidden
@@ -402,33 +466,43 @@ public sealed partial class StacksWindowViewModel
             SelectedRegistryStack = RegistryStacks.FirstOrDefault();
             StatusText = result.Message ?? $"Deleted Registry Stack '{selectedStack.StackId}'.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
             StatusText = ex.Message;
         }
         finally
         {
-            IsBusy = false;
-            NotifyRegistryStackStateChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifyRegistryStackStateChanged();
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanRemoveSelectedStack))]
     private async Task RemoveSelectedStackAsync()
     {
-        if (SelectedStack is null)
+        var selectedStack = SelectedStack;
+        if (_disposed || selectedStack is null)
         {
             return;
         }
 
-        var removedName = SelectedStack.Name;
+        var removedName = selectedStack.Name;
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
-            await _library.DeleteAsync(SelectedStack.Item);
-            _allStacks = await _library.ListAsync();
+            await _stackLibrary.DeleteAsync(selectedStack.Item, cancellationToken);
             RebuildStackList();
             StatusText = $"Removed local Stack '{removedName}'.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -436,20 +510,31 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
     private async Task<LocalStackLibraryItem?> ImportStackFromPathAsync(string path, CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return null;
+        }
+
         IsBusy = true;
         try
         {
-            var item = await _library.ImportAsync(path, cancellationToken);
-            _allStacks = await _library.ListAsync(cancellationToken);
+            var item = await _stackLibrary.ImportAsync(path, cancellationToken);
             RebuildStackList(item.StackId);
             StatusText = $"Imported '{item.Name}'. Review it before use.";
             return item;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
         }
         catch (Exception ex)
         {
@@ -458,7 +543,10 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
         }
     }
 
@@ -525,6 +613,11 @@ public sealed partial class StacksWindowViewModel
         AppLaunchRequestKind launchKind,
         CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return null;
+        }
+
         var tempDirectory = Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "V1", "registry", Guid.NewGuid().ToString("N"));
         var tempPath = Path.Combine(tempDirectory, SunderStackFormat.BuildStackFileName(stackId));
         IsBusy = true;
@@ -541,13 +634,16 @@ public sealed partial class StacksWindowViewModel
             }
 
             await registryClient.DownloadStackAsync(stack.Artifact, stack.StackId, tempPath, cancellationToken);
-            var item = await _library.ImportAsync(tempPath, cancellationToken);
-            _allStacks = await _library.ListAsync(cancellationToken);
+            var item = await _stackLibrary.ImportAsync(tempPath, cancellationToken);
             RebuildStackList(item.StackId);
             StatusText = launchKind == AppLaunchRequestKind.StackUse
                 ? $"Downloaded '{item.Name}' from the Registry. Review it before use."
                 : $"Downloaded '{item.Name}' from the Registry.";
             return item;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
         }
         catch (Exception ex)
         {
@@ -556,7 +652,10 @@ public sealed partial class StacksWindowViewModel
         }
         finally
         {
-            IsBusy = false;
+            if (!_disposed)
+            {
+                IsBusy = false;
+            }
             TryDeleteDirectory(tempDirectory);
         }
     }

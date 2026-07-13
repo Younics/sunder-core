@@ -188,7 +188,7 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
             SetBusyState("Stopping runtime...");
             try
             {
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimeConnectionClient>();
                 await runtimeApiClient.ShutdownAsync(cancellationToken);
                 await Task.Delay(250, cancellationToken);
             }
@@ -241,7 +241,7 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
         SetBusyState("Checking runtime...");
         try
         {
-            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimeConnectionClient>();
             Exception? statusException = null;
             try
             {

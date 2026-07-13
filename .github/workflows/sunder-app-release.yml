@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DOTNET_VERSION: "10.0.x"
+  DOTNET_VERSION: "10.0.100"
   VELOPACK_VERSION: "0.0.1298"
   RELEASE_CHANNEL: stable
   RELEASE_REPO_URL: https://github.com/${{ github.repository }}
@@ -328,6 +328,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -350,10 +353,18 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
           IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
         run: |
           set -euo pipefail
+
+          tag="app/v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+            exit 1
+          fi
+          bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
 
           upload_args=(
             upload github
@@ -381,3 +392,9 @@ jobs:
 
             vpk "${upload_args[@]}" --channel "$channel" --outputDir "$output_dir"
           done
+
+          gh release upload "$tag" \
+            release-assets/SHA256SUMS \
+            release-assets/release-provenance.json \
+            release-assets/release-sbom.spdx.json \
+            release-assets/toolchain.txt

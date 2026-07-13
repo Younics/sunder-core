@@ -16,6 +16,7 @@ internal sealed class MacNativeMenuController : IDisposable
     private readonly Func<MainWindowViewModel?> _viewModelAccessor;
     private readonly Dictionary<string, Bitmap> _iconCache = new(StringComparer.Ordinal);
     private readonly HashSet<string> _loadingIconKeys = new(StringComparer.Ordinal);
+    private readonly OwnedTaskObserver _tasks = new("macOS native menu");
     private readonly Dictionary<string, PackageMenuEntry> _packageEntries = new(StringComparer.OrdinalIgnoreCase);
     private NativeMenu? _rootMenu;
     private NativeMenu? _viewSubmenu;
@@ -52,6 +53,7 @@ internal sealed class MacNativeMenuController : IDisposable
         }
 
         _disposed = true;
+        _tasks.Dispose();
         _window.DataContextChanged -= Window_OnDataContextChanged;
         _window.Opened -= Window_OnOpened;
         _window.Activated -= Window_OnActivated;
@@ -372,7 +374,7 @@ internal sealed class MacNativeMenuController : IDisposable
             return;
         }
 
-        _ = LoadIconAsync(iconUri, key);
+        _tasks.Run(_ => LoadIconAsync(iconUri, key), "loading a package icon");
     }
 
     private async Task LoadIconAsync(Uri iconUri, string key)

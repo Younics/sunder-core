@@ -4,7 +4,7 @@ namespace Sunder.Cli;
 
 internal sealed class RegistryManagementCommandHandler(
     ICliRuntimeClient runtime,
-    IRegistryClient registry,
+    IRegistryBrowseClient registry,
     CliOutput output,
     CliOptions options)
 {

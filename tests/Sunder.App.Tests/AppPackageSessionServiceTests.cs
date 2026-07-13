@@ -2,15 +2,13 @@ using Sunder.App.Services;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Xunit;
-using SdkPackageSessionLoadRequest = Sunder.Sdk.Abstractions.PackageSessionLoadRequest;
-using SdkPackageSessionSourceKind = Sunder.Sdk.Abstractions.PackageSessionSourceKind;
 
 namespace Sunder.App.Tests;
 
 public sealed class AppPackageSessionServiceTests
 {
     [Fact]
-    public async Task LoadPackageAsync_ForDevSource_RejectsRemoteFolderInput()
+    public void DevelopmentSessions_WhenRuntimePathsCannotBeShared_ExposeUnavailableReason()
     {
         var folder = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var events = new List<string>();
@@ -33,15 +31,13 @@ public sealed class AppPackageSessionServiceTests
                 return Task.CompletedTask;
             });
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await service.LoadPackageAsync(new SdkPackageSessionLoadRequest(SdkPackageSessionSourceKind.Dev, folder)));
-
-        Assert.Contains("Runtime startup", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(service.Availability.IsAvailable);
+        Assert.Contains("cannot pass local paths", service.Availability.UnavailableReason, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(events);
     }
 
     [Fact]
-    public async Task LoadPackageAsync_WhenDevFolderIsRemote_DoesNotStageOrCommit()
+    public async Task LoadDevelopmentPackageAsync_WhenUnavailable_ReturnsStructuredUnsupportedOutcome()
     {
         var folder = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var events = new List<string>();
@@ -52,10 +48,10 @@ public sealed class AppPackageSessionServiceTests
             (_, _) => Task.CompletedTask,
             (_, _, _, _) => throw new InvalidOperationException("preflight failed"));
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await service.LoadPackageAsync(new SdkPackageSessionLoadRequest(SdkPackageSessionSourceKind.Dev, folder)));
+        var result = await service.LoadDevelopmentPackageAsync(new PackageDevelopmentSessionLoadRequest(folder));
 
-        Assert.Contains("Runtime startup", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(PackageDevelopmentSessionOperationOutcome.Unsupported, result.Outcome);
+        Assert.Contains("cannot pass local paths", result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(runtimeClient.CommitCalled);
         Assert.False(runtimeClient.DiscardCalled);
         Assert.Empty(events);
@@ -63,10 +59,11 @@ public sealed class AppPackageSessionServiceTests
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
     {
-        public IRuntimeApiClient CreateClient() => runtimeApiClient;
+        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
+            => (TClient)(object)runtimeApiClient;
     }
 
-    private sealed class FakeRuntimeApiClient(string folder, List<string> events) : IRuntimeApiClient
+    private sealed class FakeRuntimeApiClient(string folder, List<string> events) : IRuntimePackageSessionClient
     {
         private readonly ActivePackageDescriptor[] _activePackages =
         [
@@ -84,23 +81,11 @@ public sealed class AppPackageSessionServiceTests
 
         public PackageLifecycleStageRequest? StageRequest { get; private set; }
 
-        public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<SystemStatusResponse?>(null);
-
-        public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(true);
-
         public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<ActivePackageDescriptor>>(_activePackages);
 
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
-
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>(_packageSources);
-
-        public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
 
         public Task<Sunder.Runtime.Contracts.PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
         {
@@ -117,31 +102,17 @@ public sealed class AppPackageSessionServiceTests
                 ErrorMessage: null));
         }
 
-        public Uri CreatePackageAssetUri(string packageId, string assetPath)
-            => new($"file:///packages/{packageId}/{assetPath}");
-
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(
-            string packageId,
-            string packagePath,
-            bool allowDowngrade = false,
-            bool reinstall = false,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
         public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
+            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
+            => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
 
         public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
         {
@@ -177,31 +148,7 @@ public sealed class AppPackageSessionServiceTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task SavePackageConfigurationValuesAsync(string packageId, IReadOnlyDictionary<string, string?> values, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(string packageId, string authSessionId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
         public Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task ShutdownAsync(CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public void Dispose()

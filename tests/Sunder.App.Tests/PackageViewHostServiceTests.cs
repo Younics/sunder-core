@@ -206,7 +206,7 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public void AppSharedAssemblyRegistry_WhenSameIdentityContractExistsAtDifferentPaths_DoesNotThrow()
+    public void AppSharedAssemblyRegistry_WhenSameUnsignedIdentityHasDifferentBinaryDefinition_RejectsIt()
     {
         using var registry = new AppSharedAssemblyRegistry([]);
         var registerMethod = typeof(AppSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -218,7 +218,8 @@ public sealed class PackageViewHostServiceTests
         var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderRuntimePackageModule).Assembly.Location, assemblyName);
 
         registerMethod.Invoke(registry, [firstCandidate, null]);
-        registerMethod.Invoke(registry, [secondCandidate, null]);
+        var error = Assert.Throws<TargetInvocationException>(() => registerMethod.Invoke(registry, [secondCandidate, null]));
+        Assert.IsType<InvalidOperationException>(error.InnerException);
     }
 
     [Fact]
@@ -261,6 +262,17 @@ public sealed class PackageViewHostServiceTests
 
         Assert.True(AppSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, loaded));
         Assert.False(AppSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(loaded, requested));
+    }
+
+    [Fact]
+    public void AppSharedAssemblyRegistry_RejectsHigherMajorAndDifferentContractIdentity()
+    {
+        var requested = new AssemblyName("Example.Contracts, Version=1.2.0.0, Culture=neutral, PublicKeyToken=0011223344556677");
+        var higherMajor = new AssemblyName("Example.Contracts, Version=2.0.0.0, Culture=neutral, PublicKeyToken=0011223344556677");
+        var unrelated = new AssemblyName("Example.Contracts, Version=1.3.0.0, Culture=neutral, PublicKeyToken=8899aabbccddeeff");
+
+        Assert.False(AppSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, higherMajor));
+        Assert.False(AppSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, unrelated));
     }
 
     [Fact]
@@ -623,13 +635,13 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task ApplyPackageDeltaAsync_ProvidesPackageSessionServiceToPackageModules()
+    public async Task ApplyPackageDeltaAsync_ProvidesDevelopmentSessionControlToPackageModules()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var sessionFolder = Path.Combine(rootPath, "session");
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.RequirePackageSessionServiceMarkerFileName), string.Empty);
+        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ResolveDevelopmentSessionControlMarkerFileName), string.Empty);
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
@@ -645,7 +657,7 @@ public sealed class PackageViewHostServiceTests
         {
             await hostService.ApplyPackageDeltaAsync([package], [source]);
 
-            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.PackageSessionServiceResolvedFileName, SearchOption.AllDirectories));
+            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.DevelopmentSessionControlResolvedFileName, SearchOption.AllDirectories));
         }
         finally
         {

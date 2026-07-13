@@ -46,7 +46,7 @@ public sealed class SettingsWindowViewModelTests
         {
             ConfigurationSchemas = [CreateSchema("agent", "Agent", "Configure Agent.")],
         };
-        runtimeClient.ConfigurationValues["agent"] = new PackageConfigurationValuesResponse(
+        runtimeClient.ConfigurationValues["agent"] = new PackageSettingsValuesResponse(
             "agent",
             new Dictionary<string, string?> { ["apiKey"] = "stored" },
             []);
@@ -113,7 +113,7 @@ public sealed class SettingsWindowViewModelTests
                     await releaseAgentValues.Task.WaitAsync(cancellationToken);
                 }
 
-                return new PackageConfigurationValuesResponse(
+                return new PackageSettingsValuesResponse(
                     packageId,
                     new Dictionary<string, string?> { ["apiKey"] = packageId },
                     []);
@@ -289,73 +289,19 @@ public sealed class SettingsWindowViewModelTests
                     ]),
             ]);
 
-    private sealed class FakeRuntimeApiClient : IRuntimeApiClient
+    private sealed class FakeRuntimeApiClient : IRuntimePackageSettingsClient
     {
         public IReadOnlyList<PackageConfigurationSchemaDescriptor> ConfigurationSchemas { get; set; } = [];
 
-        public Dictionary<string, PackageConfigurationValuesResponse?> ConfigurationValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, PackageSettingsValuesResponse?> ConfigurationValues { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public Func<CancellationToken, Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>>>? GetConfigurationSchemasAsyncCallback { get; init; }
 
-        public Func<string, CancellationToken, Task<PackageConfigurationValuesResponse?>>? GetConfigurationValuesAsyncCallback { get; init; }
+        public Func<string, CancellationToken, Task<PackageSettingsValuesResponse?>>? GetConfigurationValuesAsyncCallback { get; init; }
 
         public Func<string, IReadOnlyDictionary<string, string?>, CancellationToken, Task>? SaveConfigurationValuesAsyncCallback { get; init; }
 
         public int GetPackageConfigurationValuesCallCount { get; private set; }
-
-        public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<SystemStatusResponse?>(null);
-
-        public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(true);
-
-        public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ActivePackageDescriptor>>([]);
-
-        public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
-
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
-
-        public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
-
-        public Uri CreatePackageAssetUri(string packageId, string assetPath) =>
-            throw new NotSupportedException();
-
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(
-            string packagePath,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(
-            string packageId,
-            string packagePath,
-            bool allowDowngrade = false,
-            bool reinstall = false,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(
-            string packageId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(
-            string packageId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageOperationResult> UninstallPackageAsync(
-            string packageId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
-            PackageLifecycleLoadRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
 
         public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(
             CancellationToken cancellationToken = default)
@@ -369,7 +315,7 @@ public sealed class SettingsWindowViewModelTests
             return Task.FromResult(ConfigurationSchemas);
         }
 
-        public Task<PackageConfigurationValuesResponse?> GetPackageConfigurationValuesAsync(
+        public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(
             string packageId,
             CancellationToken cancellationToken = default)
         {
@@ -384,7 +330,7 @@ public sealed class SettingsWindowViewModelTests
             return Task.FromResult(values);
         }
 
-        public Task SavePackageConfigurationValuesAsync(
+        public Task SavePackageSettingsValuesAsync(
             string packageId,
             IReadOnlyDictionary<string, string?> values,
             CancellationToken cancellationToken = default)
@@ -392,37 +338,6 @@ public sealed class SettingsWindowViewModelTests
             cancellationToken.ThrowIfCancellationRequested();
             return SaveConfigurationValuesAsyncCallback?.Invoke(packageId, values, cancellationToken) ?? Task.CompletedTask;
         }
-
-        public Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(
-            string packageId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(
-            string packageId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(
-            string packageId,
-            string authSessionId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(
-            string packageId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task ReportPackageFaultAsync(
-            string packageId,
-            PackageFailureOrigin origin,
-            string message,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task ShutdownAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
 
         public void Dispose()
         {

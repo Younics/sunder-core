@@ -1,6 +1,7 @@
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.Cli;
 
@@ -31,7 +32,9 @@ internal static class CliRenderers
         output.Line($"Latest: {package.LatestVersion ?? "-"}");
         if (!string.IsNullOrWhiteSpace(package.Summary)) output.Line($"Summary: {package.Summary}");
         output.Line("Versions:");
-        foreach (var version in package.Versions.OrderByDescending(version => version.PublishedAtUtc))
+        foreach (var version in package.Versions
+                     .OrderByDescending(version => SemanticVersion.TryParse(version.Version, out var parsed) ? parsed : (SemanticVersion?)null)
+                     .ThenByDescending(version => version.Version, StringComparer.Ordinal))
         {
             var suffix = version.IsYanked ? " yanked" : string.Empty;
             if (!string.IsNullOrWhiteSpace(version.DeprecatedMessage)) suffix += $" deprecated: {version.DeprecatedMessage}";
@@ -58,7 +61,7 @@ internal static class CliRenderers
             output.Line($"  {dependency.PackageId} {dependency.VersionRange}");
         if (version.DependsOn.Count == 0) output.Line("  none");
         output.Line($"Artifact SHA-256: {version.Artifact.Sha256}");
-        output.Line($"Artifact Size: {version.Artifact.Size} bytes");
+        output.Line($"Artifact Size: {(version.Artifact.Size is { } packageSize ? $"{packageSize} bytes" : "unknown")}");
     }
 
     public static void StackSummaries(CliOutput output, IReadOnlyList<RegistryStackSummary> stacks)
@@ -90,7 +93,7 @@ internal static class CliRenderers
             output.Line($"  {input.InputId} ({(input.Required ? "required" : "optional")})");
         if (stack.RequiredInputs.Count == 0) output.Line("  none");
         output.Line($"Artifact SHA-256: {stack.Artifact.Sha256}");
-        output.Line($"Artifact Size: {stack.Artifact.Size} bytes");
+        output.Line($"Artifact Size: {(stack.Artifact.Size is { } stackSize ? $"{stackSize} bytes" : "unknown")}");
     }
 
     public static int RegistryPackageChange(CliOutput output, RuntimeRegistryPackageChangeResult result)

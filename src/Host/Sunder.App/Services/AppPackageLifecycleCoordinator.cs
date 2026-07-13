@@ -11,7 +11,7 @@ public sealed class AppPackageLifecycleCoordinator(
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
+        using var runtimeApiClient = runtimeApiClientFactory.CreateClient<IRuntimeShellClient>();
         var activePackagesTask = runtimeApiClient.GetActivePackagesAsync(cancellationToken);
         var packageSourcesTask = runtimeApiClient.GetActivePackageUiSnapshotsAsync(cancellationToken);
         await Task.WhenAll(activePackagesTask, packageSourcesTask).ConfigureAwait(false);

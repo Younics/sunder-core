@@ -12,7 +12,7 @@ namespace Sunder.App.ViewModels;
 public sealed partial class UseStackWizardViewModel(
     LocalStackLibraryService library,
     LocalStackLibraryItem stack,
-    IRuntimeApiClient runtimeApiClient,
+    IRuntimeStacksClient runtimeApiClient,
     RegistryPackageInstallService registryInstallService,
     Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
     Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> notifyStackImportAppliedAsync,
@@ -26,6 +26,7 @@ public sealed partial class UseStackWizardViewModel(
     private bool _installPlanHasErrors;
     private readonly LatestAsyncRequest _previewRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(UseStackWizardViewModel));
+    private string? _importPlanId;
     private bool _disposed;
 
     public event Action<bool?>? CloseRequested;
@@ -122,11 +123,13 @@ public sealed partial class UseStackWizardViewModel(
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        if (_manifestLoaded || IsBusy)
+        if (_disposed || _manifestLoaded || IsBusy)
         {
             return;
         }
 
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
         IsBusy = true;
         try
         {
@@ -152,14 +155,23 @@ public sealed partial class UseStackWizardViewModel(
         }
         finally
         {
-            IsBusy = false;
-            NotifyWizardStateChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifyWizardStateChanged();
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanApply))]
     private async Task ApplyAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var cancellationToken = _tasks.Token;
         var missingRequiredInput = RequiredInputs.FirstOrDefault(input => input.IsMissingRequiredValue);
         if (missingRequiredInput is not null)
         {
@@ -190,7 +202,9 @@ public sealed partial class UseStackWizardViewModel(
                     _packageRequirements,
                     registryClient,
                     runtimeApiClient,
-                    progress => StatusText = progress.StatusText);
+                    progress => StatusText = progress.StatusText,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 ApplyInstallResult(installResult);
                 if (!installResult.Success)
                 {
@@ -200,8 +214,12 @@ public sealed partial class UseStackWizardViewModel(
 
                 if (installResult.ImpactedPackageIds.Count > 0)
                 {
-                    await applyPackageLifecycleChangesAsync(installResult.ImpactedPackageIds, _tasks.Token);
+                    await applyPackageLifecycleChangesAsync(installResult.ImpactedPackageIds, cancellationToken);
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception ex)
             {
@@ -213,13 +231,16 @@ public sealed partial class UseStackWizardViewModel(
             }
             finally
             {
-                IsBusy = false;
+                if (!_disposed)
+                {
+                    IsBusy = false;
+                }
             }
 
-            await RefreshInstallPlanAsync();
+            await RefreshInstallPlanAsync(cancellationToken);
         }
 
-        await RefreshImportPreviewCoreAsync(_tasks.Token);
+        await RefreshImportPreviewCoreAsync(cancellationToken);
 
         missingRequiredInput = RequiredInputs.FirstOrDefault(input => input.IsMissingRequiredValue);
         if (missingRequiredInput is not null)
@@ -246,6 +267,12 @@ public sealed partial class UseStackWizardViewModel(
             CloseRequested?.Invoke(true);
             return;
         }
+        if (string.IsNullOrWhiteSpace(_importPlanId))
+        {
+            StatusText = "Stack setup preview did not return an import plan.";
+            NotifyWizardStateChanged();
+            return;
+        }
 
         IsBusy = true;
         ImportWarnings.Clear();
@@ -254,13 +281,11 @@ public sealed partial class UseStackWizardViewModel(
         try
         {
             StatusText = "Importing Stack setup...";
-            var upload = await runtimeApiClient.UploadStackAsync(stack.LocalPath);
             var result = await runtimeApiClient.ImportStackAsync(new RuntimeStackImportRequest(
-                upload.UploadId,
+                _importPlanId,
                 GetSelectedFragmentIds(),
-                GetInputValues(),
-                new Dictionary<string, string>(),
-                selectedActionIds));
+                selectedActionIds), cancellationToken);
+            _importPlanId = null;
 
             foreach (var warning in result.Warnings)
             {
@@ -277,15 +302,21 @@ public sealed partial class UseStackWizardViewModel(
                 ImportedItems.Add($"{imported.DisplayName} ({imported.Kind})");
             }
 
-            await NotifyStackImportAppliedAsync(result.AppliedContributions, _tasks.Token);
+            await NotifyStackImportAppliedAsync(ToAppliedContributions(result.ContributorResults), cancellationToken);
 
-            StatusText = result.Success
-                ? $"Imported {result.ImportedItems.Count} Stack setup item{StackDisplayFormatters.Plural(result.ImportedItems.Count)}."
-                : result.Errors.FirstOrDefault() ?? "Stack setup import failed.";
-            if (result.Success)
+            StatusText = result.Outcome switch
+            {
+                RuntimeStackImportOutcome.Completed => $"Imported {result.ImportedItems.Count} Stack setup item{StackDisplayFormatters.Plural(result.ImportedItems.Count)}.",
+                RuntimeStackImportOutcome.Partial => $"Partially imported {result.ImportedItems.Count} Stack setup item{StackDisplayFormatters.Plural(result.ImportedItems.Count)}; review contributor errors.",
+                _ => result.Errors.FirstOrDefault() ?? "Stack setup import failed.",
+            };
+            if (result.Outcome == RuntimeStackImportOutcome.Completed)
             {
                 CloseRequested?.Invoke(true);
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -294,8 +325,11 @@ public sealed partial class UseStackWizardViewModel(
         }
         finally
         {
-            IsBusy = false;
-            NotifyWizardStateChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifyWizardStateChanged();
+            }
         }
     }
 

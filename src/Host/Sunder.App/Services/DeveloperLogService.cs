@@ -124,7 +124,7 @@ public sealed class DeveloperLogService : IDisposable
         {
             try
             {
-                using var client = _runtimeApiClientFactory!.CreateClient();
+                using var client = _runtimeApiClientFactory!.CreateClient<IRuntimeLogClient>();
                 var snapshot = await client.GetPackageLogSnapshotAsync(sequenceId, cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (snapshot.HistoryGap)
                 {

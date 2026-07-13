@@ -191,7 +191,8 @@ public sealed class ActivePackageSessionTests
             new RuntimePackageLoadContext(
                 packageId,
                 assemblyPath,
-                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])));
+                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
+            EmptyTestPackageSettings.Instance);
     }
 
     private static ActivePackageDescriptor CreateActivePackage(

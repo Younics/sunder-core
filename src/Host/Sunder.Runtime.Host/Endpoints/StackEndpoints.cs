@@ -37,9 +37,13 @@ internal static class StackEndpoints
             async (RuntimeStackImportRequest request, RuntimeStackImportService stackImport, CancellationToken cancellationToken) =>
             {
                 var result = await stackImport.ImportAsync(request, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Errors.FirstOrDefault(), packageValidation: true);
                 return Results.Ok(result);
             });
+
+        group.MapDelete(
+            "import/plans/{planId}",
+            (string planId, RuntimeStackImportService stackImport) =>
+                stackImport.DiscardPlan(planId) ? Results.NoContent() : Results.NotFound());
 
         return endpoints;
     }

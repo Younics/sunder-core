@@ -32,4 +32,17 @@ public sealed class AppSingleInstanceCoordinatorTests
         Assert.Equal(AppLaunchRequestKind.StackDetails, request.Kind);
         Assert.Equal("sunder.stack.demo", request.StackId);
     }
+
+    [Fact]
+    public async Task TryForwardLaunchArgumentsAsync_RejectsOversizedPayloadBeforeConnecting()
+    {
+        var scope = $"Sunder.App.Tests.{Guid.NewGuid():N}";
+        using var primary = AppSingleInstanceCoordinator.Create(scope);
+        using var secondary = AppSingleInstanceCoordinator.Create(scope);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            secondary.TryForwardLaunchArgumentsAsync([new string('x', AppSingleInstanceCoordinator.MaxLaunchPayloadCharacters)]));
+
+        Assert.Contains("payload limit", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

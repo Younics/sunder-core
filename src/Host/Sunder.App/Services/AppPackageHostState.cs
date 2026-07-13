@@ -122,7 +122,7 @@ internal sealed class AppPackageHostState(
         }
     }
 
-    public (object[] OwnedDisposables, AppPackageLoadContext[] LoadContexts) SnapshotLegacyResources()
+    public (object[] OwnedDisposables, AppPackageLoadContext[] LoadContexts) SnapshotOwnedResources()
     {
         lock (_syncRoot)
         {

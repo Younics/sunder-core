@@ -19,6 +19,7 @@ public sealed partial class UseStackWizardViewModel
         RequiredInputs.Clear();
         ImportWarnings.Clear();
         ImportErrors.Clear();
+        _importPlanId = null;
         if (!HasSelectedSetupItems)
         {
             StatusText = HasPackageRequirements
@@ -42,6 +43,8 @@ public sealed partial class UseStackWizardViewModel
             {
                 return;
             }
+
+            _importPlanId = preview.PlanId;
 
             foreach (var action in preview.Actions)
             {

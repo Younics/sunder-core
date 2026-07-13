@@ -5,6 +5,7 @@ namespace Sunder.Runtime.Host;
 
 internal sealed class RuntimeBearerTokenValidator
 {
+    internal const int MaxAuthorizationHeaderLength = 1024;
     private readonly byte[] _expectedHash;
 
     public RuntimeBearerTokenValidator(string bearerToken)
@@ -21,6 +22,7 @@ internal sealed class RuntimeBearerTokenValidator
     {
         const string prefix = "Bearer ";
         if (string.IsNullOrWhiteSpace(authorizationHeader)
+            || authorizationHeader.Length > MaxAuthorizationHeaderLength
             || !authorizationHeader.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
             return false;

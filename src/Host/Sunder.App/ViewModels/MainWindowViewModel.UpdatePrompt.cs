@@ -16,11 +16,21 @@ public partial class MainWindowViewModel
     public string UpdatePromptStatus => _appUpdatePrompt.UpdatePromptStatus;
 
     public async Task CheckForAppUpdatesOnStartupAsync()
-        => await _appUpdatePrompt.CheckForStartupPromptAsync(RunOnUiThread);
+    {
+        if (!_disposed)
+        {
+            await _appUpdatePrompt.CheckForStartupPromptAsync(RunOnUiThread, _tasks.Token);
+        }
+    }
 
     [RelayCommand]
     private async Task InstallAvailableAppUpdateAsync()
-        => await _appUpdatePrompt.InstallAvailableUpdateAsync(RunOnUiThread);
+    {
+        if (!_disposed)
+        {
+            await _appUpdatePrompt.InstallAvailableUpdateAsync(RunOnUiThread, _tasks.Token);
+        }
+    }
 
     [RelayCommand]
     private void DismissAppUpdatePrompt()

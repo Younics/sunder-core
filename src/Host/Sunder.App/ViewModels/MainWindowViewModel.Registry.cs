@@ -8,14 +8,7 @@ namespace Sunder.App.ViewModels;
 
 public partial class MainWindowViewModel
 {
-    private static readonly Color[] RegistryAvatarColors =
-    [
-        Color.FromRgb(0xD9, 0x9A, 0x3A),
-        Color.FromRgb(0xB6, 0x7A, 0x2B),
-        Color.FromRgb(0x8D, 0x78, 0x56),
-        Color.FromRgb(0xA0, 0x84, 0x5C),
-        Color.FromRgb(0xC2, 0x92, 0x4A),
-    ];
+    private readonly LatestAsyncRequest _registryAuthRequest = new();
 
     [ObservableProperty]
     private bool _isRegistryAuthBusy;
@@ -36,7 +29,7 @@ public partial class MainWindowViewModel
     private string _registryAccountAvatarText = "R";
 
     [ObservableProperty]
-    private IBrush _registryAccountAvatarBrush = new SolidColorBrush(RegistryAvatarColors[0]);
+    private IBrush _registryAccountAvatarBrush = RegistryAccountPresentationState.SignedOut().AvatarBrush;
 
     [ObservableProperty]
     private string? _registryAccountAvatarUrl;
@@ -78,11 +71,12 @@ public partial class MainWindowViewModel
     [RelayCommand(CanExecute = nameof(CanManageRegistryAccount))]
     private async Task RefreshRegistryAccountAsync()
     {
-        if (_registryAuthService is null)
+        if (_disposed || _registryAuthService is null)
         {
             return;
         }
 
+        using var request = _registryAuthRequest.Start(_tasks.Token);
         IsRegistryAuthBusy = true;
         RegistryAuthState? cachedState = null;
         try
@@ -93,10 +87,22 @@ public partial class MainWindowViewModel
                 ApplyRegistryAuthState(cachedState);
             }
 
-            ApplyRegistryAuthState(await _registryAuthService.GetStatusAsync());
+            var state = await _registryAuthService.GetStatusAsync(cancellationToken: request.Token);
+            if (request.IsCurrent)
+            {
+                ApplyRegistryAuthState(state);
+            }
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
+            if (!request.IsCurrent)
+            {
+                return;
+            }
+
             if (cachedState is { IsSignedIn: true })
             {
                 RegistryAccountStatusText = "Signed in to Sunder. Account refresh failed.";
@@ -108,56 +114,84 @@ public partial class MainWindowViewModel
         }
         finally
         {
-            IsRegistryAuthBusy = false;
+            if (request.IsCurrent)
+            {
+                IsRegistryAuthBusy = false;
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanManageRegistryAccount))]
     private async Task LoginRegistryAsync()
     {
-        if (_registryAuthService is null)
+        if (_disposed || _registryAuthService is null)
         {
             return;
         }
 
+        using var request = _registryAuthRequest.Start(_tasks.Token);
         IsRegistryAuthBusy = true;
         try
         {
-            ApplyRegistryAuthState(await _registryAuthService.LoginAsync());
+            var state = await _registryAuthService.LoginAsync(cancellationToken: request.Token);
+            if (request.IsCurrent)
+            {
+                ApplyRegistryAuthState(state);
+            }
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            ApplySignedOutRegistryState(ex.Message);
+            if (request.IsCurrent)
+            {
+                ApplySignedOutRegistryState(ex.Message);
+            }
         }
         finally
         {
-            IsRegistryAuthBusy = false;
+            if (request.IsCurrent)
+            {
+                IsRegistryAuthBusy = false;
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanManageRegistryAccount))]
     private async Task LogoutRegistryAsync()
     {
-        if (_registryAuthService is null)
+        if (_disposed || _registryAuthService is null)
         {
             return;
         }
 
+        using var request = _registryAuthRequest.Start(_tasks.Token);
         IsRegistryAuthBusy = true;
         try
         {
-            ApplyRegistryAuthState(await _registryAuthService.LogoutAsync());
+            var state = await _registryAuthService.LogoutAsync(cancellationToken: request.Token);
+            if (request.IsCurrent)
+            {
+                ApplyRegistryAuthState(state);
+            }
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
         }
         finally
         {
-            IsRegistryAuthBusy = false;
+            if (request.IsCurrent)
+            {
+                IsRegistryAuthBusy = false;
+            }
         }
     }
 
     [RelayCommand(CanExecute = nameof(CanOpenRegistryHub))]
     private void OpenRegistryHub()
     {
-        if (_externalBrowserService is null)
+        if (_disposed || _externalBrowserService is null)
         {
             return;
         }
@@ -173,102 +207,19 @@ public partial class MainWindowViewModel
     }
 
     private void ApplyRegistryAuthState(RegistryAuthState state)
-    {
-        if (!state.IsSignedIn || state.User is null)
-        {
-            ApplySignedOutRegistryState(state.Message);
-            return;
-        }
-
-        IsRegistrySignedIn = true;
-        RegistryAccountDisplayName = GetRegistryDisplayName(state.User);
-        RegistryAccountSubtitle = state.RegistryUrl.Host;
-        RegistryAccountStatusText = "Signed in to Sunder.";
-        RegistryAccountAvatarText = BuildRegistryAvatarText(GetRegistryAvatarLabel(state.User));
-        RegistryAccountAvatarBrush = new SolidColorBrush(PickRegistryAvatarColor(GetRegistryAvatarSeed(state.User)));
-        RegistryAccountAvatarUrl = NormalizeRegistryAvatarUrl(state.User.AvatarUrl);
-    }
+        => ApplyRegistryAccountPresentation(RegistryAccountPresentationState.FromAuthState(state));
 
     private void ApplySignedOutRegistryState(string? message)
+        => ApplyRegistryAccountPresentation(RegistryAccountPresentationState.SignedOut(message));
+
+    private void ApplyRegistryAccountPresentation(RegistryAccountPresentationState state)
     {
-        IsRegistrySignedIn = false;
-        RegistryAccountDisplayName = "Registry";
-        RegistryAccountSubtitle = "Not signed in";
-        RegistryAccountStatusText = string.IsNullOrWhiteSpace(message)
-            ? "Sign in to publish packages and Stacks."
-            : message;
-        RegistryAccountAvatarText = "R";
-        RegistryAccountAvatarBrush = new SolidColorBrush(RegistryAvatarColors[0]);
-        RegistryAccountAvatarUrl = null;
-    }
-
-    private static string GetRegistryDisplayName(RegistryCurrentUserResponse user)
-        => FirstNonEmpty(FormatUsername(user.Username), SafeDisplayName(user.DisplayName), user.Email) ?? "Sunder user";
-
-    private static string GetRegistryAvatarLabel(RegistryCurrentUserResponse user)
-        => FirstNonEmpty(FormatUsername(user.Username), SafeDisplayName(user.DisplayName), user.Email) ?? "registry";
-
-    private static string GetRegistryAvatarSeed(RegistryCurrentUserResponse user)
-        => FirstNonEmpty(FormatUsername(user.Username), SafeDisplayName(user.DisplayName), user.Email) ?? "registry";
-
-    private static string? FormatUsername(string? username)
-        => string.IsNullOrWhiteSpace(username) ? null : $"@{username.Trim()}";
-
-    private static string? SafeDisplayName(string? displayName)
-    {
-        var normalized = displayName?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) || normalized.StartsWith("user_", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : normalized;
-    }
-
-    private static string? FirstNonEmpty(params string?[] values)
-        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
-
-    private static string BuildRegistryAvatarText(string displayName)
-    {
-        var label = displayName.Trim();
-        label = label.StartsWith('@')
-            ? label.TrimStart('@')
-            : label.Contains('@', StringComparison.Ordinal)
-                ? label.Split('@', 2)[0]
-                : label;
-        var parts = label
-            .Split([' ', '.', '-', '_', '@'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(part => part.Length > 0)
-            .ToArray();
-        if (parts.Length == 0)
-        {
-            return "?";
-        }
-
-        return parts.Length == 1
-            ? parts[0][..1].ToUpperInvariant()
-            : string.Concat(parts[0][..1], parts[^1][..1]).ToUpperInvariant();
-    }
-
-    private static Color PickRegistryAvatarColor(string seed)
-    {
-        var hash = 0;
-        foreach (var character in seed)
-        {
-            hash = unchecked((hash * 31) + character);
-        }
-
-        return RegistryAvatarColors[(int)((uint)hash % RegistryAvatarColors.Length)];
-    }
-
-    private static string? NormalizeRegistryAvatarUrl(string? avatarUrl)
-    {
-        var normalized = avatarUrl?.Trim();
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            return null;
-        }
-
-        return Uri.TryCreate(normalized, UriKind.Absolute, out var uri)
-               && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
-            ? normalized
-            : null;
+        IsRegistrySignedIn = state.IsSignedIn;
+        RegistryAccountDisplayName = state.DisplayName;
+        RegistryAccountSubtitle = state.Subtitle;
+        RegistryAccountStatusText = state.StatusText;
+        RegistryAccountAvatarText = state.AvatarText;
+        RegistryAccountAvatarBrush = state.AvatarBrush;
+        RegistryAccountAvatarUrl = state.AvatarUrl;
     }
 }

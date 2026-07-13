@@ -9,12 +9,6 @@ internal sealed class MasterKeyStore
     private const int KeyDocumentVersion = 1;
     private const int MasterKeySize = 32;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-    };
-
     private readonly AtomicFileDocument _document;
     private readonly IMasterKeyProtection _protection;
 
@@ -40,7 +34,7 @@ internal sealed class MasterKeyStore
         {
             return Parse(contents, transaction.FilePath);
         }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException or FormatException)
+        catch (Exception exception) when (PackageStorageExceptionClassifier.IsStructural(exception))
         {
             throw FailClosed(transaction, contents, exception);
         }
@@ -59,7 +53,7 @@ internal sealed class MasterKeyStore
             {
                 return Parse(contents, transaction.FilePath);
             }
-            catch (Exception exception) when (exception is JsonException or InvalidDataException or FormatException)
+            catch (Exception exception) when (PackageStorageExceptionClassifier.IsStructural(exception))
             {
                 throw FailClosed(transaction, contents, exception);
             }
@@ -168,7 +162,7 @@ internal sealed class MasterKeyStore
 
             return true;
         }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException or FormatException)
+        catch (Exception exception) when (PackageStorageExceptionClassifier.IsStructural(exception))
         {
             throw FailClosed(transaction, contents, exception);
         }
@@ -187,29 +181,20 @@ internal sealed class MasterKeyStore
     private MasterKeyMaterial Parse(byte[] contents, string canonicalPath)
     {
         using var json = JsonDocument.Parse(contents);
-        if (json.RootElement.ValueKind != JsonValueKind.Object)
-        {
-            throw new InvalidDataException("The master key document root must be an object.");
-        }
-
-        var root = json.RootElement;
+        var root = PackageStorageJson.RequireObject(json, "master key document");
         if (StorageFailureMarker.IsMarker(root))
         {
             throw StorageFailureMarker.CreateException(root, canonicalPath);
         }
 
-        var format = ReadString(root, "format");
+        var format = PackageStorageJson.ReadString(root, "format", "master key document");
         if (!string.Equals(format, KeyFormat, StringComparison.Ordinal))
         {
             throw new PackageStorageNotSupportedException($"Unsupported master key format '{format}'.");
         }
 
-        var documentVersion = ReadInt32(root, "version");
-        if (documentVersion != KeyDocumentVersion)
-        {
-            throw new PackageStorageNotSupportedException(
-                $"Master key document version {documentVersion} is not supported.");
-        }
+        var documentVersion = PackageStorageJson.ReadInt32(root, "version", "master key document");
+        PackageStorageJson.RequireVersion(documentVersion, KeyDocumentVersion, "Master key document version");
 
         if (!root.TryGetProperty("protection", out var protection)
             || protection.ValueKind != JsonValueKind.Object)
@@ -217,15 +202,16 @@ internal sealed class MasterKeyStore
             throw new InvalidDataException("The master key protection metadata is invalid.");
         }
 
-        var scheme = ReadString(protection, "scheme");
-        var version = ReadInt32(protection, "version");
+        var scheme = PackageStorageJson.ReadString(protection, "scheme", "master key protection metadata");
+        var version = PackageStorageJson.ReadInt32(protection, "version", "master key protection metadata");
         if (!MasterKeyProtectionSchemes.IsKnown(scheme) || version != MasterKeyProtectionSchemes.CurrentVersion)
         {
             throw new PackageStorageNotSupportedException(
                 $"Master key protection scheme '{scheme}' version {version} is not supported.");
         }
 
-        var payload = Convert.FromBase64String(ReadString(root, "payload"));
+        var payload = Convert.FromBase64String(
+            PackageStorageJson.ReadString(root, "payload", "master key document"));
         byte[] key;
         try
         {
@@ -291,7 +277,7 @@ internal sealed class MasterKeyStore
             KeyDocumentVersion,
             new MasterKeyProtectionEnvelope(protectedKey.Scheme, protectedKey.Version),
             Convert.ToBase64String(protectedKey.Payload));
-        var serializedEnvelope = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+        var serializedEnvelope = JsonSerializer.SerializeToUtf8Bytes(envelope, PackageStorageJson.Options);
         try
         {
             transaction.Write(serializedEnvelope);
@@ -326,26 +312,6 @@ internal sealed class MasterKeyStore
                     + "The restricted original key document was not overwritten.",
                 new AggregateException(cause, quarantineException));
         }
-    }
-
-    private static string ReadString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
-        {
-            throw new InvalidDataException($"The master key document has an invalid '{propertyName}'.");
-        }
-
-        return property.GetString()!;
-    }
-
-    private static int ReadInt32(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) || !property.TryGetInt32(out var value))
-        {
-            throw new InvalidDataException($"The master key document has an invalid '{propertyName}'.");
-        }
-
-        return value;
     }
 
     private void TryDeletePersistedProtection(byte[] contents)
@@ -437,10 +403,8 @@ internal sealed class MasterKeyStore
         }
     }
 
-    private static bool IsOptionalProtectionFailure(Exception exception) => exception is not (
-        OutOfMemoryException
-        or StackOverflowException
-        or AccessViolationException);
+    private static bool IsOptionalProtectionFailure(Exception exception) =>
+        PackageStorageExceptionClassifier.IsProviderFailure(exception);
 
     private sealed record MasterKeyEnvelope(
         string Format,

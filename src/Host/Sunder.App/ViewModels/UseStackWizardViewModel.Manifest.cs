@@ -50,6 +50,17 @@ public sealed partial class UseStackWizardViewModel
         }
     }
 
+    private static IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> ToAppliedContributions(
+        IReadOnlyList<RuntimeStackImportContributorResultDescriptor> results)
+        => results
+            .Where(result => result.ImportedItems.Count > 0)
+            .Select(result => new RuntimeStackImportAppliedContributionDescriptor(
+                result.OwnerPackageId,
+                result.ContributorId,
+                result.FragmentIds,
+                result.ImportedItems))
+            .ToArray();
+
     private void BuildSetupPackageGroups(
         SunderStackManifest manifest,
         IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
@@ -176,6 +187,10 @@ public sealed partial class UseStackWizardViewModel
                     ? "All Stack package requirements are already satisfied."
                     : $"Stack package graph resolved {InstallPlanItems.Count} package change{StackDisplayFormatters.Plural(InstallPlanItems.Count)}."
                 : InstallPlanErrors.FirstOrDefault() ?? "Stack package graph resolution failed.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

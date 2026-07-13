@@ -2,32 +2,42 @@ using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Client;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Logging;
+using Sunder.Sdk.Runtime;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 {
     private readonly RuntimePackageDataClient? _runtimeClient;
-    private readonly IPackageLocalWorkspaceLease? _localWorkspace;
+    private readonly RuntimePackageOperationClient? _runtimeOperationClient;
+    private readonly RuntimePackageCallbackClient? _runtimeCallbackClient;
 
     private AppPackageContext(
         string packageId,
         string version,
         string installPath,
         IPackageStorageContext storage,
-        IPackageConfiguration configuration,
+        IPackageSettings settings,
         IPackageSecrets secrets,
-        RuntimePackageDataClient? runtimeClient)
+        RuntimePackageDataClient? runtimeClient,
+        RuntimePackageOperationClient? runtimeOperationClient,
+        RuntimePackageCallbackClient? runtimeCallbackClient)
     {
         PackageId = packageId;
         Version = version;
         InstallPath = installPath;
         Storage = storage;
-        Configuration = configuration;
+        Settings = settings;
         Secrets = secrets;
         _runtimeClient = runtimeClient;
-        _localWorkspace = runtimeClient is null ? null : storage.LocalWorkspace;
-
+        _runtimeOperationClient = runtimeOperationClient;
+        _runtimeCallbackClient = runtimeCallbackClient;
+        Runtime = runtimeOperationClient is null
+            ? NullPackageRuntimeClient.Instance
+            : new AppPackageRuntimeClient(packageId, runtimeOperationClient);
+        Callbacks = runtimeCallbackClient is null
+            ? NullPackageCallbackClient.Instance
+            : new AppPackageCallbackClient(packageId, runtimeCallbackClient, new ExternalBrowserService());
         Logging = new AppPackageLogging(PackageId);
     }
 
@@ -46,28 +56,36 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
                 version,
                 installPath,
                 AppPreflightPackageStorageContext.Instance,
-                AppPreflightPackageConfiguration.Instance,
+                AppPreflightPackageSettings.Instance,
                 AppPreflightPackageSecrets.Instance,
-                runtimeClient: null));
+                runtimeClient: null,
+                runtimeOperationClient: null,
+                runtimeCallbackClient: null));
         }
 
         var runtimeClient = new RuntimePackageDataClient(getRuntimeConnectionInfo ?? (static () => null));
+        var runtimeOperationClient = new RuntimePackageOperationClient(getRuntimeConnectionInfo ?? (static () => null));
+        var runtimeCallbackClient = new RuntimePackageCallbackClient(getRuntimeConnectionInfo ?? (static () => null));
         try
         {
-            IPackageLocalWorkspaceLease workspace = new AppPackageLocalWorkspaceLease(packageId);
+            IPackageRoleLocalWorkspace workspace = new AppPackageRoleLocalWorkspace(packageId);
 
             return Task.FromResult(new AppPackageContext(
                 packageId,
                 version,
                 installPath,
                 new AppRuntimePackageStorageContext(packageId, runtimeClient, workspace),
-                new AppRuntimePackageConfiguration(packageId, runtimeClient),
+                new AppRuntimePackageSettings(packageId, runtimeClient),
                 new AppRuntimePackageSecrets(packageId, runtimeClient),
-                runtimeClient));
+                runtimeClient,
+                runtimeOperationClient,
+                runtimeCallbackClient));
         }
         catch
         {
             runtimeClient.Dispose();
+            runtimeOperationClient.Dispose();
+            runtimeCallbackClient.Dispose();
             throw;
         }
     }
@@ -80,25 +98,28 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 
     public IPackageStorageContext Storage { get; }
 
-    public IPackageConfiguration Configuration { get; }
+    public IPackageSettings Settings { get; }
 
     public IPackageSecrets Secrets { get; }
+
+    public IPackageCallbackClient Callbacks { get; }
+
+    internal IPackageRuntimeClient Runtime { get; }
 
     public ILoggerFactory LoggerFactory => Logging.LoggerFactory;
 
     public IPackageLogging Logging { get; }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_localWorkspace is not null)
-        {
-            await _localWorkspace.DisposeAsync().ConfigureAwait(false);
-        }
-
         _runtimeClient?.Dispose();
+        _runtimeOperationClient?.Dispose();
+        _runtimeCallbackClient?.Dispose();
         if (Logging is IDisposable disposableLogging)
         {
             disposableLogging.Dispose();
         }
+
+        return ValueTask.CompletedTask;
     }
 }

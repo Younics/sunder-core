@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
@@ -60,7 +62,7 @@ public sealed class RegistryRuntimeArchitectureTests
                     Content = JsonContent.Create(new RegistryCurrentUserResponse("user-1", "Owner", null, "owner")),
                 };
             });
-            var coordinator = new RegistryAuthCoordinator(
+            await using var coordinator = new RegistryAuthCoordinator(
                 new FakeHttpClientFactory(handler),
                 new RegistryCredentialStore(new RuntimePackagePaths(root)),
                 NullLogger<RegistryAuthCoordinator>.Instance);
@@ -89,6 +91,100 @@ public sealed class RegistryRuntimeArchitectureTests
             Assert.Equal(RuntimeRegistryAuthSessionState.Succeeded, status?.State);
             Assert.Equal("owner", status?.User?.Username);
             Assert.DoesNotContain(secret, status?.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrowserAuthorization_SessionsAreCappedExpireAndAreRemovedAfterRetention()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            await using var coordinator = new RegistryAuthCoordinator(
+                new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError))),
+                new RegistryCredentialStore(new RuntimePackagePaths(root)),
+                NullLogger<RegistryAuthCoordinator>.Instance,
+                TimeSpan.FromMinutes(5),
+                TimeSpan.FromMinutes(1),
+                maxSessions: 2);
+
+            var first = coordinator.Start(new RuntimeRegistryAuthStartRequest("https://registry.example/"));
+            var second = coordinator.Start(new RuntimeRegistryAuthStartRequest("https://registry.example/"));
+            Assert.Throws<InvalidOperationException>(() => coordinator.Start(new RuntimeRegistryAuthStartRequest("https://registry.example/")));
+
+            var expiredAt = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(6);
+            coordinator.SweepExpired(expiredAt);
+            Assert.Equal(RuntimeRegistryAuthSessionState.Expired, coordinator.GetSession(first.SessionId)?.State);
+            Assert.Equal(RuntimeRegistryAuthSessionState.Expired, coordinator.GetSession(second.SessionId)?.State);
+
+            await WaitUntilAsync(() =>
+            {
+                coordinator.SweepExpired(expiredAt + TimeSpan.FromMinutes(2));
+                return coordinator.SessionCount == 0;
+            });
+            Assert.NotNull(coordinator.Start(new RuntimeRegistryAuthStartRequest("https://registry.example/")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrowserAuthorization_OversizedRawRequestFailsWithoutLeakingSession()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            await using var coordinator = new RegistryAuthCoordinator(
+                new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError))),
+                new RegistryCredentialStore(new RuntimePackagePaths(root)),
+                NullLogger<RegistryAuthCoordinator>.Instance,
+                TimeSpan.FromMinutes(5),
+                TimeSpan.FromMinutes(1),
+                maxSessions: 1);
+            var start = coordinator.Start(new RuntimeRegistryAuthStartRequest("https://registry.example/"));
+            var callback = new Uri(ParseQuery(new Uri(start.LaunchUrl).Query)["redirect_uri"]);
+            using var client = new TcpClient();
+            await client.ConnectAsync(callback.Host, callback.Port);
+            await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes($"GET /{new string('x', new RuntimeAuthPolicyOptions().MaxCallbackRequestLineBytes)} HTTP/1.1\r\n\r\n"));
+
+            await WaitUntilAsync(() => coordinator.GetSession(start.SessionId)?.State == RuntimeRegistryAuthSessionState.Failed);
+            await WaitUntilAsync(() =>
+            {
+                coordinator.SweepExpired(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(1));
+                return coordinator.SessionCount == 0;
+            });
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrowserAuthorization_HostShutdownClosesListenersAndAwaitsSessions()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            await using var coordinator = new RegistryAuthCoordinator(
+                new FakeHttpClientFactory(new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError))),
+                new RegistryCredentialStore(new RuntimePackagePaths(root)),
+                NullLogger<RegistryAuthCoordinator>.Instance);
+            await coordinator.StartAsync(CancellationToken.None);
+            var start = coordinator.Start(new RuntimeRegistryAuthStartRequest("https://registry.example/"));
+            var callback = new Uri(ParseQuery(new Uri(start.LaunchUrl).Query)["redirect_uri"]);
+
+            await coordinator.StopAsync(CancellationToken.None);
+
+            Assert.Equal(0, coordinator.SessionCount);
+            using var client = new TcpClient();
+            await Assert.ThrowsAnyAsync<SocketException>(() => client.ConnectAsync(callback.Host, callback.Port));
         }
         finally
         {
@@ -185,6 +281,109 @@ public sealed class RegistryRuntimeArchitectureTests
     }
 
     [Fact]
+    public async Task RegistryHttpClient_RejectsOversizedJsonBeforeDeserialization()
+    {
+        var handler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"value\":true}"),
+        });
+        var client = new RegistryHttpClient(
+            new FakeHttpClientFactory(handler),
+            new RuntimeTransportPolicyOptions { MaxRegistryJsonBytes = 4 },
+            TimeProvider.System);
+        using var response = await client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+            HttpCompletionOption.ResponseContentRead,
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.ReadJsonAsync<object>(response, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RegistryHttpClient_MapsProblemDetailAndPropagatesCallerCancellation()
+    {
+        var problemHandler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.Conflict)
+        {
+            Content = JsonContent.Create(new RegistryProblemDetails(
+                "about:blank", "Conflict", 409, "Package version already exists.", "/test",
+                RegistryV1ErrorCodes.Conflict, "trace", "correlation")),
+        });
+        var problemClient = new RegistryHttpClient(
+            new FakeHttpClientFactory(problemHandler),
+            new RuntimeTransportPolicyOptions(),
+            TimeProvider.System);
+        using var response = await problemClient.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+            HttpCompletionOption.ResponseContentRead,
+            CancellationToken.None);
+        Assert.Equal("Package version already exists.", await problemClient.ReadErrorAsync(response, CancellationToken.None));
+
+        var cancellationClient = new RegistryHttpClient(
+            new FakeHttpClientFactory(new AsyncDelegateHandler(async (_, token) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            })),
+            new RuntimeTransportPolicyOptions(),
+            TimeProvider.System);
+        using var cancellation = new CancellationTokenSource();
+        var pending = cancellationClient.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://registry.example/test"),
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellation.Token);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RegistryPackagePlan_WhenRegistryIsUnreachable_ReturnsFailedPlan(bool timeout)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            HttpMessageHandler handler = timeout
+                ? new AsyncDelegateHandler(async (_, token) =>
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                })
+                : new AsyncDelegateHandler((_, _) => Task.FromException<HttpResponseMessage>(
+                    new HttpRequestException("Connection refused.")));
+            var services = new ServiceCollection();
+            services.AddRuntimeHostServices(
+                new RuntimePackagePaths(root),
+                new RuntimeBearerTokenValidator("test-runtime-token"));
+            services.AddSingleton(new RuntimeTransportPolicyOptions
+            {
+                RegistryRequestTimeout = TimeSpan.FromMilliseconds(20),
+            });
+            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
+
+            await using var provider = services.BuildServiceProvider();
+            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
+            var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
+            var request = new RuntimeRegistryPackageBatchRequest(
+                "http://localhost:5288/",
+                [new RegistryPackageChangeRequest("agent", null, "latest")]);
+            var plan = await orchestrator.ResolveAsync(request, CancellationToken.None);
+
+            Assert.False(plan.Success);
+            Assert.Empty(plan.Items);
+            Assert.Equal(["Registry is not reachable at http://localhost:5288/."], plan.Errors);
+
+            var execution = await orchestrator.ExecuteAsync(request, CancellationToken.None);
+            Assert.False(execution.Success);
+            Assert.Equal(RuntimeRegistryErrorCode.RegistryUnavailable, execution.ErrorCode);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void AppAndCliSources_DoNotContainRegistryCredentialHandling()
     {
         var root = LocateRepositoryRoot();
@@ -233,6 +432,16 @@ public sealed class RegistryRuntimeArchitectureTests
             .Select(part => part.Split('=', 2))
             .ToDictionary(part => Uri.UnescapeDataString(part[0]), part => Uri.UnescapeDataString(part[1]), StringComparer.OrdinalIgnoreCase);
 
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (!condition() && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+        Assert.True(condition(), "Condition was not reached before the test deadline.");
+    }
+
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "sunder-registry-runtime-tests", Guid.NewGuid().ToString("N"));
@@ -259,6 +468,12 @@ public sealed class RegistryRuntimeArchitectureTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(send(request));
+    }
+
+    private sealed class AsyncDelegateHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => send(request, cancellationToken);
     }
 
     private sealed class CancellingStream : Stream

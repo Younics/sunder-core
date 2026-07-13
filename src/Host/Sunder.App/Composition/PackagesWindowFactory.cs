@@ -20,7 +20,7 @@ public sealed class PackagesWindowFactory(
     {
         var window = new PackagesWindow(shellStateService, shellState);
         window.DataContext = new PackagesWindowViewModel(
-            runtimeApiClientFactory.CreateClient(),
+            runtimeApiClientFactory.CreateClient<IRuntimePackagesClient>(),
             new PackageArchivePicker(window),
             applyPackageLifecycleChangesAsync,
             packageOperationService,

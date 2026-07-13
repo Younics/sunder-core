@@ -22,7 +22,7 @@ public sealed class RegistryContractGoldenTests
                 "1.2.3",
                 "assets/icon.png",
                 "Sample.dll",
-                new RegistryPackageCompatibility(1, "0.8.0", ["app-ui.v1", "core.v1"], "net10.0", 1, 1),
+                new RegistryPackageCompatibility(1, "0.8.0", ["views.v1", "core.v1"], "net10.0", 1, 1),
                 false,
                 null,
                 [new RegistryPackageDependency("sunder.package.base", ">=1.0.0")],

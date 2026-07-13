@@ -46,7 +46,6 @@ public static class RegistryUrlHelper
     private static Uri ResolveDefaultRegistryUrl()
     {
         var configuredUrl = Environment.GetEnvironmentVariable("SUNDER_REGISTRY_API_URL")
-            ?? Environment.GetEnvironmentVariable("SUNDER_REGISTRY_URL")
             ?? SunderAppSettings.Load().RegistryApiUrl;
         if (string.IsNullOrWhiteSpace(configuredUrl))
         {

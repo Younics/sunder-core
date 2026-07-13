@@ -3,9 +3,8 @@ using Microsoft.Extensions.Logging;
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageSessionReconciler(
-    ILogger logger,
     InstalledPackageStore installedPackageStore,
-    RuntimePackagePaths paths)
+    PackageSessionLoadService loader)
 {
     public async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
@@ -26,7 +25,7 @@ internal sealed class PackageSessionReconciler(
         }
 
         return devFolders.Length == 0
-            ? await new PackageSessionLoadService(logger, paths).LoadInstalledAsync(installedPackages, startBackgroundServices)
-            : await new PackageSessionLoadService(logger, paths).LoadInstalledWithDevOverlaysAsync(installedPackages, devFolders, startBackgroundServices);
+            ? await loader.LoadInstalledAsync(installedPackages, startBackgroundServices, cancellationToken)
+            : await loader.LoadInstalledWithDevOverlaysAsync(installedPackages, devFolders, startBackgroundServices, cancellationToken);
     }
 }

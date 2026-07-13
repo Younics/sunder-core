@@ -4,12 +4,12 @@ namespace Sunder.App.ViewModels;
 
 internal sealed class AppUpdatePromptCoordinator(SunderUpdateService updateService)
 {
-    public async Task<SunderUpdateInfo?> CheckForStartupPromptAsync()
+    public async Task<SunderUpdateInfo?> CheckForStartupPromptAsync(CancellationToken cancellationToken)
     {
         try
         {
             var updateSettings = updateService.LoadSettings();
-            var checkResult = await updateService.CheckForUpdatesAsync();
+            var checkResult = await updateService.CheckForUpdatesAsync(cancellationToken);
             if (checkResult.Update is null)
             {
                 return null;
@@ -17,11 +17,15 @@ internal sealed class AppUpdatePromptCoordinator(SunderUpdateService updateServi
 
             if (updateSettings.DownloadUpdatesAutomatically)
             {
-                await updateService.DownloadUpdateAsync(checkResult.Update);
+                await updateService.DownloadUpdateAsync(checkResult.Update, cancellationToken: cancellationToken);
                 return null;
             }
 
             return checkResult.Update;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -32,12 +36,17 @@ internal sealed class AppUpdatePromptCoordinator(SunderUpdateService updateServi
 
     public async Task<string?> InstallUpdateAndRestartAsync(
         SunderUpdateInfo update,
-        Action<int> progress)
+        Action<int> progress,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await updateService.DownloadUpdateAndRestartAsync(update, progress);
+            await updateService.DownloadUpdateAndRestartAsync(update, progress, cancellationToken);
             return null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

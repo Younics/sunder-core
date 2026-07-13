@@ -37,8 +37,8 @@ public sealed class RegistryPackageInstallService
         string? tag,
         bool allowDowngrade,
         bool reinstall,
-        IRegistryApiClient registryClient,
-        IRuntimeApiClient runtimeApiClient,
+        IRegistryClient registryClient,
+        IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default,
         Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync = null)
@@ -59,8 +59,8 @@ public sealed class RegistryPackageInstallService
 
     public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
         IReadOnlyList<SunderStackPackageRequirement> packages,
-        IRegistryApiClient registryClient,
-        IRuntimeApiClient runtimeApiClient,
+        IRegistryClient registryClient,
+        IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -70,8 +70,8 @@ public sealed class RegistryPackageInstallService
 
     public async Task<RegistryPackageInstallExecutionResult> InstallPackagesAsync(
         IReadOnlyList<SunderStackPackageRequirement> packages,
-        IRegistryApiClient registryClient,
-        IRuntimeApiClient runtimeApiClient,
+        IRegistryClient registryClient,
+        IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -82,8 +82,8 @@ public sealed class RegistryPackageInstallService
     }
 
     public async Task<RegistryPackageInstallExecutionResult> UpdateAllAsync(
-        IRegistryApiClient registryClient,
-        IRuntimeApiClient runtimeApiClient,
+        IRegistryClient registryClient,
+        IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default,
         Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync = null)

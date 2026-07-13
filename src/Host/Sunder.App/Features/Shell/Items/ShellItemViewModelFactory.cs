@@ -24,7 +24,7 @@ internal sealed class ShellItemViewModelFactory(IRuntimeApiClientFactory runtime
     {
         return PackageIconUriResolver.Resolve(packageId, icon, (resolvedPackageId, assetPath) =>
         {
-            using var runtimeApiClient = runtimeApiClientFactory.CreateClient();
+            using var runtimeApiClient = runtimeApiClientFactory.CreateClient<IRuntimePackageUiClient>();
             return runtimeApiClient.CreatePackageAssetUri(resolvedPackageId, assetPath);
         });
     }

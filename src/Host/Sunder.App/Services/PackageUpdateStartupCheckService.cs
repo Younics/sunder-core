@@ -10,7 +10,7 @@ public sealed class PackageUpdateStartupCheckService(
     IRuntimeApiClientFactory runtimeApiClientFactory,
     IPackageNotificationService notificationService,
     Func<Uri>? registryUrlProvider = null,
-    Func<Uri, IRegistryApiClient>? registryClientFactory = null)
+    Func<Uri, IRegistryClient>? registryClientFactory = null)
 {
     internal const string GroupKey = "sunder.package-update-check";
     private const string SourceMetadataKey = "sunder.packageUpdateCheck";
@@ -19,7 +19,7 @@ public sealed class PackageUpdateStartupCheckService(
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory = runtimeApiClientFactory;
     private readonly IPackageNotificationService _notificationService = notificationService;
     private readonly Func<Uri> _registryUrlProvider = registryUrlProvider ?? (() => RegistryUrlHelper.DefaultRegistryUrl);
-    private readonly Func<Uri, IRegistryApiClient> _registryClientFactory = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
+    private readonly Func<Uri, IRegistryClient> _registryClientFactory = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
 
     public BackgroundProcessSnapshot EnqueueStartupCheck()
         => _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
@@ -39,7 +39,7 @@ public sealed class PackageUpdateStartupCheckService(
         try
         {
             context.ReportProgress(0, "Checking installed packages...");
-            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient();
+            using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageUpdateClient>();
             var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(context.CancellationToken).ConfigureAwait(false);
             if (installedPackages.Count == 0)
             {
@@ -53,6 +53,12 @@ public sealed class PackageUpdateStartupCheckService(
                     _registryUrlProvider().AbsoluteUri,
                     installedPackages.Select(package => new RegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray()),
                 context.CancellationToken).ConfigureAwait(false);
+            if (!plan.Success)
+            {
+                context.ReportProgress(100, "Package update check failed.");
+                return;
+            }
+
             var updateCount = plan.Items.Count(item => item.CurrentVersion is not null
                                                        && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase));
 

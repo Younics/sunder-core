@@ -2,6 +2,8 @@ using System.Reflection;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
 using Sunder.Sdk.Stacks;
+using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Xunit;
 
 namespace Sunder.Sdk.PublicApi.Tests;
@@ -13,11 +15,13 @@ public sealed class PublicApiBaselineTests
         typeof(IPackageContext).Assembly,
         typeof(IAvaloniaPackageContributionRegistry).Assembly,
         typeof(IPackageStackContributor).Assembly,
+        typeof(RuntimeHandshakeResponse).Assembly,
+        typeof(RegistryPackageArtifact).Assembly,
     };
 
     [Theory]
     [MemberData(nameof(SdkAssemblies))]
-    public void ExportedApiMatchesV1Baseline(Assembly assembly)
+    public void ExportedApiMatchesShipped11Baseline(Assembly assembly)
     {
         var fileName = assembly.GetName().Name + ".txt";
         var actual = PublicApiFormatter.Format(assembly);

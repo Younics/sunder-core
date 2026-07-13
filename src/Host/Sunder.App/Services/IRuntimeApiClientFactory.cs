@@ -2,5 +2,5 @@ namespace Sunder.App.Services;
 
 public interface IRuntimeApiClientFactory
 {
-    IRuntimeApiClient CreateClient();
+    TClient CreateClient<TClient>() where TClient : class, IRuntimeClient;
 }

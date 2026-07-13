@@ -5,7 +5,6 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly object _syncRoot = new();
-    private CancellationTokenSource? _legacyCancellation;
     private bool _stopping;
     private bool _stopped;
     private readonly RuntimeEventStreamService? _eventStream;
@@ -48,29 +47,6 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
 
         _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.PackageOperation);
         return new Lease(this, linkedCancellation);
-    }
-
-    public async Task WaitAsync(CancellationToken cancellationToken = default)
-    {
-        var lease = await EnterAsync(cancellationToken);
-        lock (_syncRoot)
-        {
-            _legacyCancellation = lease.DetachCancellation();
-        }
-    }
-
-    public void Release()
-    {
-        CancellationTokenSource? cancellation;
-        lock (_syncRoot)
-        {
-            cancellation = _legacyCancellation;
-            _legacyCancellation = null;
-        }
-
-        cancellation?.Dispose();
-        _gate.Release();
-        _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.Idle);
     }
 
     public async Task ShutdownAsync(Func<Task> cleanup)
@@ -138,12 +114,6 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
             }
 
             return ValueTask.CompletedTask;
-        }
-
-        internal CancellationTokenSource DetachCancellation()
-        {
-            _owner = null;
-            return _cancellation;
         }
     }
 }

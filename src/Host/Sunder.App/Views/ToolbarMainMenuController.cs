@@ -16,8 +16,9 @@ internal sealed class ToolbarMainMenuController(
     Control toolbarDefaultActions,
     Control middlePackageIconBar,
     Control toolbarLeftMenuHost,
-    Func<MainWindowViewModel?> viewModelAccessor)
+    Func<MainWindowViewModel?> viewModelAccessor) : IDisposable
 {
+    private readonly OwnedTaskObserver _tasks = new("toolbar main menu");
     public bool Show()
     {
         var viewModel = viewModelAccessor();
@@ -124,10 +125,10 @@ internal sealed class ToolbarMainMenuController(
         return menuItem;
     }
 
-    private static MenuItem CreateToolbarMenuItem(string header, string? glyph = null, Uri? iconUri = null)
+    private MenuItem CreateToolbarMenuItem(string header, string? glyph = null, Uri? iconUri = null)
         => new() { Header = CreateToolbarMenuHeader(header, glyph, iconUri), Classes = { "toolbar-menu-item" } };
 
-    private static object CreateToolbarMenuHeader(string header, string? glyph, Uri? iconUri)
+    private object CreateToolbarMenuHeader(string header, string? glyph, Uri? iconUri)
     {
         if (string.IsNullOrWhiteSpace(glyph) && iconUri is null)
         {
@@ -172,7 +173,7 @@ internal sealed class ToolbarMainMenuController(
 
         if (iconUri is not null)
         {
-            _ = LoadToolbarMenuIconAsync(iconImage, glyphText, iconUri);
+            _tasks.Run(_ => LoadToolbarMenuIconAsync(iconImage, glyphText, iconUri), "loading a package icon");
         }
 
         return content;
@@ -193,4 +194,6 @@ internal sealed class ToolbarMainMenuController(
             glyphText.IsVisible = false;
         });
     }
+
+    public void Dispose() => _tasks.Dispose();
 }

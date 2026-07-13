@@ -11,18 +11,20 @@ internal static class MarketplacePackageSearchProjector
         IReadOnlyList<RegistryPackageUpdate> availableUpdates,
         Func<RegistryPackageSearchItemViewModel, Task> selectPackageAsync)
     {
-        var installedById = installedPackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
-        var updatesById = availableUpdates.ToDictionary(update => update.PackageId, StringComparer.OrdinalIgnoreCase);
+        var installationIndex = new PackageCatalogInstallationIndex(installedPackages, availableUpdates);
 
-        return packages.Select(package =>
-        {
-            installedById.TryGetValue(package.PackageId, out var installedPackage);
-            updatesById.TryGetValue(package.PackageId, out var update);
-            return new RegistryPackageSearchItemViewModel(
+        return PackageCatalogProjection.Project(
+            packages,
+            package => new PackageCatalogSearchDocument(
+                package.PackageId,
+                package.Name,
+                package.LatestVersion,
+                package.Summary,
+                "Marketplace package"),
+            package => new RegistryPackageSearchItemViewModel(
                 package,
-                installedPackage?.Version,
-                update,
-                selectPackageAsync);
-        }).ToArray();
+                installationIndex.GetInstalledPackage(package.PackageId)?.Version,
+                installationIndex.GetUpdate(package.PackageId),
+                selectPackageAsync));
     }
 }

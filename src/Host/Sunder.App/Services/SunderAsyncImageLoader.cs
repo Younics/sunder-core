@@ -9,8 +9,10 @@ namespace Sunder.App.Services;
 internal sealed class SunderAsyncImageLoader(string cacheFolder)
     : DiskCachedWebImageLoader(CreateHttpClient(), disposeHttpClient: true, cacheFolder)
 {
+    internal const long MaxImageBytes = 8 * 1024 * 1024;
     private const string ImageAcceptHeader = "image/jpeg,image/png,*/*;q=0.1";
     private const string UserAgent = "Sunder.App/1.0";
+    private static readonly SemaphoreSlim LoadSemaphore = new(8, 8);
 
     public static void Install()
     {
@@ -23,30 +25,27 @@ internal sealed class SunderAsyncImageLoader(string cacheFolder)
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url)
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             {
-                Version = HttpVersion.Version20,
-                VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-            };
-            request.Headers.Accept.ParseAdd(ImageAcceptHeader);
-            request.Headers.UserAgent.ParseAdd(UserAgent);
-
-            using var response = await HttpClient
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
-                .ConfigureAwait(false);
-            var contentType = response.Content.Headers.ContentType?.MediaType ?? "unknown";
-            var contentLength = response.Content.Headers.ContentLength;
-            if (!response.IsSuccessStatusCode)
-            {
-                AppSessionLog.WriteError(
-                    $"Async image request to '{DescribeUrl(url)}' returned HTTP {(int)response.StatusCode} {response.StatusCode} ({contentType}, {FormatContentLength(contentLength)}).",
-                    visibleInDeveloperLog: false);
                 return null;
             }
 
-            var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var loaded = await BoundedImageContentLoader.LoadAsync(
+                HttpClient,
+                LoadSemaphore,
+                uri,
+                MaxImageBytes,
+                CancellationToken.None).ConfigureAwait(false);
+            if (loaded.Content is null)
+            {
+                AppSessionLog.WriteError(loaded.Error ?? $"Async image request to '{DescribeUrl(url)}' failed.", visibleInDeveloperLog: false);
+                return null;
+            }
+
+            using var content = loaded.Content;
+            var bytes = content.ToArray();
             AppSessionLog.WriteInfo(
-                $"Async image loaded from '{DescribeUrl(url)}' ({contentType}, {bytes.Length} bytes).",
+                $"Async image loaded from '{DescribeUrl(url)}' ({loaded.ContentType ?? "unknown"}, {bytes.Length} bytes).",
                 visibleInDeveloperLog: false);
             return bytes;
         }

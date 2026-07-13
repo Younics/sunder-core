@@ -20,8 +20,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private static readonly TimeSpan RegistryDetailSpinnerDelay = TimeSpan.FromSeconds(1);
 
     private readonly LocalStackLibraryService _library;
+    private readonly StackLibraryCoordinator _stackLibrary;
+    private readonly StackSelectionCoordinator _selection;
+    private readonly StackDetailLoadCoordinator _detailLoader;
     private readonly IStackArchivePicker _archivePicker;
-    private readonly IRuntimeApiClient _runtimeApiClient;
+    private readonly IRuntimeStacksClient _runtimeApiClient;
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _applyPackageLifecycleChangesAsync;
     private readonly Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> _notifyStackImportAppliedAsync;
@@ -30,17 +33,12 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private readonly TimeSpan _registryDetailSpinnerDelay;
     private readonly MarketplacePackageProfileViewModel _selectedLocalProfile = new();
     private readonly MarketplacePackageProfileViewModel _registryProfile = new();
-    private IReadOnlyList<LocalStackLibraryItem> _allStacks = [];
-    private IReadOnlyList<SunderStackPackageRequirement> _selectedPackageRequirements = [];
-    private int _selectionVersion;
-    private int _registrySelectionVersion;
+    private StackSelectionRequest _localSelectionRequest;
     private int _registrySearchVersion;
-    private CancellationTokenSource? _registryStackDetailsCancellation;
     private CancellationTokenSource? _registryStackDetailsSpinnerCancellation;
-    private bool _selectedInstallPlanReady;
-    private bool _selectedInstallPlanHasErrors;
     private readonly LatestAsyncRequest _registrySearchRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(StacksWindowViewModel));
+    private PresentationOperationState _registryStackDetailsState = PresentationOperationState.Idle;
     private bool _disposed;
 
     public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? RegistryImageGalleryRequested
@@ -58,7 +56,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     public StacksWindowViewModel(
         LocalStackLibraryService library,
         IStackArchivePicker archivePicker,
-        IRuntimeApiClient runtimeApiClient,
+        IRuntimeStacksClient runtimeApiClient,
         RegistryPackageInstallService? registryInstallService = null,
         Func<IReadOnlyList<string>, CancellationToken, Task>? applyPackageLifecycleChangesAsync = null,
         Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>>? notifyStackImportAppliedAsync = null,
@@ -67,8 +65,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         TimeSpan? registryDetailSpinnerDelay = null)
     {
         _library = library;
+        _stackLibrary = new StackLibraryCoordinator(library);
         _archivePicker = archivePicker;
         _runtimeApiClient = runtimeApiClient;
+        _selection = new StackSelectionCoordinator(_tasks.Token);
+        _detailLoader = new StackDetailLoadCoordinator(library, runtimeApiClient);
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         _applyPackageLifecycleChangesAsync = applyPackageLifecycleChangesAsync ?? ((_, _) => Task.CompletedTask);
         _notifyStackImportAppliedAsync = notifyStackImportAppliedAsync ?? ((_, _) => Task.FromResult<IReadOnlyList<string>>([]));
@@ -89,20 +90,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<StackFragmentViewModel> SelectedFragments { get; } = [];
 
     public ObservableCollection<string> SelectedRequiredInputs { get; } = [];
-
-    public ObservableCollection<StackPackageInstallPlanItemViewModel> SelectedInstallPlanItems { get; } = [];
-
-    public ObservableCollection<string> SelectedInstallPlanWarnings { get; } = [];
-
-    public ObservableCollection<string> SelectedInstallPlanErrors { get; } = [];
-
-    public ObservableCollection<StackImportActionViewModel> SelectedImportActions { get; } = [];
-
-    public ObservableCollection<StackRequiredInputValueViewModel> SelectedImportRequiredInputs { get; } = [];
-
-    public ObservableCollection<string> SelectedImportWarnings { get; } = [];
-
-    public ObservableCollection<string> SelectedImportErrors { get; } = [];
 
     public ObservableCollection<RegistryPackageMediaItemViewModel> SelectedStackProfileMedia => _selectedLocalProfile.Media;
 
@@ -216,16 +203,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private bool _selectedRegistryStackIsStarred;
 
     [ObservableProperty]
-    private bool _isRegistryStackDetailsLoading;
-
-    [ObservableProperty]
-    private bool _registryStackDetailsLoaded;
-
-    [ObservableProperty]
     private bool _showRegistryStackDetailsSpinner;
-
-    [ObservableProperty]
-    private string _registryStackDetailsError = string.Empty;
 
     public bool HasStacks => Stacks.Count > 0;
 
@@ -250,6 +228,12 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     public bool HasRegistrySelection => SelectedRegistryStack is not null;
 
     public bool HasRegistryStackDetailsError => !string.IsNullOrWhiteSpace(RegistryStackDetailsError);
+
+    public bool IsRegistryStackDetailsLoading => _registryStackDetailsState.IsRunning;
+
+    public bool RegistryStackDetailsLoaded => _registryStackDetailsState.IsSucceeded;
+
+    public string RegistryStackDetailsError => _registryStackDetailsState.ErrorMessage;
 
     public bool ShowRegistryStackDetailsLoading => ShowRegistrySelectedDetails && IsRegistryStackDetailsLoading && ShowRegistryStackDetailsSpinner;
 
@@ -301,29 +285,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasSelectedRequiredInputs => SelectedRequiredInputs.Count > 0;
 
-    public bool HasSelectedInstallPlanItems => SelectedInstallPlanItems.Count > 0;
-
-    public bool HasSelectedInstallPlanWarnings => SelectedInstallPlanWarnings.Count > 0;
-
-    public bool HasSelectedInstallPlanErrors => SelectedInstallPlanErrors.Count > 0;
-
-    public bool HasSelectedImportActions => SelectedImportActions.Count > 0;
-
-    public bool HasSelectedImportRequiredInputs => SelectedImportRequiredInputs.Count > 0;
-
-    public bool HasSelectedImportWarnings => SelectedImportWarnings.Count > 0;
-
-    public bool HasSelectedImportErrors => SelectedImportErrors.Count > 0;
-
-    public bool ShowSelectedInstallPlan => HasSelection && _selectedPackageRequirements.Count > 0;
-
-    public bool ShowNoSelectedInstallPlanChanges => ShowSelectedInstallPlan
-                                                   && _selectedInstallPlanReady
-                                                   && !HasSelectedInstallPlanItems
-                                                   && !HasSelectedInstallPlanErrors;
-
-    public bool ShowSelectedImportPreview => HasSelection && HasSelectedFragments;
-
     public bool ShowSelectedDetails => IsLocalMode && HasSelection;
 
     public bool ShowRegistrySelectedDetails => IsMarketplaceMode && HasRegistrySelection;
@@ -374,20 +335,20 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnSelectedStackChanged(LocalStackLibraryItemViewModel? value)
     {
+        _localSelectionRequest = _selection.BeginLocal(value is not null && !_disposed);
         foreach (var stack in Stacks)
         {
             stack.IsSelected = ReferenceEquals(stack, value);
         }
 
-        var selectionVersion = ++_selectionVersion;
         ApplySelectedStackSummary(value);
         NotifySelectionChanged();
         if (value is not null)
         {
-            _tasks.Observe(LoadSelectedStackManifestAsync(value.Item, selectionVersion, _tasks.Token), "loading local Stack details");
+            _tasks.Observe(LoadSelectedStackManifestAsync(value.Item, _localSelectionRequest), "loading local Stack details");
             if (value.IsPublished)
             {
-                _tasks.Observe(LoadSelectedPublishedStackStatsAsync(value, selectionVersion, _tasks.Token), "loading published Stack statistics");
+                _tasks.Observe(LoadSelectedPublishedStackStatsAsync(value, _localSelectionRequest), "loading published Stack statistics");
             }
         }
     }
@@ -436,11 +397,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
             stack.IsSelected = ReferenceEquals(stack, value);
         }
 
-        var selectionVersion = BeginSelectedRegistryStackDetailsLoad(value);
+        var selectionRequest = BeginSelectedRegistryStackDetailsLoad(value);
         if (value is not null)
         {
             _tasks.Observe(
-                LoadSelectedRegistryStackDetailsAsync(value.StackId, selectionVersion, _registryStackDetailsCancellation!),
+                LoadSelectedRegistryStackDetailsAsync(value.StackId, selectionRequest),
                 "loading Registry Stack details");
         }
 
@@ -467,11 +428,11 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
+        CancelRegistryStackDetailsSpinnerDelay();
+        _selection.Dispose();
         _registrySearchScheduler.Dispose();
         _registrySearchRequest.Dispose();
         _tasks.Dispose();
-        CancelRegistryStackDetailsSpinnerDelay();
-        CancelSelectedRegistryStackDetailsLoad();
         DisposeSelectedLocalDetails();
         DisposeRegistrySelectedDetails();
         _selectedLocalProfile.Dispose();
@@ -481,8 +442,15 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
         cancellationToken.ThrowIfCancellationRequested();
-        if (_allStacks.Count == 0)
+        if (_stackLibrary.Count == 0)
         {
             await RefreshLocalStacksAsync(cancellationToken);
         }
@@ -516,7 +484,17 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public async Task RefreshAfterCreatedStackAsync(string? stackId)
     {
-        _allStacks = await _library.ListAsync();
+        if (_disposed)
+        {
+            return;
+        }
+
+        await _stackLibrary.RefreshAsync(_tasks.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
         RebuildStackList(stackId);
         StatusText = string.IsNullOrWhiteSpace(stackId)
             ? "Created local Stack."
@@ -525,7 +503,17 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public async Task RefreshAfterEditedStackAsync(string? stackId)
     {
-        _allStacks = await _library.ListAsync();
+        if (_disposed)
+        {
+            return;
+        }
+
+        await _stackLibrary.RefreshAsync(_tasks.Token);
+        if (_disposed)
+        {
+            return;
+        }
+
         RebuildStackList(stackId);
         var selectedStack = SelectedStack;
         StatusText = string.IsNullOrWhiteSpace(stackId)
@@ -545,11 +533,14 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
         {
-            var upload = await _runtimeApiClient.UploadStackAsync(selectedStack.LocalPath);
-            var result = await _runtimeApiClient.PublishRegistryStackAsync(new RuntimeRegistryPublishRequest(registryUrl.AbsoluteUri, upload.UploadId));
+            var upload = await _runtimeApiClient.UploadStackAsync(selectedStack.LocalPath, cancellationToken);
+            var result = await _runtimeApiClient.PublishRegistryStackAsync(
+                new RuntimeRegistryPublishRequest(registryUrl.AbsoluteUri, upload.UploadId),
+                cancellationToken);
             if (!result.Success)
             {
                 StatusText = $"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {result.Errors.FirstOrDefault() ?? "publish failed"}.";
@@ -563,10 +554,14 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 registryUrl.ToString(),
                 publishedStackId,
                 selectedStack.Item.PublishedAtUtc ?? now,
-                now);
-            _allStacks = await _library.ListAsync();
+                now,
+                cancellationToken);
+            await _stackLibrary.RefreshAsync(cancellationToken);
             RebuildStackList(selectedStack.StackId);
             StatusText = result.Message ?? $"Saved and updated Registry Stack '{publishedStackId}'.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -574,15 +569,27 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
         finally
         {
-            IsBusy = false;
-            NotifySelectionChanged();
+            if (!_disposed)
+            {
+                IsBusy = false;
+                NotifySelectionChanged();
+            }
         }
     }
 
     public async Task RefreshAfterUsedStackAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         var stackId = SelectedStack?.StackId;
-        _allStacks = await _library.ListAsync();
+        await _stackLibrary.RefreshAsync(_tasks.Token);
+        if (_disposed)
+        {
+            return;
+        }
         RebuildStackList(stackId);
         StatusText = stackId is null
             ? "Stack use completed."
@@ -591,6 +598,13 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public async Task ApplyLaunchRequestAsync(AppLaunchRequest request, CancellationToken cancellationToken = default)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        cancellationToken = lifetimeCancellation.Token;
         switch (request.Kind)
         {
             case AppLaunchRequestKind.StackFile when !string.IsNullOrWhiteSpace(request.FilePath):

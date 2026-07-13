@@ -190,6 +190,11 @@ type enum Sunder.Sdk.Stacks.StackImportConflictSeverity : System.IComparable, Sy
   field Sunder.Sdk.Stacks.StackImportConflictSeverity Error = 1
   field Sunder.Sdk.Stacks.StackImportConflictSeverity Warning = 0
   field System.Int32 value__
+type enum Sunder.Sdk.Stacks.StackImportOutcome : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field Sunder.Sdk.Stacks.StackImportOutcome Completed = 0
+  field Sunder.Sdk.Stacks.StackImportOutcome Failed = 2
+  field Sunder.Sdk.Stacks.StackImportOutcome Partial = 1
+  field System.Int32 value__
 type sealed class Sunder.Sdk.Stacks.StackImportPayloadFile : System.IEquatable<Sunder.Sdk.Stacks.StackImportPayloadFile>
   method .ctor(System.String RelativePath, System.String ExtractedPath)
   property System.String ExtractedPath { get; set; }
@@ -236,18 +241,18 @@ type sealed class Sunder.Sdk.Stacks.StackImportRequest : System.IEquatable<Sunde
   method System.String ToString()
   method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
 type sealed class Sunder.Sdk.Stacks.StackImportResult : System.IEquatable<Sunder.Sdk.Stacks.StackImportResult>
-  method .ctor(System.Boolean Success, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  method .ctor(Sunder.Sdk.Stacks.StackImportOutcome Outcome, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; set; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { get; set; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems { get; set; }
-  property System.Boolean Success { get; set; }
+  property Sunder.Sdk.Stacks.StackImportOutcome Outcome { get; set; }
   property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; set; }
   method Sunder.Sdk.Stacks.StackImportResult <Clone>$()
   method System.Boolean Equals(Sunder.Sdk.Stacks.StackImportResult? other)
   method System.Boolean Equals(System.Object? obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
-  method System.Void Deconstruct(out System.Boolean Success, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  method System.Void Deconstruct(out Sunder.Sdk.Stacks.StackImportOutcome Outcome, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
 type sealed class Sunder.Sdk.Stacks.StackImportedItem : System.IEquatable<Sunder.Sdk.Stacks.StackImportedItem>
   method .ctor(System.String ItemId, System.String DisplayName, System.String Kind)
   property System.String DisplayName { get; set; }

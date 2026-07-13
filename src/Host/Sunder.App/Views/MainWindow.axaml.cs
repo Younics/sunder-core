@@ -24,26 +24,6 @@ public partial class MainWindow : Window
         AddHandler(InputElement.PointerPressedEvent, MainWindow_OnPointerPressed, RoutingStrategies.Tunnel, true);
     }
 
-    internal static (double LeftWidth, double RightWidth) CalculateTopColumnWidths(
-        double totalWidth,
-        double requestedLeftWidth,
-        double requestedRightWidth,
-        bool hasLeftPanel,
-        bool hasRightPanel,
-        double leftSplitterWidth = ShellLayoutCalculator.SplitterThickness,
-        double rightSplitterWidth = ShellLayoutCalculator.SplitterThickness)
-        => MainWindowLayoutController.CalculateTopColumnWidths(
-            totalWidth,
-            requestedLeftWidth,
-            requestedRightWidth,
-            hasLeftPanel,
-            hasRightPanel,
-            leftSplitterWidth,
-            rightSplitterWidth);
-
-    internal static double CalculateResizableExtent(double totalExtent, params double[] fixedExtents)
-        => MainWindowLayoutController.CalculateResizableExtent(totalExtent, fixedExtents);
-
     private void OnClosing(object? sender, WindowClosingEventArgs e)
     {
         ViewModel?.Dispose();

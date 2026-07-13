@@ -10,7 +10,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         string key,
         CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return null;
@@ -25,7 +26,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         string? prefix,
         CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         return package is null
             ? null
             : await package.StateStore.ListKeysAsync(prefix, cancellationToken);
@@ -37,7 +39,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         string value,
         CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
@@ -49,7 +52,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
 
     public async Task<bool> DeleteStateAsync(string packageId, string key, CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
@@ -64,7 +68,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         string key,
         CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return null;
@@ -80,7 +85,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         string value,
         CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
@@ -92,7 +98,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
 
     public async Task<bool> DeleteSecretAsync(string packageId, string key, CancellationToken cancellationToken)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        using var lease = sessionState.AcquireLease();
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
@@ -108,7 +115,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         int maxLength,
         CancellationToken cancellationToken)
     {
-        var filePath = TryGetFilePath(packageId, relativePath);
+        using var lease = sessionState.AcquireLease();
+        var filePath = TryGetFilePath(lease, packageId, relativePath);
         if (filePath is null || !File.Exists(filePath))
         {
             return null;
@@ -128,7 +136,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         byte[] contents,
         CancellationToken cancellationToken)
     {
-        var filePath = TryGetFilePath(packageId, relativePath);
+        using var lease = sessionState.AcquireLease();
+        var filePath = TryGetFilePath(lease, packageId, relativePath);
         if (filePath is null)
         {
             return false;
@@ -142,7 +151,8 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
     public Task<bool> DeleteFileAsync(string packageId, string relativePath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var filePath = TryGetFilePath(packageId, relativePath);
+        using var lease = sessionState.AcquireLease();
+        var filePath = TryGetFilePath(lease, packageId, relativePath);
         if (filePath is null)
         {
             return Task.FromResult(false);
@@ -152,9 +162,9 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         return Task.FromResult(true);
     }
 
-    private string? TryGetFilePath(string packageId, string relativePath)
+    private string? TryGetFilePath(PackageSessionLease lease, string packageId, string relativePath)
     {
-        var package = sessionState.GetLoadedPackage(packageId);
+        var package = sessionState.GetLoadedPackage(lease, packageId);
         var context = package?.ServiceProvider.GetService(typeof(Sunder.Sdk.Abstractions.IPackageContext))
             as RuntimePackageContext;
         return context?.LocalStorage is { Files: LocalPackageFileStore files }

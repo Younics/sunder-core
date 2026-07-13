@@ -29,6 +29,19 @@ public sealed class RuntimeBearerAuthenticationMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_WhenAuthorizationHeaderExceedsLimit_ReturnsUnauthorized()
+    {
+        var nextCalled = false;
+        var middleware = CreateMiddleware(() => nextCalled = true);
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer " + new string('x', RuntimeBearerTokenValidator.MaxAuthorizationHeaderLength);
+
+        await Assert.ThrowsAsync<RuntimeAuthenticationException>(() => middleware.InvokeAsync(context));
+
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
     public async Task InvokeAsync_WhenBearerTokenIsCorrect_ContinuesRequest()
     {
         var nextCalled = false;

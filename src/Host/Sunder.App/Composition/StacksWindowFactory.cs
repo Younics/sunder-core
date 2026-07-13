@@ -22,7 +22,7 @@ public sealed class StacksWindowFactory(
         window.DataContext = new StacksWindowViewModel(
             localStackLibrary,
             new StackArchivePicker(window),
-            runtimeApiClientFactory.CreateClient(),
+            runtimeApiClientFactory.CreateClient<IRuntimeStacksClient>(),
             registryPackageInstallService,
             applyPackageLifecycleChangesAsync,
             notifyStackImportAppliedAsync);

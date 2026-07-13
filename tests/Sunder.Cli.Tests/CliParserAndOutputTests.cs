@@ -18,11 +18,62 @@ public sealed class CliParserAndOutputTests
     }
 
     [Fact]
+    public async Task Removed_combined_registry_url_alias_is_rejected()
+    {
+        var result = await CliTestHost.RunAsync(["system", "status", "--registry-url", "https://old.test/"]);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
+        Assert.DoesNotContain("--registry-url", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Search_take_is_clamped_to_registry_page_bound()
+    {
+        var observedTake = 0;
+        var registry = new FakeRegistryClient
+        {
+            Search = (_, _, take, _) =>
+            {
+                observedTake = take;
+                return Task.FromResult<IReadOnlyList<RegistryPackageSummary>>([]);
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["search", "--take", "100000"], registry: registry);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.Equal(100, observedTake);
+    }
+
+    [Fact]
+    public void Global_urls_reject_non_http_schemes()
+    {
+        var error = Assert.Throws<ArgumentException>(() => CliCommandParser.Parse([
+            "system", "status",
+            "--registry-api-url", "file:///tmp/registry",
+            "--registry-web-url", "https://registry.test/",
+            "--runtime-url", "http://runtime.test/",
+        ]));
+
+        Assert.Contains("only HTTP and HTTPS", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Conflicting_install_options_are_parse_errors()
     {
         var result = await CliTestHost.RunAsync(["install", "demo", "--version", "1.0.0", "--tag", "latest"]);
         Assert.Equal(CliExitCodes.Usage, result.ExitCode);
         Assert.Contains("either '--version' or '--tag'", result.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("install", "Package.Owner", "--version", "1.0.0")]
+    [InlineData("install", "package.owner", "--version", "1.0")]
+    public async Task Package_commands_use_canonical_sdk_identity_validation(params string[] arguments)
+    {
+        var result = await CliTestHost.RunAsync(arguments);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
     }
 
     [Fact]

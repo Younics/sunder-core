@@ -1,3 +1,4 @@
+using Sunder.Package.Format;
 using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.Contracts;
 using Xunit;
@@ -70,14 +71,7 @@ public sealed class PackageLoadPlannerTests
             LibraryFolder: "/shadow/" + packageId + "/lib",
             packageId,
             Version: "1.0.0",
-            Manifest: new RuntimePackageManifest
-            {
-                ManifestVersion = 1,
-                Id = packageId,
-                Name = packageId,
-                Version = "1.0.0",
-                EntryAssembly = packageId + ".dll",
-            },
+            Activation: new RuntimePackageActivationState(packageId, packageId, "1.0.0", null),
             EntryAssemblyPath: "/shadow/" + packageId + "/lib/" + packageId + ".dll",
             Dependencies: dependencies ?? []);
 }

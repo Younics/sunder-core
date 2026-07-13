@@ -8,12 +8,12 @@ namespace Sunder.Runtime.Host.Services;
 internal static class PackageProtocolMapper
 {
     public static ActivePackageDescriptor BuildDescriptor(
-        RuntimePackageManifest manifest,
+        RuntimePackageActivationState activation,
         bool isEnabled,
         PackageReadinessState readiness,
         IReadOnlyList<PackageViewRegistration>? packageViews = null)
     {
-        var packageIcon = ToProtocolIcon(manifest.Icon, manifest.Name!);
+        var packageIcon = ToProtocolIcon(activation.Icon, activation.Name);
         var views = new List<PackageViewDescriptor>();
 
         foreach (var view in packageViews ?? [])
@@ -21,7 +21,7 @@ internal static class PackageProtocolMapper
             views.Add(
                 new PackageViewDescriptor(
                     view.Id,
-                    manifest.Id!,
+                    activation.PackageId,
                     view.Name,
                     ToProtocolIcon(view.Icon, view.Name) ?? packageIcon,
                     ToProtocolPlacement(view.DefaultPlacement),
@@ -31,9 +31,9 @@ internal static class PackageProtocolMapper
         }
 
         return new ActivePackageDescriptor(
-            manifest.Id!,
-            manifest.Name!,
-            manifest.Version!,
+            activation.PackageId,
+            activation.Name,
+            activation.Version,
             packageIcon,
             isEnabled,
             readiness,
@@ -42,14 +42,14 @@ internal static class PackageProtocolMapper
     }
 
     public static SessionPackageDescriptor BuildSessionDescriptor(
-        RuntimePackageManifest manifest,
+        RuntimePackageActivationState activation,
         bool isEnabled,
         PackageReadinessState readiness,
         PackageFailureOrigin? failureOrigin = null,
         string? lastError = null,
         int failureCount = 0)
     {
-        var descriptor = BuildDescriptor(manifest, isEnabled, readiness);
+        var descriptor = BuildDescriptor(activation, isEnabled, readiness);
         return new SessionPackageDescriptor(
             descriptor.PackageId,
             descriptor.DisplayName,
@@ -65,7 +65,7 @@ internal static class PackageProtocolMapper
     }
 
     public static SessionPackageDescriptor BuildSessionDescriptor(
-        RuntimePackageManifest manifest,
+        RuntimePackageActivationState activation,
         bool isEnabled,
         PackageReadinessState readiness,
         IReadOnlyList<PackageViewRegistration> packageViews,
@@ -73,7 +73,7 @@ internal static class PackageProtocolMapper
         string? lastError = null,
         int failureCount = 0)
     {
-        var descriptor = BuildDescriptor(manifest, isEnabled, readiness, packageViews);
+        var descriptor = BuildDescriptor(activation, isEnabled, readiness, packageViews);
         return new SessionPackageDescriptor(
             descriptor.PackageId,
             descriptor.DisplayName,

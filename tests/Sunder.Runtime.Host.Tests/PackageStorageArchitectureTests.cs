@@ -57,7 +57,7 @@ public sealed class PackageStorageArchitectureTests
 
     [Theory]
     [InlineData("sunder.agent", true)]
-    [InlineData("Sunder-Agent_1", true)]
+    [InlineData("Sunder-Agent_1", false)]
     [InlineData("../agent", false)]
     [InlineData("agent/child", false)]
     [InlineData("agent child", false)]

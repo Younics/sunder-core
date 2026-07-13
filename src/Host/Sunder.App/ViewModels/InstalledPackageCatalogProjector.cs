@@ -13,39 +13,32 @@ internal static class InstalledPackageCatalogProjector
         Func<string, PackageIconDescriptor?, Uri?> createPackageIconUri)
     {
         var sessionById = sessionPackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
-        var installedById = installedPackages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
-        var updatesById = availableUpdates.ToDictionary(update => update.PackageId, StringComparer.OrdinalIgnoreCase);
-        var packageIds = sessionById.Keys.Concat(installedById.Keys)
+        var installationIndex = new PackageCatalogInstallationIndex(installedPackages, availableUpdates);
+        var packageIds = sessionById.Keys.Concat(installedPackages.Select(package => package.PackageId))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase);
+            .ToArray();
 
-        return packageIds
-            .Select(packageId =>
+        var states = packageIds.Select(packageId =>
             {
                 sessionById.TryGetValue(packageId, out var sessionPackage);
-                installedById.TryGetValue(packageId, out var installedPackage);
-                updatesById.TryGetValue(packageId, out var update);
+                var installedPackage = installationIndex.GetInstalledPackage(packageId);
+                var update = installationIndex.GetUpdate(packageId);
                 return PackageCatalogItemViewModel.CreateState(
                     sessionPackage,
                     installedPackage,
                     update,
                     createPackageIconUri(packageId, sessionPackage?.Icon ?? installedPackage?.Icon));
-            })
-            .Where(package => MatchesSearch(package, searchText))
-            .OrderBy(package => package.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
+            }).ToArray();
 
-    private static bool MatchesSearch(PackageCatalogItemState package, string searchText)
-    {
-        if (string.IsNullOrWhiteSpace(searchText))
-        {
-            return true;
-        }
-
-        return package.DisplayName.Contains(searchText, StringComparison.OrdinalIgnoreCase)
-               || package.PackageId.Contains(searchText, StringComparison.OrdinalIgnoreCase)
-               || package.Version.Contains(searchText, StringComparison.OrdinalIgnoreCase)
-               || package.SourceLabel.Contains(searchText, StringComparison.OrdinalIgnoreCase);
+        return PackageCatalogProjection.Project(
+            states,
+            state => new PackageCatalogSearchDocument(
+                state.PackageId,
+                state.DisplayName,
+                state.Version,
+                SourceLabel: state.SourceLabel),
+            state => state,
+            searchText,
+            PackageCatalogSort.DisplayName);
     }
 }

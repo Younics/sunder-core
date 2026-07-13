@@ -78,21 +78,31 @@ type interface Sunder.Sdk.Abstractions.IPackageAuthHandler : Sunder.Sdk.Abstract
 type interface Sunder.Sdk.Abstractions.IPackageBackgroundService
   method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken = null)
+type interface Sunder.Sdk.Abstractions.IPackageCallbackClient
+  property System.Boolean IsAvailable { get; }
+  method System.Threading.Tasks.ValueTask OpenLaunchUriAsync(System.Uri launchUri, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> GetStatusAsync(System.String callbackSessionId, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> StartAsync(System.String callbackHandlerId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
 type interface Sunder.Sdk.Abstractions.IPackageCallbackHandler
   property System.String CallbackHandlerId { get; }
+  method System.Threading.Tasks.Task CancelCallbackAsync(Sunder.Sdk.Callbacks.PackageCallbackCancellationContext context, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<Sunder.Sdk.Callbacks.PackageCallbackCompletionResult> CompleteCallbackAsync(Sunder.Sdk.Callbacks.PackageCallbackCompletionContext context, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<Sunder.Sdk.Callbacks.PackageCallbackStartResult> StartCallbackAsync(Sunder.Sdk.Callbacks.PackageCallbackStartContext context, System.Threading.CancellationToken cancellationToken = null)
-type interface Sunder.Sdk.Abstractions.IPackageConfiguration
-  method System.Threading.Tasks.Task<System.String> GetValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
 type interface Sunder.Sdk.Abstractions.IPackageContext
-  property Sunder.Sdk.Abstractions.IPackageConfiguration Configuration { get; }
+  property Sunder.Sdk.Abstractions.IPackageCallbackClient Callbacks { get; }
   property System.String InstallPath { get; }
   property Microsoft.Extensions.Logging.ILoggerFactory LoggerFactory { get; }
   property Sunder.Sdk.Logging.IPackageLogging Logging { get; }
   property System.String PackageId { get; }
   property Sunder.Sdk.Abstractions.IPackageSecrets Secrets { get; }
+  property Sunder.Sdk.Abstractions.IPackageSettings Settings { get; }
   property Sunder.Sdk.Abstractions.IPackageStorageContext Storage { get; }
   property System.String Version { get; }
+type interface Sunder.Sdk.Abstractions.IPackageDevelopmentSessionControl
+  property Sunder.Sdk.Abstractions.PackageDevelopmentSessionAvailability Availability { get; }
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult> LoadDevelopmentPackageAsync(Sunder.Sdk.Abstractions.PackageDevelopmentSessionLoadRequest request, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult> UnloadDevelopmentPackageAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus> GetDevelopmentPackageStatusAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
 type interface Sunder.Sdk.Abstractions.IPackageExtensionCatalog
   method IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
   method IReadOnlyList<TContract> GetExtensions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
@@ -104,23 +114,28 @@ type interface Sunder.Sdk.Abstractions.IPackageFileStore
   method System.Threading.Tasks.Task DeleteAsync(System.String relativePath, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task WriteAsync(System.String relativePath, System.ReadOnlyMemory<System.Byte> contents, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<System.Byte[]> ReadAsync(System.String relativePath, System.Threading.CancellationToken cancellationToken = null)
+type interface Sunder.Sdk.Abstractions.IPackageInstalledSessionControl
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.InstalledPackageSessionStatus> GetInstalledPackageStatusAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.InstalledPackageSessionStatus> LoadInstalledPackageAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<System.Boolean> UnloadInstalledPackageAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
 type interface Sunder.Sdk.Abstractions.IPackageKeyValueStore
   method System.Threading.Tasks.Task DeleteValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task SetValueAsync(System.String key, System.String value, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<System.Boolean> ContainsKeyAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.String>> ListKeysAsync(System.String? prefix = null, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<System.String> GetValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
-type interface Sunder.Sdk.Abstractions.IPackageLocalWorkspaceLease : System.IAsyncDisposable
+type interface Sunder.Sdk.Abstractions.IPackageRoleLocalWorkspace
   property System.String WorkspaceRootPath { get; }
   method System.String GetLocalPath(System.String relativePath)
 type interface Sunder.Sdk.Abstractions.IPackageSecrets
   method System.Threading.Tasks.Task DeleteSecretAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task SetSecretAsync(System.String key, System.String value, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.Task<System.String> GetSecretAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
-type interface Sunder.Sdk.Abstractions.IPackageSessionService
-  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageSessionStatus> GetPackageStatusAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
-  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageSessionStatus> LoadPackageAsync(Sunder.Sdk.Abstractions.PackageSessionLoadRequest request, System.Threading.CancellationToken cancellationToken = null)
-  method System.Threading.Tasks.Task<System.Boolean> UnloadPackageAsync(System.String packageId, Sunder.Sdk.Abstractions.PackageSessionSourceKind sourceKind, System.Threading.CancellationToken cancellationToken = null)
+type interface Sunder.Sdk.Abstractions.IPackageSettings
+  method System.Threading.Tasks.Task DeleteValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task SetValueAsync(System.String key, System.String value, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<System.String> GetStoredValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<System.String> GetValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
 type interface Sunder.Sdk.Abstractions.IPackageSettingsNavigationService
   method System.Threading.Tasks.ValueTask<System.Boolean> OpenPackageSettingsAsync(System.String packageId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.ValueTask<System.Boolean> OpenSettingsAsync(System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
@@ -134,7 +149,7 @@ type interface Sunder.Sdk.Abstractions.IPackageShellViewService
   method System.Threading.Tasks.ValueTask<System.Boolean> RemoveViewFromHotbarAsync(System.String viewId, System.Threading.CancellationToken cancellationToken = null)
 type interface Sunder.Sdk.Abstractions.IPackageStorageContext
   property Sunder.Sdk.Abstractions.IPackageFileStore Files { get; }
-  property Sunder.Sdk.Abstractions.IPackageLocalWorkspaceLease LocalWorkspace { get; }
+  property Sunder.Sdk.Abstractions.IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
   property Sunder.Sdk.Abstractions.IPackageKeyValueStore State { get; }
 type interface Sunder.Sdk.Abstractions.IPackageViewNavigationTarget
   method System.Threading.Tasks.ValueTask OnNavigatedToAsync(Sunder.Sdk.Abstractions.PackageViewNavigationContext context, System.Threading.CancellationToken cancellationToken = null)
@@ -147,18 +162,87 @@ type interface Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry
   method System.Void RegisterBackgroundService<TService>()
   method System.Void RegisterConfigurationSchema(Sunder.Sdk.Configuration.PackageConfigurationSchema schema)
   method System.Void RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract? contribution)
+  method System.Void RegisterRuntimeOperation<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, IPackageRuntimeOperationHandler<TRequest, TResponse> handler)
+  method System.Void RegisterRuntimeStream<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, IPackageRuntimeStreamHandler<TRequest, TEvent> handler)
 type interface Sunder.Sdk.Abstractions.ISunderRuntimePackageModule
   method System.Void ConfigureRuntimeServices(Microsoft.Extensions.DependencyInjection.IServiceCollection services, Sunder.Sdk.Abstractions.IPackageContext context)
   method System.Void RegisterRuntimeContributions(Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry registry, System.IServiceProvider services)
-type sealed class Sunder.Sdk.Abstractions.NullPackageSessionService : Sunder.Sdk.Abstractions.IPackageSessionService
-  property Sunder.Sdk.Abstractions.NullPackageSessionService Instance { get; }
-  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageSessionStatus> GetPackageStatusAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
-  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageSessionStatus> LoadPackageAsync(Sunder.Sdk.Abstractions.PackageSessionLoadRequest request, System.Threading.CancellationToken cancellationToken = null)
-  method System.Threading.Tasks.Task<System.Boolean> UnloadPackageAsync(System.String packageId, Sunder.Sdk.Abstractions.PackageSessionSourceKind sourceKind, System.Threading.CancellationToken cancellationToken = null)
+type sealed class Sunder.Sdk.Abstractions.InstalledPackageSessionStatus : System.IEquatable<Sunder.Sdk.Abstractions.InstalledPackageSessionStatus>
+  method .ctor(System.String PackageId, System.String? DisplayName, System.String? Version, System.Boolean IsLoaded, System.String? ErrorMessage)
+  property System.String? DisplayName { get; set; }
+  property System.String? ErrorMessage { get; set; }
+  property System.Boolean IsLoaded { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String? Version { get; set; }
+  method Sunder.Sdk.Abstractions.InstalledPackageSessionStatus <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Abstractions.InstalledPackageSessionStatus? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? DisplayName, out System.String? Version, out System.Boolean IsLoaded, out System.String? ErrorMessage)
+type sealed class Sunder.Sdk.Abstractions.NullPackageCallbackClient : Sunder.Sdk.Abstractions.IPackageCallbackClient
+  property Sunder.Sdk.Abstractions.NullPackageCallbackClient Instance { get; }
+  property System.Boolean IsAvailable { get; }
+  method System.Threading.Tasks.ValueTask OpenLaunchUriAsync(System.Uri launchUri, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> GetStatusAsync(System.String callbackSessionId, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> StartAsync(System.String callbackHandlerId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
 type sealed class Sunder.Sdk.Abstractions.NullPackageSettingsNavigationService : Sunder.Sdk.Abstractions.IPackageSettingsNavigationService
   property Sunder.Sdk.Abstractions.NullPackageSettingsNavigationService Instance { get; }
   method System.Threading.Tasks.ValueTask<System.Boolean> OpenPackageSettingsAsync(System.String packageId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.ValueTask<System.Boolean> OpenSettingsAsync(System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
+type sealed class Sunder.Sdk.Abstractions.PackageDevelopmentSessionAvailability : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentSessionAvailability>
+  method .ctor(System.Boolean IsAvailable, System.String? UnavailableReason)
+  property System.Boolean IsAvailable { get; set; }
+  property System.String? UnavailableReason { get; set; }
+  method Sunder.Sdk.Abstractions.PackageDevelopmentSessionAvailability <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentSessionAvailability? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.Boolean IsAvailable, out System.String? UnavailableReason)
+type sealed class Sunder.Sdk.Abstractions.PackageDevelopmentSessionLoadRequest : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentSessionLoadRequest>
+  method .ctor(System.String DevelopmentOutputPath, System.Boolean Watch = false)
+  property System.String DevelopmentOutputPath { get; set; }
+  property System.Boolean Watch { get; set; }
+  method Sunder.Sdk.Abstractions.PackageDevelopmentSessionLoadRequest <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentSessionLoadRequest? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String DevelopmentOutputPath, out System.Boolean Watch)
+type enum Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome Failed = 3
+  field Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome NotActive = 1
+  field Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome Succeeded = 0
+  field Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome Unsupported = 2
+  field System.Int32 value__
+type sealed class Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult>
+  method .ctor(Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome Outcome, System.String Message, Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus? Status = null)
+  property System.Boolean IsSuccess { get; }
+  property System.String Message { get; set; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome Outcome { get; set; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus? Status { get; set; }
+  method Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationOutcome Outcome, out System.String Message, out Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus? Status)
+type sealed class Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus>
+  method .ctor(System.String PackageId, System.String? DisplayName, System.String? Version, System.Boolean IsLoaded, System.Boolean WatchEnabled, System.Boolean OverridesInstalledPackage, System.String? ErrorMessage)
+  property System.String? DisplayName { get; set; }
+  property System.String? ErrorMessage { get; set; }
+  property System.Boolean IsLoaded { get; set; }
+  property System.Boolean OverridesInstalledPackage { get; set; }
+  property System.String PackageId { get; set; }
+  property System.String? Version { get; set; }
+  property System.Boolean WatchEnabled { get; set; }
+  method Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String PackageId, out System.String? DisplayName, out System.String? Version, out System.Boolean IsLoaded, out System.Boolean WatchEnabled, out System.Boolean OverridesInstalledPackage, out System.String? ErrorMessage)
 type enum Sunder.Sdk.Abstractions.PackageExtensionCatalogChangeReason : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field Sunder.Sdk.Abstractions.PackageExtensionCatalogChangeReason PackageActivated = 0
   field Sunder.Sdk.Abstractions.PackageExtensionCatalogChangeReason PackageDeactivated = 1
@@ -195,15 +279,15 @@ type enum Sunder.Sdk.Abstractions.PackageExtensionChangeKind : System.IComparabl
   field Sunder.Sdk.Abstractions.PackageExtensionChangeKind Replaced = 2
   field System.Int32 value__
 type sealed class Sunder.Sdk.Abstractions.PackageExtensionContribution<TContract> : IEquatable<Sunder.Sdk.Abstractions.PackageExtensionContribution<TContract>>
-  method .ctor(System.String PackageId, TContract? Contribution)
-  property TContract? Contribution { get; set; }
-  property System.String PackageId { get; set; }
+  method .ctor(System.String packageId, TContract? contribution)
+  property TContract? Contribution { get; }
+  property System.String PackageId { get; }
   method Sunder.Sdk.Abstractions.PackageExtensionContribution<TContract> <Clone>$()
   method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageExtensionContribution<TContract>? other)
   method System.Boolean Equals(System.Object? obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
-  method System.Void Deconstruct(out System.String PackageId, out TContract? Contribution)
+  method System.Void Deconstruct(out System.String packageId, out TContract? contribution)
 type sealed class Sunder.Sdk.Abstractions.PackageExtensionPoint<TContribution> : IEquatable<Sunder.Sdk.Abstractions.PackageExtensionPoint<TContribution>>
   method .ctor(System.String Id)
   property System.String Id { get; set; }
@@ -236,37 +320,6 @@ type sealed class Sunder.Sdk.Abstractions.PackageHotbarView : System.IEquatable<
   method System.Int32 GetHashCode()
   method System.String ToString()
   method System.Void Deconstruct(out System.String ViewId, out System.String PackageId, out System.String PackageDisplayName, out System.String Title, out System.String Glyph, out Sunder.Sdk.Abstractions.PackageHotbarPlacement Placement, out System.Int32 Order, out System.Boolean IsOpen)
-type sealed class Sunder.Sdk.Abstractions.PackageSessionLoadRequest : System.IEquatable<Sunder.Sdk.Abstractions.PackageSessionLoadRequest>
-  method .ctor(Sunder.Sdk.Abstractions.PackageSessionSourceKind SourceKind, System.String Source, System.Boolean Watch = false)
-  property System.String Source { get; set; }
-  property Sunder.Sdk.Abstractions.PackageSessionSourceKind SourceKind { get; set; }
-  property System.Boolean Watch { get; set; }
-  method Sunder.Sdk.Abstractions.PackageSessionLoadRequest <Clone>$()
-  method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageSessionLoadRequest? other)
-  method System.Boolean Equals(System.Object? obj)
-  method System.Int32 GetHashCode()
-  method System.String ToString()
-  method System.Void Deconstruct(out Sunder.Sdk.Abstractions.PackageSessionSourceKind SourceKind, out System.String Source, out System.Boolean Watch)
-type enum Sunder.Sdk.Abstractions.PackageSessionSourceKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field Sunder.Sdk.Abstractions.PackageSessionSourceKind Dev = 1
-  field Sunder.Sdk.Abstractions.PackageSessionSourceKind Installed = 0
-  field System.Int32 value__
-type sealed class Sunder.Sdk.Abstractions.PackageSessionStatus : System.IEquatable<Sunder.Sdk.Abstractions.PackageSessionStatus>
-  method .ctor(System.String PackageId, System.String? DisplayName, System.String? Version, Sunder.Sdk.Abstractions.PackageSessionSourceKind ActiveSourceKind, System.Boolean IsLoaded, System.Boolean WatchEnabled, System.Boolean OverridesInstalledPackage, System.String? ErrorMessage)
-  property Sunder.Sdk.Abstractions.PackageSessionSourceKind ActiveSourceKind { get; set; }
-  property System.String? DisplayName { get; set; }
-  property System.String? ErrorMessage { get; set; }
-  property System.Boolean IsLoaded { get; set; }
-  property System.Boolean OverridesInstalledPackage { get; set; }
-  property System.String PackageId { get; set; }
-  property System.String? Version { get; set; }
-  property System.Boolean WatchEnabled { get; set; }
-  method Sunder.Sdk.Abstractions.PackageSessionStatus <Clone>$()
-  method System.Boolean Equals(Sunder.Sdk.Abstractions.PackageSessionStatus? other)
-  method System.Boolean Equals(System.Object? obj)
-  method System.Int32 GetHashCode()
-  method System.String ToString()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? DisplayName, out System.String? Version, out Sunder.Sdk.Abstractions.PackageSessionSourceKind ActiveSourceKind, out System.Boolean IsLoaded, out System.Boolean WatchEnabled, out System.Boolean OverridesInstalledPackage, out System.String? ErrorMessage)
 type sealed class Sunder.Sdk.Abstractions.PackageViewNavigationContext : System.IEquatable<Sunder.Sdk.Abstractions.PackageViewNavigationContext>
   method .ctor(System.String ViewId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Parameters)
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Parameters { get; set; }
@@ -296,6 +349,12 @@ type sealed class Sunder.Sdk.Abstractions.PackageViewRegistration : System.IEqua
   method System.Boolean Equals(System.Object? obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
+type sealed class Sunder.Sdk.Abstractions.UnavailablePackageDevelopmentSessionControl : Sunder.Sdk.Abstractions.IPackageDevelopmentSessionControl
+  property Sunder.Sdk.Abstractions.PackageDevelopmentSessionAvailability Availability { get; }
+  property Sunder.Sdk.Abstractions.UnavailablePackageDevelopmentSessionControl Instance { get; }
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult> LoadDevelopmentPackageAsync(Sunder.Sdk.Abstractions.PackageDevelopmentSessionLoadRequest request, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentSessionOperationResult> UnloadDevelopmentPackageAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentSessionStatus> GetDevelopmentPackageStatusAsync(System.String packageId, System.Threading.CancellationToken cancellationToken = null)
 type enum Sunder.Sdk.Authentication.PackageAuthFlowKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field Sunder.Sdk.Authentication.PackageAuthFlowKind Browser = 0
   field System.Int32 value__
@@ -370,6 +429,21 @@ type enum Sunder.Sdk.Authentication.PackageAuthStatusKind : System.IComparable, 
   field Sunder.Sdk.Authentication.PackageAuthStatusKind NotConnected = 1
   field Sunder.Sdk.Authentication.PackageAuthStatusKind Unavailable = 0
   field System.Int32 value__
+type sealed class Sunder.Sdk.Callbacks.PackageCallbackCancellationContext : System.IEquatable<Sunder.Sdk.Callbacks.PackageCallbackCancellationContext>
+  method .ctor(System.String CallbackSessionId, Sunder.Sdk.Callbacks.PackageCallbackCancellationReason Reason)
+  property System.String CallbackSessionId { get; set; }
+  property Sunder.Sdk.Callbacks.PackageCallbackCancellationReason Reason { get; set; }
+  method Sunder.Sdk.Callbacks.PackageCallbackCancellationContext <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Callbacks.PackageCallbackCancellationContext? other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Void Deconstruct(out System.String CallbackSessionId, out Sunder.Sdk.Callbacks.PackageCallbackCancellationReason Reason)
+type enum Sunder.Sdk.Callbacks.PackageCallbackCancellationReason : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field Sunder.Sdk.Callbacks.PackageCallbackCancellationReason Expired = 0
+  field Sunder.Sdk.Callbacks.PackageCallbackCancellationReason HostShutdown = 2
+  field Sunder.Sdk.Callbacks.PackageCallbackCancellationReason PackageUnloaded = 1
+  field System.Int32 value__
 type sealed class Sunder.Sdk.Callbacks.PackageCallbackCompletionContext : System.IEquatable<Sunder.Sdk.Callbacks.PackageCallbackCompletionContext>
   method .ctor(System.String CallbackSessionId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> QueryValues)
   property System.String CallbackSessionId { get; set; }
@@ -402,17 +476,40 @@ type enum Sunder.Sdk.Callbacks.PackageCallbackFlowKind : System.IComparable, Sys
   field System.Int32 value__
 type sealed class Sunder.Sdk.Callbacks.PackageCallbackHandlerIds
   field System.String Authentication = auth
-type sealed class Sunder.Sdk.Callbacks.PackageCallbackStartContext : System.IEquatable<Sunder.Sdk.Callbacks.PackageCallbackStartContext>
-  method .ctor(System.String CallbackSessionId, System.Uri CallbackUri, System.String? Purpose = null)
+type sealed class Sunder.Sdk.Callbacks.PackageCallbackParameters
+  field System.Int32 MaximumCount = 16
+  field System.Int32 MaximumKeyLength = 64
+  field System.Int32 MaximumTotalLength = 8192
+  field System.Int32 MaximumValueLength = 2048
+  method System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> CopyAndValidate(System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters)
+type enum Sunder.Sdk.Callbacks.PackageCallbackSessionState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field Sunder.Sdk.Callbacks.PackageCallbackSessionState Cancelled = 3
+  field Sunder.Sdk.Callbacks.PackageCallbackSessionState Completed = 1
+  field Sunder.Sdk.Callbacks.PackageCallbackSessionState Expired = 4
+  field Sunder.Sdk.Callbacks.PackageCallbackSessionState Failed = 2
+  field Sunder.Sdk.Callbacks.PackageCallbackSessionState Pending = 0
+  field System.Int32 value__
+type sealed class Sunder.Sdk.Callbacks.PackageCallbackSessionStatus : System.IEquatable<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus>
+  method .ctor(System.String PackageId, System.String CallbackHandlerId, System.String CallbackSessionId, Sunder.Sdk.Callbacks.PackageCallbackSessionState State, System.String Message, System.Uri? LaunchUri, System.DateTimeOffset ExpiresAtUtc)
+  property System.String CallbackHandlerId { get; set; }
   property System.String CallbackSessionId { get; set; }
-  property System.Uri CallbackUri { get; set; }
-  property System.String? Purpose { get; set; }
-  method Sunder.Sdk.Callbacks.PackageCallbackStartContext <Clone>$()
-  method System.Boolean Equals(Sunder.Sdk.Callbacks.PackageCallbackStartContext? other)
+  property System.DateTimeOffset ExpiresAtUtc { get; set; }
+  property System.Uri? LaunchUri { get; set; }
+  property System.String Message { get; set; }
+  property System.String PackageId { get; set; }
+  property Sunder.Sdk.Callbacks.PackageCallbackSessionState State { get; set; }
+  method Sunder.Sdk.Callbacks.PackageCallbackSessionStatus <Clone>$()
+  method System.Boolean Equals(Sunder.Sdk.Callbacks.PackageCallbackSessionStatus? other)
   method System.Boolean Equals(System.Object? obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
-  method System.Void Deconstruct(out System.String CallbackSessionId, out System.Uri CallbackUri, out System.String? Purpose)
+  method System.Void Deconstruct(out System.String PackageId, out System.String CallbackHandlerId, out System.String CallbackSessionId, out Sunder.Sdk.Callbacks.PackageCallbackSessionState State, out System.String Message, out System.Uri? LaunchUri, out System.DateTimeOffset ExpiresAtUtc)
+type sealed class Sunder.Sdk.Callbacks.PackageCallbackStartContext
+  method .ctor(System.String callbackSessionId, System.Uri callbackUri, System.String? purpose = null, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null)
+  property System.String CallbackSessionId { get; }
+  property System.Uri CallbackUri { get; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Parameters { get; }
+  property System.String? Purpose { get; }
 type sealed class Sunder.Sdk.Callbacks.PackageCallbackStartResult : System.IEquatable<Sunder.Sdk.Callbacks.PackageCallbackStartResult>
   method .ctor(System.String PackageId, System.String CallbackSessionId, Sunder.Sdk.Callbacks.PackageCallbackFlowKind Flow, System.String LaunchUrl, System.String Message)
   property System.String CallbackSessionId { get; set; }
@@ -433,20 +530,23 @@ type sealed class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field System.String AuthV1 = auth.v1
   field System.String BackgroundProcessesV1 = background-processes.v1
   field System.String BackgroundServicesV1 = background-services.v1
+  field System.String Baseline11V1 = sdk-baseline-1-1.v1
   field System.String CallbacksV1 = callbacks.v1
   field System.String ConfigurationSchemaV1 = configuration.schema.v1
-  field System.String ConfigurationValuesV1 = configuration.values.v1
   field System.String ContributionsV1 = contributions.v1
   field System.String CoreV1 = core.v1
+  field System.String DevelopmentPackageSessionsV1 = development-package-sessions.v1
   field System.String ExtensionChangesV1 = extensions.changes.v1
   field System.String ExtensionsV1 = extensions.v1
-  field System.String LocalWorkspaceV1 = local-workspace.v1
+  field System.String InstalledPackageSessionsV1 = installed-package-sessions.v1
   field System.String LoggingV1 = logging.v1
   field System.String NotificationsV1 = notifications.v1
-  field System.String PackageSessionsV1 = package-sessions.v1
   field System.String PackagingV1 = packaging.v1
+  field System.String RoleLocalWorkspaceV1 = role-local-workspace.v1
+  field System.String RuntimeOperationsV1 = runtime-operations.v1
   field System.String SecretsV1 = secrets.v1
   field System.String SettingsNavigationV1 = settings-navigation.v1
+  field System.String SettingsV1 = settings.v1
   field System.String SettingsViewsV1 = settings-views.v1
   field System.String ShellViewV1 = shell-view.v1
   field System.String StackContributionsV1 = stacks.contributions.v1
@@ -566,6 +666,41 @@ type enum Sunder.Sdk.Notifications.PackageNotificationSeverity : System.ICompara
   field Sunder.Sdk.Notifications.PackageNotificationSeverity Success = 1
   field Sunder.Sdk.Notifications.PackageNotificationSeverity Warning = 2
   field System.Int32 value__
+type struct Sunder.Sdk.Packaging.PackageId : System.IEquatable<Sunder.Sdk.Packaging.PackageId>
+  field System.Int32 MaximumLength = 128
+  method Sunder.Sdk.Packaging.PackageId Parse(System.String value)
+  method System.Boolean Equals(Sunder.Sdk.Packaging.PackageId other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Boolean TryParse(System.String? value, out Sunder.Sdk.Packaging.PackageId packageId)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+type struct Sunder.Sdk.Packaging.PackageVersionRange : System.IEquatable<Sunder.Sdk.Packaging.PackageVersionRange>
+  field System.Int32 MaximumLength = 1024
+  method Sunder.Sdk.Packaging.PackageVersionRange Parse(System.String value)
+  method System.Boolean Equals(Sunder.Sdk.Packaging.PackageVersionRange other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Boolean IsSatisfiedBy(Sunder.Sdk.Packaging.SemanticVersion version)
+  method System.Boolean IsSatisfiedBy(System.String version, System.String range)
+  method System.Boolean TryCompare(System.String left, System.String right, out System.Int32 comparison)
+  method System.Boolean TryParse(System.String? value, out Sunder.Sdk.Packaging.PackageVersionRange range)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+type struct Sunder.Sdk.Packaging.SemanticVersion : System.IComparable<Sunder.Sdk.Packaging.SemanticVersion>, System.IEquatable<Sunder.Sdk.Packaging.SemanticVersion>
+  field System.Int32 MaximumLength = 256
+  property System.String? BuildMetadata { get; }
+  property System.String Major { get; }
+  property System.String Minor { get; }
+  property System.String Patch { get; }
+  property System.String? Prerelease { get; }
+  method Sunder.Sdk.Packaging.SemanticVersion NextMajor()
+  method Sunder.Sdk.Packaging.SemanticVersion Parse(System.String value)
+  method System.Boolean Equals(Sunder.Sdk.Packaging.SemanticVersion other)
+  method System.Boolean Equals(System.Object? obj)
+  method System.Boolean HasSamePrecedence(Sunder.Sdk.Packaging.SemanticVersion other)
+  method System.Boolean TryParse(System.String? value, out Sunder.Sdk.Packaging.SemanticVersion version)
+  method System.Int32 CompareTo(Sunder.Sdk.Packaging.SemanticVersion other)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
 type sealed class Sunder.Sdk.Packaging.SunderPackageAttribute : System.Attribute
   method .ctor()
   property System.String? Icon { get; set; }
@@ -576,3 +711,22 @@ type sealed class Sunder.Sdk.Packaging.SunderPackageDependencyAttribute : System
   method .ctor()
   property System.String PackageId { get; set; }
   property System.String VersionRange { get; set; }
+type interface Sunder.Sdk.Runtime.IPackageRuntimeClient
+  property System.Boolean IsAvailable { get; }
+  method IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, TRequest request, System.Threading.CancellationToken cancellationToken = null)
+  method ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, TRequest request, System.Threading.CancellationToken cancellationToken = null)
+type interface Sunder.Sdk.Runtime.IPackageRuntimeOperationHandler<TRequest, TResponse>
+  method ValueTask<TResponse> HandleAsync(TRequest request, System.Threading.CancellationToken cancellationToken = null)
+type interface Sunder.Sdk.Runtime.IPackageRuntimeStreamHandler<TRequest, TEvent>
+  method IAsyncEnumerable<TEvent> SubscribeAsync(TRequest request, System.Threading.CancellationToken cancellationToken = null)
+type sealed class Sunder.Sdk.Runtime.NullPackageRuntimeClient : Sunder.Sdk.Runtime.IPackageRuntimeClient
+  property Sunder.Sdk.Runtime.NullPackageRuntimeClient Instance { get; }
+  property System.Boolean IsAvailable { get; }
+  method IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, TRequest request, System.Threading.CancellationToken cancellationToken = null)
+  method ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, TRequest request, System.Threading.CancellationToken cancellationToken = null)
+type sealed class Sunder.Sdk.Runtime.PackageRuntimeOperation<TRequest, TResponse>
+  method .ctor(System.String operationId)
+  property System.String OperationId { get; }
+type sealed class Sunder.Sdk.Runtime.PackageRuntimeStream<TRequest, TEvent>
+  method .ctor(System.String streamId)
+  property System.String StreamId { get; }

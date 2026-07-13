@@ -15,7 +15,8 @@ internal sealed class RuntimePackageContext : IPackageContext
         InstallPath = installPath;
         LocalStorage = new LocalPackageStorageContext(packageId, packageDataRootPath);
         Storage = LocalStorage;
-        Configuration = new PackageStateConfiguration(Storage.State);
+        PackageSettings = new PackageSettings(LocalStorage.SettingsStore);
+        Settings = PackageSettings;
         SecretsStore = new JsonPackageSecretsStore(Path.Combine(LocalStorage.DataRootPath, "secrets.json"));
         Logging = new FilePackageLogging(LocalStorage.LogsRootPath, PackageId, Version);
     }
@@ -30,11 +31,15 @@ internal sealed class RuntimePackageContext : IPackageContext
 
     internal LocalPackageStorageContext LocalStorage { get; }
 
-    public IPackageConfiguration Configuration { get; }
+    public IPackageSettings Settings { get; }
+
+    internal PackageSettings PackageSettings { get; }
 
     public IPackageSecrets Secrets => SecretsStore;
 
     public JsonPackageSecretsStore SecretsStore { get; }
+
+    public IPackageCallbackClient Callbacks => NullPackageCallbackClient.Instance;
 
     public ILoggerFactory LoggerFactory => Logging.LoggerFactory;
 

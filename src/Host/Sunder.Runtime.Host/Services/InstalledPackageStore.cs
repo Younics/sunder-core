@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Services;
 

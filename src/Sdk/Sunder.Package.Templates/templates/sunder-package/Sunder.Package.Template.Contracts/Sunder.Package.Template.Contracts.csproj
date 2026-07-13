@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk" Version="1.0.0" />
+    <PackageReference Include="Sunder.Sdk" Version="1.1.0" />
   </ItemGroup>
 
 </Project>

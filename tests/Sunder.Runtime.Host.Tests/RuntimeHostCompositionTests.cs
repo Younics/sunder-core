@@ -31,21 +31,22 @@ public sealed class RuntimeHostCompositionTests
             Assert.NotNull(provider.GetRequiredService<RuntimePackageUiService>());
             Assert.NotNull(provider.GetRequiredService<PackageSessionCommandService>());
             Assert.NotNull(provider.GetRequiredService<RuntimePackageDataService>());
-            Assert.NotNull(provider.GetRequiredService<PackageConfigurationAccessService>());
+            Assert.NotNull(provider.GetRequiredService<PackageSettingsAccessService>());
             Assert.NotNull(provider.GetRequiredService<PackageAuthAccessService>());
             Assert.NotNull(provider.GetRequiredService<PackageFaultService>());
             Assert.NotNull(provider.GetRequiredService<RuntimeStackExportService>());
             Assert.NotNull(provider.GetRequiredService<RuntimeStackImportService>());
-            Assert.NotNull(provider.GetRequiredService<PackageAuthCallbackServer>());
+            Assert.NotNull(provider.GetRequiredService<PackageCallbackAccessService>());
+            Assert.NotNull(provider.GetRequiredService<PackageCallbackServer>());
             Assert.NotNull(provider.GetRequiredService<RegistryCredentialStore>());
             Assert.NotNull(provider.GetRequiredService<RegistryAuthCoordinator>());
+            Assert.NotNull(provider.GetRequiredService<RegistryPackagePlanResolver>());
             Assert.NotNull(provider.GetRequiredService<RegistryPackageChangeOrchestrator>());
             Assert.NotNull(provider.GetRequiredService<RegistryAuthenticatedOperations>());
 
             Assert.Same(
                 provider.GetRequiredService<RuntimeSessionOwner>().State,
                 provider.GetRequiredService<PackageSessionState>());
-            Assert.Null(provider.GetService<RuntimePackageSessionService>());
         }
         finally
         {
@@ -65,7 +66,7 @@ public sealed class RuntimeHostCompositionTests
         var facadeDependencies = productionTypes
             .SelectMany(type => type.GetConstructors())
             .SelectMany(constructor => constructor.GetParameters())
-            .Where(parameter => parameter.ParameterType == typeof(RuntimePackageSessionService))
+            .Where(parameter => parameter.ParameterType.Name.Contains("SessionService", StringComparison.Ordinal))
             .ToArray();
 
         Assert.Empty(facadeDependencies);

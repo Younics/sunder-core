@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
@@ -8,25 +9,30 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RegistryAuthenticatedOperations
 {
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly RegistryHttpClient _registryClient;
     private readonly RegistryCredentialStore _credentialStore;
     private readonly RuntimeContentTransferStore? _transferStore;
     private readonly PackageSessionLifecycleService? _packageSessions;
 
     public RegistryAuthenticatedOperations(
-        IHttpClientFactory httpClientFactory,
+        RegistryHttpClient registryClient,
         RegistryCredentialStore credentialStore,
         RuntimeContentTransferStore transferStore,
         PackageSessionLifecycleService packageSessions)
-        : this(httpClientFactory, credentialStore)
+        : this(registryClient, credentialStore)
     {
         _transferStore = transferStore;
         _packageSessions = packageSessions;
     }
 
     internal RegistryAuthenticatedOperations(IHttpClientFactory httpClientFactory, RegistryCredentialStore credentialStore)
+        : this(new RegistryHttpClient(httpClientFactory, new RuntimeTransportPolicyOptions(), TimeProvider.System), credentialStore)
     {
-        _httpClientFactory = httpClientFactory;
+    }
+
+    private RegistryAuthenticatedOperations(RegistryHttpClient registryClient, RegistryCredentialStore credentialStore)
+    {
+        _registryClient = registryClient;
         _credentialStore = credentialStore;
     }
 
@@ -36,7 +42,7 @@ internal sealed class RegistryAuthenticatedOperations
             request.Starred ? HttpMethod.Put : HttpMethod.Delete,
             $"api/v1/packages/{Uri.EscapeDataString(request.ResourceId)}/star",
             null,
-            response => ReadAsync(response, new RegistryPackageStarResponse(false, null, null, [Error(response)]), cancellationToken),
+            response => ReadAsync(response, error => new RegistryPackageStarResponse(false, null, null, [error]), cancellationToken),
             () => new RegistryPackageStarResponse(false, null, null, ["Registry sign-in is required."]) { Forbidden = true },
             cancellationToken);
 
@@ -46,7 +52,7 @@ internal sealed class RegistryAuthenticatedOperations
             request.Starred ? HttpMethod.Put : HttpMethod.Delete,
             $"api/v1/stacks/{Uri.EscapeDataString(request.ResourceId)}/star",
             null,
-            response => ReadAsync(response, new RegistryStackStarResponse(false, null, null, [Error(response)]), cancellationToken),
+            response => ReadAsync(response, error => new RegistryStackStarResponse(false, null, null, [error]), cancellationToken),
             () => new RegistryStackStarResponse(false, null, null, ["Registry sign-in is required."]) { Forbidden = true },
             cancellationToken);
 
@@ -56,7 +62,7 @@ internal sealed class RegistryAuthenticatedOperations
             HttpMethod.Delete,
             $"api/v1/stacks/{Uri.EscapeDataString(request.StackId)}",
             null,
-            response => ReadAsync(response, new RegistryStackManagementOperationResponse(false, null, [Error(response)]), cancellationToken),
+            response => ReadAsync(response, error => new RegistryStackManagementOperationResponse(false, null, [error]), cancellationToken),
             () => new RegistryStackManagementOperationResponse(false, null, ["Registry sign-in is required."]) { Forbidden = true },
             cancellationToken);
 
@@ -66,7 +72,7 @@ internal sealed class RegistryAuthenticatedOperations
             HttpMethod.Put,
             $"api/v1/packages/{Uri.EscapeDataString(request.PackageId)}/versions/{Uri.EscapeDataString(request.Version)}/yank",
             JsonContent.Create(new RegistrySetPackageVersionYankRequest(request.IsYanked)),
-            response => ReadAsync(response, new RegistryPackageManagementOperationResponse(false, null, [Error(response)]), cancellationToken),
+            response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
             cancellationToken);
 
@@ -76,7 +82,7 @@ internal sealed class RegistryAuthenticatedOperations
             HttpMethod.Put,
             $"api/v1/packages/{Uri.EscapeDataString(request.PackageId)}/versions/{Uri.EscapeDataString(request.Version)}/deprecation",
             JsonContent.Create(new RegistryDeprecatePackageVersionRequest(request.Message)),
-            response => ReadAsync(response, new RegistryPackageManagementOperationResponse(false, null, [Error(response)]), cancellationToken),
+            response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
             cancellationToken);
 
@@ -86,7 +92,7 @@ internal sealed class RegistryAuthenticatedOperations
             request.Version is null ? HttpMethod.Delete : HttpMethod.Put,
             $"api/v1/packages/{Uri.EscapeDataString(request.PackageId)}/dist-tags/{Uri.EscapeDataString(request.Tag)}",
             request.Version is null ? null : JsonContent.Create(new RegistrySetPackageDistTagRequest(request.Version)),
-            response => ReadAsync(response, new RegistryPackageManagementOperationResponse(false, null, [Error(response)]), cancellationToken),
+            response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
             cancellationToken);
 
@@ -96,7 +102,7 @@ internal sealed class RegistryAuthenticatedOperations
             RuntimeUploadKind.Package,
             "api/v1/packages/publish",
             "package",
-            (response, token) => ReadAsync(response, new RegistryPublishPackageResponse(false, null, null, null, [], [Error(response)]), token),
+            (response, token) => ReadAsync(response, error => new RegistryPublishPackageResponse(false, null, null, null, [], [error]), token),
             () => new RegistryPublishPackageResponse(false, null, null, null, [], ["Registry sign-in is required."]) { Forbidden = true },
             cancellationToken);
 
@@ -106,7 +112,7 @@ internal sealed class RegistryAuthenticatedOperations
             RuntimeUploadKind.Stack,
             "api/v1/stacks/publish",
             "stack",
-            (response, token) => ReadAsync(response, new RegistryPublishStackResponse(false, null, null, [], [Error(response)]), token),
+            (response, token) => ReadAsync(response, error => new RegistryPublishStackResponse(false, null, null, [], [error]), token),
             () => new RegistryPublishStackResponse(false, null, null, [], ["Registry sign-in is required."]) { Forbidden = true },
             cancellationToken);
 
@@ -171,8 +177,7 @@ internal sealed class RegistryAuthenticatedOperations
 
         using var request = new HttpRequestMessage(method, new Uri(origin, path)) { Content = content };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
-        var client = _httpClientFactory.CreateClient("registry");
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+        using var response = await _registryClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             await _credentialStore.DeleteAsync(origin, cancellationToken);
@@ -182,17 +187,23 @@ internal sealed class RegistryAuthenticatedOperations
         return await read(response);
     }
 
-    private static async Task<T> ReadAsync<T>(HttpResponseMessage response, T fallback, CancellationToken cancellationToken)
-        => await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken) ?? fallback;
+    private async Task<T> ReadAsync<T>(
+        HttpResponseMessage response,
+        Func<string, T> fallback,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var value = await _registryClient.ReadJsonAsync<T>(response, cancellationToken);
+            if (value is not null) return value;
+        }
+        catch (JsonException) when (!response.IsSuccessStatusCode)
+        {
+        }
+        return fallback(await _registryClient.ReadErrorAsync(response, cancellationToken));
+    }
 
     private static RegistryPackageManagementOperationResponse AuthenticationRequiredPackageManagement()
         => new(false, null, ["Registry sign-in is required."]) { Forbidden = true };
 
-    private static string Error(HttpResponseMessage response)
-        => response.StatusCode switch
-        {
-            HttpStatusCode.NotFound => "Registry resource was not found.",
-            HttpStatusCode.Conflict => "Registry operation conflicted with existing state.",
-            _ => response.ReasonPhrase ?? "Registry operation failed.",
-        };
 }

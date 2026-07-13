@@ -33,6 +33,64 @@ public sealed class CliArchitectureTests
             Assert.DoesNotContain("new HttpClient", File.ReadAllText(file), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RegistryAndRuntimeClients_KeepEndpointFamiliesSeparateFromTransport()
+    {
+        var cliDirectory = FindCliDirectory();
+        var root = new DirectoryInfo(cliDirectory).Parent!.Parent!.Parent!.FullName;
+        var runtimeClientDirectory = Path.Combine(root, "src", "Host", "Sunder.Runtime.Client");
+        var expectedFiles = new[]
+        {
+            Path.Combine(cliDirectory, "RegistryClient.Packages.cs"),
+            Path.Combine(cliDirectory, "RegistryClient.Stacks.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Registry.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs"),
+        };
+
+        Assert.All(expectedFiles, path => Assert.True(File.Exists(path), $"Missing client endpoint family {path}."));
+        var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [Path.Combine(cliDirectory, "RegistryClient.cs")] = 113,
+            [Path.Combine(cliDirectory, "RegistryClient.Packages.cs")] = 25,
+            [Path.Combine(cliDirectory, "RegistryClient.Stacks.cs")] = 59,
+            [Path.Combine(cliDirectory, "CliHttpContentReader.cs")] = 46,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.cs")] = 51,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs")] = 16,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Registry.cs")] = 59,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs")] = 53,
+        };
+
+        Assert.All(baselines, pair => Assert.True(
+            File.ReadLines(pair.Key).Count() <= pair.Value,
+            $"{pair.Key} exceeded its {pair.Value}-line ratchet."));
+
+        Assert.All(
+            Directory.GetFiles(runtimeClientDirectory, "*.cs"),
+            path => Assert.True(
+                File.ReadLines(path).Count() < 500,
+                $"{path} exceeded the 500-line Runtime client ratchet."));
+    }
+
+    [Fact]
+    public void RegistryCapabilityInterfaces_HaveNoDefaultsAndHandlersUseNarrowRoles()
+    {
+        Assert.All(
+            typeof(IRegistryConnection).Assembly.GetTypes()
+                .Where(type => type.IsInterface && typeof(IRegistryConnection).IsAssignableFrom(type))
+                .SelectMany(type => type.GetMethods(
+                    System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.DeclaredOnly)),
+            method => Assert.True(method.IsAbstract, $"{method.DeclaringType?.Name}.{method.Name} has a default implementation."));
+
+        var directory = FindCliDirectory();
+        Assert.Contains("IRegistryBrowseClient", File.ReadAllText(Path.Combine(directory, "RegistryBrowseCommandHandler.cs")), StringComparison.Ordinal);
+        Assert.Contains("IRegistryManageClient", File.ReadAllText(Path.Combine(directory, "DeveloperPublishCommandHandler.cs")), StringComparison.Ordinal);
+        Assert.DoesNotContain("IRegistryClient", File.ReadAllText(Path.Combine(directory, "RegistryBrowseCommandHandler.cs")), StringComparison.Ordinal);
+        Assert.DoesNotContain("IRegistryClient", File.ReadAllText(Path.Combine(directory, "DeveloperPublishCommandHandler.cs")), StringComparison.Ordinal);
+    }
+
     private static string FindCliDirectory()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

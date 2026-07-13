@@ -46,8 +46,7 @@ internal sealed class PackagesMarketplaceCatalog(
         {
             var package = await registryClient.GetPackageAsync(packageId, cancellationToken).ConfigureAwait(false);
             var versions = package?.Versions
-                .OrderByDescending(version => RegistryPackageVersionOrdering.TryParse(version.Version), RegistryPackageVersionOrdering.Comparer)
-                .ThenByDescending(version => version.PublishedAtUtc)
+                .OrderByDescending(version => version.Version, RegistryPackageVersionOrdering.Comparer)
                 .Select(version => new RegistryPackageVersionItemViewModel(version, selectVersion))
                 .ToArray() ?? [];
             return PackagesMarketplaceDetailsResult.Succeeded(package, versions);

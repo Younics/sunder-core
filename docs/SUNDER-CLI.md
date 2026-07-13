@@ -26,7 +26,6 @@ Global options:
 | --- | --- |
 | `--registry-api-url <url>` | Registry API URL |
 | `--registry-web-url <url>` | Registry web URL used by browser auth |
-| `--registry-url <url>` | Back-compatible alias that sets both Registry URLs |
 | `--runtime-url <url>` | Local runtime host URL |
 | `--timeout <duration>` | Command request timeout. Defaults to `15m`; accepts values like `15m`, `900s`, `900`, or `00:15:00` |
 | `--json` | Emit one machine-readable JSON result instead of text output |
@@ -37,10 +36,11 @@ Environment overrides:
 | --- | --- |
 | `SUNDER_REGISTRY_API_URL` | Registry API URL |
 | `SUNDER_REGISTRY_WEB_URL` | Registry web URL |
-| `SUNDER_REGISTRY_URL` | Legacy alias for both Registry URLs |
 | `SUNDER_RUNTIME_URL` | Local runtime host URL |
 
-Runtime-bound commands authenticate automatically from the current user's private Runtime connection file. The Runtime URL in that file must exactly match the configured `Runtime:Url`, `SUNDER_RUNTIME_URL`, or `--runtime-url`; a missing or mismatched entry fails closed instead of sending an unauthenticated request. Runtime API endpoints use `/api/v1`.
+Runtime-bound commands authenticate automatically from the current user's private Runtime connection file. The Runtime URL in that file must exactly match the configured `Runtime:Url`, `SUNDER_RUNTIME_URL`, or `--runtime-url`; a missing or mismatched entry fails closed instead of sending an unauthenticated request.
+
+Before any `/api/v1` call, the CLI performs the authenticated unversioned `/api/handshake` request. The handshake identifies the Runtime protocol, supported revision range, Runtime instance, and feature set. An absent, malformed, unauthenticated, or incompatible handshake stops the command before a versioned request is sent. Runtime product and informational versions are diagnostics only; product SemVer does not determine protocol compatibility.
 
 The connection document lives only in the Runtime V1 local-state root. Unversioned connection files and legacy `auth.json` files are not read.
 
@@ -253,7 +253,7 @@ sunder publish --file .\MyPackage.1.0.0.sunderpkg --no-latest
 Publish to a development Registry endpoint:
 
 ```powershell
-sunder publish --file .\MyPackage.1.0.0.sunderpkg --dev-local --registry-url http://localhost:5288/
+sunder publish --file .\MyPackage.1.0.0.sunderpkg --dev-local --registry-api-url http://localhost:5288/
 ```
 
 Publish a large package with a longer Registry request timeout:
@@ -352,6 +352,7 @@ sunder list --runtime-url http://127.0.0.1:5276/
 `Sunder.Cli` is a parser, command-handler, and renderer layer. Command handlers receive explicit option records and do not construct Runtime HTTP endpoints.
 
 - `Sunder.Runtime.Client` owns Runtime authentication, endpoint paths, JSON and Problem Details handling, content upload verification, and package stage/commit delegation.
+- `Sunder.Runtime.Client` owns protocol negotiation, explicit request/stream deadlines, bounded response and error reads, and fail-closed compatibility checks shared by CLI and App transports.
 - The Runtime owns Registry credentials, install/update plans, package downloads, verification, and package mutations.
 - The CLI keeps a small anonymous Registry browse client for public search/details and explicit Stack downloads.
 - Local package and Stack archive validation remains CLI-owned.

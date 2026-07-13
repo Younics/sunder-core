@@ -78,15 +78,17 @@ internal sealed class FakeRegistryClient : IRegistryClient
     public Func<string?, int, int, CancellationToken, Task<IReadOnlyList<RegistryPackageSummary>>> Search { get; set; }
         = (_, _, _, _) => Task.FromResult<IReadOnlyList<RegistryPackageSummary>>([]);
     public Func<RegistryStackArtifact, string, string, CancellationToken, Task> Download { get; set; }
-        = (_, _, _, _) => throw new NotSupportedException();
+        = (_, _, _, _) => Task.CompletedTask;
     public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken token) => Search(query, skip, take, token);
     public Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, CancellationToken token) => Task.FromResult<IReadOnlyList<RegistryStackSummary>>([]);
     public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken token) => Task.FromResult<RegistryPackageDetails?>(null);
     public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken token) => Task.FromResult<RegistryPackageVersionDetails?>(null);
     public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken token) => Task.FromResult<RegistryStackDetails?>(null);
     public Task<RegistryPackageDistTagsResponse?> GetDistTagsAsync(string packageId, CancellationToken token) => Task.FromResult<RegistryPackageDistTagsResponse?>(null);
-    public Task<RegistryPublishPackageResponse> PublishLocalPackageAsync(string packagePath, bool setLatest, CancellationToken token) => throw new NotSupportedException();
-    public Task<RegistryPublishStackResponse> PublishLocalStackAsync(string stackPath, CancellationToken token) => throw new NotSupportedException();
+    public Task<RegistryPublishPackageResponse> PublishLocalPackageAsync(string packagePath, bool setLatest, CancellationToken token)
+        => Task.FromResult(new RegistryPublishPackageResponse(false, null, null, "Publishing is not configured for this test.", [], ["Publishing is not configured for this test."]));
+    public Task<RegistryPublishStackResponse> PublishLocalStackAsync(string stackPath, CancellationToken token)
+        => Task.FromResult(new RegistryPublishStackResponse(false, null, "Publishing is not configured for this test.", [], ["Publishing is not configured for this test."]));
     public Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken token) => Download(artifact, stackId, destinationPath, token);
     public void Dispose() { }
 }
@@ -111,7 +113,12 @@ internal static class CliTestHost
         var stdout = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var stderr = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var app = new CliApplication(stdout, stderr, _ => runtime, _ => registry, browser ?? new FakeBrowserLauncher());
-        var globals = new[] { "--registry-url", "https://registry.test/", "--runtime-url", "http://runtime.test/" };
+        var globals = new[]
+        {
+            "--registry-api-url", "https://registry.test/",
+            "--registry-web-url", "https://registry.test/",
+            "--runtime-url", "http://runtime.test/",
+        };
         var exit = await app.RunAsync([.. args, .. globals], token);
         return (exit, stdout.ToString().Replace("\r\n", "\n"), stderr.ToString().Replace("\r\n", "\n"));
     }

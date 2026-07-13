@@ -4,6 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.3" />
-    <PackageReference Include="Sunder.Sdk.Avalonia" Version="1.0.0" />
+    <PackageReference Include="Sunder.Sdk.Avalonia" Version="1.1.0" />
   </ItemGroup>
 </Project>

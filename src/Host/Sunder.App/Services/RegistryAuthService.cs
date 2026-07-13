@@ -15,14 +15,14 @@ public sealed class RegistryAuthService(
     public async Task<RegistryAuthState> GetStatusAsync(Uri? registryUrl = null, CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        using var runtime = runtimeApiClientFactory.CreateClient();
+        using var runtime = runtimeApiClientFactory.CreateClient<IRuntimeRegistryAuthClient>();
         return ToState(await runtime.GetRegistryAuthStatusAsync(registryUrl.AbsoluteUri, cancellationToken));
     }
 
     public async Task<RegistryAuthState> LoginAsync(Uri? registryUrl = null, CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        using var runtime = runtimeApiClientFactory.CreateClient();
+        using var runtime = runtimeApiClientFactory.CreateClient<IRuntimeRegistryAuthClient>();
         var start = await runtime.StartRegistryAuthAsync(
             new RuntimeRegistryAuthStartRequest(registryUrl.AbsoluteUri, DisplayName: "Sunder App"),
             cancellationToken);
@@ -49,7 +49,7 @@ public sealed class RegistryAuthService(
     public async Task<RegistryAuthState> LogoutAsync(Uri? registryUrl = null, CancellationToken cancellationToken = default)
     {
         registryUrl = RegistryUrlHelper.Normalize(registryUrl ?? RegistryUrlHelper.DefaultRegistryUrl);
-        using var runtime = runtimeApiClientFactory.CreateClient();
+        using var runtime = runtimeApiClientFactory.CreateClient<IRuntimeRegistryAuthClient>();
         return ToState(await runtime.LogoutRegistryAsync(registryUrl.AbsoluteUri, cancellationToken));
     }
 
