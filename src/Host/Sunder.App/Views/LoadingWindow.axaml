@@ -56,6 +56,23 @@
             <TextBlock Classes="loading-caption"
                        Text="{Binding StatusMessage}" />
 
+            <TextBlock MaxWidth="620"
+                       IsVisible="{Binding HasFailed}"
+                       Text="{Binding FailureDetails}"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource Sunder.Brush.Text.Secondary}" />
+
+            <StackPanel Orientation="Horizontal"
+                        Spacing="10"
+                        IsVisible="{Binding HasFailed}">
+              <Button Content="Retry"
+                      Command="{Binding RetryCommand}" />
+              <Button Content="Open Core Shell"
+                      Command="{Binding OpenCoreShellCommand}" />
+              <Button Content="Quit"
+                      Command="{Binding QuitCommand}" />
+            </StackPanel>
+
             <Border Classes="loading-progress-track">
               <Border Classes="loading-progress-fill"
                       Width="{Binding ProgressWidth}"

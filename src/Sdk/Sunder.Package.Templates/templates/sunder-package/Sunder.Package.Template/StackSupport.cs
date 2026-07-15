@@ -6,10 +6,14 @@ namespace Sunder.Package.Template;
 public sealed partial class PackageModule
 {
     partial void RegisterStackContributions(ISunderRuntimeContributionRegistry registry)
-        => registry.RegisterExtension(SunderStackExtensionPoints.StackContributors, new PackageStackContributor());
+    {
+        var contributor = new PackageStackContributor();
+        registry.RegisterExtension(SunderStackExtensionPoints.StackExporters, contributor);
+        registry.RegisterExtension(SunderStackExtensionPoints.StackImporters, contributor);
+    }
 }
 
-public sealed class PackageStackContributor : IPackageStackContributor
+public sealed class PackageStackContributor : IPackageStackExporter, IPackageStackImporter
 {
     public string ContributorId => "sunder.package.template.stacks";
 

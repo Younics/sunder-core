@@ -9,12 +9,17 @@ namespace Sunder.Package.Build.Tasks;
 
 internal sealed class PackageCapabilityInference(
     IReadOnlyList<string> configuredCapabilities,
-    IReadOnlyList<string> dependencyPaths)
+    IReadOnlyList<string> referencePaths,
+    IReadOnlyList<string> runtimeCopyLocalPaths,
+    IReadOnlyList<string> authoredAssemblyPaths,
+    IReadOnlyList<string> dynamicAccessAcknowledgements,
+    string projectDirectory)
 {
     private static readonly OpCode[] SingleByteOpCodes = new OpCode[0x100];
     private static readonly OpCode[] MultiByteOpCodes = new OpCode[0x100];
     private readonly List<string> _diagnostics = [];
     private readonly SortedSet<string> _dynamicSdkCallSites = new(StringComparer.Ordinal);
+    private SdkCapabilityCatalog? _capabilityCatalog;
 
     public bool IsComplete { get; private set; }
 
@@ -54,25 +59,33 @@ internal sealed class PackageCapabilityInference(
             SunderSdkCapabilities.ContributionsV1,
         };
 
-        try
+        _capabilityCatalog = SdkCapabilityCatalog.Create(
+            referencePaths.Concat(runtimeCopyLocalPaths),
+            _diagnostics);
+        foreach (var inspectedAssemblyPath in GetInspectedAssemblyPaths(assemblyPath))
         {
-            using var stream = File.OpenRead(assemblyPath);
-            using var peReader = new PEReader(stream);
-            if (!peReader.HasMetadata)
+            try
             {
-                _diagnostics.Add($"Package assembly '{assemblyPath}' does not contain managed metadata.");
-                return capabilities.ToArray();
-            }
+                using var stream = File.OpenRead(inspectedAssemblyPath);
+                using var peReader = new PEReader(stream);
+                if (!peReader.HasMetadata)
+                {
+                    _diagnostics.Add($"Package assembly '{inspectedAssemblyPath}' does not contain managed metadata.");
+                    continue;
+                }
 
-            var metadata = peReader.GetMetadataReader();
-            ValidateSdkAssemblyReferences(metadata, assemblyPath);
-            InspectMetadataReferences(metadata, capabilities);
-            InspectAuthoredMethodBodies(peReader, metadata, capabilities);
+                var metadata = peReader.GetMetadataReader();
+                ValidateSdkAssemblyReferences(metadata, inspectedAssemblyPath);
+                InspectMetadataReferences(metadata, capabilities);
+                InspectAuthoredMethodBodies(peReader, metadata, capabilities);
+            }
+            catch (Exception exception)
+            {
+                _diagnostics.Add($"Could not inspect package metadata in '{inspectedAssemblyPath}': {exception.GetType().Name}: {exception.Message}");
+            }
         }
-        catch (Exception exception)
-        {
-            _diagnostics.Add($"Could not inspect package metadata in '{assemblyPath}': {exception.GetType().Name}: {exception.Message}");
-        }
+
+        InspectAvaloniaXamlSources(capabilities);
 
         var explicitCapabilities = configuredCapabilities
             .Where(static value => !string.IsNullOrWhiteSpace(value))
@@ -83,6 +96,15 @@ internal sealed class PackageCapabilityInference(
             capabilities.Add(capability);
         }
 
+        if (capabilities.Contains(SunderSdkCapabilities.AuthV1))
+        {
+            capabilities.Add(SunderSdkCapabilities.CallbacksV1);
+        }
+
+        var acknowledgements = dynamicAccessAcknowledgements
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value.Trim())
+            .ToHashSet(StringComparer.Ordinal);
         if (_dynamicSdkCallSites.Count > 0 && explicitCapabilities.Length == 0)
         {
             _diagnostics.Add(
@@ -90,17 +112,45 @@ internal sealed class PackageCapabilityInference(
                 + string.Join(", ", _dynamicSdkCallSites)
                 + ". Declare every dynamically accessed capability with <SunderSdkCapability Include=\"...\" />.");
         }
+        foreach (var callSite in _dynamicSdkCallSites.Where(callSite => !acknowledgements.Contains(callSite)))
+        {
+            _diagnostics.Add(
+                $"Dynamic/reflection access at '{callSite}' requires an explicit "
+                + $"<SunderSdkDynamicAccess Include=\"{callSite}\" /> acknowledgment.");
+        }
+        foreach (var acknowledgement in acknowledgements.Where(value => !_dynamicSdkCallSites.Contains(value)))
+        {
+            _diagnostics.Add($"SunderSdkDynamicAccess acknowledgment '{acknowledgement}' does not match an unresolved authored call site.");
+        }
 
         IsComplete = _diagnostics.Count == 0;
         return capabilities.ToArray();
     }
 
+    private IEnumerable<string> GetInspectedAssemblyPaths(string entryAssemblyPath)
+        => authoredAssemblyPaths
+            .Append(entryAssemblyPath)
+            .Where(static path => ManagedAssemblyPath.IsCandidate(path) && File.Exists(path))
+            .Where(path => string.Equals(path, entryAssemblyPath, StringComparison.OrdinalIgnoreCase)
+                           || !IsHostBoundaryAssembly(Path.GetFileNameWithoutExtension(path)))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsHostBoundaryAssembly(string assemblyName)
+        => IsSdkContractAssemblyName(assemblyName)
+           || assemblyName.Equals("Microsoft.Extensions.DependencyInjection.Abstractions", StringComparison.OrdinalIgnoreCase)
+           || assemblyName.Equals("Microsoft.Extensions.Logging.Abstractions", StringComparison.OrdinalIgnoreCase)
+           || assemblyName.Equals("Avalonia", StringComparison.OrdinalIgnoreCase)
+           || assemblyName.StartsWith("Avalonia.", StringComparison.OrdinalIgnoreCase)
+           || assemblyName.Equals("MicroCom.Runtime", StringComparison.OrdinalIgnoreCase);
+
     private void ValidateSdkAssemblyReferences(MetadataReader metadata, string assemblyPath)
     {
-        var availableFiles = dependencyPaths
+        var availableFiles = referencePaths
+            .Concat(runtimeCopyLocalPaths)
             .Append(assemblyPath)
             .Concat(Directory.EnumerateFiles(Path.GetDirectoryName(assemblyPath)!, "*.dll"))
-            .Where(static path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Where(static path => ManagedAssemblyPath.IsCandidate(path) && File.Exists(path))
             .Select(static path => Path.GetFileNameWithoutExtension(path))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -116,14 +166,14 @@ internal sealed class PackageCapabilityInference(
         }
     }
 
-    private static void InspectMetadataReferences(MetadataReader metadata, ISet<string> capabilities)
+    private void InspectMetadataReferences(MetadataReader metadata, ISet<string> capabilities)
     {
         foreach (var handle in metadata.TypeReferences)
         {
             var identity = GetTypeReferenceIdentity(metadata, handle);
             if (identity.IsSdk)
             {
-                AddSdkTypeReferenceCapability(identity.Namespace, identity.Name, capabilities);
+                AddSdkTypeReferenceCapability(identity, capabilities);
             }
         }
 
@@ -133,7 +183,7 @@ internal sealed class PackageCapabilityInference(
             var identity = GetParentTypeIdentity(metadata, member.Parent);
             if (identity is { IsSdk: true } sdkType)
             {
-                AddKnownSdkMemberCapability(sdkType.Namespace, sdkType.Name, metadata.GetString(member.Name), capabilities);
+                AddKnownSdkMemberCapability(sdkType, metadata.GetString(member.Name), capabilities);
             }
         }
     }
@@ -146,7 +196,7 @@ internal sealed class PackageCapabilityInference(
         foreach (var handle in metadata.MethodDefinitions)
         {
             var method = metadata.GetMethodDefinition(handle);
-            if (method.RelativeVirtualAddress == 0 || IsGeneratedMethod(metadata, handle))
+            if (method.RelativeVirtualAddress == 0)
             {
                 continue;
             }
@@ -154,7 +204,7 @@ internal sealed class PackageCapabilityInference(
             var declaringTypeHandle = method.GetDeclaringType();
             var typeName = GetTypeDisplayName(metadata, declaringTypeHandle);
             var methodName = metadata.GetString(method.Name);
-            var callSite = $"{typeName}.{methodName}";
+            var callSite = PackageAuthoredCallSite.Get(typeName, methodName);
             byte[] il;
             try
             {
@@ -166,7 +216,17 @@ internal sealed class PackageCapabilityInference(
                 continue;
             }
 
-            InspectMethodBody(metadata, il, callSite, capabilities);
+            if (IsToolGeneratedMethod(metadata, handle))
+            {
+                if (IsGeneratedAvaloniaXamlMethod(metadata, handle))
+                {
+                    InspectGeneratedMethodBody(metadata, il, callSite, capabilities);
+                }
+            }
+            else
+            {
+                InspectMethodBody(metadata, il, callSite, capabilities);
+            }
         }
     }
 
@@ -176,6 +236,7 @@ internal sealed class PackageCapabilityInference(
         string callSite,
         ISet<string> capabilities)
     {
+        string? previousString = null;
         for (var index = 0; index < il.Length;)
         {
             var opCode = ReadOpCode(il, ref index);
@@ -183,6 +244,18 @@ internal sealed class PackageCapabilityInference(
             {
                 _diagnostics.Add($"Could not decode package-authored IL in '{callSite}'; the unknown instruction may hide a Sunder SDK call.");
                 return;
+            }
+
+            if (opCode.OperandType == OperandType.InlineString)
+            {
+                if (index + sizeof(int) > il.Length)
+                {
+                    _diagnostics.Add($"Could not decode a string token in package-authored IL at '{callSite}'.");
+                    return;
+                }
+                previousString = TryReadUserString(metadata, BitConverter.ToInt32(il.AsSpan(index, sizeof(int))));
+                index += sizeof(int);
+                continue;
             }
 
             if (opCode.OperandType is OperandType.InlineMethod or OperandType.InlineField or OperandType.InlineType or OperandType.InlineTok)
@@ -195,7 +268,8 @@ internal sealed class PackageCapabilityInference(
 
                 var token = BitConverter.ToInt32(il.AsSpan(index, sizeof(int)));
                 index += sizeof(int);
-                InspectToken(metadata, token, callSite, capabilities);
+                InspectToken(metadata, token, callSite, previousString, capabilities);
+                previousString = null;
                 continue;
             }
 
@@ -206,10 +280,19 @@ internal sealed class PackageCapabilityInference(
                 return;
             }
             index += operandSize;
+            if (opCode != OpCodes.Nop)
+            {
+                previousString = null;
+            }
         }
     }
 
-    private void InspectToken(MetadataReader metadata, int token, string callSite, ISet<string> capabilities)
+    private void InspectToken(
+        MetadataReader metadata,
+        int token,
+        string callSite,
+        string? reflectedTypeName,
+        ISet<string> capabilities)
     {
         EntityHandle handle;
         try
@@ -227,16 +310,16 @@ internal sealed class PackageCapabilityInference(
         switch (handle.Kind)
         {
             case HandleKind.MemberReference:
-                InspectMemberReference(metadata, (MemberReferenceHandle)handle, callSite, capabilities);
+                InspectMemberReference(metadata, (MemberReferenceHandle)handle, callSite, reflectedTypeName, capabilities);
                 break;
             case HandleKind.MethodSpecification:
-                InspectMethodSpecification(metadata, (MethodSpecificationHandle)handle, callSite, capabilities);
+                InspectMethodSpecification(metadata, (MethodSpecificationHandle)handle, callSite, reflectedTypeName, capabilities);
                 break;
             case HandleKind.TypeReference:
                 var identity = GetTypeReferenceIdentity(metadata, (TypeReferenceHandle)handle);
                 if (identity.IsSdk)
                 {
-                    AddSdkTypeReferenceCapability(identity.Namespace, identity.Name, capabilities);
+                    AddSdkTypeReferenceCapability(identity, capabilities);
                 }
                 break;
             case HandleKind.TypeSpecification:
@@ -248,7 +331,7 @@ internal sealed class PackageCapabilityInference(
                 }
                 else if (specificationType.IsSdk)
                 {
-                    AddSdkTypeReferenceCapability(specificationType.Namespace, specificationType.Name, capabilities);
+                    AddSdkTypeReferenceCapability(specificationType, capabilities);
                 }
                 break;
             case HandleKind.MethodDefinition:
@@ -267,12 +350,13 @@ internal sealed class PackageCapabilityInference(
         MetadataReader metadata,
         MethodSpecificationHandle handle,
         string callSite,
+        string? reflectedTypeName,
         ISet<string> capabilities)
     {
         var method = metadata.GetMethodSpecification(handle).Method;
         if (method.Kind == HandleKind.MemberReference)
         {
-            InspectMemberReference(metadata, (MemberReferenceHandle)method, callSite, capabilities);
+            InspectMemberReference(metadata, (MemberReferenceHandle)method, callSite, reflectedTypeName, capabilities);
         }
         else if (method.Kind != HandleKind.MethodDefinition)
         {
@@ -284,6 +368,7 @@ internal sealed class PackageCapabilityInference(
         MetadataReader metadata,
         MemberReferenceHandle handle,
         string callSite,
+        string? reflectedTypeName,
         ISet<string> capabilities)
     {
         var member = metadata.GetMemberReference(handle);
@@ -303,17 +388,162 @@ internal sealed class PackageCapabilityInference(
         var memberName = metadata.GetString(member.Name);
         if (declaringType.IsSdk)
         {
-            AddSdkTypeReferenceCapability(declaringType.Namespace, declaringType.Name, capabilities);
-            AddKnownSdkMemberCapability(declaringType.Namespace, declaringType.Name, memberName, capabilities);
+            AddSdkTypeReferenceCapability(declaringType, capabilities);
+            AddKnownSdkMemberCapability(declaringType, memberName, capabilities);
         }
         else if (IsDynamicAccessMember(declaringType, memberName))
         {
-            _dynamicSdkCallSites.Add(callSite);
+            if (!TryAddReflectedSdkTypeCapability(reflectedTypeName, capabilities))
+            {
+                _dynamicSdkCallSites.Add(callSite);
+            }
         }
         // A resolvable metadata reference to a non-SDK assembly cannot hide an SDK call.
     }
 
-    private static bool IsGeneratedMethod(MetadataReader metadata, MethodDefinitionHandle methodHandle)
+    private void InspectGeneratedMethodBody(
+        MetadataReader metadata,
+        byte[] il,
+        string callSite,
+        ISet<string> capabilities)
+    {
+        for (var index = 0; index < il.Length;)
+        {
+            var opCode = ReadOpCode(il, ref index);
+            if (opCode.Size == 0)
+            {
+                _diagnostics.Add(
+                    $"Could not inspect generated Avalonia XAML IL at '{callSite}'. "
+                    + $"Declare <SunderSdkCapability Include=\"{SunderSdkCapabilities.ThemingV1}\" /> when the XAML uses Sunder theme resources.");
+                return;
+            }
+
+            if (opCode.OperandType == OperandType.InlineString)
+            {
+                if (index + sizeof(int) > il.Length)
+                {
+                    _diagnostics.Add($"Could not decode a generated Avalonia XAML string token at '{callSite}'.");
+                    return;
+                }
+
+                var value = TryReadUserString(metadata, BitConverter.ToInt32(il.AsSpan(index, sizeof(int))));
+                if (IsSunderThemeReference(value))
+                {
+                    capabilities.Add(SunderSdkCapabilities.ThemingV1);
+                }
+                index += sizeof(int);
+                continue;
+            }
+
+            var operandSize = OperandSize(opCode.OperandType, il, index);
+            if (operandSize < 0 || index + operandSize > il.Length)
+            {
+                _diagnostics.Add(
+                    $"Could not inspect generated Avalonia XAML IL at '{callSite}'. "
+                    + $"Declare <SunderSdkCapability Include=\"{SunderSdkCapabilities.ThemingV1}\" /> when the XAML uses Sunder theme resources.");
+                return;
+            }
+            index += operandSize;
+        }
+    }
+
+    private void InspectAvaloniaXamlSources(ISet<string> capabilities)
+    {
+        if (!Directory.Exists(projectDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(projectDirectory, "*.axaml", SearchOption.AllDirectories)
+                         .Where(path => !HasDirectorySegment(path, "bin") && !HasDirectorySegment(path, "obj")))
+            {
+                var source = File.ReadAllText(path);
+                if (IsSunderThemeReference(source))
+                {
+                    capabilities.Add(SunderSdkCapabilities.ThemingV1);
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _diagnostics.Add(
+                $"Could not inspect Avalonia XAML under '{projectDirectory}' for Sunder theme resources: {exception.Message} "
+                + $"Declare <SunderSdkCapability Include=\"{SunderSdkCapabilities.ThemingV1}\" /> explicitly if theming is used.");
+        }
+    }
+
+    private static bool HasDirectorySegment(string path, string segment)
+        => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(value => value.Equals(segment, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsSunderThemeReference(string? value)
+        => value?.Contains("Sunder.Brush.", StringComparison.Ordinal) == true
+           || value?.Contains("Sunder.Color.", StringComparison.Ordinal) == true
+           || value?.Contains("Sunder.Shadow.", StringComparison.Ordinal) == true
+           || value?.Contains("Sunder.Radius.", StringComparison.Ordinal) == true
+           || value?.Contains("Sunder.Spacing.", StringComparison.Ordinal) == true
+           || value?.Contains("Sunder.FontSize.", StringComparison.Ordinal) == true
+           || value?.Contains("Sunder.Theme", StringComparison.Ordinal) == true
+           || value?.Contains("avares://Sunder.Sdk.Avalonia/", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string? TryReadUserString(MetadataReader metadata, int token)
+    {
+        try
+        {
+            return metadata.GetUserString(MetadataTokens.UserStringHandle(token & 0x00ffffff));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool TryAddReflectedSdkTypeCapability(string? assemblyQualifiedTypeName, ISet<string> capabilities)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyQualifiedTypeName))
+        {
+            return false;
+        }
+
+        var parts = assemblyQualifiedTypeName.Split(',', 3, StringSplitOptions.TrimEntries);
+        if (parts.Length < 2 || !IsSdkContractAssemblyName(parts[1]))
+        {
+            return true;
+        }
+
+        var separator = parts[0].LastIndexOf('.');
+        if (separator <= 0 || separator == parts[0].Length - 1)
+        {
+            _diagnostics.Add($"Reflected SDK type declaration '{assemblyQualifiedTypeName}' is not a fully qualified contract type.");
+            return true;
+        }
+
+        var identity = new MetadataTypeIdentity(parts[1], parts[0][..separator], parts[0][(separator + 1)..]);
+        if (_capabilityCatalog?.AddTypeCapabilities(
+                identity.AssemblyName,
+                identity.Namespace,
+                identity.Name,
+                capabilities) == true)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsGeneratedAvaloniaXamlMethod(MetadataReader metadata, MethodDefinitionHandle methodHandle)
+    {
+        var method = metadata.GetMethodDefinition(methodHandle);
+        var typeNamespace = GetTypeNamespace(metadata, method.GetDeclaringType());
+        var methodName = metadata.GetString(method.Name);
+        return typeNamespace == "CompiledAvaloniaXaml"
+               || typeNamespace.StartsWith("CompiledAvaloniaXaml.", StringComparison.Ordinal)
+               || methodName.StartsWith("!XamlIl", StringComparison.Ordinal);
+    }
+
+    private static bool IsToolGeneratedMethod(MetadataReader metadata, MethodDefinitionHandle methodHandle)
     {
         var method = metadata.GetMethodDefinition(methodHandle);
         var typeHandle = method.GetDeclaringType();
@@ -326,17 +556,16 @@ internal sealed class PackageCapabilityInference(
             return true;
         }
 
-        return HasGeneratedCodeAttribute(metadata, method.GetCustomAttributes())
-            || HasGeneratedCodeAttribute(metadata, metadata.GetTypeDefinition(typeHandle).GetCustomAttributes());
+        return HasToolGeneratedCodeAttribute(metadata, method.GetCustomAttributes())
+            || HasToolGeneratedCodeAttribute(metadata, metadata.GetTypeDefinition(typeHandle).GetCustomAttributes());
     }
 
-    private static bool HasGeneratedCodeAttribute(MetadataReader metadata, CustomAttributeHandleCollection attributes)
+    private static bool HasToolGeneratedCodeAttribute(MetadataReader metadata, CustomAttributeHandleCollection attributes)
     {
         foreach (var handle in attributes)
         {
             var name = GetAttributeTypeName(metadata, metadata.GetCustomAttribute(handle).Constructor);
-            if (name is "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
-                or "System.CodeDom.Compiler.GeneratedCodeAttribute")
+            if (name is "System.CodeDom.Compiler.GeneratedCodeAttribute")
             {
                 return true;
             }
@@ -459,7 +688,21 @@ internal sealed class PackageCapabilityInference(
         => assemblyName?.Equals("Sunder.Sdk", StringComparison.OrdinalIgnoreCase) == true
            || assemblyName?.StartsWith("Sunder.Sdk.", StringComparison.OrdinalIgnoreCase) == true;
 
-    private static void AddSdkTypeReferenceCapability(string @namespace, string name, ISet<string> capabilities)
+    private void AddSdkTypeReferenceCapability(MetadataTypeIdentity identity, ISet<string> capabilities)
+    {
+        if (_capabilityCatalog?.AddTypeCapabilities(
+                identity.AssemblyName,
+                identity.Namespace,
+                identity.Name,
+                capabilities) == true)
+        {
+            return;
+        }
+
+        AddFallbackSdkTypeReferenceCapability(identity.Namespace, identity.Name, capabilities);
+    }
+
+    private static void AddFallbackSdkTypeReferenceCapability(string @namespace, string name, ISet<string> capabilities)
     {
         switch (@namespace, name)
         {
@@ -480,9 +723,6 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "PackageViewPlacement"):
                 capabilities.Add(SunderSdkCapabilities.ViewsV1);
                 break;
-            case ("Sunder.Sdk.Avalonia", "IPackageWorkspaceFactory"):
-                capabilities.Add(SunderSdkCapabilities.WorkspacesV1);
-                break;
             case ("Sunder.Sdk.Abstractions", "IPackageBackgroundService"):
                 capabilities.Add(SunderSdkCapabilities.BackgroundServicesV1);
                 break;
@@ -502,15 +742,14 @@ internal sealed class PackageCapabilityInference(
                 capabilities.Add(SunderSdkCapabilities.ExtensionsV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageExtensionCatalogMonitor"):
-            case ("Sunder.Sdk.Abstractions", "IPackageExtensionCatalogChangeNotifier"):
             case ("Sunder.Sdk.Abstractions", "PackageExtensionCatalogChangedEventArgs"):
             case ("Sunder.Sdk.Abstractions", "PackageExtensionCatalogChangeReason"):
             case ("Sunder.Sdk.Abstractions", "PackageExtensionChangeKind"):
             case ("Sunder.Sdk.Abstractions", "PackageExtensionChange"):
                 capabilities.Add(SunderSdkCapabilities.ExtensionChangesV1);
                 break;
-            case ("Sunder.Sdk.Configuration", _):
-                capabilities.Add(SunderSdkCapabilities.ConfigurationSchemaV1);
+            case ("Sunder.Sdk.Settings", _):
+                capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageSettings"):
                 capabilities.Add(SunderSdkCapabilities.SettingsV1);
@@ -536,16 +775,11 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "IPackageViewNavigationTarget"):
             case ("Sunder.Sdk.Abstractions", "PackageViewNavigationContext"):
             case ("Sunder.Sdk.Abstractions", "PackageHotbarView"):
-            case ("Sunder.Sdk.Abstractions", "PackageHotbarPlacement"):
                 capabilities.Add(SunderSdkCapabilities.ShellViewV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageSettingsNavigationService"):
             case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
                 capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageInstalledSessionControl"):
-            case ("Sunder.Sdk.Abstractions", "InstalledPackageSessionStatus"):
-                capabilities.Add(SunderSdkCapabilities.InstalledPackageSessionsV1);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageDevelopmentSessionControl"):
             case ("Sunder.Sdk.Abstractions", "PackageDevelopmentSessionAvailability"):
@@ -559,7 +793,8 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Runtime", _):
                 capabilities.Add(SunderSdkCapabilities.RuntimeOperationsV1);
                 break;
-            case ("Sunder.Sdk.Stacks", "IPackageStackContributor"):
+            case ("Sunder.Sdk.Stacks", "IPackageStackExporter"):
+            case ("Sunder.Sdk.Stacks", "IPackageStackImporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
             case ("Sunder.Sdk.Stacks", "SunderStackExtensionPoints"):
                 capabilities.Add(SunderSdkCapabilities.StacksV1);
@@ -584,7 +819,25 @@ internal sealed class PackageCapabilityInference(
         }
     }
 
-    private static void AddKnownSdkMemberCapability(
+    private void AddKnownSdkMemberCapability(
+        MetadataTypeIdentity identity,
+        string memberName,
+        ISet<string> capabilities)
+    {
+        if (_capabilityCatalog?.AddMemberCapabilities(
+                identity.AssemblyName,
+                identity.Namespace,
+                identity.Name,
+                memberName,
+                capabilities) == true)
+        {
+            return;
+        }
+
+        AddFallbackSdkMemberCapability(identity.Namespace, identity.Name, memberName, capabilities);
+    }
+
+    private static void AddFallbackSdkMemberCapability(
         string @namespace,
         string typeName,
         string memberName,
@@ -610,11 +863,7 @@ internal sealed class PackageCapabilityInference(
                 case "RegisterPackageView":
                     capabilities.Add(SunderSdkCapabilities.ViewsV1);
                     break;
-                case "RegisterPackageViewFactory":
-                    capabilities.Add(SunderSdkCapabilities.WorkspacesV1);
-                    break;
                 case "RegisterSettingsView":
-                case "RegisterSettingsViewFactory":
                     capabilities.Add(SunderSdkCapabilities.SettingsViewsV1);
                     break;
                 case "RegisterBackgroundService":
@@ -623,8 +872,8 @@ internal sealed class PackageCapabilityInference(
                 case "RegisterExtension":
                     capabilities.Add(SunderSdkCapabilities.ExtensionsV1);
                     break;
-                case "RegisterConfigurationSchema":
-                    capabilities.Add(SunderSdkCapabilities.ConfigurationSchemaV1);
+                case "RegisterSettingsSchema":
+                    capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
                     break;
                 case "RegisterRuntimeOperation":
                 case "RegisterRuntimeStream":
@@ -654,7 +903,8 @@ internal sealed class PackageCapabilityInference(
             OperandType.InlineNone => 0,
             OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
             OperandType.InlineVar => 2,
-            OperandType.InlineBrTarget or OperandType.InlineI or OperandType.InlineSig or OperandType.InlineString => 4,
+            OperandType.InlineBrTarget or OperandType.InlineI or OperandType.InlineSig or OperandType.InlineString
+                or OperandType.InlineMethod or OperandType.InlineField or OperandType.InlineType or OperandType.InlineTok => 4,
             OperandType.ShortInlineR => 4,
             OperandType.InlineI8 or OperandType.InlineR => 8,
             OperandType.InlineSwitch => index + 4 > il.Length ? -1 : 4 + (BitConverter.ToInt32(il.AsSpan(index, 4)) * 4),

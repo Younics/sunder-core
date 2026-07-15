@@ -1,11 +1,11 @@
 using Sunder.Sdk.Compatibility;
-using Sunder.Sdk.Configuration;
 using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Settings;
 
 namespace Sunder.Sdk.Abstractions;
 
 /// <summary>Collects Runtime contributions during one package activation.</summary>
-/// <remarks>The Runtime owns registrations and their service instances until deactivation. Registration is single-threaded and valid only during module activation.</remarks>
+/// <remarks>Every registration is attributed to the currently activating package. The Runtime retains registrations and their service instances until deactivation. Registration is single-threaded and valid only during module activation.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.ContributionsV1)]
 public interface ISunderRuntimeContributionRegistry
 {
@@ -13,13 +13,15 @@ public interface ISunderRuntimeContributionRegistry
     [SunderSdkCapability(SunderSdkCapabilities.BackgroundServicesV1)]
     void RegisterBackgroundService<TService>() where TService : class, IPackageBackgroundService;
 
-    /// <summary>Registers a host-owned contribution instance for a typed extension point.</summary>
+    /// <summary>Registers a contribution owned by the currently activating package for a typed extension point.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.ExtensionsV1)]
     void RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution);
 
-    /// <summary>Registers the package's complete host-rendered configuration schema.</summary>
-    [SunderSdkCapability(SunderSdkCapabilities.ConfigurationSchemaV1)]
-    void RegisterConfigurationSchema(PackageConfigurationSchema schema);
+    /// <summary>Registers the package's complete host-rendered settings schema.</summary>
+    [SunderSdkCapability(SunderSdkCapabilities.SettingsSchemaV1)]
+    void RegisterSettingsSchema(PackageSettingsSchema schema)
+        => throw new NotSupportedException(
+            "This host has not implemented the Sunder 1.1 settings-schema registration adapter.");
 
     /// <summary>Registers one package-scoped typed operation handler.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.RuntimeOperationsV1)]

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -10,7 +11,6 @@ internal sealed class AppPackageActivator(
     AppPackageServiceProviderFactory serviceProviderFactory,
     AppPackageViewRegistry viewRegistry,
     AppPackageExtensionCatalog extensionCatalog,
-    bool isPreflight = false,
     Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo = null)
 {
     public async Task ActivateAsync(
@@ -23,6 +23,10 @@ internal sealed class AppPackageActivator(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if ((package.HostRoles & PackageHostRoles.App) == 0)
+        {
+            throw new InvalidOperationException($"Package '{package.PackageId}' does not declare the App host role.");
+        }
         var manifest = AppPackageManifest.Load(Path.Combine(preparedSource.Folder, "sunder-package.json"));
         if (manifest?.EntryAssembly is null)
         {
@@ -41,10 +45,19 @@ internal sealed class AppPackageActivator(
             package.PackageId,
             package.Version,
             activation.PackageInfo.Folder,
-            isPreflight,
             getRuntimeConnectionInfo,
+            serviceProviderFactory.Publication,
             cancellationToken).ConfigureAwait(false);
-        var serviceProvider = serviceProviderFactory.Create(package, packageContext, module);
+        ServiceProvider serviceProvider;
+        try
+        {
+            serviceProvider = serviceProviderFactory.Create(package, packageContext, module);
+        }
+        catch
+        {
+            await packageContext.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
         activation.ServiceProvider = serviceProvider;
         trackOwnedDisposable(serviceProvider);
 
@@ -55,7 +68,9 @@ internal sealed class AppPackageActivator(
         if (module is not null)
         {
             var registry = new AppPackageContributionRegistry(serviceProvider, viewRegistry, extensionCatalog, package.PackageId);
+            using var extensionBatch = extensionCatalog.BeginBatch(PackageExtensionCatalogChangeReason.PackageActivated);
             module.RegisterAppContributions(registry, serviceProvider);
+            extensionBatch.Commit();
         }
     }
 

@@ -9,14 +9,13 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
     internal static readonly TimeSpan StabilityProbeDelay = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan MaxStabilityWait = TimeSpan.FromSeconds(5);
 
-    private readonly Func<bool, CancellationToken, Task<IReadOnlyList<DevPackageWatchTarget>>> _configureAsync;
     private readonly Func<PackageLifecycleStageRequest, CancellationToken, Task<PackageLifecycleStageResult>> _stageAsync;
     private readonly Func<string, CancellationToken, Task<PackageLifecycleOperationResult>> _commitAsync;
     private readonly Func<string, CancellationToken, Task<bool>> _discardAsync;
-    private readonly Func<long> _getSessionGeneration;
     private readonly RuntimeEventStreamService _eventStream;
     private readonly ILogger<DevPackageWatchService> _logger;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
+    private readonly SemaphoreSlim _transitionGate = new(1, 1);
     private readonly object _gate = new();
     private readonly Dictionary<string, WatchRegistration> _registrations = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _changedPackageIds = new(StringComparer.OrdinalIgnoreCase);
@@ -30,11 +29,9 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         RuntimeEventStreamService eventStream,
         ILogger<DevPackageWatchService> logger)
         : this(
-            packageSessionService.ConfigureDevWatchingAsync,
             packageSessionService.StageAsync,
             packageSessionService.CommitStageAsync,
             packageSessionService.DiscardStageAsync,
-            () => packageSessionService.Generation,
             eventStream,
             logger,
             Task.Delay)
@@ -42,76 +39,90 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
     }
 
     internal DevPackageWatchService(
-        Func<bool, CancellationToken, Task<IReadOnlyList<DevPackageWatchTarget>>> configureAsync,
         Func<PackageLifecycleStageRequest, CancellationToken, Task<PackageLifecycleStageResult>> stageAsync,
         Func<string, CancellationToken, Task<PackageLifecycleOperationResult>> commitAsync,
         Func<string, CancellationToken, Task<bool>> discardAsync,
-        Func<long> getSessionGeneration,
         RuntimeEventStreamService eventStream,
         ILogger<DevPackageWatchService> logger,
         Func<TimeSpan, CancellationToken, Task> delayAsync)
     {
-        _configureAsync = configureAsync;
         _stageAsync = stageAsync;
         _commitAsync = commitAsync;
         _discardAsync = discardAsync;
-        _getSessionGeneration = getSessionGeneration;
         _eventStream = eventStream;
         _logger = logger;
         _delayAsync = delayAsync;
     }
 
-    public async Task<DevPackageWatchStatus> SetIntentAsync(bool enabled, CancellationToken cancellationToken = default)
+    public async Task SynchronizeAsync(
+        IReadOnlyList<DevPackageWatchTarget> targets,
+        CancellationToken cancellationToken = default)
     {
-        var targets = await _configureAsync(enabled, cancellationToken);
-        lock (_gate)
+        ArgumentNullException.ThrowIfNull(targets);
+        await _transitionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            _enabled = enabled;
-            ReplaceRegistrations(enabled ? targets : []);
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                _enabled = targets.Count > 0;
+                ReplaceRegistrations(targets);
+                if (!_enabled)
+                {
+                    _reloadCancellation?.Cancel();
+                    _changedPackageIds.Clear();
+                }
+            }
         }
-
-        return new DevPackageWatchStatus(
-            enabled,
-            _getSessionGeneration(),
-            targets.Select(target => target.PackageId).ToArray());
+        finally
+        {
+            _transitionGate.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        Task reloadTask;
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            _enabled = false;
-            _reloadCancellation?.Cancel();
-            foreach (var registration in _registrations.Values)
-            {
-                registration.Dispose();
-            }
-
-            _registrations.Clear();
-            _changedPackageIds.Clear();
-            reloadTask = _reloadTask;
-        }
-
+        await _transitionGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await reloadTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-        }
+            Task reloadTask;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
 
-        lock (_gate)
+                _disposed = true;
+                _enabled = false;
+                _reloadCancellation?.Cancel();
+                foreach (var registration in _registrations.Values)
+                {
+                    registration.Dispose();
+                }
+
+                _registrations.Clear();
+                _changedPackageIds.Clear();
+                reloadTask = _reloadTask;
+            }
+
+            try
+            {
+                await reloadTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            lock (_gate)
+            {
+                _reloadCancellation?.Dispose();
+                _reloadCancellation = null;
+            }
+        }
+        finally
         {
-            _reloadCancellation?.Dispose();
-            _reloadCancellation = null;
+            _transitionGate.Release();
         }
     }
 
@@ -161,11 +172,25 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
             _changedPackageIds.Add(packageId);
             _reloadCancellation?.Cancel();
-            _reloadCancellation?.Dispose();
-            _reloadCancellation = new CancellationTokenSource();
-            _reloadTask = DebounceAndReloadAsync(_reloadCancellation);
+            var cancellation = new CancellationTokenSource();
+            var previousReload = _reloadTask;
+            _reloadCancellation = cancellation;
+            _reloadTask = RunSerializedReloadAsync(previousReload, cancellation);
             _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloadDebounce, _changedPackageIds.ToArray());
         }
+    }
+
+    private async Task RunSerializedReloadAsync(Task previousReload, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await previousReload.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        await DebounceAndReloadAsync(cancellation).ConfigureAwait(false);
     }
 
     private async Task DebounceAndReloadAsync(CancellationTokenSource cancellation)
@@ -209,7 +234,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
             _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloading, packageIds);
             var stage = await _stageAsync(
-                new PackageLifecycleStageRequest(packageIds, PackageLifecycleOverlayOwner.HotReload),
+                new PackageLifecycleStageRequest(packageIds),
                 cancellationToken).ConfigureAwait(false);
             if (stage.StageId is null || stage.Errors.Count > 0)
             {

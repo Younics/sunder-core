@@ -2,8 +2,15 @@ using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Sunder.App.ViewModels;
 
-internal sealed partial class SettingsCliViewModel(SettingsCliCoordinator coordinator) : ViewModelBase
+public sealed partial class SettingsCliViewModel : ViewModelBase
 {
+    private readonly SettingsCliCoordinator _coordinator;
+
+    internal SettingsCliViewModel(SettingsCliCoordinator coordinator)
+    {
+        _coordinator = coordinator;
+    }
+
     public bool HasWarning => !string.IsNullOrWhiteSpace(WarningText);
 
     public bool HasPathInstructions => !string.IsNullOrWhiteSpace(PathInstructions);
@@ -44,14 +51,14 @@ internal sealed partial class SettingsCliViewModel(SettingsCliCoordinator coordi
     partial void OnPathInstructionsChanged(string value)
         => OnPropertyChanged(nameof(HasPathInstructions));
 
-    public async Task<string?> RefreshStatusAsync(bool showSuccessStatus)
-        => ApplyOperationResult(await coordinator.RefreshStatusAsync(showSuccessStatus));
+    internal async Task<string?> RefreshStatusAsync(bool showSuccessStatus)
+        => ApplyOperationResult(await _coordinator.RefreshStatusAsync(showSuccessStatus));
 
-    public async Task<string?> InstallOrRepairAsync()
-        => ApplyOperationResult(await coordinator.InstallOrRepairAsync());
+    internal async Task<string?> InstallOrRepairAsync()
+        => ApplyOperationResult(await _coordinator.InstallOrRepairAsync());
 
-    public async Task<string?> UninstallAsync()
-        => ApplyOperationResult(await coordinator.UninstallAsync());
+    internal async Task<string?> UninstallAsync()
+        => ApplyOperationResult(await _coordinator.UninstallAsync());
 
     private string? ApplyOperationResult(SettingsCliOperationResult result)
     {

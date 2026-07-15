@@ -72,6 +72,41 @@ public sealed class RuntimeHostCompositionTests
         Assert.Empty(facadeDependencies);
     }
 
+    [Fact]
+    public async Task ServiceProviderDisposal_CleansTransferAndSnapshotStores()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(root);
+        var services = new ServiceCollection();
+        services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
+        var provider = services.BuildServiceProvider();
+        var transfers = provider.GetRequiredService<RuntimeContentTransferStore>();
+        var snapshots = provider.GetRequiredService<PackageUiSnapshotStore>();
+        await using var uploadContent = new MemoryStream([1, 2, 3]);
+        await transfers.CreateUploadAsync(
+            RuntimeUploadKind.Package,
+            uploadContent,
+            uploadContent.Length,
+            expectedHash: null,
+            "test.sunderpkg",
+            "application/vnd.sunder.package",
+            generation: 0,
+            CancellationToken.None);
+        var source = Path.Combine(root, "snapshot-source");
+        Directory.CreateDirectory(Path.Combine(source, "lib"));
+        File.WriteAllText(Path.Combine(source, "sunder-package.json"), "{}");
+        File.WriteAllText(Path.Combine(source, "lib", "package.dll"), "payload");
+        snapshots.CreateSnapshots([
+            new RuntimePackageSource("test.package", Sunder.Runtime.Contracts.PackageSourceKind.Dev, source, source),
+        ], generation: 1);
+        Assert.NotEmpty(Directory.EnumerateFiles(paths.TransferRootPath));
+
+        await provider.DisposeAsync();
+
+        Assert.Empty(Directory.EnumerateFiles(paths.TransferRootPath));
+        Directory.Delete(root, recursive: true);
+    }
+
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "SunderRuntimeCompositionTests", Guid.NewGuid().ToString("N"));

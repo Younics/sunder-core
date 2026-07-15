@@ -6,8 +6,9 @@ using Sunder.Sdk.Notifications;
 namespace Sunder.App.Services;
 
 internal sealed class PackageOperationFinalizer(
-    Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
-    NotificationCenterService notificationCenter)
+    Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>> waitForPresentationAsync,
+    NotificationCenterService notificationCenter,
+    TimeSpan presentationWaitTimeout)
 {
     public async Task FinishRegistryOperationAsync(
         BackgroundProcessContext context,
@@ -26,6 +27,7 @@ internal sealed class PackageOperationFinalizer(
             context,
             result.ImpactedPackageIds,
             result.RuntimeSessionApplied,
+            result.CommittedStamp,
             result.Message,
             successTitle,
             BuildRegistryPackageOperationToastMessage(result, successFallbackMessage),
@@ -49,6 +51,7 @@ internal sealed class PackageOperationFinalizer(
             context,
             result.ImpactedPackageIds,
             result.RuntimeSessionApplied,
+            result.CommittedStamp,
             result.Message,
             successTitle,
             string.IsNullOrWhiteSpace(result.Message) ? successFallbackMessage : result.Message.Trim(),
@@ -59,15 +62,16 @@ internal sealed class PackageOperationFinalizer(
         BackgroundProcessContext context,
         IReadOnlyList<string> impactedPackageIds,
         bool runtimeSessionApplied,
+        RuntimePackageStamp? committedStamp,
         string? resultMessage,
         string successTitle,
         string successToastMessage,
         string successFallbackMessage)
     {
-        if (impactedPackageIds.Count > 0 && runtimeSessionApplied)
+        if (impactedPackageIds.Count > 0 && runtimeSessionApplied && committedStamp is not null)
         {
             context.ReportProgress(92, "Applying package changes to the running shell...");
-            var lifecycleWarning = await ApplyPackageLifecycleChangesAsync(impactedPackageIds, context.CancellationToken).ConfigureAwait(false);
+            var lifecycleWarning = await WaitForPresentationAsync(committedStamp, context.CancellationToken).ConfigureAwait(false);
             if (lifecycleWarning is not null)
             {
                 context.ReportProgress(100, lifecycleWarning);
@@ -91,24 +95,47 @@ internal sealed class PackageOperationFinalizer(
         }
     }
 
-    private async Task<string?> ApplyPackageLifecycleChangesAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken)
+    private async Task<string?> WaitForPresentationAsync(RuntimePackageStamp committedStamp, CancellationToken cancellationToken)
     {
+        using var timeoutCancellation = new CancellationTokenSource(presentationWaitTimeout);
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutCancellation.Token);
         try
         {
-            await applyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken).ConfigureAwait(false);
-            return null;
+            var result = await waitForPresentationAsync(committedStamp, waitCancellation.Token).ConfigureAwait(false);
+            return result.Outcome == PackagePresentationOutcome.Applied
+                ? null
+                : await ReportPresentationFailureAsync(result.Message ?? "The running shell did not apply the committed package presentation.", result.Exception).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            var warning = "Package store commit succeeded, but waiting for the running shell presentation was canceled.";
+            await ReportPresentationFailureAsync(warning, exception: null).ConfigureAwait(false);
+            throw new InvalidOperationException(warning);
+        }
+        catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+        {
+            return await ReportPresentationFailureAsync(
+                $"Package store commit succeeded, but the running shell did not apply it within {presentationWaitTimeout.TotalSeconds:0} seconds.",
+                exception: null).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            AppSessionLog.WriteError("Package store updated, but the running shell rejected the live package change.", ex);
-            var warning = $"Package store updated, but the running shell rejected the live change: {ex.Message}";
-            await PublishWarningAsync("Package changes were not applied live", warning).ConfigureAwait(false);
-            return warning;
+            return await ReportPresentationFailureAsync(
+                $"Package store commit succeeded, but the running shell rejected the live presentation: {ex.Message}",
+                ex).ConfigureAwait(false);
         }
+    }
+
+    private async Task<string> ReportPresentationFailureAsync(string details, Exception? exception)
+    {
+        var warning = details.StartsWith("Package store commit succeeded", StringComparison.Ordinal)
+            ? details
+            : $"Package store commit succeeded, but live presentation failed: {details}";
+        AppSessionLog.WriteError(warning, exception);
+        await PublishWarningAsync("Package changes were not applied live", warning).ConfigureAwait(false);
+        return warning;
     }
 
     private async Task PublishSuccessAsync(string title, string message)

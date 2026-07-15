@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Logging;
 
@@ -13,8 +12,8 @@ public interface IPackageContext
     string PackageId { get; }
     /// <summary>Gets the canonical strict SemVer package version.</summary>
     string Version { get; }
-    /// <summary>Gets the read-only installed package root; mutable data must use <see cref="Storage"/>.</summary>
-    string InstallPath { get; }
+    /// <summary>Gets the read-only activation content root; mutable data must use <see cref="Storage"/>.</summary>
+    string ContentRootPath { get; }
     /// <summary>Gets package-scoped storage for the current host role.</summary>
     IPackageStorageContext Storage { get; }
     /// <summary>Gets writable, schema-declared package settings stored independently from package state.</summary>
@@ -24,8 +23,6 @@ public interface IPackageContext
     /// <summary>Gets the App callback-session client; Runtime and preflight contexts return an unavailable client.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.CallbacksV1)]
     IPackageCallbackClient Callbacks => NullPackageCallbackClient.Instance;
-    /// <summary>Gets the package-scoped Microsoft logger factory.</summary>
-    ILoggerFactory LoggerFactory { get; }
     /// <summary>Gets package logging capabilities.</summary>
     IPackageLogging Logging { get; }
 }

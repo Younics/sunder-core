@@ -1,5 +1,4 @@
-using Avalonia;
-using Sunder.App.Features.Shell.Panels;
+using Avalonia.Controls;
 using Sunder.App.Services;
 using Sunder.Runtime.Contracts;
 
@@ -8,17 +7,18 @@ namespace Sunder.App.Features.Shell.Lifecycle;
 internal sealed class ShellPackageLifecycleRefreshCoordinator(
     AppPackageLifecycleCoordinator packageLifecycleCoordinator,
     ShellPackageLifecyclePresenter packageLifecyclePresenter,
-    ShellDeferredHostedViewActivator deferredHostedViewActivator,
     Func<bool> isDisposed,
-    IUiDispatcher? uiDispatcher = null)
+    Action<Control> stageCandidateView,
+    Action detachStagedCandidateViews,
+    IUiDispatcher uiDispatcher)
 {
     private readonly AppPackageLifecycleGate _packageLifecycleGate = new(nameof(ShellPackageLifecycleRefreshCoordinator));
-    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
 
     public async Task ApplyPackageLifecycleChangesAsync(
-        IReadOnlyCollection<string>? impactedPackageIds = null,
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyCollection<string>? retryDisabledPackageIds = null,
         CancellationToken cancellationToken = default,
-        bool deferHostedViewCreation = false)
+        Action? detachAuxiliaryPackageViews = null)
     {
         using var lifecycle = await _packageLifecycleGate.EnterAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
@@ -27,26 +27,49 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
             return;
         }
 
-        var activePackages = await packageLifecycleCoordinator.ApplyPackageDeltaFromRuntimeAsync(impactedPackageIds, cancellationToken).ConfigureAwait(false);
-        await ApplyPackageLifecycleChangesToShellAsync(activePackages, impactedPackageIds, deferHostedViewCreation).ConfigureAwait(false);
-        if (deferHostedViewCreation)
+        try
         {
-            await deferredHostedViewActivator.ActivateAfterLifecycleAsync(cancellationToken).ConfigureAwait(false);
+            await packageLifecycleCoordinator.ApplyPackageSnapshotAsync(
+                snapshot,
+                retryDisabledPackageIds,
+                async (candidate, activePackages, prepareCancellationToken) =>
+                {
+                    var presentation = uiDispatcher.CheckAccess()
+                        ? packageLifecyclePresenter.PrepareLifecycleChanges(activePackages)
+                        : await uiDispatcher.InvokeAsync(
+                            () => packageLifecyclePresenter.PrepareLifecycleChanges(activePackages));
+                    var stabilizedViewIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var viewId in presentation.SelectedViewIds)
+                    {
+                        prepareCancellationToken.ThrowIfCancellationRequested();
+                        await candidate.StabilizeViewAsync(
+                            viewId,
+                            parameters: null,
+                            stageCandidateView,
+                            prepareCancellationToken).ConfigureAwait(false);
+                        stabilizedViewIds.Add(viewId);
+                    }
+
+                    return () =>
+                    {
+                        detachStagedCandidateViews();
+                        detachAuxiliaryPackageViews?.Invoke();
+                        packageLifecyclePresenter.CommitPreparedLifecycleChanges(presentation, stabilizedViewIds);
+                    };
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (uiDispatcher.CheckAccess())
+            {
+                detachStagedCandidateViews();
+            }
+            else
+            {
+                await uiDispatcher.InvokeAsync(detachStagedCandidateViews).ConfigureAwait(false);
+            }
         }
     }
 
-    private async Task ApplyPackageLifecycleChangesToShellAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyCollection<string>? impactedPackageIds,
-        bool deferHostedViewCreation)
-    {
-        if (_uiDispatcher.CheckAccess() || Application.Current is null)
-        {
-            packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation);
-            return;
-        }
-
-        await _uiDispatcher.InvokeAsync(
-            () => packageLifecyclePresenter.ApplyLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation));
-    }
 }

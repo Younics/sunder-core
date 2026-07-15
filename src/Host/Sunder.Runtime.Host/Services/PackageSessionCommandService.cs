@@ -22,11 +22,14 @@ internal sealed class PackageSessionCommandService(
     }
 
     private async Task<PackageSessionOperationResult> MapAsync(PackageOperationResult result, string packageId, CancellationToken cancellationToken)
-        => new(
+        => new PackageSessionOperationResult(
             result.Success,
             result.Message,
             result.Warnings,
             result.Errors,
             result.ImpactedPackageIds.Count == 0 ? [packageId] : result.ImpactedPackageIds,
-            await sessions.GetStatusAsync(packageId, cancellationToken));
+            await sessions.GetStatusAsync(packageId, cancellationToken))
+        {
+            CommittedStamp = result.CommittedStamp,
+        };
 }

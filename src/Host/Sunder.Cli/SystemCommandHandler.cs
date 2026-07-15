@@ -1,6 +1,6 @@
 namespace Sunder.Cli;
 
-internal sealed class SystemCommandHandler(ICliRuntimeClient runtime, CliOutput output)
+internal sealed class SystemCommandHandler(ICliRuntimeSystemClient runtime, CliOutput output)
 {
     public async Task<int> ExecuteAsync(SystemStatusCommand command, CancellationToken token)
     {

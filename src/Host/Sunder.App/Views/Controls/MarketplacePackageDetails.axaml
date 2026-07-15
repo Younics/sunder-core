@@ -60,21 +60,21 @@
 
     <Border Classes="card-surface"
             IsVisible="{Binding HasMarketplaceProfileMedia}">
-      <controls:MarketplaceMediaStrip Items="{Binding MarketplaceProfileMedia}" />
+      <controls:MarketplaceMediaStrip Items="{Binding Marketplace.ProfileMedia}" />
     </Border>
 
     <Border Classes="card-surface"
             IsVisible="{Binding HasMarketplaceReadme}">
       <StackPanel Spacing="8">
         <TextBlock Classes="section-title" Text="Overview" />
-        <md:MarkdownRenderer MarkdownBuilder="{Binding MarketplaceReadmeMarkdownBuilder}" />
+        <md:MarkdownRenderer MarkdownBuilder="{Binding Marketplace.ReadmeMarkdownBuilder}" />
       </StackPanel>
     </Border>
 
     <controls:MarketplaceProfileCard Description="Project links and package metadata."
-                                     Links="{Binding MarketplaceProfileLinks}"
-                                     Metadata="{Binding MarketplaceProfileMetadata}"
-                                     Tags="{Binding MarketplaceProfileTags}"
+                                      Links="{Binding Marketplace.ProfileLinks}"
+                                      Metadata="{Binding Marketplace.ProfileMetadata}"
+                                      Tags="{Binding Marketplace.ProfileTags}"
                                      HasLinks="{Binding HasMarketplaceProfileLinks}"
                                      HasMetadata="{Binding HasMarketplaceProfileMetadata}"
                                      HasTags="{Binding HasMarketplaceProfileTags}"
@@ -90,7 +90,7 @@
         <StackPanel Spacing="6"
                     IsVisible="{Binding HasMarketplaceCreators}">
           <TextBlock Classes="caption marketplace-people-heading" Text="Creator" />
-          <ItemsControl ItemsSource="{Binding MarketplaceCreators}">
+          <ItemsControl ItemsSource="{Binding Marketplace.Creators}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <WrapPanel />
@@ -109,7 +109,7 @@
         <StackPanel Spacing="6"
                     IsVisible="{Binding HasMarketplaceMaintainers}">
           <TextBlock Classes="caption marketplace-people-heading" Text="Maintainers" />
-          <ItemsControl ItemsSource="{Binding MarketplaceMaintainers}">
+          <ItemsControl ItemsSource="{Binding Marketplace.Maintainers}">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <WrapPanel />
@@ -133,7 +133,7 @@
         <TextBlock Classes="section-title" Text="Versions" />
         <ListBox Classes="package-list"
                  MaxHeight="280"
-                 ItemsSource="{Binding MarketplaceVersions}"
+                 ItemsSource="{Binding Marketplace.Versions}"
                  SelectedItem="{Binding SelectedMarketplaceVersion, Mode=TwoWay}"
                  IsVisible="{Binding HasMarketplaceVersions}">
           <ListBox.ItemTemplate>

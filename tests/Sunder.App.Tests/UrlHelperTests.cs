@@ -30,7 +30,7 @@ public sealed class UrlHelperTests
     }
 
     [Theory]
-    [InlineData(" http://registry.example.test ", "http://registry.example.test/")]
+    [InlineData(" http://127.0.0.1:5288 ", "http://127.0.0.1:5288/")]
     [InlineData("https://registry.example.test/api", "https://registry.example.test/api/")]
     [InlineData("https://registry.example.test/api/", "https://registry.example.test/api/")]
     public void RegistryUrlHelper_TryParse_NormalizesHttpUrls(string value, string expected)
@@ -46,6 +46,10 @@ public sealed class UrlHelperTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("ftp://registry.example.test")]
+    [InlineData("http://registry.example.test")]
+    [InlineData("https://user:secret@registry.example.test")]
+    [InlineData("https://registry.example.test/?tenant=one")]
+    [InlineData("https://registry.example.test/#fragment")]
     public void RegistryUrlHelper_TryParse_RejectsInvalidUrls(string? value)
     {
         var parsed = RegistryUrlHelper.TryParse(value, out var uri);

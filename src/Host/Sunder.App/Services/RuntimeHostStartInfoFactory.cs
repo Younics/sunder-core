@@ -8,9 +8,7 @@ internal static class RuntimeHostStartInfoFactory
     public static ProcessStartInfo Create(
         string runtimeHostPath,
         Uri runtimeUrl,
-        string bearerToken,
-        string connectionInfoPath,
-        IReadOnlyList<string>? devPackageFolders = null)
+        string connectionInfoPath)
     {
         var runtimeUrlText = runtimeUrl.ToString().TrimEnd('/');
         var isDotnetAssembly = string.Equals(Path.GetExtension(runtimeHostPath), ".dll", StringComparison.OrdinalIgnoreCase);
@@ -21,7 +19,6 @@ internal static class RuntimeHostStartInfoFactory
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(runtimeHostPath)!,
         };
-        startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"] = bearerToken;
         startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = connectionInfoPath;
 
         if (isDotnetAssembly)
@@ -31,17 +28,6 @@ internal static class RuntimeHostStartInfoFactory
 
         startInfo.ArgumentList.Add("--urls");
         startInfo.ArgumentList.Add(runtimeUrlText);
-        foreach (var folder in devPackageFolders ?? [])
-        {
-            if (string.IsNullOrWhiteSpace(folder))
-            {
-                continue;
-            }
-
-            startInfo.ArgumentList.Add("--dev-package");
-            startInfo.ArgumentList.Add(folder);
-        }
-
         return startInfo;
     }
 }

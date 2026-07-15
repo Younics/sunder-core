@@ -13,6 +13,7 @@ internal static class RuntimeHostComposition
         RuntimeBearerTokenValidator bearerTokenValidator)
     {
         services.AddLogging();
+        services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
         services.AddSingleton(bearerTokenValidator);
         services.AddSingleton(packagePaths);
         services.AddSingleton(TimeProvider.System);
@@ -20,6 +21,7 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeAuthPolicyOptions>();
         services.AddSingleton<RuntimeStackPolicyOptions>();
         services.AddSingleton<RuntimePackageOperationPolicyOptions>();
+        services.AddSingleton<RuntimeLifecyclePolicyOptions>();
         services.AddSingleton<RuntimeProtocolDescriptor>();
         services.AddSingleton<RuntimeOperationGate>();
         services.AddSingleton<RuntimeResetChallengeService>();
@@ -39,8 +41,11 @@ internal static class RuntimeHostComposition
             provider.GetRequiredService<RuntimeAuthPolicyOptions>(),
             provider.GetRequiredService<RuntimePackageOperationPolicyOptions>(),
             provider.GetRequiredService<TimeProvider>(),
-            provider.GetService<IHostApplicationLifetime>()));
+            provider.GetService<IHostApplicationLifetime>(),
+            provider.GetRequiredService<PackageUiSnapshotStore>(),
+            provider.GetRequiredService<RuntimeLifecyclePolicyOptions>()));
         services.AddSingleton(provider => provider.GetRequiredService<RuntimeSessionOwner>().State);
+        services.AddSingleton<RuntimeSnapshotService>();
         services.AddSingleton(provider => new PackageSessionLoadService(
             provider.GetRequiredService<ILogger<PackageSessionLoadService>>(),
             provider.GetRequiredService<RuntimePackagePaths>()));
@@ -50,6 +55,7 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimePackageUiService>();
         services.AddSingleton<PackageSessionLifecycleService>();
         services.AddSingleton<InstalledPackageLifecycleService>();
+        services.AddHostedService<PackageStageCleanupService>();
         services.AddSingleton<PackageSessionCommandService>();
         services.AddSingleton<RuntimePackageDataService>();
         services.AddSingleton(provider => new RuntimePackageOperationService(
@@ -65,13 +71,15 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeStackImportService>();
         services.AddHostedService<RuntimeStackImportPlanCleanupService>();
         services.AddSingleton<DevPackageWatchService>();
+        services.AddSingleton<DevPackageOwnerLeaseService>();
+        services.AddHostedService<DevPackageOwnerLeaseReaper>();
         services.AddSingleton<PackageCallbackServer>();
         services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<PackageCallbackServer>());
         services.AddHttpClient("registry", client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Sunder-Runtime/1.0");
-        });
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         services.AddSingleton<RegistryHttpClient>();
         services.AddSingleton<RegistryCredentialStore>();
         services.AddSingleton<RegistryAuthCoordinator>();

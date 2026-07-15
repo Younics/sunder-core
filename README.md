@@ -79,7 +79,7 @@ installed packages / dev packages / .sunderpkg archives
 Sunder.Cli <-> Registry API / Runtime API
 ```
 
-`Sunder.App` and `Sunder.Runtime.Host` are separate processes. The runtime owns installed package state and activation. The app owns shell UI and app-side package views.
+`Sunder.App` and `Sunder.Runtime.Host` are separate processes. The persistent per-user Runtime stays alive when App closes and owns installed package state and activation. The app owns shell UI and app-side package views. Development folders are invocation-owned Runtime overlays with heartbeat/release semantics, not Runtime process startup arguments.
 
 ## Repository Map
 

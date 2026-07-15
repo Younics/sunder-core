@@ -16,6 +16,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private readonly SettingsUpdateViewModel _updates;
     private readonly SettingsPackageSectionsViewModel _packageSettings;
     private readonly SettingsPackageSectionRefreshCoordinator _packageSectionRefresh;
+    private readonly PackageViewHostService _packageViewHostService;
     private readonly SettingsSectionSelectionState _selection = new();
     private readonly LatestAsyncRequest _selectionLoadRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(SettingsWindowViewModel));
@@ -33,11 +34,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         Action<double, double>? persistBackgroundProcessPopoverSize = null)
     {
         _runtimeApiClient = runtimeApiClient;
+        _packageViewHostService = packageViewHostService;
         var resolvedUpdateService = updateService ?? new SunderUpdateService();
         _cli = new SettingsCliViewModel(new SettingsCliCoordinator(cliInstallationService));
-        _cli.PropertyChanged += Cli_OnPropertyChanged;
         _updates = new SettingsUpdateViewModel(new SettingsUpdateCoordinator(resolvedUpdateService));
-        _updates.PropertyChanged += Updates_OnPropertyChanged;
         _packageSettings = new SettingsPackageSectionsViewModel(
             new SettingsPackageSectionLoader(runtimeApiClient, packageViewHostService),
             new SettingsPackageSelectionCoordinator(runtimeApiClient, packageViewHostService));
@@ -46,7 +46,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             () => _disposed,
             () => _selection.SelectedSection?.PackageId,
             PreservePackageSelectionAfterRefresh,
-            () => OnPropertyChanged(nameof(HasPackageSections)),
+            () => OnPropertyChanged(nameof(PackageSettings)),
             value => IsBusy = value,
             value => StatusText = value);
         BackgroundProcesses = backgroundProcessQueue is null
@@ -81,15 +81,15 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<SettingsSectionItemViewModel> CoreSections { get; }
 
-    public ObservableCollection<SettingsSectionItemViewModel> PackageSections => _packageSettings.PackageSections;
+    public SettingsCliViewModel Cli => _cli;
+
+    public SettingsUpdateViewModel Updates => _updates;
+
+    public SettingsPackageSectionsViewModel PackageSettings => _packageSettings;
 
     public ObservableCollection<string> SelectedCoreLines { get; }
 
-    public ObservableCollection<SettingsFieldSectionViewModel> SelectedPackageSections => _packageSettings.SelectedPackageSections;
-
     public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
-
-    public bool HasPackageSections => _packageSettings.HasPackageSections;
 
     public bool IsCoreSelection => !IsPackageSelection;
 
@@ -106,44 +106,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public bool ShowScrollableSelectionContent => !HasHostedSettingsView;
 
     public bool ShowApplySaveButtons => !HasHostedSettingsView && !IsCliSelection;
-
-    public bool HasCliWarning => _cli.HasWarning;
-
-    public bool HasCliPathInstructions => _cli.HasPathInstructions;
-
-    public string CliStatusText => _cli.StatusText;
-
-    public string CliStatusDescription => _cli.StatusDescription;
-
-    public string CliPlatformText => _cli.PlatformText;
-
-    public string CliBundledPath => _cli.BundledPath;
-
-    public string CliInstalledPath => _cli.InstalledPath;
-
-    public string CliShimPath => _cli.ShimPath;
-
-    public string CliWarningText => _cli.WarningText;
-
-    public string CliPathInstructions => _cli.PathInstructions;
-
-    public bool CanInstallOrRepairCli => _cli.CanInstallOrRepair;
-
-    public bool CanUninstallCli => _cli.CanUninstall;
-
-    public bool DownloadUpdatesAutomatically
-    {
-        get => _updates.DownloadUpdatesAutomatically;
-        set => _updates.DownloadUpdatesAutomatically = value;
-    }
-
-    public string UpdateCurrentVersionText => _updates.CurrentVersionText;
-
-    public string UpdateSourceText => _updates.SourceText;
-
-    public string UpdateStatusText => _updates.StatusText;
-
-    public bool CanCheckForAppUpdates => _updates.CanCheckForAppUpdates;
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _selectedTitle = "Appearance";
@@ -218,29 +180,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowUpdateSettings));
     }
 
-    public async Task SelectSectionAsync(SettingsSectionItemViewModel item)
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        var selectionVersion = _selection.Select(item);
-
-        if (item.IsPackage)
-        {
-            await ApplyPackageSelectionAsync(item, selectionVersion);
-            return;
-        }
-
-        _selectionLoadRequest.Invalidate();
-        ApplyCoreSelection(item);
-        if (IsCliSelection)
-        {
-            await RefreshCliStatusAsync(showSuccessStatus: false);
-        }
-    }
-
     public async Task<bool> ApplyAsync()
     {
         if (_disposed)
@@ -267,7 +206,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsBusy = true;
         try
         {
-            var values = PackageConfigurationFormSerializer.Serialize(SelectedPackageSections);
+            var values = PackageConfigurationFormSerializer.Serialize(PackageSettings.SelectedPackageSections);
             await _runtimeApiClient.SavePackageSettingsValuesAsync(packageId, values, cancellationToken);
             if (IsCurrentSelection(selectedSection, selectionVersion))
             {
@@ -337,6 +276,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token);
         cancellationToken = lifetimeCancellation.Token;
         cancellationToken.ThrowIfCancellationRequested();
+        var parameterSnapshot = SnapshotNavigationParameters(parameters);
 
         if (string.IsNullOrWhiteSpace(packageId))
         {
@@ -357,20 +297,35 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             return false;
         }
 
-        await SelectSectionAsync(item);
-        if (!IsCurrentSelection(item))
-        {
-            return false;
-        }
-
-        await NotifyHostedSettingsNavigatedAsync(packageId, parameters ?? new Dictionary<string, string?>(), cancellationToken);
-        return true;
+        return await SelectSectionCoreAsync(item, parameterSnapshot, cancellationToken);
     }
 
     public async Task RefreshPackageSectionsAsync(CancellationToken cancellationToken = default)
     {
         using var refreshCts = CreateLifetimeCancellationTokenSource(cancellationToken, out var refreshToken);
-        await _packageSectionRefresh.RefreshAsync(preserveSelection: true, refreshToken).WaitAsync(cancellationToken);
+        var applied = await _packageSectionRefresh.RefreshAsync(preserveSelection: true, refreshToken).WaitAsync(cancellationToken);
+        if (!applied)
+        {
+            return;
+        }
+        refreshToken.ThrowIfCancellationRequested();
+        var selectedSection = _selection.SelectedSection;
+        if (selectedSection?.PackageId is not null
+            && HostedSettingsView is null
+            && _packageViewHostService.HasSettingsView(selectedSection.PackageId))
+        {
+            await ApplyPackageSelectionAsync(
+                selectedSection,
+                _selection.Version,
+                new Dictionary<string, string?>(),
+                refreshToken);
+        }
+    }
+
+    internal void DetachHostedPackageSettingsView()
+    {
+        _selectionLoadRequest.Invalidate();
+        HostedSettingsView = null;
     }
 
     public async Task RefreshCliStatusAsync(bool showSuccessStatus = true)
@@ -488,12 +443,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _disposed = true;
         _selection.Dispose();
         _selectionLoadRequest.Dispose();
-        _packageSectionRefresh.Invalidate();
+        _packageSectionRefresh.Dispose();
         _disposeCts.Cancel();
         _tasks.Dispose();
         HostedSettingsView = null;
-        _cli.PropertyChanged -= Cli_OnPropertyChanged;
-        _updates.PropertyChanged -= Updates_OnPropertyChanged;
         if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
         {
             BackgroundProcesses.Dispose();
@@ -501,28 +454,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         _runtimeApiClient.Dispose();
         _disposeCts.Dispose();
-    }
-
-    private async Task NotifyHostedSettingsNavigatedAsync(
-        string packageId,
-        IReadOnlyDictionary<string, string?> parameters,
-        CancellationToken cancellationToken)
-    {
-        if (HostedSettingsView is null)
-        {
-            return;
-        }
-
-        var context = new PackageViewNavigationContext(packageId, parameters);
-        if (HostedSettingsView is IPackageViewNavigationTarget viewTarget)
-        {
-            await viewTarget.OnNavigatedToAsync(context, cancellationToken);
-        }
-
-        if (HostedSettingsView is Avalonia.Controls.Control { DataContext: IPackageViewNavigationTarget dataContextTarget })
-        {
-            await dataContextTarget.OnNavigatedToAsync(context, cancellationToken);
-        }
     }
 
     private void PreservePackageSelectionAfterRefresh(string? selectedPackageId)
@@ -535,6 +466,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         var refreshedSelection = _packageSettings.FindSection(selectedPackageId);
         if (refreshedSelection is null)
         {
+            HostedSettingsView = null;
             _selection.PreserveSelection(CoreSections[0]);
             ApplyCoreSelection(CoreSections[0]);
             return;
@@ -559,7 +491,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         DetailsText = item.Description;
         StatusText = string.Empty;
 
-        SelectedPackageSections.Clear();
+        PackageSettings.SelectedPackageSections.Clear();
         SelectedCoreLines.Clear();
 
         if (IsUpdatesSelection)
@@ -577,15 +509,19 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async Task ApplyPackageSelectionAsync(SettingsSectionItemViewModel item, int selectionVersion)
+    private async Task<bool> ApplyPackageSelectionAsync(
+        SettingsSectionItemViewModel item,
+        int selectionVersion,
+        IReadOnlyDictionary<string, string?> parameters,
+        CancellationToken cancellationToken)
     {
         if (item.PackageId is null)
         {
             ApplyCoreSelection(CoreSections[0]);
-            return;
+            return false;
         }
 
-        using var request = _selectionLoadRequest.Start(_disposeCts.Token);
+        using var request = _selectionLoadRequest.Start(cancellationToken);
         IsBusy = true;
         try
         {
@@ -601,24 +537,40 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
                 request.Token);
             if (!request.IsCurrent || !IsCurrentSelection(item, selectionVersion))
             {
-                return;
+                return false;
             }
 
-            HostedSettingsView = result.HostedSettingsView;
+            HostedSettingsView = result is HostedPackageSettingsSelection hosted ? hosted.View : null;
             _packageSettings.ApplySelectionResult(result);
 
             StatusText = result.StatusText;
+            if (HostedSettingsView is Avalonia.Controls.Control hostedSettingsView)
+            {
+                await AppPackageViewNavigator.NotifyViewNavigatedAsync(
+                    hostedSettingsView,
+                    $"settings:{item.PackageId}",
+                    parameters,
+                    request.Token);
+                if (hostedSettingsView is HostedPackageViewBoundary { IsFaulted: true } boundary)
+                {
+                    throw new InvalidOperationException(boundary.FaultMessage ?? "The package settings view rejected navigation.");
+                }
+            }
+
+            return request.IsCurrent && IsCurrentSelection(item, selectionVersion);
         }
         catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
         {
+            return false;
         }
         catch (Exception ex)
         {
             if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
             {
-                StatusText = ex.Message;
                 ApplyCoreSelection(CoreSections[0]);
+                StatusText = $"Could not open package settings: {ex.Message}";
             }
+            return false;
         }
         finally
         {
@@ -631,7 +583,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     private void ApplyPackageSelectionHeader(
         SettingsSectionItemViewModel item,
-        PackageConfigurationSchemaDescriptor? schema)
+        PackageSettingsSchemaDescriptor? schema)
     {
         SelectedTitle = schema?.PackageDisplayName ?? item.Title;
         SelectedDescription = schema?.Summary ?? item.Description;

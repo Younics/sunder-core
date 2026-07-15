@@ -8,7 +8,7 @@ namespace Sunder.Cli;
 
 internal interface IRegistryConnection : IDisposable
 {
-    Uri RegistryUrl { get; }
+    Uri RegistryApiUrl { get; }
 }
 
 internal interface IRegistryBrowseClient : IRegistryConnection
@@ -19,7 +19,7 @@ internal interface IRegistryBrowseClient : IRegistryConnection
     Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken token);
     Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken token);
     Task<RegistryPackageDistTagsResponse?> GetDistTagsAsync(string packageId, CancellationToken token);
-    Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken token);
+    Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, bool force, CancellationToken token);
 }
 
 internal interface IRegistryManageClient : IRegistryConnection
@@ -38,15 +38,15 @@ internal sealed partial class RegistryClient : IRegistryClient
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _httpClient;
 
-    public RegistryClient(Uri registryUrl, HttpMessageHandler? handler = null)
+    public RegistryClient(Uri registryApiUrl, HttpMessageHandler? handler = null)
     {
-        RegistryUrl = CliHttpUrl.Require(registryUrl, "Registry");
-        _httpClient = handler is null ? new HttpClient() : new HttpClient(handler);
-        _httpClient.BaseAddress = registryUrl;
+        RegistryApiUrl = CliHttpUrl.RequireBase(registryApiUrl, "Registry");
+        _httpClient = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false });
+        _httpClient.BaseAddress = RegistryApiUrl;
         _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
-    public Uri RegistryUrl { get; }
+    public Uri RegistryApiUrl { get; }
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken token)
     {
@@ -107,7 +107,7 @@ internal sealed partial class RegistryClient : IRegistryClient
             problem?.Code);
     }
 
-    private Uri CreateUri(string path) => CliHttpUrl.Require(Uri.TryCreate(path, UriKind.Relative, out _) ? new Uri(RegistryUrl, path) : new Uri(path, UriKind.Absolute), "Registry request");
+    private Uri CreateUri(string path) => RegistryTransportSecurity.CreateUri(RegistryApiUrl, path);
     public void Dispose() => _httpClient.Dispose();
     private sealed record Problem(string? Title, string? Detail, string? Code);
 }

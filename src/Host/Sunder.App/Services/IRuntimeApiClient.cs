@@ -14,10 +14,27 @@ public interface IRuntimeConnectionClient : IRuntimeClient
 
 public interface IRuntimeEventClient : IRuntimeClient
 {
-    Task<DevPackageWatchStatus> SetDevPackageWatchIntentAsync(bool enabled, CancellationToken cancellationToken = default);
     Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(long afterSequenceId = 0, CancellationToken cancellationToken = default);
     IAsyncEnumerable<RuntimeEventDescriptor> StreamRuntimeEventsAsync(long afterSequenceId, CancellationToken cancellationToken = default);
 }
+
+public interface IRuntimeDevPackageOwnerClient : IRuntimeClient
+{
+    Task<RuntimeHandshakeResponse> GetRuntimeHandshakeAsync(CancellationToken cancellationToken = default);
+    Task<DevPackageOwnerLeaseResponse> ReplaceDevPackageOwnerAsync(string ownerId, DevPackageOwnerMutationRequest request, CancellationToken cancellationToken = default);
+    Task<DevPackageOwnerLeaseResponse> HeartbeatDevPackageOwnerAsync(string ownerId, DevPackageOwnerHeartbeatRequest request, CancellationToken cancellationToken = default);
+    Task ReleaseDevPackageOwnerAsync(string ownerId, DevPackageOwnerReleaseRequest request, CancellationToken cancellationToken = default);
+}
+
+public interface IRuntimeSnapshotClient : IRuntimeClient
+{
+    Task<RuntimePackageSnapshot> GetRuntimePackageSnapshotAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IRuntimeStartupClient :
+    IRuntimeConnectionClient,
+    IRuntimeSnapshotClient,
+    IRuntimeDevPackageOwnerClient;
 
 public interface IRuntimeLogClient : IRuntimeClient
 {
@@ -30,13 +47,6 @@ public interface IRuntimePackageSessionClient : IRuntimeClient
     Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default);
     Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default);
-    Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default);
-    Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default);
-    Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default);
-    Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default);
-    Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default);
-    Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default);
-    Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default);
     Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default);
 }
 
@@ -58,19 +68,15 @@ public interface IRuntimeContentTransferClient : IRuntimeClient
 public interface IRuntimePackageStoreClient : IRuntimeClient
 {
     Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default);
-    Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default);
-    Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default);
-    Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default);
-    Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default);
-    Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default);
     Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default);
     Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default);
+    Task<RuntimePackageStageStatus> GetPackageStoreStageStatusAsync(string stageId, CancellationToken cancellationToken = default);
     Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default);
 }
 
 public interface IRuntimePackageSettingsClient : IRuntimeClient
 {
-    Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(CancellationToken cancellationToken = default);
     Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(string packageId, CancellationToken cancellationToken = default);
     Task SavePackageSettingsValuesAsync(string packageId, IReadOnlyDictionary<string, string?> values, CancellationToken cancellationToken = default);
 }
@@ -101,7 +107,7 @@ public interface IRuntimeRegistryAuthClient : IRuntimeClient
 
 public interface IRuntimeRegistryPackageClient : IRuntimeClient
 {
-    Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
+    Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default);
@@ -128,7 +134,7 @@ public interface IRuntimePackageChangeClient :
 public interface IRuntimePackageUpdateClient : IRuntimeClient
 {
     Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default);
-    Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
+    Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
 }
 
 public interface IRuntimePackagesClient :
@@ -146,8 +152,11 @@ public interface IRuntimeStacksClient :
     IRuntimeRegistryStackClient;
 
 public interface IRuntimeApiClient :
+    IRuntimeStartupClient,
     IRuntimeConnectionClient,
+    IRuntimeSnapshotClient,
     IRuntimeEventClient,
+    IRuntimeDevPackageOwnerClient,
     IRuntimeLogClient,
     IRuntimePackageSessionClient,
     IRuntimePackageUiClient,

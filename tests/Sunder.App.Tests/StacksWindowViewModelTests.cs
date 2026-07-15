@@ -22,14 +22,14 @@ public sealed class StacksWindowViewModelTests
             ],
         };
         using var viewModel = CreateViewModel(root, registryClient);
-        viewModel.RegistrySearchText = "team";
+        viewModel.Registry.SearchText = "team";
 
         await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
 
-        var result = Assert.Single(viewModel.RegistryStacks);
+        var result = Assert.Single(viewModel.Registry.Stacks);
         Assert.Equal("team-stack", result.StackId);
         Assert.Equal("team", registryClient.LastStackSearchQuery);
-        Assert.Equal(result, viewModel.SelectedRegistryStack);
+        Assert.Equal(result, viewModel.Registry.SelectedStack);
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public sealed class StacksWindowViewModelTests
         };
         using var viewModel = CreateViewModel(root, registryClient, registrySearchThrottleDelay: TimeSpan.FromMilliseconds(40));
 
-        viewModel.RegistrySearchText = " team ";
+        viewModel.Registry.SearchText = " team ";
 
         await Task.Delay(10);
         Assert.Empty(registryClient.StackSearchQueries);
@@ -50,7 +50,7 @@ public sealed class StacksWindowViewModelTests
         await WaitForConditionAsync(() => registryClient.StackSearchQueries.Count == 1);
 
         Assert.Collection(registryClient.StackSearchQueries, query => Assert.Equal("team", query));
-        Assert.Equal("team-stack", Assert.Single(viewModel.RegistryStacks).StackId);
+        Assert.Equal("team-stack", Assert.Single(viewModel.Registry.Stacks).StackId);
         Assert.True(viewModel.HasRegistrySearchText);
     }
 
@@ -64,9 +64,9 @@ public sealed class StacksWindowViewModelTests
         };
         using var viewModel = CreateViewModel(root, registryClient, registrySearchThrottleDelay: TimeSpan.FromMilliseconds(50));
 
-        viewModel.RegistrySearchText = "t";
+        viewModel.Registry.SearchText = "t";
         await Task.Delay(10);
-        viewModel.RegistrySearchText = "team";
+        viewModel.Registry.SearchText = "team";
 
         await WaitForConditionAsync(() => registryClient.StackSearchQueries.Count == 1);
 
@@ -87,7 +87,7 @@ public sealed class StacksWindowViewModelTests
             registryDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
 
         await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
-        viewModel.SelectedRegistrySortOption = viewModel.RegistrySortOptions.Single(option => option.Sort == RegistrySearchSort.Stars);
+        viewModel.Registry.SelectedSortOption = viewModel.Registry.SortOptions.Single(option => option.Sort == RegistrySearchSort.Stars);
 
         await WaitForConditionAsync(() => registryClient.StackSearchSorts.Count == 2);
 
@@ -159,7 +159,7 @@ public sealed class StacksWindowViewModelTests
         Assert.Single(viewModel.RegistrySelectedPackages);
         Assert.Single(viewModel.RegistrySelectedDetails);
 
-        viewModel.SelectedRegistryStack = viewModel.RegistryStacks[1];
+        viewModel.Registry.SelectedStack = viewModel.Registry.Stacks[1];
         await toolsDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(viewModel.IsRegistryStackDetailsLoading);
@@ -244,7 +244,7 @@ public sealed class StacksWindowViewModelTests
 
         await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
         await teamDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        viewModel.SelectedRegistryStack = viewModel.RegistryStacks[1];
+        viewModel.Registry.SelectedStack = viewModel.Registry.Stacks[1];
         await teamDetailsCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded && viewModel.SelectedRegistryStackTitle == "Tools Stack");
 
@@ -282,13 +282,13 @@ public sealed class StacksWindowViewModelTests
             AppLaunchRequestKind.StackDetails,
             StackId: "team-stack",
             RegistryUrl: new Uri("https://registry.example/")));
-        await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded && viewModel.SelectedRegistryStack?.StackId == "team-stack");
+        await WaitForConditionAsync(() => viewModel.RegistryStackDetailsLoaded && viewModel.Registry.SelectedStack?.StackId == "team-stack");
 
         Assert.True(viewModel.IsMarketplaceMode);
-        Assert.Equal("team-stack", viewModel.RegistrySearchText);
-        Assert.Collection(viewModel.RegistryStacks, stack => Assert.Equal("team-stack", stack.StackId));
+        Assert.Equal("team-stack", viewModel.Registry.SearchText);
+        Assert.Collection(viewModel.Registry.Stacks, stack => Assert.Equal("team-stack", stack.StackId));
         Assert.Equal("Team Stack", viewModel.SelectedRegistryStackTitle);
-        Assert.Empty(viewModel.Stacks);
+        Assert.Empty(viewModel.Local.Stacks);
         Assert.Null(registryClient.LastDownloadedStackId);
         Assert.Collection(registryClient.StackSearchQueries, query => Assert.Equal("team-stack", query));
     }
@@ -309,7 +309,7 @@ public sealed class StacksWindowViewModelTests
         await viewModel.SearchRegistryStacksCommand.ExecuteAsync(null);
         await viewModel.ImportSelectedRegistryStackCommand.ExecuteAsync(null);
 
-        var localStack = Assert.Single(viewModel.Stacks);
+        var localStack = Assert.Single(viewModel.Local.Stacks);
         Assert.Equal("team-stack", localStack.StackId);
         Assert.True(File.Exists(localStack.LocalPath));
         Assert.Equal("team-stack", registryClient.LastDownloadedStackId);
@@ -341,7 +341,7 @@ public sealed class StacksWindowViewModelTests
 
         Assert.False(await importTask);
         Assert.Empty(await library.ListAsync());
-        Assert.Empty(viewModel.Stacks);
+        Assert.Empty(viewModel.Local.Stacks);
         Assert.False(viewModel.IsBusy);
         Assert.NotNull(registryClient.LastStackDownloadDestination);
         Assert.False(Directory.Exists(Path.GetDirectoryName(registryClient.LastStackDownloadDestination)!));
@@ -392,7 +392,7 @@ public sealed class StacksWindowViewModelTests
         Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "sunder.package.agent" && group.Items.Count == 2);
         Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "sunder.package.agent.tools" && group.Items.Count == 1);
         Assert.All(viewModel.PackageGroups, group => Assert.False(group.IsSelected));
-        Assert.All(viewModel.PackageGroups.SelectMany(group => group.Items), item => Assert.False(item.IsSelected));
+        Assert.All(viewModel.PackageGroups.SelectMany(group => group.Items), item => Assert.True(item.IsSelected));
         Assert.Equal(0, viewModel.SelectedPackageCount);
         Assert.Equal(0, viewModel.SelectedItemCount);
         Assert.False(viewModel.CanGoNext);
@@ -407,11 +407,36 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal(["Agent Profiles", "Agent Workspaces"], agentGroup.ItemGroups.Select(group => group.DisplayName));
         agentGroup.SelectAllItemsCommand.Execute(null);
         Assert.Equal("2/2 items", agentGroup.CountText);
-        Assert.Equal(2, viewModel.SelectedItemCount);
+        Assert.Equal(3, viewModel.SelectedItemCount);
         Assert.True(viewModel.CanGoNext);
         agentGroup.UnselectAllItemsCommand.Execute(null);
         Assert.Equal("0/2 items", agentGroup.CountText);
         Assert.True(viewModel.CanGoNext);
+    }
+
+    [Fact]
+    public async Task CreateStackWizard_HonorsExportItemDefaultSelected()
+    {
+        var root = CreateTempDirectory();
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
+                [
+                    CreateExportItem("sunder.package.agent", "profile", "Agent profile"),
+                    CreateExportItem("sunder.package.agent", "workspace", "Agent workspace", defaultSelected: false),
+                ],
+                [],
+                []),
+        };
+        var viewModel = new CreateStackWizardViewModel(
+            new LocalStackLibraryService(Path.Combine(root, "library")),
+            runtimeApiClient);
+
+        await viewModel.InitializeAsync();
+
+        var items = Assert.Single(viewModel.PackageGroups).Items;
+        Assert.True(Assert.Single(items, item => item.ItemId == "profile").IsSelected);
+        Assert.False(Assert.Single(items, item => item.ItemId == "workspace").IsSelected);
     }
 
     [Fact]
@@ -529,6 +554,7 @@ public sealed class StacksWindowViewModelTests
         var packageGroup = Assert.Single(viewModel.PackageGroups);
         packageGroup.IsSelected = true;
         packageGroup.Items.Single(item => item.ItemId == "profile").IsSelected = true;
+        packageGroup.Items.Single(item => item.ItemId == "workspace").IsSelected = false;
 
         var includedGroup = Assert.Single(packageGroup.ItemGroups, group => group.Kind == "agent-profile");
         var emptyGroup = Assert.Single(packageGroup.ItemGroups, group => group.Kind == "agent-workspace");
@@ -673,7 +699,13 @@ public sealed class StacksWindowViewModelTests
     public async Task CreateStackWizard_EditCommand_PreservesUnmatchedFragmentsAndPublishState()
     {
         var root = CreateTempDirectory();
-        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: true);
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: true,
+            requiredFeatures: [SunderStackFormat.RequiredInputsFeature]);
         var library = new LocalStackLibraryService(Path.Combine(root, "library"));
         var stack = await library.ImportAsync(stackPath);
         var publishedAt = DateTimeOffset.UtcNow.AddDays(-2);
@@ -704,6 +736,7 @@ public sealed class StacksWindowViewModelTests
         var manifest = await library.ReadManifestAsync(listed.LocalPath);
         var preservedFragment = Assert.Single(manifest.Fragments ?? []);
         Assert.Equal("agent-profile", preservedFragment.FragmentId);
+        Assert.Equal([SunderStackFormat.RequiredInputsFeature], manifest.RequiredFeatures);
     }
 
     [Fact]
@@ -712,7 +745,13 @@ public sealed class StacksWindowViewModelTests
         var root = CreateTempDirectory();
         var mediaPath = Path.Combine(root, "hero.png");
         await File.WriteAllBytesAsync(mediaPath, [1, 2, 3, 4]);
-        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: false);
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
         var library = new LocalStackLibraryService(Path.Combine(root, "library"));
         var stack = (await library.ImportAsync(stackPath)) with
         {
@@ -776,6 +815,7 @@ public sealed class StacksWindowViewModelTests
                     "sunder.package.agent",
                     "Agent",
                     "1.0.0",
+                    PackageHostRoles.App | PackageHostRoles.Runtime,
                     new PackageIconDescriptor("A", "icons/agent.png"),
                     true,
                     PackageReadinessState.Ready,
@@ -817,10 +857,40 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task PublishSelectedStackCommand_DelegatesPublishAndRefreshesOwnedLocalCatalog()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack");
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        await library.ImportAsync(stackPath);
+        var runtimeClient = new FakeRuntimeApiClient();
+        using var viewModel = CreateViewModel(
+            root,
+            new FakeRegistryApiClient(),
+            library,
+            runtimeApiClient: runtimeClient);
+        viewModel.ShowLocalCommand.Execute(null);
+        await viewModel.InitializeAsync();
+
+        await viewModel.PublishSelectedStackCommand.ExecuteAsync(null);
+
+        Assert.Equal("stack-upload", runtimeClient.LastPublishRequest?.UploadId);
+        var published = Assert.Single(viewModel.Local.Stacks);
+        Assert.True(published.IsPublished);
+        Assert.Equal("team-stack", published.PublishedStackId);
+    }
+
+    [Fact]
     public async Task UseStackWizard_DefaultsSetupItemsSelectedAndAppliesGeneratedActions()
     {
         var root = CreateTempDirectory();
-        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: false);
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: false,
+            fragmentDefaultSelected: true);
         var library = new LocalStackLibraryService(Path.Combine(root, "library"));
         var stack = (await library.ImportAsync(stackPath)) with
         {
@@ -844,15 +914,15 @@ public sealed class StacksWindowViewModelTests
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
                 [
-                    new RuntimeStackImportActionDescriptor("profile", "agent", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
+                    new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
                 ],
-                [new RuntimeStackRequiredInputDescriptor("api-key", "agent", "API key", true, "Provider key.")],
+                [new RuntimeStackRequiredInputDescriptor("input-key", "sunder.package.agent", "agent", "api-key", "API key", true, "Provider key.")],
                 [],
                 [],
                 []),
             ImportResponse = new RuntimeStackImportResponse(
                 RuntimeStackImportOutcome.Completed,
-                [new RuntimeStackImportedItemDescriptor("profile", "agent", "Agent profile", "Profile")],
+                [new RuntimeStackImportedItemDescriptor("profile", "sunder.package.agent", "agent", "Agent profile", "Profile")],
                 new Dictionary<string, string>(),
                 [],
                 [],
@@ -878,9 +948,11 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal("Custom instructions", detail.Label);
         Assert.Equal("# Professional Blender 3D Agent Instructions", detail.ValuePreview);
         Assert.True(setupItem.IsSelected);
-        Assert.Single(viewModel.ImportActions);
+        var importAction = Assert.Single(viewModel.ImportActions);
+        Assert.False(importAction.IsSelected);
+        importAction.IsSelected = true;
         Assert.False(viewModel.CanApply);
-        Assert.Equal("api-key", Assert.Single(viewModel.RequiredInputs).InputId);
+        Assert.Equal("input-key", Assert.Single(viewModel.RequiredInputs).InputId);
         Assert.Equal("Not provided", Assert.Single(viewModel.RequiredInputs).ReviewValue);
         Assert.Single(viewModel.RequiredInputs).Value = "secret-local-value";
         Assert.True(viewModel.CanApply);
@@ -889,9 +961,9 @@ public sealed class StacksWindowViewModelTests
 
         Assert.NotNull(runtimeApiClient.LastImportRequest);
         Assert.Equal(["agent-profile"], runtimeApiClient.LastImportRequest.SelectedFragmentIds);
-        Assert.Equal(["profile"], runtimeApiClient.LastImportRequest.SelectedActionIds);
+        Assert.Equal(["action-key"], runtimeApiClient.LastImportRequest.SelectedActionIds);
         Assert.Equal("plan-1", runtimeApiClient.LastImportRequest.PlanId);
-        Assert.Equal("secret-local-value", runtimeApiClient.LastPreviewRequest?.InputValues["api-key"]);
+        Assert.Equal("secret-local-value", runtimeApiClient.LastPreviewRequest?.InputValues["input-key"]);
     }
 
     [Fact]
@@ -934,10 +1006,39 @@ public sealed class StacksWindowViewModelTests
     }
 
     [Fact]
+    public async Task UseStackWizard_HonorsManifestDefaultSelectedFalse()
+    {
+        var root = CreateTempDirectory();
+        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: false);
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        var stack = await library.ImportAsync(stackPath);
+        using var viewModel = new UseStackWizardViewModel(
+            library,
+            stack,
+            new FakeRuntimeApiClient(),
+            new RegistryPackageInstallService(),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
+            _ => new FakeRegistryApiClient(),
+            "https://registry.example/");
+
+        await viewModel.InitializeAsync();
+
+        Assert.False(Assert.Single(Assert.Single(viewModel.SetupPackageGroups).Items).IsSelected);
+        Assert.Empty(viewModel.ImportActions);
+    }
+
+    [Fact]
     public async Task UseStackWizard_ApplyInstallsPackagesBeforeImportingSetup()
     {
         var root = CreateTempDirectory();
-        var stackPath = await CreateStackArchiveAsync(root, "team-stack", "Team Stack", includeFragment: true, includePackage: true);
+        var stackPath = await CreateStackArchiveAsync(
+            root,
+            "team-stack",
+            "Team Stack",
+            includeFragment: true,
+            includePackage: true,
+            fragmentDefaultSelected: true);
         var library = new LocalStackLibraryService(Path.Combine(root, "library"));
         var stack = await library.ImportAsync(stackPath);
         var installPlan = new RegistryResolveInstallPlanResponse(
@@ -954,6 +1055,19 @@ public sealed class StacksWindowViewModelTests
             [],
             []);
         var noChangesPlan = new RegistryResolveInstallPlanResponse(true, [], [], [], []);
+        var runtimeInstallPlan = new RuntimeRegistryResolveInstallPlanResponse(
+            true,
+            [new RuntimeRegistryPackageInstallPlanItem(
+                "sunder.package.agent",
+                CurrentVersion: null,
+                Version: "1.2.0",
+                IsUpdate: false,
+                DeprecatedMessage: null,
+                DependsOn: [],
+                new RuntimeRegistryPackageArtifact("sha256", 1024, "https://registry.example/packages/sunder.package.agent/1.2.0/download"))],
+            [],
+            [],
+            []);
         var registryClient = new FakeRegistryApiClient
         {
             InstallPlanResponses = [installPlan, installPlan, noChangesPlan],
@@ -964,19 +1078,19 @@ public sealed class StacksWindowViewModelTests
                 true,
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
-                [new RuntimeStackImportActionDescriptor("profile", "agent", "Agent profile", "Profile", DefaultSelected: false, "Import profile.")],
+                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true, "Import profile.")],
                 [],
                 [],
                 [],
                 []),
             ImportResponse = new RuntimeStackImportResponse(
                 RuntimeStackImportOutcome.Completed,
-                [new RuntimeStackImportedItemDescriptor("profile", "agent", "Agent profile", "Profile")],
+                [new RuntimeStackImportedItemDescriptor("profile", "sunder.package.agent", "agent", "Agent profile", "Profile")],
                 new Dictionary<string, string>(),
                 [],
                 [],
                 []),
-            RegistryPlan = installPlan,
+            RegistryPlan = runtimeInstallPlan,
             PackageStoreStageOperationResult = SuccessPackageOperation() with
             {
                 ImpactedPackageIds = ["sunder.package.agent"],
@@ -987,9 +1101,9 @@ public sealed class StacksWindowViewModelTests
             stack,
             runtimeApiClient,
             new RegistryPackageInstallService(),
-            (packageIds, _) =>
+            (stamp, _) =>
             {
-                runtimeApiClient.Events.Add("lifecycle:" + string.Join(",", packageIds));
+                runtimeApiClient.Events.Add("presentation:" + stamp.SessionGeneration);
                 return Task.CompletedTask;
             },
             (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
@@ -1004,9 +1118,9 @@ public sealed class StacksWindowViewModelTests
 
         await viewModel.ApplyCommand.ExecuteAsync(null);
 
-        Assert.Equal(["install", "lifecycle:sunder.package.agent", "preview", "import"], runtimeApiClient.Events);
+        Assert.Equal(["install", "presentation:1", "preview", "import"], runtimeApiClient.Events);
         Assert.Equal(["agent-profile"], runtimeApiClient.LastImportRequest?.SelectedFragmentIds);
-        Assert.Equal(["profile"], runtimeApiClient.LastImportRequest?.SelectedActionIds);
+        Assert.Equal(["action-key"], runtimeApiClient.LastImportRequest?.SelectedActionIds);
     }
 
     private static StacksWindowViewModel CreateViewModel(
@@ -1054,7 +1168,7 @@ public sealed class StacksWindowViewModelTests
                 "profile",
                 "agent-profile",
                 [new RegistryStackFragmentDetail("Custom instructions", "Use a concise tone.", "Include value")])],
-            [new RegistryStackRequiredInput("api-key", "API key", "Provider key.", true)],
+            [new RegistryStackRequiredInput("api-key", "sunder.package.agent", "agent", "API key", "Provider key.", true)],
             new RegistryStackArtifact("", 0, $"https://registry.example/api/v1/stacks/{stackId}/download"),
             DateTimeOffset.UtcNow.AddDays(-1),
             DateTimeOffset.UtcNow,
@@ -1067,20 +1181,21 @@ public sealed class StacksWindowViewModelTests
         IReadOnlyList<string>? sensitivities = null,
         IReadOnlyList<RuntimeStackExportItemDetail>? details = null,
         string kind = "Configuration",
-        string? contributorId = null)
+        string? contributorId = null,
+        bool defaultSelected = true)
         => new(
             contributorId ?? ownerPackageId + ".contributor",
             ownerPackageId,
             itemId,
             displayName,
             kind,
-            DefaultSelected: true,
+            DefaultSelected: defaultSelected,
             sensitivities ?? [],
             "Exportable setup item.",
             details ?? []);
 
     private static ActivePackageDescriptor CreateActivePackage(string packageId, string displayName)
-        => new(packageId, displayName, "1.0.0", null, true, PackageReadinessState.Ready, []);
+        => new(packageId, displayName, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []);
 
     private static async Task<string> CreateStackArchiveAsync(
         string root,
@@ -1089,7 +1204,9 @@ public sealed class StacksWindowViewModelTests
         bool includeFragment = false,
         bool includePackage = true,
         bool includeRequiredInput = false,
-        bool includeDisplayDetails = false)
+        bool includeDisplayDetails = false,
+        bool fragmentDefaultSelected = false,
+        IReadOnlyList<string>? requiredFeatures = null)
     {
         var path = Path.Combine(root, stackId + ".sunderstack");
         var payloadFiles = new Dictionary<string, string>();
@@ -1110,7 +1227,7 @@ public sealed class StacksWindowViewModelTests
                     SchemaVersion = 1,
                     DisplayName = includeDisplayDetails ? "Blender Artist" : "Agent profile",
                     Description = "Profile settings.",
-                    DefaultSelected = false,
+                    DefaultSelected = fragmentDefaultSelected,
                     PayloadPath = "payload/fragments/agent-profile.json",
                     RequiredInputs = includeRequiredInput
                         ? [new SunderStackRequiredInputManifest { InputId = "api-key", Label = "API key", Required = true }]
@@ -1145,6 +1262,7 @@ public sealed class StacksWindowViewModelTests
         {
             SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
             MinReaderVersion = SunderStackFormat.CurrentReaderVersion,
+            RequiredFeatures = requiredFeatures,
             StackId = stackId,
             Name = name,
             Summary = "A shared Stack.",
@@ -1346,7 +1464,7 @@ public sealed class StacksWindowViewModelTests
 
         public RuntimeStackImportResponse ImportResponse { get; init; } = new(RuntimeStackImportOutcome.Completed, [], new Dictionary<string, string>(), [], [], []);
 
-        public RegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], []);
+        public RuntimeRegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], []);
 
         public PackageOperationResult PackageStoreStageOperationResult { get; init; } = SuccessPackageOperation();
 
@@ -1363,6 +1481,8 @@ public sealed class StacksWindowViewModelTests
         public RuntimeStackImportPreviewRequest? LastPreviewRequest { get; private set; }
 
         public PackageStoreStageRequest? LastPackageStoreStageRequest { get; private set; }
+
+        public RuntimeRegistryPublishRequest? LastPublishRequest { get; private set; }
 
         public List<string> Events { get; } = [];
 
@@ -1404,7 +1524,7 @@ public sealed class StacksWindowViewModelTests
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default) => Task.FromResult(InstalledPackages);
 
-        public Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+        public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(RegistryPlan);
 
         public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
@@ -1419,7 +1539,10 @@ public sealed class StacksWindowViewModelTests
                 RegistryPlan.Warnings,
                 [],
                 RegistryPlan.Items.Select(item => item.PackageId).ToArray(),
-                RegistryPlan.Items));
+                RegistryPlan.Items)
+            {
+                CommittedStamp = new RuntimePackageStamp(Guid.Parse("00000000-0000-0000-0000-000000000001"), 1),
+            });
         }
 
         public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
@@ -1435,7 +1558,10 @@ public sealed class StacksWindowViewModelTests
             => Task.FromResult(new RegistryStackStarResponse(true, "Updated Stack star.", new RegistryStackStats(0, request.Starred ? 1 : 0, request.Starred), []));
 
         public Task<RegistryPublishStackResponse> PublishRegistryStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RegistryPublishStackResponse(true, "team-stack", "Published Stack 'team-stack'.", [], []));
+        {
+            LastPublishRequest = request;
+            return Task.FromResult(new RegistryPublishStackResponse(true, "team-stack", "Published Stack 'team-stack'.", [], []));
+        }
 
         public Task<RegistryStackManagementOperationResponse> DeleteRegistryStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RegistryStackManagementOperationResponse(true, "Deleted Stack.", []));
@@ -1473,7 +1599,7 @@ public sealed class StacksWindowViewModelTests
                 {
                     ImpactedPackageIds = impactedPackageIds,
                 },
-                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray(),
                 impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
         }
 
@@ -1482,6 +1608,19 @@ public sealed class StacksWindowViewModelTests
             Events.Add("install");
             return Task.FromResult(PackageStoreStageOperationResult);
         }
+
+        public Task<RuntimePackageStageStatus> GetPackageStoreStageStatusAsync(
+            string stageId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimePackageStageStatus(
+                stageId,
+                RuntimePackageStageKind.PackageStore,
+                RuntimePackageStageState.Committed,
+                DateTimeOffset.UtcNow,
+                PackageStoreStageOperationResult.CommittedStamp,
+                PackageStoreStageOperationResult.RuntimeSessionApplied,
+                PackageStoreStageOperationResult.RuntimeSessionReconciliationPending,
+                PackageStoreStageOperationResult.Message));
 
         public Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
@@ -1493,10 +1632,7 @@ public sealed class StacksWindowViewModelTests
 
         public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult(Success());
 
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new PackageLifecycleOperationResult(true, "ok", [], [], [], [], []));
-
-        public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageConfigurationSchemaDescriptor>>([]);
+        public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageSettingsSchemaDescriptor>>([]);
 
         public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult<PackageSettingsValuesResponse?>(null);
 
@@ -1550,10 +1686,10 @@ public sealed class StacksWindowViewModelTests
                     Fragments = [],
                     Media = request.Media?.Select(media => new SunderStackMediaManifest
                     {
-                         Path = media.ContentPath,
+                        Path = media.ContentPath,
                         FileName = media.FileName,
                         ContentType = media.ContentType,
-                         Size = new FileInfo(media.UploadId).Length,
+                        Size = new FileInfo(media.UploadId).Length,
                         AltText = media.AltText,
                         SortOrder = media.SortOrder,
                     }).ToArray(),

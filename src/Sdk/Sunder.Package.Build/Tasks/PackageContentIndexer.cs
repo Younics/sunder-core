@@ -17,7 +17,7 @@ internal static class PackageContentIndexer
     public static void Write(string stagingPath)
     {
         var files = Directory.EnumerateFiles(stagingPath, "*", SearchOption.AllDirectories)
-            .Where(static path => !string.Equals(Path.GetFileName(path), "content-index.json", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !SunderPackageFormat.IsContentIndexPath(ToArchivePath(stagingPath, path)))
             .Select(path => CreateEntry(stagingPath, path))
             .OrderBy(static entry => entry.Path, StringComparer.Ordinal)
             .ToArray();
@@ -33,15 +33,10 @@ internal static class PackageContentIndexer
             relativePath,
             Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
             stream.Length,
-            ResolveRole(relativePath));
+            SunderPackageFormat.GetContentRole(relativePath)
+                ?? throw new InvalidDataException($"Package staging contains file outside canonical archive roots: '{relativePath}'."));
     }
 
-    private static string ResolveRole(string path)
-    {
-        if (path.StartsWith("payload/lib/runtimes/", StringComparison.OrdinalIgnoreCase)) return "native";
-        if (path.StartsWith("payload/lib/", StringComparison.OrdinalIgnoreCase) && Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase)) return "assembly";
-        if (path.StartsWith("payload/assets/", StringComparison.OrdinalIgnoreCase)) return "asset";
-        if (path.StartsWith("manifest/", StringComparison.OrdinalIgnoreCase)) return "manifest";
-        return "file";
-    }
+    private static string ToArchivePath(string stagingPath, string filePath)
+        => Path.GetRelativePath(stagingPath, filePath).Replace('\\', '/');
 }

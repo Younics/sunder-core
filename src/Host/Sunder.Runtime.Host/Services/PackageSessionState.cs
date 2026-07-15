@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -77,13 +78,17 @@ internal sealed class PackageSessionState(
         }
     }
 
-    public bool ReportPackageFault(string packageId, ReportPackageFaultRequest request)
+    public bool ReportPackageFault(
+        string packageId,
+        ReportPackageFaultRequest request,
+        Action<long>? committed = null)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
+        long generation;
         lock (_syncRoot)
         {
-            if (request.GenerationId != _generation)
+            if (request.GenerationId != _generation || _activeEntry.Draining)
             {
                 return false;
             }
@@ -94,16 +99,19 @@ internal sealed class PackageSessionState(
                 return false;
             }
 
-            removePackageAuthSessions(packageId);
-
-            logger.LogError(
-                "Disabled package {PackageId} for the current session after {Origin}: {Message}",
-                packageId,
-                request.Origin,
-                request.Message);
+            _generation = checked(_generation + 1);
+            _activeEntry.Generation = _generation;
+            generation = _generation;
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
         }
 
+        removePackageAuthSessions(packageId);
+        committed?.Invoke(generation);
+        logger.LogError(
+            "Disabled package {PackageId} for the current session after {Origin}: {Message}",
+            packageId,
+            request.Origin,
+            request.Message);
         QueuePackageDeactivation(deactivation);
         return true;
     }
@@ -111,35 +119,43 @@ internal sealed class PackageSessionState(
     public async Task<IReadOnlyList<string>> ClearActiveSessionAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        SessionEntry previousEntry;
-        CancellationTokenSource retirement;
+        SessionEntry? previousEntry = null;
+        CancellationTokenSource? retirement = null;
         lock (_syncRoot)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (ReferenceEquals(_activeEntry.Session, ActivePackageSession.Empty))
             {
-                clearAuthSessions();
-                return [];
+                // Authentication state is external to the session lock.
             }
-
-            previousEntry = _activeEntry;
-            if (previousEntry.Draining)
+            else
             {
-                throw new RuntimeUnavailableException("The active package session is already draining.");
+                previousEntry = _activeEntry;
+                if (previousEntry.Draining)
+                {
+                    throw new RuntimeUnavailableException("The active package session is already draining.");
+                }
+                previousEntry.Draining = true;
+                retirement = previousEntry.Retirement;
+                SignalRetirementIfDrained(previousEntry);
             }
-            previousEntry.Draining = true;
-            retirement = previousEntry.Retirement;
-            SignalRetirementIfDrained(previousEntry);
         }
 
-        retirement.Cancel();
+        if (previousEntry is null)
+        {
+            clearAuthSessions();
+            return [];
+        }
+
+        var activeRetirement = retirement!;
+        activeRetirement.Cancel();
         try
         {
             await previousEntry.Drained.Task.WaitAsync(_sessionDrainTimeout, cancellationToken);
         }
         catch
         {
-            AbortDrain(previousEntry, retirement);
+            AbortDrain(previousEntry, activeRetirement);
             throw;
         }
 
@@ -151,27 +167,50 @@ internal sealed class PackageSessionState(
             }
             previousEntry.Retired = true;
             _activeEntry = new SessionEntry(ActivePackageSession.Empty, _generation);
-            clearAuthSessions();
         }
 
+        clearAuthSessions();
         return await RetireSessionAsync(previousEntry);
     }
 
     public async Task<(long Generation, IReadOnlyList<string> Warnings)> PublishSessionAsync(
         ActivePackageSession session,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? expectedGeneration = null,
+        Action<long>? committed = null)
+    {
+        var publication = await PreparePublicationAsync(session, expectedGeneration, cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return await CommitPublicationAsync(publication, committed);
+        }
+        catch
+        {
+            DiscardPublication(publication);
+            throw;
+        }
+    }
+
+    internal async Task<SessionPublication> PreparePublicationAsync(
+        ActivePackageSession session,
+        long? expectedGeneration,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
         cancellationToken.ThrowIfCancellationRequested();
         SessionEntry previousEntry;
         CancellationTokenSource retirement;
-        long generation;
         lock (_syncRoot)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (ReferenceEquals(session, _activeEntry.Session))
             {
                 throw new InvalidOperationException("The active package session cannot be published again.");
+            }
+            if (expectedGeneration is not null && expectedGeneration != _generation)
+            {
+                throw new RuntimeStaleGenerationException("The active package session changed while the replacement was being prepared.");
             }
 
             previousEntry = _activeEntry;
@@ -188,6 +227,8 @@ internal sealed class PackageSessionState(
         try
         {
             await previousEntry.Drained.Task.WaitAsync(_sessionDrainTimeout, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new SessionPublication(session, previousEntry, retirement, expectedGeneration);
         }
         catch (TimeoutException exception)
         {
@@ -201,27 +242,63 @@ internal sealed class PackageSessionState(
             AbortDrain(previousEntry, retirement);
             throw;
         }
+    }
 
-        if (cancellationToken.IsCancellationRequested)
-        {
-            AbortDrain(previousEntry, retirement);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-
+    internal async Task<(long Generation, IReadOnlyList<string> Warnings)> CommitPublicationAsync(
+        SessionPublication publication,
+        Action<long>? committed = null)
+    {
+        long generation;
         lock (_syncRoot)
         {
-            if (!ReferenceEquals(_activeEntry, previousEntry) || !previousEntry.Draining)
+            if (publication.Completed)
+            {
+                throw new InvalidOperationException("The package session publication is already complete.");
+            }
+            if (!ReferenceEquals(_activeEntry, publication.PreviousEntry) || !publication.PreviousEntry.Draining)
             {
                 throw new InvalidOperationException("The active package session changed while it was draining.");
             }
+            if (publication.ExpectedGeneration is not null && publication.ExpectedGeneration != _generation)
+            {
+                throw new RuntimeStaleGenerationException("The active package session changed while the replacement was being prepared.");
+            }
+
             generation = checked(_generation + 1);
-            previousEntry.Retired = true;
+            publication.PreviousEntry.Retired = true;
+            publication.Completed = true;
+            publication.Committed = true;
             _generation = generation;
-            _activeEntry = new SessionEntry(session, generation);
-            clearAuthSessions();
+            _activeEntry = new SessionEntry(publication.Session, generation);
         }
 
-        return (generation, await RetireSessionAsync(previousEntry));
+        Exception? publicationException = null;
+        try
+        {
+            clearAuthSessions();
+            committed?.Invoke(generation);
+        }
+        catch (Exception exception)
+        {
+            publicationException = exception;
+        }
+
+        var warnings = await RetireSessionAsync(publication.PreviousEntry);
+        if (publicationException is not null)
+        {
+            throw publicationException;
+        }
+        return (generation, warnings);
+    }
+
+    internal void DiscardPublication(SessionPublication publication)
+    {
+        if (publication.Completed)
+        {
+            return;
+        }
+        publication.Completed = true;
+        AbortDrain(publication.PreviousEntry, publication.Retirement);
     }
 
     public bool HandlePackageFault(
@@ -229,62 +306,31 @@ internal sealed class PackageSessionState(
         long generation,
         PackageFailureOrigin origin,
         Exception exception,
-        string action)
+        string action,
+        Action<long>? committed = null)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
+        long committedGeneration;
         lock (_syncRoot)
         {
             if (generation != _generation
+                || _activeEntry.Draining
                 || !_activeEntry.Session.MarkPackageFailed(packageId, origin, exception.Message, out packageToDeactivate))
             {
                 return false;
             }
 
-            removePackageAuthSessions(packageId);
+            _generation = checked(_generation + 1);
+            _activeEntry.Generation = _generation;
+            committedGeneration = _generation;
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
         }
 
+        removePackageAuthSessions(packageId);
+        committed?.Invoke(committedGeneration);
         QueuePackageDeactivation(deactivation);
         logger.LogError(exception, "Failed to {Action} for package {PackageId}; package disabled for current session", action, packageId);
-        return true;
-    }
-
-    public bool DisableInstalledPackage(string packageId)
-    {
-        ActiveLoadedPackage? packageToDeactivate;
-        PackageDeactivationWork? deactivation;
-        lock (_syncRoot)
-        {
-            if (!_activeEntry.Session.DisableInstalledPackage(packageId, out packageToDeactivate))
-            {
-                return false;
-            }
-
-            removePackageAuthSessions(packageId);
-            deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
-        }
-
-        QueuePackageDeactivation(deactivation);
-        return true;
-    }
-
-    public bool RemovePackage(string packageId)
-    {
-        ActiveLoadedPackage? packageToDeactivate;
-        PackageDeactivationWork? deactivation;
-        lock (_syncRoot)
-        {
-            if (!_activeEntry.Session.RemovePackage(packageId, out packageToDeactivate))
-            {
-                return false;
-            }
-
-            removePackageAuthSessions(packageId);
-            deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
-        }
-
-        QueuePackageDeactivation(deactivation);
         return true;
     }
 
@@ -300,7 +346,9 @@ internal sealed class PackageSessionState(
     {
         lock (_syncRoot)
         {
-            if (!ReferenceEquals(lease.Identity, _activeEntry) || _activeEntry.Draining)
+            if (!ReferenceEquals(lease.Identity, _activeEntry)
+                || lease.Generation != _activeEntry.Generation
+                || _activeEntry.Draining)
             {
                 return false;
             }
@@ -316,6 +364,17 @@ internal sealed class PackageSessionState(
             lock (_syncRoot)
             {
                 return _generation;
+            }
+        }
+    }
+
+    internal ActivePackageSession ActiveSession
+    {
+        get
+        {
+            lock (_syncRoot)
+            {
+                return _activeEntry.Session;
             }
         }
     }
@@ -395,10 +454,17 @@ internal sealed class PackageSessionState(
             _ = ObserveRetiredSessionCleanupAsync(cleanup);
             return [warning];
         }
+        catch (Exception exception)
+        {
+            var warning = $"Previous package session cleanup failed: {exception.Message}";
+            logger.LogWarning(exception, "Previous package session cleanup failed");
+            return [warning];
+        }
     }
 
     private async Task<IReadOnlyList<string>> CleanupRetiredSessionAsync(SessionEntry entry)
     {
+        var started = Stopwatch.GetTimestamp();
         Task[] pendingCleanups;
         lock (_syncRoot)
         {
@@ -415,7 +481,11 @@ internal sealed class PackageSessionState(
         var warnings = new List<string>();
         try
         {
+            var stopStarted = Stopwatch.GetTimestamp();
             await entry.Session.StopBackgroundServicesAsync(CancellationToken.None);
+            logger.LogInformation(
+                "Stopped retired package background services in {ElapsedMilliseconds} ms",
+                Stopwatch.GetElapsedTime(stopStarted).TotalMilliseconds);
         }
         catch (Exception ex)
         {
@@ -425,7 +495,11 @@ internal sealed class PackageSessionState(
 
         try
         {
+            var disposeStarted = Stopwatch.GetTimestamp();
             await entry.Session.DisposeAsync();
+            logger.LogInformation(
+                "Disposed the retired package session in {ElapsedMilliseconds} ms",
+                Stopwatch.GetElapsedTime(disposeStarted).TotalMilliseconds);
         }
         catch (Exception ex)
         {
@@ -434,6 +508,9 @@ internal sealed class PackageSessionState(
         }
 
         entry.Retirement.Dispose();
+        logger.LogInformation(
+            "Cleaned the retired package session in {ElapsedMilliseconds} ms",
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return warnings;
     }
 
@@ -533,10 +610,10 @@ internal sealed class PackageSessionState(
         GC.WaitForPendingFinalizers();
     }
 
-    private sealed class SessionEntry(ActivePackageSession session, long generation)
+    internal sealed class SessionEntry(ActivePackageSession session, long generation)
     {
         public ActivePackageSession Session { get; } = session;
-        public long Generation { get; } = generation;
+        public long Generation { get; set; } = generation;
         public HashSet<long> ActiveLeaseIds { get; } = [];
         public List<LeaseBarrier> LeaseBarriers { get; } = [];
         public List<Task> PendingCleanups { get; } = [];
@@ -547,7 +624,32 @@ internal sealed class PackageSessionState(
         public bool Draining { get; set; }
     }
 
-    private sealed class LeaseBarrier(IEnumerable<long> leaseIds)
+    internal sealed class SessionPublication
+    {
+        private readonly SessionEntry _previousEntry;
+        private readonly CancellationTokenSource _retirement;
+
+        internal SessionPublication(
+            ActivePackageSession session,
+            SessionEntry previousEntry,
+            CancellationTokenSource retirement,
+            long? expectedGeneration)
+        {
+            Session = session;
+            _previousEntry = previousEntry;
+            _retirement = retirement;
+            ExpectedGeneration = expectedGeneration;
+        }
+
+        public ActivePackageSession Session { get; }
+        internal SessionEntry PreviousEntry => _previousEntry;
+        internal CancellationTokenSource Retirement => _retirement;
+        public long? ExpectedGeneration { get; }
+        public bool Completed { get; set; }
+        public bool Committed { get; set; }
+    }
+
+    internal sealed class LeaseBarrier(IEnumerable<long> leaseIds)
     {
         public HashSet<long> PendingLeaseIds { get; } = [.. leaseIds];
         public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

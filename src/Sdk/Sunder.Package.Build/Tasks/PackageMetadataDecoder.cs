@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using Microsoft.Build.Utilities;
+using Sunder.Package.Format;
 using Sunder.Sdk.Packaging;
 
 namespace Sunder.Package.Build.Tasks;
@@ -41,6 +42,7 @@ internal sealed class PackageMetadataDecoder(
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Name)) ?? string.Empty,
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Summary)),
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Icon)),
+                PackageHostRoleMetadata.ReadManifestRoles(assemblyPath),
                 dependencyExtractor.Extract(attributes),
                 capabilityInference.Infer(assemblyPath));
         }
@@ -94,7 +96,8 @@ internal sealed class PackageMetadataDecoder(
             }
 
             candidatePath = dependencyPaths.FirstOrDefault(path =>
-                File.Exists(path)
+                ManagedAssemblyPath.IsCandidate(path)
+                && File.Exists(path)
                 && Path.GetFileNameWithoutExtension(path).Equals(assemblyName.Name, StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrWhiteSpace(candidatePath))
             {

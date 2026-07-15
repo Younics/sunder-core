@@ -33,26 +33,27 @@ internal sealed class AppPackageViewRegistry
 
     public void RegisterPackageView<TView>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
         where TView : Control
-        => RegisterPackageView(packageId, registration, serviceProvider, typeof(TView), AppRegistrationKind.View);
+        => RegisterPackageView(packageId, registration, serviceProvider, typeof(TView));
 
     internal void RegisterPackageView<TView>(string packageId, string viewId, IServiceProvider serviceProvider)
         where TView : Control
         => RegisterPackageView<TView>(packageId, new PackageViewRegistration(viewId, viewId), serviceProvider);
 
-    public void RegisterPackageViewFactory<TFactory>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
-        where TFactory : class, IPackageWorkspaceFactory
-        => RegisterPackageView(packageId, registration, serviceProvider, typeof(TFactory), AppRegistrationKind.Factory);
-
-    internal void RegisterPackageViewFactory<TFactory>(string packageId, string viewId, IServiceProvider serviceProvider)
-        where TFactory : class, IPackageWorkspaceFactory
-        => RegisterPackageViewFactory<TFactory>(packageId, new PackageViewRegistration(viewId, viewId), serviceProvider);
+    internal string? GetPackageId(string viewId)
+    {
+        lock (_syncRoot)
+        {
+            return _registeredViews.TryGetValue(viewId, out var registration)
+                ? registration.PackageId
+                : null;
+        }
+    }
 
     private void RegisterPackageView(
         string packageId,
         PackageViewRegistration registration,
         IServiceProvider serviceProvider,
-        Type implementationType,
-        AppRegistrationKind registrationKind)
+        Type implementationType)
     {
         var viewId = registration.Id;
         lock (_syncRoot)
@@ -64,7 +65,7 @@ internal sealed class AppPackageViewRegistry
                     $"Package view id '{viewId}' is already registered by package '{existingRegistration.PackageId}'.");
             }
 
-            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, implementationType, registrationKind, packageId, registration);
+            _registeredViews[viewId] = new AppRegisteredPackageView(serviceProvider, implementationType, packageId, registration);
             TrackPackageViewId(packageId, viewId);
         }
     }
@@ -79,7 +80,7 @@ internal sealed class AppPackageViewRegistry
                     view.Registration.Id,
                     packageId,
                     view.Registration.Name,
-                    string.IsNullOrWhiteSpace(view.Registration.Icon) ? null : new PackageIconDescriptor(null, view.Registration.Icon),
+                    string.IsNullOrWhiteSpace(view.Registration.IconAssetPath) ? null : new PackageIconDescriptor(null, view.Registration.IconAssetPath),
                     view.Registration.DefaultPlacement.ToString(),
                     view.Registration.ShowInHotbarByDefault))
                 .ToArray();
@@ -91,16 +92,7 @@ internal sealed class AppPackageViewRegistry
     {
         lock (_syncRoot)
         {
-            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TView), AppRegistrationKind.View, packageId);
-        }
-    }
-
-    public void RegisterSettingsViewFactory<TFactory>(string packageId, IServiceProvider serviceProvider)
-        where TFactory : class, IPackageWorkspaceFactory
-    {
-        lock (_syncRoot)
-        {
-            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TFactory), AppRegistrationKind.Factory, packageId);
+            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TView), packageId);
         }
     }
 
@@ -135,7 +127,7 @@ internal sealed class AppPackageViewRegistry
         Control control;
         try
         {
-            control = CreateControl(registration.ServiceProvider, registration.ImplementationType, registration.RegistrationKind);
+            control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
         }
         catch (Exception ex)
         {
@@ -241,7 +233,7 @@ internal sealed class AppPackageViewRegistry
         Control control;
         try
         {
-            control = CreateControl(registration.ServiceProvider, registration.ImplementationType, registration.RegistrationKind);
+            control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
         }
         catch (Exception ex)
         {
@@ -382,16 +374,8 @@ internal sealed class AppPackageViewRegistry
         }
     }
 
-    private static Control CreateControl(IServiceProvider serviceProvider, Type implementationType, AppRegistrationKind registrationKind)
-    {
-        if (registrationKind == AppRegistrationKind.View)
-        {
-            return (Control)ActivatorUtilities.CreateInstance(serviceProvider, implementationType);
-        }
-
-        var factory = (IPackageWorkspaceFactory)ActivatorUtilities.CreateInstance(serviceProvider, implementationType);
-        return factory.CreateRootView(serviceProvider);
-    }
+    private static Control CreateControl(IServiceProvider serviceProvider, Type implementationType)
+        => (Control)ActivatorUtilities.CreateInstance(serviceProvider, implementationType);
 
     private static void DisposeCachedControls(IEnumerable<Control> controls)
     {
@@ -466,15 +450,8 @@ internal sealed class AppPackageViewRegistry
     private sealed record AppRegisteredPackageView(
         IServiceProvider ServiceProvider,
         Type ImplementationType,
-        AppRegistrationKind RegistrationKind,
         string PackageId,
         PackageViewRegistration Registration);
 
-    private sealed record AppRegisteredSettingsView(IServiceProvider ServiceProvider, Type ImplementationType, AppRegistrationKind RegistrationKind, string PackageId);
-
-    private enum AppRegistrationKind
-    {
-        View = 0,
-        Factory = 1,
-    }
+    private sealed record AppRegisteredSettingsView(IServiceProvider ServiceProvider, Type ImplementationType, string PackageId);
 }

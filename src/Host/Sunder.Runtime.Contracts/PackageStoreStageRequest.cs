@@ -17,7 +17,11 @@ public sealed record PackageStoreMutationRequest(
     bool Reinstall = false);
 
 public sealed record PackageStoreStageRequest(
-    IReadOnlyList<PackageStoreMutationRequest> Mutations);
+    IReadOnlyList<PackageStoreMutationRequest> Mutations)
+{
+    public IReadOnlyList<PackageStoreMutationRequest> Mutations { get; }
+        = RuntimeContractCollections.Freeze(Mutations);
+}
 
 public sealed record PackageStoreStageResult(
     string? StageId,
@@ -25,6 +29,13 @@ public sealed record PackageStoreStageResult(
     IReadOnlyList<ActivePackageDescriptor> ActivePackages,
     IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots)
 {
+    public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; }
+        = RuntimeContractCollections.Freeze(ActivePackages.Select(
+            package => package with { Views = RuntimeContractCollections.Freeze(package.Views) }));
+
+    public IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots { get; }
+        = RuntimeContractCollections.Freeze(PackageUiSnapshots);
+
     public bool Success => OperationResult.Success && !string.IsNullOrWhiteSpace(StageId);
 
     public IReadOnlyList<string> ImpactedPackageIds => OperationResult.ImpactedPackageIds;

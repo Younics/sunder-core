@@ -9,7 +9,10 @@ using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
-public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageRequirement package, StackPackageInfo? packageInfo) : PackageIconItemViewModel(packageInfo?.IconUri)
+public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageRequirement package, StackPackageInfo? packageInfo)
+    : PackageIconItemViewModel(
+        packageInfo?.IconUri,
+        iconTransport: packageInfo?.IconTransport ?? PackageIconTransport.RuntimeAsset)
 {
     public string PackageId { get; } = package.PackageId ?? "unknown";
 
@@ -22,7 +25,7 @@ public sealed partial class UseStackPackageReviewViewModel(SunderStackPackageReq
     [ObservableProperty]
     private string _statusText = "Checking";
 
-    public void ApplyInstallPlan(RegistryPackageInstallPlanItem? item, bool planSuccess)
+    public void ApplyInstallPlan(RuntimeRegistryPackageInstallPlanItem? item, bool planSuccess)
     {
         StatusText = !planSuccess
             ? "Blocked"
@@ -42,7 +45,9 @@ public sealed partial class UseStackSetupPackageGroupViewModel(
     string displayName,
     string glyph,
     Uri? iconUri,
-    IReadOnlyList<UseStackSetupItemViewModel> items) : PackageIconItemViewModel(iconUri)
+    PackageIconTransport iconTransport,
+    IReadOnlyList<UseStackSetupItemViewModel> items)
+    : PackageIconItemViewModel(iconUri, iconTransport: iconTransport)
 {
     public string PackageId { get; } = packageId;
 
@@ -107,6 +112,7 @@ public sealed partial class UseStackSetupItemViewModel : ViewModelBase
         Details = (details?.Values ?? [])
             .Select(value => new LocalStackDetailValueViewModel(value))
             .ToArray();
+        _isSelected = fragment.DefaultSelected != false;
     }
 
     public string FragmentId { get; }
@@ -143,24 +149,52 @@ public sealed partial class UseStackSetupItemViewModel : ViewModelBase
 
 }
 
-public sealed class UseStackImportActionViewModel(RuntimeStackImportActionDescriptor action)
+public sealed partial class UseStackImportActionViewModel : ViewModelBase
 {
-    public string ActionId { get; } = action.ActionId;
+    private readonly Action _changed;
 
-    public string DisplayName { get; } = action.DisplayName;
+    public UseStackImportActionViewModel(RuntimeStackImportActionDescriptor action, Action changed)
+    {
+        _changed = changed;
+        ActionId = action.ActionId;
+        DisplayName = action.DisplayName;
+        Subtitle = $"{action.ContributorId} - {action.Kind}";
+        Description = string.IsNullOrWhiteSpace(action.Description) ? "No description provided." : action.Description;
+        _isSelected = action.DefaultSelected;
+    }
 
-    public string Subtitle { get; } = $"{action.ContributorId} - {action.Kind}";
+    public string ActionId { get; }
 
-    public string Description { get; } = string.IsNullOrWhiteSpace(action.Description) ? "No description provided." : action.Description;
+    public string DisplayName { get; }
+
+    public string Subtitle { get; }
+
+    public string Description { get; }
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    partial void OnIsSelectedChanged(bool value) => _changed();
 }
 
 public sealed partial class UseStackRequiredInputValueViewModel(RuntimeStackRequiredInputDescriptor input, string? currentValue, Action valueChanged) : ViewModelBase
 {
     public string InputId { get; } = input.InputId;
 
+    public string OwnerPackageId { get; } = input.OwnerPackageId;
+
+    public string LocalInputId { get; } = input.LocalInputId;
+
     public string Label { get; } = input.Label;
 
     public string ContributorId { get; } = input.ContributorId;
+
+    public bool IsHostScoped => !string.IsNullOrWhiteSpace(InputId);
+
+    public bool Matches(RuntimeStackRequiredInputDescriptor input)
+        => string.Equals(OwnerPackageId, input.OwnerPackageId, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(ContributorId, input.ContributorId, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(LocalInputId, input.LocalInputId, StringComparison.OrdinalIgnoreCase);
 
     public bool Required { get; } = input.Required;
 

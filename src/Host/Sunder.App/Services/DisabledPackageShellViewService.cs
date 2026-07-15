@@ -19,7 +19,7 @@ internal sealed class DisabledPackageShellViewService : IPackageShellViewService
 
     public ValueTask<bool> AddViewToHotbarAsync(
         string viewId,
-        PackageHotbarPlacement placement,
+        PackageViewPlacement placement,
         int? index = null,
         bool openPanel = false,
         IReadOnlyDictionary<string, string?>? parameters = null,

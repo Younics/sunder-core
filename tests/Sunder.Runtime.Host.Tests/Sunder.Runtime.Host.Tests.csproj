@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
+    <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Sunder.Package.Format\Sunder.Package.Format.csproj" />
   </ItemGroup>

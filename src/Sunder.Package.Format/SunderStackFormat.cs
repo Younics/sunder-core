@@ -12,6 +12,26 @@ public static class SunderStackFormat
     public const string FragmentPayloadRoot = "payload/fragments/";
     public const string FragmentFileRoot = "payload/files/";
     public const string MediaPayloadRoot = "payload/media/";
+    public const string FragmentJsonFeature = "fragment-json.v1";
+    public const string MediaFeature = "media.v1";
+    public const string RequiredInputsFeature = "required-inputs.v1";
+
+    public static IReadOnlySet<string> SupportedFeatures { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        FragmentJsonFeature,
+        MediaFeature,
+        RequiredInputsFeature,
+    };
+
+    public static bool IsContentIndexPath(string path)
+        => string.Equals(path, ContentIndexPath, StringComparison.Ordinal);
+
+    public static bool IsAllowedArchivePath(string path)
+        => string.Equals(path, ManifestPath, StringComparison.Ordinal)
+           || IsContentIndexPath(path)
+           || path.StartsWith(FragmentPayloadRoot, StringComparison.Ordinal)
+           || path.StartsWith(FragmentFileRoot, StringComparison.Ordinal)
+           || path.StartsWith(MediaPayloadRoot, StringComparison.Ordinal);
 
     public static string BuildStackFileName(string stackId)
     {

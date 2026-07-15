@@ -4,7 +4,7 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Abstractions;
 
 /// <summary>Defines the Runtime-hosted role of a package module.</summary>
-/// <remarks>The Runtime creates one module per activation, configures services first, builds the provider, then registers contributions. Modules must not retain either registry beyond activation.</remarks>
+/// <remarks>The Runtime constructs the module through its public parameterless constructor, calls <see cref="ConfigureRuntimeServices"/>, builds the role-specific provider, then calls <see cref="RegisterRuntimeContributions"/>. The module is not resolved from that provider and must not retain the registry beyond activation.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.CoreV1)]
 public interface ISunderRuntimePackageModule
 {

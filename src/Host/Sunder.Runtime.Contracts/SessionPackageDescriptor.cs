@@ -4,6 +4,7 @@ public sealed record SessionPackageDescriptor(
     string PackageId,
     string DisplayName,
     string Version,
+    PackageHostRoles HostRoles,
     PackageIconDescriptor? Icon,
     bool IsEnabled,
     PackageReadinessState Readiness,

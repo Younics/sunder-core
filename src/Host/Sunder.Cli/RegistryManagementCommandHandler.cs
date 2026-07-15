@@ -3,7 +3,7 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.Cli;
 
 internal sealed class RegistryManagementCommandHandler(
-    ICliRuntimeClient runtime,
+    ICliRuntimeManagementClient runtime,
     IRegistryBrowseClient registry,
     CliOutput output,
     CliOptions options)

@@ -4,7 +4,12 @@ public sealed record SystemStatusResponse(
     string Name,
     string Version,
     bool IsReady,
-    DateTimeOffset StartedAtUtc);
+    DateTimeOffset StartedAtUtc)
+{
+    public RuntimeBootstrapState State { get; init; } = IsReady
+        ? RuntimeBootstrapState.Ready
+        : RuntimeBootstrapState.Starting;
+}
 
 public sealed record RuntimeResetChallengeResponse(string Challenge, DateTimeOffset ExpiresAtUtc);
 

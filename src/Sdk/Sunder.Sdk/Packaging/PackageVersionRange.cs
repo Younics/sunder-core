@@ -56,14 +56,14 @@ public readonly struct PackageVersionRange : IEquatable<PackageVersionRange>
         {
             var comparison = version.CompareTo(constraint.Version);
             if (constraint.Operator switch
-                {
-                    ComparisonOperator.Exact or ComparisonOperator.Equal => comparison != 0,
-                    ComparisonOperator.LessThan => comparison >= 0,
-                    ComparisonOperator.LessThanOrEqual => comparison > 0,
-                    ComparisonOperator.GreaterThan => comparison <= 0,
-                    ComparisonOperator.GreaterThanOrEqual => comparison < 0,
-                    _ => true,
-                })
+            {
+                ComparisonOperator.Exact or ComparisonOperator.Equal => comparison != 0,
+                ComparisonOperator.LessThan => comparison >= 0,
+                ComparisonOperator.LessThanOrEqual => comparison > 0,
+                ComparisonOperator.GreaterThan => comparison <= 0,
+                ComparisonOperator.GreaterThanOrEqual => comparison < 0,
+                _ => true,
+            })
             {
                 return false;
             }

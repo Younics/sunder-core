@@ -29,7 +29,7 @@ internal sealed class CliCommandDispatcher
         _management = new(runtime, registry, output, options);
         _validation = new(archives, output);
         _publish = new(runtime, registry, archives, output, progress, options);
-        _stacks = new(runtime, registry, archives, output, progress, options);
+        _stacks = new(runtime, runtime, registry, archives, output, progress, options);
     }
 
     public Task<int> ExecuteAsync(CliCommand command, CancellationToken token) => command switch

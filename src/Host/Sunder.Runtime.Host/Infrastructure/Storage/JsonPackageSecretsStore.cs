@@ -3,7 +3,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
-internal sealed class JsonPackageSecretsStore : IPackageSecrets
+internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
 {
     private readonly AtomicFileDocument _document;
     private readonly PackageSecretsSerializer _serializer;
@@ -62,6 +62,11 @@ internal sealed class JsonPackageSecretsStore : IPackageSecrets
         return _document.ExecuteAsync(transaction =>
         {
             var secrets = Load(transaction);
+            if (secrets.Values.TryGetValue(key, out var current)
+                && string.Equals(current, value, StringComparison.Ordinal))
+            {
+                return true;
+            }
             var nextRevision = checked(secrets.Revision + 1);
             secrets.Values[key] = value;
             Save(transaction, secrets.Values, nextRevision);

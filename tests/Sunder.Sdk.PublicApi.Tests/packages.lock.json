@@ -108,14 +108,17 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "sunder.package.format": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Sdk": "[1.1.0, )"
+        }
+      },
       "sunder.registry.contracts": {
         "type": "Project"
       },
       "sunder.runtime.contracts": {
-        "type": "Project",
-        "dependencies": {
-          "Sunder.Registry.Contracts": "[1.0.0, )"
-        }
+        "type": "Project"
       },
       "sunder.sdk": {
         "type": "Project",

@@ -14,14 +14,18 @@
       "sunder.runtime.client": {
         "type": "Project",
         "dependencies": {
+          "Sunder.Registry.Contracts": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
-          "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
+          "Sunder.Runtime.LocalState": "[1.0.0, )"
         }
       },
       "sunder.runtime.contracts": {
+        "type": "Project"
+      },
+      "sunder.runtime.localstate": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Registry.Contracts": "[1.0.0, )"
+          "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
         }
       },
       "sunder.sdk": {

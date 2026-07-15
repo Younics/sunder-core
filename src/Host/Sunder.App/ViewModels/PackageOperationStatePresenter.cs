@@ -3,14 +3,14 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.ViewModels;
 
-internal sealed class PackageOperationStatePresenter(PackageOperationService? packageOperationService)
+internal sealed class PackageOperationStatePresenter(IPackageOperationExecutor operationExecutor)
 {
     public bool HasActivePackageStoreOperation
-        => packageOperationService?.GetActivePackageStoreOperation()?.IsActive == true;
+        => operationExecutor.GetActivePackageStoreOperation()?.IsActive == true;
 
     public bool CancelActiveOperationForPackage(string? packageId)
         => !string.IsNullOrWhiteSpace(packageId)
-           && packageOperationService?.CancelActiveOperationForPackage(packageId) == true;
+           && operationExecutor.CancelActiveOperationForPackage(packageId);
 
     public void RefreshPackageRows(
         IEnumerable<IPackageOperationStateViewModel> marketplacePackages,
@@ -41,5 +41,5 @@ internal sealed class PackageOperationStatePresenter(PackageOperationService? pa
     private BackgroundProcessSnapshot? GetActiveOperationForPackage(string? packageId)
         => string.IsNullOrWhiteSpace(packageId)
             ? null
-            : packageOperationService?.GetActiveOperationForPackage(packageId);
+            : operationExecutor.GetActiveOperationForPackage(packageId);
 }

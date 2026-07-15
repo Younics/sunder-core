@@ -3,8 +3,9 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class InstalledPackageLifecycleService
+internal sealed partial class InstalledPackageLifecycleService
 {
+    private const int MaxPendingStages = 32;
     private readonly RuntimeSessionOwner _sessions;
     private readonly RuntimeOperationGate _gate;
     private readonly InstalledPackageStore _installedPackages;
@@ -14,7 +15,11 @@ internal sealed class InstalledPackageLifecycleService
     private readonly RuntimeContentTransferStore _transfers;
     private readonly PackageSessionPublisher _publisher;
     private readonly ILogger<InstalledPackageLifecycleService> _logger;
+    private readonly IInstalledPackageLifecycleFaultInjector? _faultInjector;
+    private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy;
+    private readonly TimeProvider _timeProvider;
     private readonly Dictionary<string, PendingStoreStage> _stages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _reconciliationPendingStages = new(StringComparer.OrdinalIgnoreCase);
 
     public InstalledPackageLifecycleService(
         RuntimeSessionOwner sessions,
@@ -25,7 +30,10 @@ internal sealed class InstalledPackageLifecycleService
         RuntimePackageUiService ui,
         RuntimeContentTransferStore transfers,
         PackageSessionPublisher publisher,
-        ILogger<InstalledPackageLifecycleService> logger)
+        ILogger<InstalledPackageLifecycleService> logger,
+        IInstalledPackageLifecycleFaultInjector? faultInjector = null,
+        RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
+        TimeProvider? timeProvider = null)
     {
         _sessions = sessions;
         _gate = gate;
@@ -36,6 +44,9 @@ internal sealed class InstalledPackageLifecycleService
         _transfers = transfers;
         _publisher = publisher;
         _logger = logger;
+        _faultInjector = faultInjector;
+        _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -44,6 +55,8 @@ internal sealed class InstalledPackageLifecycleService
         await _storeCoordinator.InitializeAsync(operation.CancellationToken);
     }
 
+    internal RuntimePackageStamp Stamp => _sessions.Stamp;
+
     public async Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledAsync(CancellationToken cancellationToken = default)
         => (await _installedPackages.ListAsync(cancellationToken))
             .Select(_installedPackages.ToDescriptor)
@@ -51,22 +64,30 @@ internal sealed class InstalledPackageLifecycleService
             .ToArray();
 
     internal async Task<PackageOperationResult> InstallFromRuntimePathAsync(string path, CancellationToken cancellationToken = default)
-    {
-        await using var operation = await _gate.EnterAsync(cancellationToken);
-        return await _storeCoordinator.ExecuteAsync(
-            [new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: path)],
-            operation.CancellationToken);
-    }
+        => await ExecutePreparedMutationAsync(
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: path),
+            cancellationToken);
+
+    internal async Task<PackageOperationResult> UpgradeFromRuntimePathAsync(
+        string packageId,
+        string path,
+        bool allowDowngrade = false,
+        bool reinstall = false,
+        CancellationToken cancellationToken = default)
+        => await ExecutePreparedMutationAsync(
+            new PackageStoreMutation(PackageStoreMutationKind.Upgrade, packageId, path, allowDowngrade, reinstall),
+            cancellationToken);
 
     public async Task<PackageLifecycleOperationResult> LoadInstalledPackagesAsync(CancellationToken cancellationToken = default)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
+        var baseGeneration = _sessions.Generation;
         var currentPackages = _sessions.State.GetActivePackages();
         var currentSnapshots = _ui.GetActiveSnapshots();
         var sources = _sessions.Sources.Snapshot();
         sources.RemoveDevOverlaysOwnedBy(PackageSessionOverlayOwner.Startup, PackageSessionOverlayOwner.HotReload, PackageSessionOverlayOwner.Sdk);
-        var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, startBackgroundServices: false, operationToken);
+        var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, operationToken);
         var warnings = loaded.Warnings.Concat(loaded.Errors.Select(error => $"Installed package session loaded with package errors: {error}")).ToList();
         if (loaded.Session is null)
         {
@@ -81,6 +102,7 @@ internal sealed class InstalledPackageLifecycleService
         if (ReferenceEquals(loaded.Session, ActivePackageSession.Empty)
             && currentPackages.Count == 0)
         {
+            ResolvePendingReconciliations(_sessions.Stamp);
             return new PackageLifecycleOperationResult(
                 true,
                 "No installed packages to load.",
@@ -88,14 +110,41 @@ internal sealed class InstalledPackageLifecycleService
                 currentSnapshots,
                 warnings,
                 [],
-                []);
+                [])
+            {
+                CommittedStamp = _sessions.Stamp,
+            };
         }
 
         var packages = loaded.Session.GetActivePackages();
-        var packageSources = loaded.Session.GetActivePackageSources();
         try
         {
-            warnings.AddRange(await _publisher.PublishAsync(loaded.Session, sources, operationToken));
+            var publication = await _publisher.PublishAsync(
+                loaded.Session,
+                sources,
+                warnings,
+                loaded.Errors,
+                baseGeneration,
+                operationToken);
+            warnings.AddRange(publication.CleanupWarnings);
+            var impacted = currentPackages.Select(package => package.PackageId)
+                .Concat(packages.Select(package => package.PackageId))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var committed = _sessions.GetSnapshot();
+            ResolvePendingReconciliations(publication.Stamp);
+            return new PackageLifecycleOperationResult(
+                true,
+                "Installed packages loaded.",
+                committed.ActivePackages,
+                committed.PackageUiSnapshots,
+                warnings,
+                loaded.Errors,
+                impacted)
+            {
+                CommittedStamp = publication.Stamp,
+            };
         }
         catch (OperationCanceledException)
         {
@@ -107,38 +156,33 @@ internal sealed class InstalledPackageLifecycleService
             const string message = "Installed package lifecycle load failed while starting background services.";
             return PackageLifecycleOperationResult.Failed(message, currentPackages, currentSnapshots, warnings, [message]);
         }
-        var impacted = currentPackages.Select(package => package.PackageId)
-            .Concat(packages.Select(package => package.PackageId))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return new PackageLifecycleOperationResult(true, "Installed packages loaded.", packages, _ui.CreateSnapshots(packageSources, _sessions.Generation), warnings, [], impacted);
-    }
-
-    public Task<PackageOperationResult> ReloadAsync(InstalledPackageSessionReloadRequest request, CancellationToken cancellationToken = default)
-    {
-        var impacted = request.ImpactedPackageIds
-            .Where(packageId => !string.IsNullOrWhiteSpace(packageId))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return ReloadAfterMutationAsync(PackageOperationResults.Success("Installed package session reloaded.", impactedPackageIds: impacted), cancellationToken);
+        throw new InvalidOperationException("Installed package publication did not complete.");
     }
 
     public Task<PackageOperationResult> SetEnabledAsync(string packageId, bool enabled, CancellationToken cancellationToken = default)
-        => ExecuteAndReloadAsync(
+        => ExecutePreparedMutationAsync(
             new PackageStoreMutation(enabled ? PackageStoreMutationKind.Enable : PackageStoreMutationKind.Disable, packageId),
             cancellationToken);
 
     public Task<PackageOperationResult> UninstallAsync(string packageId, CancellationToken cancellationToken = default)
-        => ExecuteAndReloadAsync(new PackageStoreMutation(PackageStoreMutationKind.Uninstall, packageId), cancellationToken);
+        => ExecutePreparedMutationAsync(new PackageStoreMutation(PackageStoreMutationKind.Uninstall, packageId), cancellationToken);
 
     public async Task<PackageStoreStageResult> StageAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
+        await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
+        if (_stages.Count >= MaxPendingStages)
+        {
+            return PackageStoreStageResult.Failed(
+                $"The Runtime already has {MaxPendingStages} pending package store stages.",
+                _sessions.State.GetActivePackages(),
+                _ui.GetActiveSnapshots());
+        }
+        var baseSessionGeneration = _sessions.Generation;
         var currentPackages = _sessions.State.GetActivePackages();
         var currentSnapshots = _ui.GetActiveSnapshots();
+        var sources = _sessions.Sources.Snapshot();
         var leases = new List<RuntimeUploadLease>();
         PackageStoreStagePreparation preparation;
         try
@@ -153,17 +197,66 @@ internal sealed class InstalledPackageLifecycleService
         {
             foreach (var lease in leases) _transfers.ReleaseUpload(lease);
         }
+        return await PrepareCandidateAsync(
+            preparation,
+            baseSessionGeneration,
+            currentPackages,
+            currentSnapshots,
+            sources,
+            operationToken);
+    }
+
+    private async Task<PackageStoreStageResult> PrepareCandidateAsync(
+        PackageStoreStagePreparation preparation,
+        long baseSessionGeneration,
+        IReadOnlyList<ActivePackageDescriptor> currentPackages,
+        IReadOnlyList<PackageUiSnapshotDescriptor> currentSnapshots,
+        PackageSessionSourceSnapshot sources,
+        CancellationToken cancellationToken)
+    {
         if (!preparation.Success || preparation.Stage is null)
         {
             var failure = preparation.Failure ?? PackageOperationResults.Failure("Package store stage failed.");
             return PackageStoreStageResult.Failed(failure.Message ?? "Package store stage failed.", currentPackages, currentSnapshots, failure.Warnings, failure.Errors, failure.ImpactedPackageIds);
         }
 
-        var loaded = await _reconciler.LoadMergedSessionAsync(
-            preparation.Stage.ProspectivePackages,
-            _sessions.Sources.Snapshot().ActiveDevOverlays,
-            startBackgroundServices: false,
-            operationToken);
+        if (preparation.Stage.Result.ImpactedPackageIds.Count == 0)
+        {
+            var createdAtUtc = _timeProvider.GetUtcNow();
+            var expiresAtUtc = createdAtUtc + _lifecyclePolicy.PendingStageLifetime;
+            _stages[preparation.Stage.StageId] = new PendingStoreStage(
+                Candidate: null,
+                preparation.Stage.BaseCatalogGeneration,
+                baseSessionGeneration,
+                createdAtUtc,
+                expiresAtUtc);
+            _sessions.RegisterStage(
+                preparation.Stage.StageId,
+                baseSessionGeneration,
+                baseSessionGeneration,
+                RuntimePackageStageKind.PackageStore,
+                createdAtUtc,
+                expiresAtUtc);
+            return new PackageStoreStageResult(
+                preparation.Stage.StageId,
+                preparation.Stage.Result,
+                currentPackages,
+                currentSnapshots);
+        }
+
+        PackageSessionLoadResult loaded;
+        try
+        {
+            loaded = await _reconciler.LoadMergedSessionAsync(
+                preparation.Stage.ProspectivePackages,
+                sources.ActiveDevOverlays,
+                cancellationToken);
+        }
+        catch
+        {
+            await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
+            throw;
+        }
         if (loaded.Session is null)
         {
             await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
@@ -175,6 +268,16 @@ internal sealed class InstalledPackageLifecycleService
                 loaded.Errors,
                 preparation.Stage.Result.ImpactedPackageIds);
         }
+        if (_sessions.Generation != baseSessionGeneration)
+        {
+            await loaded.Session.DisposeAsync();
+            await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
+            return PackageStoreStageResult.Failed(
+                "Package store stage is stale because the active package session changed while it was being prepared.",
+                currentPackages,
+                currentSnapshots,
+                impactedPackageIds: preparation.Stage.Result.ImpactedPackageIds);
+        }
 
         var result = preparation.Stage.Result with
         {
@@ -183,41 +286,238 @@ internal sealed class InstalledPackageLifecycleService
                 .Concat(loaded.Errors.Select(error => $"Staged installed package session loaded with package errors: {error}"))
                 .ToArray(),
         };
-        _stages[preparation.Stage.StageId] = new PendingStoreStage(loaded.Session, _sessions.Generation, preparation.Stage.BaseCatalogGeneration);
-        _sessions.RegisterStage(preparation.Stage.StageId, _sessions.Generation + 1);
+        PreparedPackageSession candidate;
+        try
+        {
+            candidate = _publisher.Prepare(
+                loaded.Session,
+                sources,
+                result.Warnings,
+                loaded.Errors,
+                baseSessionGeneration,
+                preparation.Stage.StageId);
+        }
+        catch (Exception exception)
+        {
+            await loaded.Session.DisposeAsync();
+            await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
+            _logger.LogError(exception, "Failed to prepare package UI snapshots for store stage {StageId}", preparation.Stage.StageId);
+            return PackageStoreStageResult.Failed(
+                "Package store stage failed while preparing package UI snapshots.",
+                currentPackages,
+                currentSnapshots,
+                result.Warnings,
+                impactedPackageIds: result.ImpactedPackageIds);
+        }
+        var candidateCreatedAtUtc = _timeProvider.GetUtcNow();
+        var candidateExpiresAtUtc = candidateCreatedAtUtc + _lifecyclePolicy.PendingStageLifetime;
+        _stages[preparation.Stage.StageId] = new PendingStoreStage(
+            candidate,
+            preparation.Stage.BaseCatalogGeneration,
+            baseSessionGeneration,
+            candidateCreatedAtUtc,
+            candidateExpiresAtUtc);
+        _sessions.RegisterStage(
+            preparation.Stage.StageId,
+            baseSessionGeneration + 1,
+            baseSessionGeneration,
+            RuntimePackageStageKind.PackageStore,
+            candidateCreatedAtUtc,
+            candidateExpiresAtUtc);
         return new PackageStoreStageResult(
             preparation.Stage.StageId,
             result,
             loaded.Session.GetActivePackages(),
-            _ui.CreateSnapshots(loaded.Session.GetActivePackageSources(), _sessions.Generation + 1, preparation.Stage.StageId));
+            candidate.UiSnapshots);
     }
 
     public async Task<PackageOperationResult> CommitStageAsync(string stageId, CancellationToken cancellationToken = default)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
-        var operationToken = operation.CancellationToken;
-        if (!_stages.Remove(stageId, out var stage)) return PackageOperationResults.Failure($"Package store stage '{stageId}' was not found.");
-        _ui.DiscardStage(stageId);
-        await stage.Session.DisposeAsync();
-        if (stage.BaseSessionGeneration != _sessions.Generation || stage.BaseCatalogGeneration != _storeCoordinator.CatalogGeneration)
+        await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
+        return await CommitStageCoreAsync(stageId, operation.CancellationToken);
+    }
+
+    private async Task<PackageOperationResult> CommitStageCoreAsync(string stageId, CancellationToken operationToken)
+    {
+        if (!_stages.Remove(stageId, out var stage))
         {
+            return PackageOperationResults.Failure(
+                _sessions.GetStageStatus(stageId)?.Message
+                ?? $"Package store stage '{stageId}' was not found.");
+        }
+        if ((stage.Candidate is not null && stage.BaseSessionGeneration != _sessions.Generation)
+            || stage.BaseCatalogGeneration != _storeCoordinator.CatalogGeneration)
+        {
+            if (stage.Candidate is not null)
+            {
+                await _publisher.DiscardAsync(stage.Candidate);
+            }
+            else
+            {
+                _sessions.RemoveStage(stageId);
+            }
             await _storeCoordinator.DiscardStageAsync(stageId);
+            _sessions.MarkStageFailed(stageId, "The package store stage became stale before commit.");
             return PackageOperationResults.Failure($"Package store stage '{stageId}' is stale because the active package session changed before commit.");
         }
+
+        PendingPackageSessionPublication? publication = null;
+        PackageOperationResult? storeResult = null;
+        var storeCommitted = false;
+        _sessions.MarkStageCommitting(stageId);
         try
         {
-            var result = await _storeCoordinator.CommitStageAsync(stageId, operationToken);
-            return await ReloadAfterMutationCoreAsync(result, operationToken);
+            if (stage.Candidate is not null)
+            {
+                publication = await _publisher.BeginPublishAsync(stage.Candidate, operationToken);
+                if (stage.BaseSessionGeneration != _sessions.Generation
+                    || stage.BaseCatalogGeneration != _storeCoordinator.CatalogGeneration)
+                {
+                    await _publisher.DiscardAsync(publication);
+                    publication = null;
+                    await _storeCoordinator.DiscardStageAsync(stageId);
+                    _sessions.MarkStageFailed(stageId, "The package store stage became stale before commit.");
+                    return PackageOperationResults.Failure($"Package store stage '{stageId}' is stale because the active package session changed before commit.");
+                }
+            }
+
+            operationToken.ThrowIfCancellationRequested();
+            storeResult = await _storeCoordinator.CommitStageAsync(stageId, CancellationToken.None);
+            if (!storeResult.Success)
+            {
+                if (publication is not null)
+                {
+                    await _publisher.DiscardAsync(publication);
+                    publication = null;
+                }
+                else
+                {
+                    _sessions.RemoveStage(stageId);
+                }
+                _sessions.MarkStageFailed(stageId, storeResult.Message);
+                return storeResult;
+            }
+            storeCommitted = true;
+
+            if (publication is null)
+            {
+                _sessions.RemoveStage(stageId);
+                var stamp = _sessions.Stamp;
+                var noOpResult = storeResult with
+                {
+                    StoreCommitted = true,
+                    CommittedStamp = stamp,
+                };
+                _sessions.MarkStageCommitted(
+                    stageId,
+                    stamp,
+                    runtimeSessionApplied: false,
+                    reconciliationPending: false,
+                    noOpResult.Message);
+                return noOpResult;
+            }
+
+            _faultInjector?.Hit(InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication);
+            var committed = await _publisher.CommitAsync(publication);
+            publication = null;
+            var result = storeResult with
+            {
+                RuntimeSessionApplied = true,
+                RequiresAppRestart = false,
+                Warnings = storeResult.Warnings.Concat(committed.CleanupWarnings).ToArray(),
+                CommittedStamp = committed.Stamp,
+                StoreCommitted = true,
+                RuntimeSessionReconciliationPending = committed.ReconciliationPending,
+            };
+            _sessions.MarkStageCommitted(
+                stageId,
+                committed.Stamp,
+                runtimeSessionApplied: true,
+                committed.ReconciliationPending,
+                result.Message);
+            if (committed.ReconciliationPending)
+            {
+                _reconciliationPendingStages.Add(stageId);
+            }
+            else
+            {
+                ResolvePendingReconciliations(committed.Stamp);
+            }
+            return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!storeCommitted)
         {
+            if (publication is not null)
+            {
+                await _publisher.DiscardAsync(publication);
+            }
+            else
+            {
+                _sessions.RemoveStage(stageId);
+            }
             await _storeCoordinator.DiscardStageAsync(stageId);
+            _sessions.MarkStageFailed(stageId, "The package store stage was cancelled before commit.");
             throw;
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Failed to commit package store stage {StageId}", stageId);
-            return PackageOperationResults.Failure("The package store stage could not be committed.");
+            if (publication is not null)
+            {
+                if (storeCommitted)
+                {
+                    try
+                    {
+                        await _publisher.DiscardAsync(publication);
+                    }
+                    catch (Exception cleanupException)
+                    {
+                        _logger.LogWarning(
+                            cleanupException,
+                            "Failed to discard package session candidate after committed store stage {StageId}",
+                            stageId);
+                    }
+                }
+                else
+                {
+                    await _publisher.DiscardAsync(publication);
+                }
+            }
+            else
+            {
+                _sessions.RemoveStage(stageId);
+            }
+
+            if (!storeCommitted)
+            {
+                await _storeCoordinator.DiscardStageAsync(stageId);
+                _sessions.MarkStageFailed(stageId, "The package store stage could not be committed.");
+                _logger.LogError(exception, "Failed to commit package store stage {StageId}", stageId);
+                return PackageOperationResults.Failure("The package store stage could not be committed.");
+            }
+
+            const string warning = "The installed package store was committed, but the Runtime session was not updated; reconciliation is pending.";
+            _logger.LogError(exception, "Package store stage {StageId} failed after its durable store commit", stageId);
+            var stamp = _sessions.Stamp;
+            var degraded = storeResult! with
+            {
+                Success = true,
+                RuntimeSessionApplied = false,
+                RequiresAppRestart = false,
+                Warnings = storeResult.Warnings.Append(warning).ToArray(),
+                Errors = [],
+                CommittedStamp = stamp,
+                StoreCommitted = true,
+                RuntimeSessionReconciliationPending = true,
+            };
+            _sessions.MarkStageCommitted(
+                stageId,
+                stamp,
+                runtimeSessionApplied: false,
+                reconciliationPending: true,
+                degraded.Message);
+            _reconciliationPendingStages.Add(stageId);
+            return degraded;
         }
     }
 
@@ -225,71 +525,48 @@ internal sealed class InstalledPackageLifecycleService
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         operation.CancellationToken.ThrowIfCancellationRequested();
+        await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
         if (!_stages.Remove(stageId, out var stage)) return false;
-        await stage.Session.DisposeAsync();
-        _ui.DiscardStage(stageId);
+        if (stage.Candidate is not null)
+        {
+            await _publisher.DiscardAsync(stage.Candidate);
+        }
+        else
+        {
+            _sessions.RemoveStage(stageId);
+        }
         operation.CancellationToken.ThrowIfCancellationRequested();
-        return await _storeCoordinator.DiscardStageAsync(stageId);
+        var discarded = await _storeCoordinator.DiscardStageAsync(stageId);
+        if (discarded)
+        {
+            _sessions.MarkStageDiscarded(stageId);
+        }
+        return discarded;
     }
 
-    public async Task ShutdownAsync(PackageSessionLifecycleService sessionLifecycle)
+    private async Task<PackageOperationResult> ExecutePreparedMutationAsync(
+        PackageStoreMutation mutation,
+        CancellationToken cancellationToken)
     {
-        await _gate.ShutdownAsync(async () =>
+        await using (var operation = await _gate.EnterAsync(cancellationToken))
         {
-            await sessionLifecycle.ShutdownStagesAsync();
-            foreach (var stage in _stages.Values) await stage.Session.DisposeAsync();
-            _stages.Clear();
-            _sessions.ClearStages();
-            await _storeCoordinator.DiscardAllStagesAsync();
-            _sessions.Callbacks.Clear();
-            await _sessions.State.ClearActiveSessionAsync();
-            RuntimePackageSessionDirectories.CleanupStaleSessions();
-        });
-    }
-
-    private async Task<PackageOperationResult> ExecuteAndReloadAsync(PackageStoreMutation mutation, CancellationToken cancellationToken)
-    {
-        await using var operation = await _gate.EnterAsync(cancellationToken);
-        var operationToken = operation.CancellationToken;
-        return await ReloadAfterMutationCoreAsync(await _storeCoordinator.ExecuteAsync([mutation], operationToken), operationToken);
-    }
-
-    private async Task<PackageOperationResult> ReloadAfterMutationAsync(PackageOperationResult result, CancellationToken cancellationToken)
-    {
-        await using var operation = await _gate.EnterAsync(cancellationToken);
-        return await ReloadAfterMutationCoreAsync(result, operation.CancellationToken);
-    }
-
-    private async Task<PackageOperationResult> ReloadAfterMutationCoreAsync(PackageOperationResult result, CancellationToken cancellationToken)
-    {
-        if (!result.Success || result.ImpactedPackageIds.Count == 0)
-        {
-            return result.Success ? result with { RuntimeSessionApplied = true, RequiresAppRestart = false } : result;
+            var operationToken = operation.CancellationToken;
+            var baseSessionGeneration = _sessions.Generation;
+            var currentPackages = _sessions.State.GetActivePackages();
+            var currentSnapshots = _ui.GetActiveSnapshots();
+            var sources = _sessions.Sources.Snapshot();
+            var preparation = await _storeCoordinator.PrepareStageAsync([mutation], operationToken);
+            var stage = await PrepareCandidateAsync(
+                preparation,
+                baseSessionGeneration,
+                currentPackages,
+                currentSnapshots,
+                sources,
+                operationToken);
+            return !stage.Success || stage.StageId is null
+                ? stage.OperationResult
+                : await CommitStageCoreAsync(stage.StageId, operationToken);
         }
-        var warnings = result.Warnings.ToList();
-        var loaded = await _reconciler.LoadMergedSessionAsync(_sessions.Sources.Snapshot().ActiveDevOverlays, startBackgroundServices: false, cancellationToken);
-        warnings.AddRange(loaded.Warnings);
-        if (loaded.Session is null)
-        {
-            warnings.Add("Installed package changes were saved, but the running package session kept the previous loaded packages.");
-            return result with { RuntimeSessionApplied = false, RequiresAppRestart = false, Warnings = warnings };
-        }
-        warnings.AddRange(loaded.Errors.Select(error => $"Installed package session loaded with package errors: {error}"));
-        try
-        {
-            warnings.AddRange(await _publisher.PublishAsync(loaded.Session, sources: null, cancellationToken));
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            _logger.LogError(exception, "Failed to apply installed package changes to the running session");
-            warnings.Add("Installed package changes were saved, but the running package session kept the previous loaded packages.");
-            return result with { RuntimeSessionApplied = false, RequiresAppRestart = false, Warnings = warnings };
-        }
-        return result with { RuntimeSessionApplied = true, RequiresAppRestart = false, Warnings = warnings };
     }
 
     private IReadOnlyList<PackageStoreMutation> ResolveMutations(
@@ -315,5 +592,37 @@ internal sealed class InstalledPackageLifecycleService
         return mutations;
     }
 
-    private sealed record PendingStoreStage(ActivePackageSession Session, long BaseSessionGeneration, long BaseCatalogGeneration);
+    internal ActivePackageSession? GetStagedSession(string stageId)
+        => _stages.TryGetValue(stageId, out var stage) ? stage.Candidate?.Session : null;
+
+    private void ResolvePendingReconciliations(RuntimePackageStamp stamp)
+    {
+        foreach (var stageId in _reconciliationPendingStages)
+        {
+            _sessions.MarkStageCommitted(
+                stageId,
+                stamp,
+                runtimeSessionApplied: true,
+                reconciliationPending: false,
+                "The committed package store stage was reconciled to the Runtime session.");
+        }
+        _reconciliationPendingStages.Clear();
+    }
+
+    private sealed record PendingStoreStage(
+        PreparedPackageSession? Candidate,
+        long BaseCatalogGeneration,
+        long BaseSessionGeneration,
+        DateTimeOffset CreatedAtUtc,
+        DateTimeOffset ExpiresAtUtc);
+}
+
+internal enum InstalledPackageLifecycleFaultPoint
+{
+    StoreCommittedBeforeSessionPublication,
+}
+
+internal interface IInstalledPackageLifecycleFaultInjector
+{
+    void Hit(InstalledPackageLifecycleFaultPoint point);
 }

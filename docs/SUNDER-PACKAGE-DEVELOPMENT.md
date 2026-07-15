@@ -69,7 +69,7 @@ Template options:
 | `--packageId <id>` | Required runtime package id written into generated metadata |
 | `--packageName <name>` | Required display name written into generated metadata and starter view |
 | `--withAvalonia` | Adds exact V1 Avalonia SDK references and a default App package view |
-| `--withStacks` | Adds the exact V1 Stack SDK reference and a Runtime Stack contributor example |
+| `--withStacks` | Adds the exact V1 Stack SDK reference and separate Runtime Stack exporter/importer registrations |
 | `--withContracts` | Adds a `*.Contracts` project for public extension points |
 | `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder |
 | `--withHostDependency` | Adds runtime dependency metadata for another package |
@@ -112,7 +112,7 @@ Rules:
 
 ## Sunder SDK Overview
 
-`Sunder.Sdk` contains the headless Runtime/App lifecycle and extension contracts. `Sunder.Sdk.Avalonia` is an explicit opt-in for packages that register Avalonia views, settings, workspaces, or theme resources. Neither package requires references to Host implementation projects.
+`Sunder.Sdk` contains the headless Runtime/App lifecycle and extension contracts. `Sunder.Sdk.Avalonia` is an explicit opt-in for packages that register Avalonia views, settings, or theme resources. Neither package requires references to Host implementation projects.
 
 SDK areas:
 
@@ -121,23 +121,21 @@ SDK areas:
 | Packaging | `PackageId`, `SemanticVersion`, `PackageVersionRange`, package attributes | Canonical identity/version validation and runtime package dependencies |
 | Runtime lifecycle | `ISunderRuntimePackageModule` | Headless Runtime service and contribution registration |
 | App lifecycle | `ISunderAppPackageModule` | App-side service and Avalonia contribution registration |
-| Package context | `IPackageContext` | Package id, version, install path, storage, settings, secrets, logging |
-| Runtime contributions | `ISunderRuntimeContributionRegistry` | Background services, Runtime extensions, configuration schemas |
+| Package context | `IPackageContext` | Package id, version, content root, storage, settings, secrets, logging |
+| Runtime contributions | `ISunderRuntimeContributionRegistry` | Background services, Runtime extensions, settings schemas |
 | App contributions | `ISunderAppContributionRegistry` | App-side extensions; `Sunder.Sdk.Avalonia` adds view/settings registration extensions |
 | Views | `PackageViewRegistration`, `PackageViewPlacement` | Shell-visible Avalonia package views |
-| Workspaces | `IPackageWorkspaceFactory` | Factory-created package workspaces/views |
 | Extensions | `PackageExtensionPoint<T>`, `IPackageExtensionCatalog` | Typed package-to-package contribution points and active contribution discovery |
 | Extension changes | `IPackageExtensionCatalogMonitor` | Structured change events when packages activate, deactivate, install, update, or fault |
-| Settings | `PackageConfigurationSchema`, `IPackageSettings` | Host-rendered schema and validated writable settings, stored separately from state |
+| Settings | `PackageSettingsSchema`, `IPackageSettings` | Host-rendered schema and validated writable settings, stored separately from state |
 | Storage | `IPackageStorageContext`, `IPackageFileStore`, `IPackageKeyValueStore` | Package-scoped mutable files and key-value state |
 | Role-local workspace | `IPackageRoleLocalWorkspace` | Activation-owned paths for the current App or Runtime role; callers do not dispose it |
 | Secrets | `IPackageSecrets` | Package-scoped secret values |
-| Logging | `IPackageLogging`, `IPackageEventLogger` | Package event logging and `ILoggerFactory` access |
+| Logging | `IPackageLogging`, `IPackageEventLogger` | Package event logging and `Logging.LoggerFactory` access |
 | Notifications | `IPackageNotificationService` | User-visible package notifications |
 | Background processes | `IBackgroundProcessQueue`, `BackgroundProcessRequest` | Host-visible queued work with progress, cancellation, and indicator placement |
 | Shell integration | `IPackageShellViewService`, `IPackageViewNavigationTarget` | Shell navigation and hotbar/workspace integration |
 | Settings navigation | `IPackageSettingsNavigationService` | Open global settings or another package's settings when the host supports it |
-| Installed sessions | `IPackageInstalledSessionControl` | Load, unload, and query installed package ids |
 | Development sessions | `IPackageDevelopmentSessionControl` | Optional host-local development loading with explicit availability and structured outcomes |
 | Callbacks | `IPackageCallbackHandler` | Generic browser/local callback sessions |
 | Auth | `IPackageAuthHandler` | Auth status and disconnect integration |
@@ -168,28 +166,26 @@ public sealed class PackageModule : ISunderAppPackageModule
 }
 ```
 
-Register a Host-rendered configuration schema:
+Register a Host-rendered settings schema. Package id and display name come from the activating package manifest and are not repeated in the schema:
 
 ```csharp
-using Sunder.Sdk.Configuration;
+using Sunder.Sdk.Settings;
 
-registry.RegisterConfigurationSchema(new PackageConfigurationSchema(
-    PackageId: "my.company.package",
-    PackageDisplayName: "My Package",
-    Summary: "Package settings.",
-    Sections:
+registry.RegisterSettingsSchema(new PackageSettingsSchema(
+    summary: "Package settings.",
+    sections:
     [
-        new PackageConfigurationSection(
-            SectionId: "general",
-            Title: "General",
-            Description: null,
-            Fields:
+        new PackageSettingsSection(
+            sectionId: "general",
+            title: "General",
+            description: null,
+            fields:
             [
-                new PackageConfigurationField(
-                    Key: "enabled",
-                    Label: "Enabled",
-                    Kind: PackageConfigurationFieldKind.Boolean,
-                    DefaultValue: "true")
+                new PackageSettingsField(
+                    key: "enabled",
+                    label: "Enabled",
+                    kind: PackageSettingsFieldKind.Boolean,
+                    defaultValue: "true")
             ])
     ]));
 ```
@@ -203,7 +199,7 @@ await context.Storage.State.SetValueAsync("last-run", DateTimeOffset.UtcNow.ToSt
 await context.Secrets.SetSecretAsync("api-key", apiKey, cancellationToken);
 ```
 
-`Settings.GetValueAsync` returns the stored value or the schema default. Use `GetStoredValueAsync` when the distinction matters, and `DeleteValueAsync` to make the default effective again. Runtime validates settings against non-secret schema fields. `Storage.State` is opaque operational state and is never enumerated as settings; secret fields use `Secrets`.
+`Settings.GetValueAsync` returns the stored value or the schema default. Use `GetStoredValueAsync` when the distinction matters, and `DeleteValueAsync` to make the default effective again. Schema construction fails immediately for duplicate section ids or field keys, duplicate select values, invalid defaults, and defaults on secret fields. Runtime validates settings against non-secret schema fields. `Storage.State` is opaque operational state and is never enumerated as settings; secret fields use `Secrets`.
 
 Define and consume a typed extension point:
 
@@ -304,14 +300,16 @@ Generated compatibility fields:
 | Field | Meaning |
 | --- | --- |
 | `sdkApiVersion` | Broad SDK activation generation, currently `1` |
-| `sdkPackageVersion` | Informational `Sunder.Sdk` package/build version used at build time |
+| `sdkPackageVersion` | Strict SemVer read from the actual resolved `Sunder.Sdk` reference |
 | `requiredSdkCapabilities` | Granular Host-required SDK capabilities inferred from SDK usage |
+| `hostRoles` | `app`, `runtime`, both, or `contract-only`, inferred from compiled module metadata |
 | `sdkVersion` | Optional SDK version metadata when supplied by build properties |
 
 Example generated manifest fragment:
 
 ```json
 {
+  "hostRoles": ["app", "runtime"],
   "sdkApiVersion": 1,
   "sdkPackageVersion": "1.1.0",
   "requiredSdkCapabilities": [
@@ -325,15 +323,18 @@ Example generated manifest fragment:
 }
 ```
 
-The Runtime Host validates SDK compatibility before package activation. Older Hosts reject packages that require unsupported SDK API versions or capabilities with a clear compatibility error.
+The Runtime Host validates SDK compatibility and exact Host-role metadata before package activation. Role validation inspects managed metadata without reflection-loading package code. Older Hosts reject packages that require unsupported SDK API versions or capabilities with a clear compatibility error.
 
-Capability inference fails closed when types/metadata cannot be inspected or package code uses reflection/dynamic access. In the latter case, declare every SDK capability reachable through that dynamic path explicitly:
+Capability inference reads type/member/property/event `SunderSdkCapability` annotations from resolved `Sunder.Sdk*` assemblies and scans the package entry assembly plus authored project-reference outputs. It inspects authored async, iterator, and lambda bodies without treating arbitrary NuGet/copy-local dependencies as authored code. Constant assembly-qualified SDK type names used through reflection are resolved directly. Inference fails closed when metadata cannot be inspected or a dynamic SDK path cannot be resolved. Declare every capability reachable through that path and acknowledge each diagnostic call site explicitly:
 
 ```xml
 <ItemGroup>
   <SunderSdkCapability Include="callbacks.v1" />
+  <SunderSdkDynamicAccess Include="MyCompany.Package.DynamicFactory.CreateHandler" />
 </ItemGroup>
 ```
+
+Auth contracts imply callback support, so `auth.v1` always emits `callbacks.v1`. Sunder theme resource references in source or compiled Avalonia XAML emit `theming.v1`; if generated XAML cannot be classified, the build reports an explicit declaration diagnostic rather than silently omitting the capability.
 
 See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for the V1 Host/SDK/package rules.
 
@@ -366,7 +367,7 @@ using Sunder.Sdk.Packaging;
 
 [assembly: SunderPackageDependency(
     PackageId = "sunder.package.agent",
-    VersionRange = ">=1.1.0 <1.2.0")]
+    VersionRange = ">=1.0.0 <2.0.0")]
 ```
 
 The package version is controlled by MSBuild properties such as `Version`.
@@ -398,11 +399,13 @@ public sealed class PackageModule : ISunderRuntimePackageModule
 Current module rules:
 
 - Each role has at most one public, non-abstract implementation with a public parameterless constructor.
+- The host constructs each role module directly, calls its service-configuration method, builds that role's provider, and then calls its contribution-registration method. Modules are not resolved from the package provider.
+- App and Runtime roles always have separate module instances, providers, and lifecycles, including when one class implements both interfaces.
 - Runtime services are registered in `ConfigureRuntimeServices`; App services are registered in `ConfigureAppServices`.
-- Background services and configuration schemas are Runtime-only.
+- Background services and settings schemas are Runtime-only.
 - Views and settings views are App-only and require `Sunder.Sdk.Avalonia`.
-- Extensions are registered in the host catalog that consumes them; some packages intentionally register equivalent extension objects in both isolated host service providers.
-- Extension catalog implementations must return canonical owner ids from `GetExtensionContributions`; ownerless fallback results are not valid V1 contributions.
+- Extensions are registered independently in the App or Runtime catalog that consumes them. Register in both roles only when both hosts need a role-local contribution instance.
+- Every contribution is owned by the package whose module is currently activating, not by the package that defines the extension point or contracts assembly. `GetExtensionContributions` returns that canonical owner id; ownerless fallback results are not valid V1 contributions.
 
 Open package UI that depends on other packages should observe `IPackageExtensionCatalogMonitor.Changed` and refresh only when relevant extension points change. The event identifies the lifecycle reason and extension point additions/removals.
 
@@ -416,20 +419,21 @@ Available context members:
 
 - `PackageId`
 - `Version`
-- `InstallPath`
+- `ContentRootPath`
 - `Storage`
 - `Settings`
 - `Secrets`
-- `LoggerFactory`
 - `Logging`
 
 Use package settings for schema-declared preferences, storage for opaque operational data, and secrets for sensitive values. Do not write mutable state into the installed package folder.
 
 Use `Storage.RoleLocalWorkspace` only when a library requires a local path. It is scoped to the current activation and host role, App and Runtime roots are independent, and package code does not dispose it.
 
-Runtime operation, stream, callback, auth, and Stack contributor handlers run under a package-session lease. Their cancellation token links the HTTP request, Runtime shutdown, and generation retirement. Once retirement starts the generation admits no new leases. Reload has a bounded drain deadline and never disposes package services or load contexts while a valid lease is running, so package handlers must not suppress or ignore cancellation.
+Runtime operation, stream, callback, auth, and Stack exporter/importer handlers run under a package-session lease. Their cancellation token links the HTTP request, Runtime shutdown, and generation retirement. Once retirement starts the generation admits no new leases. Reload has a bounded drain deadline and never disposes package services or load contexts while a valid lease is running, so package handlers must not suppress or ignore cancellation.
 
-Host-provided services can also be injected into package services and views. App modules can use `IBackgroundProcessQueue`, `IPackageNotificationService`, `IPackageShellViewService`, `IPackageSettingsNavigationService`, and `IPackageInstalledSessionControl`. `IPackageDevelopmentSessionControl` is optional; UI must check `Availability` and show `UnavailableReason` instead of assuming App-local paths are visible to Runtime. Runtime does not construct or invoke App modules.
+Stack packages register `IPackageStackExporter` through `SunderStackExtensionPoints.StackExporters` and `IPackageStackImporter` through `SunderStackExtensionPoints.StackImporters`. A single class may implement both, but each role is independently registrable and host-consumable. Contributor ids are stable only within the owning package. Runtime scopes action ids, required-input ids, and remap keys by owner package and contributor before exposing them to App; importers receive their original local ids. Duplicate local ids within one contributor are rejected, while identical local ids from different contributors remain distinct. App honors fragment/action `DefaultSelected` values and lets the user change both selections.
+
+Host-provided services can also be injected into package services and views. App modules can use `IBackgroundProcessQueue`, `IPackageNotificationService`, `IPackageShellViewService`, and `IPackageSettingsNavigationService`. `IPackageDevelopmentSessionControl` is optional; UI must check `Availability` and show `UnavailableReason` instead of assuming App-local paths are visible to Runtime. Runtime does not construct or invoke App modules.
 
 ## Views
 
@@ -439,14 +443,16 @@ Package views are Avalonia controls registered by an App module through `Sunder.
 registry.RegisterPackageView<MyView>(new PackageViewRegistration(
     id: "my.company.package.main",
     name: "My Package",
-    icon: "assets/icon.png",
+    iconAssetPath: "assets/icon.png",
     defaultPlacement: PackageViewPlacement.Middle));
 ```
 
 View guidance:
 
-- Use stable view ids scoped under the package id.
+- Use globally unique, stable view ids conventionally prefixed with the package id, such as `my.company.package.main`.
 - Use short user-facing names.
+- Put view dependencies in the control constructor; the App resolves registered controls from the package App service provider.
+- Implement `IPackageViewNavigationTarget` on the control or its data context for initial, restored, directly selected, and programmatic navigation. Treat parameters as immutable, stop superseded or closed-view work on cancellation, and return after the initial presentation is stable.
 - Keep package UI independent of `Sunder.App` internals.
 - Use Sunder semantic theme resources for shell-sensitive surfaces and text.
 - Use normal Avalonia patterns and libraries inside package UI.
@@ -532,7 +538,7 @@ Load multiple dev packages:
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\HostPackage\bin\Debug\net10.0\sunder-dev" --dev-package ".\ExtensionPackage\bin\Debug\net10.0\sunder-dev"
 ```
 
-The app passes dev-package folders only as Runtime startup inputs. Runtime validates and activates the package, then exposes generation-scoped UI snapshots to the App; the App does not inspect the dev output directories.
+The App does not pass dev-package folders as Runtime process arguments and does not restart a healthy Runtime for development. Runtime first boots installed packages. The connecting App then atomically applies its complete invocation-owned folder/watch set through the authenticated dev-owner lease API before reading its initial package snapshot. Runtime validates and activates the overlay, then exposes generation-scoped UI snapshots to the App; the App does not inspect the dev output directories.
 
 Add `--watch` to reload after build output changes:
 
@@ -540,7 +546,7 @@ Add `--watch` to reload after build output changes:
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev" --watch
 ```
 
-Runtime owns watcher lifecycle, parent-folder replacement handling, debounce/stability checks, and generation-fenced reload transactions. Reload state reaches the App through the authenticated Runtime event stream. Package runtime logs are likewise discovered, parsed, bounded, and streamed by Runtime rather than read from package storage by the App.
+Runtime owns watcher lifecycle, parent-folder replacement handling, debounce/stability checks, and generation-fenced reload transactions. Watch settings belong to each App invocation's TTL lease rather than a global event-stream intent. Graceful release or lease expiry restores the installed package with the same id, or removes a dev-only package; disconnecting the event stream alone does not unload it. Reload state reaches the App through the authenticated Runtime event stream. Package runtime logs are likewise discovered, parsed, bounded, and streamed by Runtime rather than read from package storage by the App.
 
 ## Debug Runtime Package Code
 

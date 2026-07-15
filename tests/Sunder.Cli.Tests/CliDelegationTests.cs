@@ -66,6 +66,64 @@ public sealed class CliDelegationTests
         Assert.True(captured?.IncludePrerelease);
     }
 
+    [Fact]
+    public async Task Explicit_all_update_is_delegated_as_an_unscoped_runtime_request()
+    {
+        RuntimeRegistryUpdateRequest? captured = null;
+        var runtime = new FakeRuntimeClient
+        {
+            UpdateRegistry = (request, _) =>
+            {
+                captured = request;
+                return Task.FromResult(Success("Updated."));
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["update", "--all"], runtime);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.Null(captured?.PackageId);
+    }
+
+    [Theory]
+    [InlineData(RuntimeRegistryAuthSessionState.Pending, RuntimeRegistryErrorCode.None, CliExitCodes.Timeout)]
+    [InlineData(RuntimeRegistryAuthSessionState.Expired, RuntimeRegistryErrorCode.None, CliExitCodes.Timeout)]
+    [InlineData(RuntimeRegistryAuthSessionState.Failed, RuntimeRegistryErrorCode.AuthenticationRequired, CliExitCodes.Authentication)]
+    [InlineData(RuntimeRegistryAuthSessionState.Failed, RuntimeRegistryErrorCode.NotFound, CliExitCodes.NotFound)]
+    [InlineData(RuntimeRegistryAuthSessionState.Failed, RuntimeRegistryErrorCode.RegistryUnavailable, CliExitCodes.Unavailable)]
+    public async Task Auth_login_terminal_state_has_stable_exit_semantics(
+        RuntimeRegistryAuthSessionState state,
+        RuntimeRegistryErrorCode errorCode,
+        int expectedExitCode)
+    {
+        var runtime = new FakeRuntimeClient
+        {
+            AuthStart = (_, _) => Task.FromResult(new RuntimeRegistryAuthStartResponse(
+                "session-1", "https://registry.test/", "https://registry.test/login", DateTimeOffset.UtcNow.AddSeconds(-1))),
+            AuthSession = (_, _) => Task.FromResult<RuntimeRegistryAuthSessionStatus?>(new(
+                "session-1", "https://registry.test/", state, null, null, errorCode, "Sign-in did not complete.")),
+        };
+
+        var result = await CliTestHost.RunAsync(["auth", "login"], runtime);
+
+        Assert.Equal(expectedExitCode, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Auth_status_propagates_typed_registry_unavailable_result()
+    {
+        var runtime = new FakeRuntimeClient
+        {
+            AuthStatus = (_, _) => Task.FromResult(new RuntimeRegistryAuthStatus(
+                "https://registry.test/", false, null, null, RuntimeRegistryErrorCode.RegistryUnavailable, "Registry unavailable.")),
+        };
+
+        var result = await CliTestHost.RunAsync(["auth", "status"], runtime);
+
+        Assert.Equal(CliExitCodes.Unavailable, result.ExitCode);
+        Assert.Equal("Registry unavailable.\n", result.Error);
+    }
+
     private static RuntimeRegistryPackageChangeResult Success(string message)
         => new(true, RuntimeRegistryErrorCode.None, message, true, false, [], [], ["demo"], []);
 }

@@ -10,21 +10,22 @@ internal sealed class RegistryPackagePlanResolver(
     InstalledPackageLifecycleService installedPackages,
     ILogger<RegistryPackagePlanResolver> logger)
 {
-    public async Task<RegistryResolveInstallPlanResponse> ResolveAsync(
+    public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveAsync(
         RuntimeRegistryPackageBatchRequest request,
         CancellationToken cancellationToken)
     {
         var origin = RegistryOrigin.Normalize(request.RegistryOrigin);
         try
         {
-            return await ResolveCoreAsync(origin, request, cancellationToken);
+            return RuntimeRegistryContractMapper.ToRuntime(
+                await ResolveCoreAsync(origin, request, cancellationToken));
         }
         catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
         {
             logger.LogWarning(
                 "Package plan failed: Registry is not reachable at {RegistryOrigin}.",
                 origin.AbsoluteUri);
-            return new RegistryResolveInstallPlanResponse(
+            return new RuntimeRegistryResolveInstallPlanResponse(
                 false,
                 [],
                 [],
@@ -58,7 +59,7 @@ internal sealed class RegistryPackagePlanResolver(
             new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "api/v1/packages/resolve-package-changes"))
             {
                 Content = JsonContent.Create(new RegistryResolvePackageChangesRequest(
-                    request.Packages,
+                    RuntimeRegistryContractMapper.ToRegistry(request.Packages),
                     installed,
                     request.IncludePrerelease,
                     request.AllowDowngrade,

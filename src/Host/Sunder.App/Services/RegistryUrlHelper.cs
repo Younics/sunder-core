@@ -13,12 +13,16 @@ public static class RegistryUrlHelper
         }
 
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var parsed)
-            || parsed.Scheme is not ("http" or "https"))
+            || parsed.Scheme is not ("http" or "https")
+            || !string.IsNullOrEmpty(parsed.UserInfo)
+            || !string.IsNullOrEmpty(parsed.Query)
+            || !string.IsNullOrEmpty(parsed.Fragment)
+            || parsed.Scheme == Uri.UriSchemeHttp && !parsed.IsLoopback)
         {
             return false;
         }
 
-        registryUrl = Normalize(parsed);
+        registryUrl = NormalizeValidated(parsed);
         return true;
     }
 
@@ -34,7 +38,22 @@ public static class RegistryUrlHelper
 
     public static Uri Normalize(Uri registryUrl)
     {
-        var builder = new UriBuilder(registryUrl);
+        if (!TryParse(registryUrl.AbsoluteUri, out var normalized) || normalized is null)
+        {
+            throw new ArgumentException($"Invalid registry URL '{registryUrl}'.", nameof(registryUrl));
+        }
+
+        return normalized;
+    }
+
+    private static Uri NormalizeValidated(Uri registryUrl)
+    {
+        var builder = new UriBuilder(registryUrl)
+        {
+            Host = registryUrl.IdnHost.ToLowerInvariant(),
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
         if (!builder.Path.EndsWith("/", StringComparison.Ordinal))
         {
             builder.Path += "/";

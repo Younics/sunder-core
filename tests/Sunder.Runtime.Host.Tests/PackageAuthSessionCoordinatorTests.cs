@@ -211,6 +211,7 @@ public sealed class PackageAuthSessionCoordinatorTests
                     packageId,
                     loadedPackage.Descriptor.DisplayName,
                     loadedPackage.Descriptor.Version,
+                    loadedPackage.Descriptor.HostRoles,
                     loadedPackage.Descriptor.Icon,
                     IsEnabled: true,
                     PackageReadinessState.Ready,
@@ -230,9 +231,9 @@ public sealed class PackageAuthSessionCoordinatorTests
         var assemblyPath = typeof(PackageAuthSessionCoordinator).Assembly.Location;
 
         return new ActiveLoadedPackage(
-            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
+            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
             new RuntimePackageSource("test.package", PackageSourceKind.Dev, tempDirectory),
-            ConfigurationSchema: null,
+            SettingsSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(
                 Path.Combine(tempDirectory, "secrets.json"),

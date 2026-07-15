@@ -6,6 +6,7 @@ public sealed class OwnedTaskObserver : IDisposable
     private readonly object _syncRoot = new();
     private readonly HashSet<Task> _tasks = [];
     private readonly string _ownerName;
+    private readonly CancellationToken _lifetimeToken;
     private bool _stopped;
     private bool _disposed;
     private Task? _stopTask;
@@ -13,25 +14,56 @@ public sealed class OwnedTaskObserver : IDisposable
     public OwnedTaskObserver(string ownerName)
     {
         _ownerName = ownerName;
+        _lifetimeToken = _lifetime.Token;
     }
 
-    public CancellationToken Token => _lifetime.Token;
+    public CancellationToken Token => _lifetimeToken;
 
     public void Observe(Task task, string operation)
+    {
+        Task? observedTask = null;
+        var observeDetached = false;
+        lock (_syncRoot)
+        {
+            if (_stopped)
+            {
+                observeDetached = true;
+            }
+            else
+            {
+                observedTask = ObserveCoreAsync(task, operation, _lifetimeToken);
+                _tasks.Add(observedTask);
+            }
+        }
+
+        if (observeDetached)
+        {
+            ObserveDetached(task, operation, _lifetimeToken);
+            return;
+        }
+
+        TrackCompletion(observedTask!);
+    }
+
+    public void Run(Func<CancellationToken, Task> operation, string operationName)
     {
         Task observedTask;
         lock (_syncRoot)
         {
             if (_stopped)
             {
-                ObserveDetached(task, operation);
                 return;
             }
 
-            observedTask = ObserveCoreAsync(task, operation);
+            observedTask = ObserveOperationAsync(operation, operationName, _lifetimeToken);
             _tasks.Add(observedTask);
         }
 
+        TrackCompletion(observedTask);
+    }
+
+    private void TrackCompletion(Task observedTask)
+    {
         _ = observedTask.ContinueWith(
             completed =>
             {
@@ -45,21 +77,9 @@ public sealed class OwnedTaskObserver : IDisposable
             TaskScheduler.Default);
     }
 
-    public void Run(Func<CancellationToken, Task> operation, string operationName)
-    {
-        lock (_syncRoot)
-        {
-            if (_stopped)
-            {
-                return;
-            }
-
-            Observe(operation(_lifetime.Token), operationName);
-        }
-    }
-
     public Task StopAsync()
     {
+        Task stopTask;
         lock (_syncRoot)
         {
             if (_stopTask is not null)
@@ -68,14 +88,17 @@ public sealed class OwnedTaskObserver : IDisposable
             }
 
             _stopped = true;
-            _lifetime.Cancel();
-            _stopTask = Task.WhenAll(_tasks.ToArray());
-            return _stopTask;
+            stopTask = Task.WhenAll(_tasks.ToArray());
+            _stopTask = stopTask;
         }
+
+        TryCancelLifetime();
+        return stopTask;
     }
 
     public void Dispose()
     {
+        var shouldDispose = false;
         lock (_syncRoot)
         {
             if (_disposed)
@@ -85,39 +108,81 @@ public sealed class OwnedTaskObserver : IDisposable
 
             _disposed = true;
             _stopped = true;
+            shouldDispose = true;
+        }
+
+        if (shouldDispose)
+        {
+            TryCancelLifetime();
+            _lifetime.Dispose();
+        }
+    }
+
+    private async Task ObserveCoreAsync(
+        Task task,
+        string operation,
+        CancellationToken lifetimeToken)
+    {
+        await Task.Yield();
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError($"{_ownerName} failed while {operation}.", ex);
+        }
+    }
+
+    private async Task ObserveOperationAsync(
+        Func<CancellationToken, Task> operation,
+        string operationName,
+        CancellationToken lifetimeToken)
+    {
+        await Task.Yield();
+        try
+        {
+            await operation(lifetimeToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError($"{_ownerName} failed while {operationName}.", ex);
+        }
+    }
+
+    private async void ObserveDetached(
+        Task task,
+        string operation,
+        CancellationToken lifetimeToken)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError($"{_ownerName} failed while {operation}.", ex);
+        }
+    }
+
+    private void TryCancelLifetime()
+    {
+        try
+        {
             _lifetime.Cancel();
         }
-
-        _lifetime.Dispose();
-    }
-
-    private async Task ObserveCoreAsync(Task task, string operation)
-    {
-        try
+        catch (ObjectDisposedException)
         {
-            await task.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError($"{_ownerName} failed while {operation}.", ex);
-        }
-    }
-
-    private async void ObserveDetached(Task task, string operation)
-    {
-        try
-        {
-            await task.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError($"{_ownerName} failed while {operation}.", ex);
+            // A concurrent dispose already delivered cancellation.
         }
     }
 }

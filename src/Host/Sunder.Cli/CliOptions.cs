@@ -5,7 +5,7 @@ namespace Sunder.Cli;
 
 internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri RuntimeUrl, TimeSpan RequestTimeout, bool Json)
 {
-    public static readonly TimeSpan DefaultRegistryTimeout = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(15);
 
     public static CliOptions Parse(List<string> args)
     {
@@ -65,7 +65,7 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return DefaultRegistryTimeout;
+            return DefaultRequestTimeout;
         }
 
         var normalized = value.Trim().ToLowerInvariant();
@@ -139,6 +139,17 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
             && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException($"Invalid {label} URL '{value}': only HTTP and HTTPS URLs are supported.");
+        }
+        if (!string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new ArgumentException($"Invalid {label} URL '{value}': user information, query strings, and fragments are not allowed.");
+        }
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && !uri.IsLoopback)
+        {
+            throw new ArgumentException($"Invalid {label} URL '{value}': HTTPS is required unless the host is loopback.");
         }
 
         var builder = new UriBuilder(uri);

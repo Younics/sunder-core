@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -31,6 +30,8 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
     public ITaskItem[] SdkCapabilities { get; set; } = [];
     public ITaskItem[] ReferencePaths { get; set; } = [];
     public ITaskItem[] RuntimeCopyLocalPaths { get; set; } = [];
+    public ITaskItem[] AuthoredAssemblyPaths { get; set; } = [];
+    public ITaskItem[] DynamicAccessAcknowledgements { get; set; } = [];
 
     public override bool Execute()
     {
@@ -40,10 +41,18 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
             return false;
         }
 
-        var sdkPackageVersion = ResolveSdkPackageVersion();
+        var sdkPackageVersion = ResolvedSdkPackageVersion.Resolve(ReferencePaths, SdkPackageVersion, Log);
+        if (sdkPackageVersion is null)
+        {
+            return false;
+        }
         var capabilityInference = new PackageCapabilityInference(
             SdkCapabilities.Select(static item => item.ItemSpec).ToArray(),
-            ReferencePaths.Concat(RuntimeCopyLocalPaths).Select(static item => item.ItemSpec).ToArray());
+            ReferencePaths.Select(static item => item.ItemSpec).ToArray(),
+            RuntimeCopyLocalPaths.Select(static item => item.ItemSpec).ToArray(),
+            AuthoredAssemblyPaths.Select(static item => item.ItemSpec).ToArray(),
+            DynamicAccessAcknowledgements.Select(static item => item.ItemSpec).ToArray(),
+            ProjectDirectory);
         var metadata = new PackageMetadataDecoder(
             TargetAssemblyPath,
             new PackageDependencyExtractor(PackageVersion),
@@ -84,6 +93,7 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
             Summary = string.IsNullOrWhiteSpace(metadata.Summary) ? null : metadata.Summary,
             Version = PackageVersion,
             EntryAssembly = EntryAssembly,
+            HostRoles = metadata.HostRoles,
             Icon = string.IsNullOrWhiteSpace(metadata.Icon) ? null : PackageAssetDiscovery.NormalizePath(metadata.Icon),
             DependsOn = metadata.Dependencies.Count == 0 ? null : metadata.Dependencies,
             SdkApiVersion = ResolveSdkApiVersion(),
@@ -117,14 +127,4 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
         return SunderSdkApiVersions.Current;
     }
 
-    private string? ResolveSdkPackageVersion()
-    {
-        if (!string.IsNullOrWhiteSpace(SdkPackageVersion))
-        {
-            return SdkPackageVersion;
-        }
-        return typeof(SunderPackageAttribute).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion;
-    }
 }

@@ -8,14 +8,12 @@ internal sealed class PackageSessionReconciler(
 {
     public async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
-        bool startBackgroundServices,
         CancellationToken cancellationToken = default)
-        => await LoadMergedSessionAsync(await installedPackageStore.ListAsync(cancellationToken), devOverlays, startBackgroundServices, cancellationToken);
+        => await LoadMergedSessionAsync(await installedPackageStore.ListAsync(cancellationToken), devOverlays, cancellationToken);
 
     public async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
         IReadOnlyList<InstalledPackageRecord> installedPackages,
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
-        bool startBackgroundServices,
         CancellationToken cancellationToken = default)
     {
         var devFolders = devOverlays.Select(overlay => overlay.Folder).ToArray();
@@ -25,7 +23,7 @@ internal sealed class PackageSessionReconciler(
         }
 
         return devFolders.Length == 0
-            ? await loader.LoadInstalledAsync(installedPackages, startBackgroundServices, cancellationToken)
-            : await loader.LoadInstalledWithDevOverlaysAsync(installedPackages, devFolders, startBackgroundServices, cancellationToken);
+            ? await loader.LoadInstalledAsync(installedPackages, cancellationToken)
+            : await loader.LoadInstalledWithDevOverlaysAsync(installedPackages, devFolders, cancellationToken);
     }
 }

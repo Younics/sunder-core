@@ -25,7 +25,6 @@
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="LiveMarkdown.Avalonia" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
-    <PackageReference Include="Svg.Controls.Skia.Avalonia" />
     <PackageReference Include="Velopack" />
   </ItemGroup>
 
@@ -34,6 +33,7 @@
     <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />

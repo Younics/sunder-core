@@ -76,7 +76,7 @@ public partial class SettingsWindow : Window
 
     private async Task CopyCliPathInstructionsAsync()
     {
-        if (ViewModel is null || string.IsNullOrWhiteSpace(ViewModel.CliPathInstructions))
+        if (ViewModel is null || string.IsNullOrWhiteSpace(ViewModel.Cli.PathInstructions))
         {
             return;
         }
@@ -84,7 +84,7 @@ public partial class SettingsWindow : Window
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
         if (clipboard is not null)
         {
-            await clipboard.SetTextAsync(ViewModel.CliPathInstructions);
+            await clipboard.SetTextAsync(ViewModel.Cli.PathInstructions);
             ViewModel.MarkCliPathInstructionsCopied();
         }
     }

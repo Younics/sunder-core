@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using Sunder.App.Services;
 using Sunder.Registry.Contracts;
 using Xunit;
@@ -48,6 +49,123 @@ public sealed class RegistryApiClientTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task DownloadStackAsync_WhenVerificationFails_PreservesExistingDestinationAndDeletesTemporaryFile()
+    {
+        var downloaded = "corrupt download"u8.ToArray();
+        var expectedHash = Convert.ToHexString(SHA256.HashData("expected download"u8)).ToLowerInvariant();
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(downloaded),
+        });
+        using var httpClient = new HttpClient(handler);
+        using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
+        var root = Path.Combine(Path.GetTempPath(), "sunder-registry-download-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var destination = Path.Combine(root, "stack.sunderstack");
+        await File.WriteAllTextAsync(destination, "existing valid content");
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => registryClient.DownloadStackAsync(
+                new RegistryStackArtifact(expectedHash, downloaded.Length, "/artifacts/stack"),
+                "stack",
+                destination));
+
+            Assert.Equal("existing valid content", await File.ReadAllTextAsync(destination));
+            Assert.DoesNotContain(
+                Directory.EnumerateFiles(root),
+                path => Path.GetFileName(path).Contains(".download-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DownloadStackAsync_WhenVerificationSucceeds_PublishesDestination()
+    {
+        var downloaded = "verified stack"u8.ToArray();
+        var hash = Convert.ToHexString(SHA256.HashData(downloaded)).ToLowerInvariant();
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(downloaded),
+        });
+        using var httpClient = new HttpClient(handler);
+        using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
+        var root = Path.Combine(Path.GetTempPath(), "sunder-registry-download-tests", Guid.NewGuid().ToString("N"));
+        var destination = Path.Combine(root, "stack.sunderstack");
+
+        try
+        {
+            await registryClient.DownloadStackAsync(
+                new RegistryStackArtifact(hash, downloaded.Length, "https://registry.example/stack.sunderstack"),
+                "stack",
+                destination);
+
+            Assert.Equal(downloaded, await File.ReadAllBytesAsync(destination));
+            Assert.DoesNotContain(
+                Directory.EnumerateFiles(root),
+                path => Path.GetFileName(path).Contains(".download-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DownloadStackAsync_WhenBodyExceedsDeclaredSize_DoesNotPublishDestination()
+    {
+        var downloaded = "four"u8.ToArray();
+        var hash = Convert.ToHexString(SHA256.HashData(downloaded)).ToLowerInvariant();
+        var content = new StreamContent(new MemoryStream(downloaded));
+        content.Headers.ContentLength = null;
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = content,
+        });
+        using var httpClient = new HttpClient(handler);
+        using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
+        var root = Path.Combine(Path.GetTempPath(), "sunder-registry-download-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var destination = Path.Combine(root, "stack.sunderstack");
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => registryClient.DownloadStackAsync(
+                new RegistryStackArtifact(hash, 3, "/artifacts/stack"),
+                "stack",
+                destination));
+
+            Assert.False(File.Exists(destination));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("file:///tmp/stack.sunderstack")]
+    [InlineData("ftp://registry.example/stack.sunderstack")]
+    [InlineData("https://cdn.example/stack.sunderstack")]
+    public async Task DownloadStackAsync_RejectsUntrustedUrlsBeforeSending(string url)
+    {
+        var handler = new RecordingHttpMessageHandler(_ => throw new InvalidOperationException("Request must not be sent."));
+        using var httpClient = new HttpClient(handler);
+        using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => registryClient.DownloadStackAsync(
+            new RegistryStackArtifact(new string('0', 64), 1, url),
+            "stack",
+            Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.sunderstack")));
+
+        Assert.Empty(handler.Requests);
+    }
+
     private sealed class RecordingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     {
         private readonly List<RecordedRequest> _requests = [];
@@ -57,7 +175,9 @@ public sealed class RegistryApiClientTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Add(new RecordedRequest(request.Method, request.RequestUri));
-            return Task.FromResult(send(request));
+            var response = send(request);
+            response.RequestMessage ??= request;
+            return Task.FromResult(response);
         }
     }
 

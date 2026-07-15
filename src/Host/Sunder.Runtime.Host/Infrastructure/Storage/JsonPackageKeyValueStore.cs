@@ -2,7 +2,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
-internal sealed class JsonPackageKeyValueStore : IPackageKeyValueStore
+internal sealed partial class JsonPackageKeyValueStore : IPackageKeyValueStore
 {
     private readonly AtomicFileDocument _document;
     private readonly PackageStateSerializer _serializer = new();
@@ -38,6 +38,11 @@ internal sealed class JsonPackageKeyValueStore : IPackageKeyValueStore
         return _document.ExecuteAsync(transaction =>
         {
             var state = Load(transaction);
+            if (state.Values.TryGetValue(key, out var current)
+                && string.Equals(current, value, StringComparison.Ordinal))
+            {
+                return true;
+            }
             var nextRevision = checked(state.Revision + 1);
             state.Values[key] = value;
             Save(transaction, state.Values, nextRevision);

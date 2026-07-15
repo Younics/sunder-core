@@ -18,21 +18,25 @@
 
 `Sunder.App` does not own installed package state, dev-package directory watching, or package-log discovery. Those responsibilities belong to `Sunder.Runtime.Host`.
 
-App-to-Runtime HTTP endpoints are versioned under `/api/v1` and require a per-Runtime-instance bearer token, including health and status. The App generates the token before launching its managed Runtime, passes it only through the inherited child environment, and publishes the matching URL/token through the per-user private Runtime connection file used by the App and CLI. Tokens are never command-line arguments.
+App-to-Runtime HTTP endpoints are versioned under `/api/v1` and require a per-Runtime-instance bearer token, including health and status. The App generates the token before launching its managed Runtime and passes it only through the launcher environment. The Runtime publishes the matching URL/token through the per-user private connection file only after it owns local Runtime state and has successfully bound its listener. Tokens are never command-line arguments, and prelaunch App state is not connection authority.
+
+The managed Runtime is a persistent per-user service rather than an App child lifetime. App uses `launchd` on macOS, a user `systemd` transient service with a detached fallback on Linux, and an independent breakaway process on Windows. Closing App does not stop Runtime. A later App invocation reconnects to the warm Runtime; explicit custom/manual Runtime URLs keep their existing connect-only behavior.
 
 ## Local State V1
 
 Persistent local state uses explicit, destructive V1 boundaries under the current user's local application data directory:
 
-- `Sunder/runtime/v1` owns the installed catalog and payloads, transactions/tombstones, package state/files/secrets/logs, uploads/snapshots, Registry credentials, Runtime lease, and Runtime connection document.
-- `Sunder/app/v1` owns shell/UI state, notifications and update settings, local Stack library data, package workspaces, image caches, and App logs.
+- `Sunder/runtime/v1` owns the installed catalog and payloads, transactions/tombstones, package state/files/secrets/logs, uploads, persistent immutable package UI snapshot objects under `cache`, Registry credentials, Runtime lease, and Runtime connection document.
+- `Sunder/app/v1` owns shell/UI state, notifications and update settings, local Stack library data, package workspaces, validated package content under `package-content-cache`, image caches, and App logs.
 - Runtime and App package snapshot/session materialization uses explicitly named `V1` temporary roots.
 
 Each persistent V1 root contains `schema.json` with product identity `Sunder`, schema version `1`, and its Runtime or App local-state API identity. A fresh empty root is initialized with an atomic create. A non-empty V1 root with missing, malformed, or incompatible metadata is rejected; no legacy root is inferred, scanned, or migrated.
 
 Package and Registry secrets use Runtime-V1-specific DPAPI entropy and macOS Keychain/Linux Secret Service namespaces. Existing unversioned filesystem data and old credential items remain untouched.
 
-The V1 boundary does not assume a shared filesystem. Runtime package UI is exposed as bounded, generation-scoped snapshot descriptors and authenticated ZIP streams. The App verifies each immutable SHA-256 revision and extracts it into an App-owned session directory; old directories are deleted only after views, services, assembly probes, and load contexts detach. Package and Stack mutations upload bytes to Runtime-owned temporary storage and use opaque handles. Runtime install, dev, staging, workspace, and transfer paths are never returned in API JSON.
+The V1 boundary does not assume a shared filesystem. Runtime package UI is exposed as bounded, generation-scoped snapshot descriptors and authenticated ZIP streams. Runtime aliases share persistent deterministic archive objects keyed by a source fingerprint and format revision. The App verifies each immutable SHA-256 revision, atomically fills a validated content-addressed cache, and copies it into a generation-owned tree; cache files are never loaded directly. Old generation directories are deleted only after views, services, assembly probes, and load contexts detach. Package and Stack mutations upload bytes to Runtime-owned temporary storage and use opaque handles. Runtime install, dev, staging, workspace, and transfer paths are never returned in API JSON.
+
+Host-role pruning keeps dependency readiness and order while avoiding unnecessary activation. Runtime does not create providers, modules, or collectible package load contexts for App-only and contract-only packages. App activates only App-role modules, while materializing contract dependencies in the App dependency closure. Runtime-only packages produce App snapshots only when that closure requires their content.
 
 ## Startup Arguments
 
@@ -114,13 +118,16 @@ The Runtime defaults to `http://127.0.0.1:5275` and rejects wildcard or non-loop
 When `--dev-package` is used:
 
 1. The app normalizes each dev package folder path.
-2. The app sends the dev package folder list to the runtime host.
-3. The runtime host shadow-materializes and validates runtime package content.
-4. The runtime host activates runtime package modules and reports active descriptors.
-5. The app downloads generation-scoped package UI snapshots without inspecting the dev directories.
-6. The app activates app-side package modules and registers package UI contributions.
+2. Runtime boots its installed package set independently of App startup arguments.
+3. After connecting to the warm Runtime, the App acquires an invocation-owned dev lease and atomically replaces that owner's complete folder/watch set before fetching its initial package snapshot.
+4. The runtime host shadow-materializes and validates runtime package content.
+5. The runtime host activates runtime package modules and reports active descriptors.
+6. The app downloads generation-scoped package UI snapshots without inspecting the dev directories.
+7. The app activates app-side package modules and registers package UI contributions.
 
-With `--watch`, the App sends watch intent through the typed Runtime API. Runtime owns recursive and parent-folder watchers, debounce, stability polling, stage/commit generation fencing, and reload result publication. The App keeps one cancellable Runtime event subscription and reconciles package UI on its dispatcher when the session generation changes.
+Each App invocation uses a random owner id and owner token distinct from the Runtime bearer token. Owner mutations carry a monotonic revision, idempotency mutation id, and `RuntimeInstanceId` fence. Heartbeats renew a memory-only TTL lease; graceful App shutdown releases it, and Runtime reaps expired or dead-process owners. Releasing the last owner of an overlay restores an installed package with the same id or removes a dev-only package. Multiple owners may share the same folder, while a package id mapped to different folders is rejected without changing the active session.
+
+With `--watch`, the watch bit is part of that owner's complete desired set; there is no process-global watch intent. Runtime aggregates same-folder owner requests and owns recursive and parent-folder watchers, debounce, stability polling, stage/commit generation fencing, and reload result publication. SSE disconnect does not unload a dev package. The App keeps one cancellable Runtime event subscription and reconciles package UI on its dispatcher when the session generation changes.
 
 Runtime lifecycle events and package logs use authenticated SSE feeds with monotonic sequence IDs, bounded replay, and snapshot fallback after a replay gap. Package log files are discovered and tailed only by Runtime. The App developer log combines its own `AppSessionLog` entries with structured, safely truncated package entries received through the Runtime API; API payloads do not contain package log paths.
 
@@ -135,9 +142,8 @@ Current behavior:
 - Installed package descriptors expose package icon asset paths.
 - The app turns package icon paths into runtime asset URLs.
 - Runtime serves authenticated icon assets through `/api/v1/packages/{packageId}/assets/{assetPath}`.
-- SVG icons load through `Svg.Controls.Skia.Avalonia` / Avalonia SVG support.
 - Raster icons load through Avalonia bitmap support.
-- File extension routing is used before content sniffing to avoid loading raster images as SVG.
+- Package validation requires a matching raster extension and signature before activation.
 - Package image icons render directly at full size in package lists/details.
 - Glyph fallback uses the first character of the package name.
 - Rounded dark icon containers are used only for glyph fallback.
@@ -150,8 +156,9 @@ Supported icon formats in current runtime/app paths:
 - ICO
 - JPG/JPEG
 - PNG
-- SVG/SVGZ
 - WebP
+
+SVG and SVGZ are intentionally unsupported for untrusted package icons because the current renderer has no complete script/external-resource sanitizer. Runtime assets do not follow redirects; anonymous media and Registry artifacts reject redirects/final URLs that leave their validated origin.
 
 ## Branding
 

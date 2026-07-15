@@ -25,6 +25,11 @@ internal sealed class PackageSessionFileMaterializer
     private void MaterializeFile(string sourcePath, string destinationPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        if (TryCloneFile(sourcePath, destinationPath))
+        {
+            return;
+        }
+
         var fingerprint = FileFingerprint.Create(sourcePath);
         if (_materializedFiles.TryGetValue(fingerprint, out var existingPath)
             && TryCreateHardLink(existingPath, destinationPath))
@@ -34,6 +39,28 @@ internal sealed class PackageSessionFileMaterializer
 
         File.Copy(sourcePath, destinationPath, overwrite: true);
         _materializedFiles[fingerprint] = destinationPath;
+    }
+
+    private static bool TryCloneFile(string sourcePath, string destinationPath)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return false;
+        }
+
+        try
+        {
+            if (File.Exists(destinationPath))
+            {
+                File.Delete(destinationPath);
+            }
+
+            return MacOsCloneFile(sourcePath, destinationPath, 0) == 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryCreateHardLink(string existingPath, string destinationPath)
@@ -63,6 +90,9 @@ internal sealed class PackageSessionFileMaterializer
 
     [DllImport("libc", EntryPoint = "link", SetLastError = true)]
     private static extern int UnixLink(string oldPath, string newPath);
+
+    [DllImport("/usr/lib/libSystem.dylib", EntryPoint = "clonefile", SetLastError = true)]
+    private static extern int MacOsCloneFile(string sourcePath, string destinationPath, int flags);
 
     private readonly record struct FileFingerprint(long Length, string Sha256)
     {

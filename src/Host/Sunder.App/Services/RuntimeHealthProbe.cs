@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Net.Sockets;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -8,16 +7,20 @@ namespace Sunder.App.Services;
 internal sealed class RuntimeHealthProbe : IDisposable
 {
     private readonly RuntimeConnectionState _connectionState;
-    private readonly HttpClient _httpClient;
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly RuntimeClientTransport _transport;
+    private readonly RuntimeManagementClient _management;
+    private readonly bool _ownsTransport;
 
-    public RuntimeHealthProbe(RuntimeConnectionState connectionState)
+    public RuntimeHealthProbe(
+        RuntimeConnectionState connectionState,
+        RuntimeClientTransport? transport = null)
     {
         _connectionState = connectionState;
-        _httpClient = new HttpClient(new RuntimeAuthenticatedHttpMessageHandler(() => _connectionState.ConnectionInfo))
-        {
-            Timeout = TimeSpan.FromSeconds(2),
-        };
+        _ownsTransport = transport is null;
+        _transport = transport ?? new RuntimeClientTransport(
+            connectionState.GetConnectionInfo,
+            policy: new RuntimeClientPolicyOptions { RequestTimeout = TimeSpan.FromSeconds(2) });
+        _management = new RuntimeManagementClient(_transport);
     }
 
     public async Task<SystemStatusResponse?> TryGetRuntimeStatusAsync(
@@ -26,16 +29,11 @@ internal sealed class RuntimeHealthProbe : IDisposable
     {
         try
         {
-            using var response = await _httpClient.GetAsync(
-                new Uri(runtimeUrl, "api/v1/system"),
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            response.EnsureSuccessStatusCode();
-            return await BoundedHttpContentReader.ReadJsonAsync<SystemStatusResponse>(
-                response.Content,
-                64 * 1024,
-                JsonOptions,
-                cancellationToken);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(2));
+            return HasMatchingConnection(runtimeUrl)
+                ? await _management.GetSystemStatusAsync(deadline.Token).ConfigureAwait(false)
+                : null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -55,16 +53,9 @@ internal sealed class RuntimeHealthProbe : IDisposable
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(2));
-            using var response = await _httpClient.GetAsync(
-                new Uri(runtimeUrl, "api/handshake"),
-                HttpCompletionOption.ResponseHeadersRead,
-                deadline.Token);
-            response.EnsureSuccessStatusCode();
-            return await BoundedHttpContentReader.ReadJsonAsync<RuntimeHandshakeResponse>(
-                response.Content,
-                64 * 1024,
-                JsonOptions,
-                deadline.Token);
+            return HasMatchingConnection(runtimeUrl)
+                ? await _transport.NegotiateAsync(deadline.Token).ConfigureAwait(false)
+                : null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -80,10 +71,10 @@ internal sealed class RuntimeHealthProbe : IDisposable
     {
         try
         {
-            using var _ = await _httpClient.PostAsync(
-                new Uri(runtimeUrl, "api/v1/system/shutdown"),
-                content: null,
-                cancellationToken);
+            if (HasMatchingConnection(runtimeUrl))
+            {
+                await _management.ShutdownAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -104,8 +95,10 @@ internal sealed class RuntimeHealthProbe : IDisposable
 
         try
         {
-            using var response = await _httpClient.GetAsync(new Uri(runtimeUrl, "api/v1/health"), cancellationToken);
-            return true;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(2));
+            return HasMatchingConnection(runtimeUrl)
+                   && await _management.IsRuntimeHealthyAsync(deadline.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -135,5 +128,15 @@ internal sealed class RuntimeHealthProbe : IDisposable
         }
     }
 
-    public void Dispose() => _httpClient.Dispose();
+    private bool HasMatchingConnection(Uri runtimeUrl)
+        => _connectionState.ConnectionInfo?.Matches(runtimeUrl) == true;
+
+    public void Dispose()
+    {
+        _management.Dispose();
+        if (_ownsTransport)
+        {
+            _transport.Dispose();
+        }
+    }
 }

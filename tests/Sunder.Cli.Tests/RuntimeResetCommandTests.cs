@@ -73,4 +73,24 @@ public sealed class RuntimeResetCommandTests
         Assert.Equal(CliExitCodes.Failure, result.ExitCode);
         Assert.Contains("package-state-files-secrets-and-logs: partial", result.Output, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Runtime_transport_timeout_is_not_treated_as_an_offline_reset()
+    {
+        var localResetCalled = false;
+        var runtime = new FakeRuntimeClient
+        {
+            ResetPrepare = _ => throw new HttpRequestException("Runtime request timed out.", new TimeoutException()),
+            LocalReset = _ =>
+            {
+                localResetCalled = true;
+                throw new InvalidOperationException("Offline reset must not run after a transport timeout.");
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["runtime", "reset", "--yes"], runtime);
+
+        Assert.Equal(CliExitCodes.Timeout, result.ExitCode);
+        Assert.False(localResetCalled);
+    }
 }

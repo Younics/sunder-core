@@ -20,11 +20,6 @@ internal static class RuntimeStreamEndpoints
             Results.Ok(packageLogs.GetSnapshot(Math.Max(0, after ?? 0), limit ?? 500)));
         logs.MapGet("stream", StreamPackageLogsAsync);
 
-        endpoints.MapPost(
-            "/dev-packages/watch",
-            async (DevPackageWatchIntentRequest request, DevPackageWatchService watcher, CancellationToken cancellationToken) =>
-                Results.Ok(await watcher.SetIntentAsync(request.Enabled, cancellationToken)));
-
         return endpoints;
     }
 

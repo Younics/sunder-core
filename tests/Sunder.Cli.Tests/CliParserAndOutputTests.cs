@@ -58,6 +58,58 @@ public sealed class CliParserAndOutputTests
         Assert.Contains("only HTTP and HTTPS", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("https://user:secret@registry.test/")]
+    [InlineData("https://registry.test/?tenant=one")]
+    [InlineData("https://registry.test/#fragment")]
+    [InlineData("http://registry.test/")]
+    public void Registry_urls_reject_unsafe_base_urls(string registryUrl)
+    {
+        Assert.Throws<ArgumentException>(() => CliCommandParser.Parse([
+            "system", "status",
+            "--registry-api-url", registryUrl,
+            "--registry-web-url", "https://registry.test/",
+            "--runtime-url", "http://127.0.0.1:5275/",
+        ]));
+    }
+
+    [Fact]
+    public async Task Dev_local_publish_requires_a_loopback_registry()
+    {
+        var result = await CliTestHost.RunAsync(["publish", "--file", "demo.sunderpkg", "--dev-local"]);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
+        Assert.Contains("loopback Registry API URL", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Help_does_not_parse_operational_configuration()
+    {
+        var result = await CliTestHost.RunAsync(["--help", "--registry-api-url", "not-a-url"]);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.Contains("Sunder CLI", result.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("runtime", "status")]
+    [InlineData("system", "reset", "--yes")]
+    public async Task Hidden_system_runtime_cross_aliases_are_rejected(params string[] arguments)
+    {
+        var result = await CliTestHost.RunAsync(arguments);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task Bare_update_is_rejected_because_scope_must_be_explicit()
+    {
+        var result = await CliTestHost.RunAsync(["update"]);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
+        Assert.Contains("package-id|--all", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Conflicting_install_options_are_parse_errors()
     {
@@ -122,7 +174,47 @@ public sealed class CliParserAndOutputTests
     }
 
     [Fact]
-    public async Task Text_search_snapshot_is_sorted_and_stable()
+    public async Task Transport_cancellation_maps_to_timeout_without_owning_the_cli_token()
+    {
+        var runtime = new FakeRuntimeClient
+        {
+            SystemStatus = _ => throw new TaskCanceledException("Transport timed out."),
+        };
+
+        var result = await CliTestHost.RunAsync(["system", "status"], runtime);
+
+        Assert.Equal(CliExitCodes.Timeout, result.ExitCode);
+        Assert.Equal("Operation timed out. Use --timeout <duration> to increase the request timeout.\n", result.Error);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, CliExitCodes.Authentication)]
+    [InlineData(HttpStatusCode.Forbidden, CliExitCodes.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound, CliExitCodes.NotFound)]
+    [InlineData(HttpStatusCode.Conflict, CliExitCodes.Failure)]
+    [InlineData(HttpStatusCode.BadGateway, CliExitCodes.Unavailable)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, CliExitCodes.Unavailable)]
+    [InlineData(HttpStatusCode.GatewayTimeout, CliExitCodes.Timeout)]
+    public void Http_errors_have_the_same_stable_categories_as_typed_results(HttpStatusCode status, int expected)
+    {
+        Assert.Equal(expected, CliErrorMapper.FromException(new CliHttpException(status, "failed")));
+    }
+
+    [Theory]
+    [InlineData(Sunder.Runtime.Contracts.RuntimeRegistryErrorCode.AuthenticationRequired, CliExitCodes.Authentication)]
+    [InlineData(Sunder.Runtime.Contracts.RuntimeRegistryErrorCode.Forbidden, CliExitCodes.Forbidden)]
+    [InlineData(Sunder.Runtime.Contracts.RuntimeRegistryErrorCode.NotFound, CliExitCodes.NotFound)]
+    [InlineData(Sunder.Runtime.Contracts.RuntimeRegistryErrorCode.Conflict, CliExitCodes.Failure)]
+    [InlineData(Sunder.Runtime.Contracts.RuntimeRegistryErrorCode.RegistryUnavailable, CliExitCodes.Unavailable)]
+    public void Typed_registry_errors_have_stable_exit_categories(
+        Sunder.Runtime.Contracts.RuntimeRegistryErrorCode code,
+        int expected)
+    {
+        Assert.Equal(expected, CliErrorMapper.FromRegistryCode(code));
+    }
+
+    [Fact]
+    public async Task Text_search_snapshot_preserves_registry_relevance_order()
     {
         var registry = new FakeRegistryClient
         {
@@ -133,7 +225,7 @@ public sealed class CliParserAndOutputTests
         };
         var result = await CliTestHost.RunAsync(["search"], registry: registry);
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
-        Assert.Equal("Package  Latest  Summary\nalpha    1.0.0   First\nzeta     2.0.0   Last\n", result.Output);
+        Assert.Equal("Package  Latest  Summary\nzeta     2.0.0   Last\nalpha    1.0.0   First\n", result.Output);
         Assert.Equal(string.Empty, result.Error);
     }
 
@@ -151,6 +243,39 @@ public sealed class CliParserAndOutputTests
         Assert.Equal("alpha", document.RootElement.GetProperty("data")[0].GetProperty("packageId").GetString());
         Assert.Equal(string.Empty, result.Error);
         Assert.Equal(1, result.Output.Count(character => character == '\n'));
+    }
+
+    [Fact]
+    public async Task Progress_is_written_to_stderr_while_json_remains_one_document()
+    {
+        var runtime = new FakeRuntimeClient
+        {
+            InstallRegistry = (_, _) => Task.FromResult(new Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeResult(
+                true, Sunder.Runtime.Contracts.RuntimeRegistryErrorCode.None, "Installed.", true, false, [], [], ["demo"], [])),
+        };
+
+        var result = await CliTestHost.RunAsync(["install", "demo", "--json"], runtime);
+
+        using var document = JsonDocument.Parse(result.Output);
+        Assert.Equal(CliExitCodes.Success, document.RootElement.GetProperty("exitCode").GetInt32());
+        Assert.Equal(1, result.Output.Count(character => character == '\n'));
+        Assert.Equal("Runtime is resolving and applying the package transaction...\n", result.Error);
+    }
+
+    [Fact]
+    public void Repeated_result_messages_are_emitted_once()
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var output = new CliOutput(stdout, stderr, json: false);
+
+        output.Error("same result");
+        output.Error("same result");
+        output.Success("same success");
+        output.Success("same success");
+
+        Assert.Equal("same result\n", stderr.ToString().Replace("\r\n", "\n"));
+        Assert.Equal("same success\n", stdout.ToString().Replace("\r\n", "\n"));
     }
 
     [Fact]

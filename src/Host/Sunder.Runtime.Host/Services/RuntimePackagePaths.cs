@@ -1,4 +1,4 @@
-using Sunder.Runtime.Client;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -18,12 +18,14 @@ internal sealed class RuntimePackagePaths
         TransactionRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TransactionsDirectory);
         TombstoneRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TombstonesDirectory);
         TransferRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.TransfersDirectory);
+        CacheRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.CacheDirectory);
         PackageDataRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.PackageDataDirectory);
         RegistryCredentialRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.RegistryCredentialsDirectory);
         RegistryCredentialFilePath = Path.Combine(RegistryCredentialRootPath, RuntimeV1StateDescriptor.RegistryCredentialFile);
         StateFilePath = Path.Combine(CatalogRootPath, "installed-packages.json");
         SchemaFilePath = Path.Combine(RootPath, RuntimeLocalState.SchemaFileName);
         LeaseFilePath = Path.Combine(RootPath, RuntimeLocalState.LeaseFileName);
+        ConnectionInfoFilePath = Path.Combine(RootPath, "connection.json");
     }
 
     public string RootPath { get; }
@@ -40,6 +42,8 @@ internal sealed class RuntimePackagePaths
 
     public string TransferRootPath { get; }
 
+    public string CacheRootPath { get; }
+
     public string PackageDataRootPath { get; }
 
     public string RegistryCredentialRootPath { get; }
@@ -51,6 +55,8 @@ internal sealed class RuntimePackagePaths
     public string SchemaFilePath { get; }
 
     public string LeaseFilePath { get; }
+
+    public string ConnectionInfoFilePath { get; }
 
     public string CreateStagingPath() => Path.Combine(StagingRootPath, Guid.NewGuid().ToString("N"));
 

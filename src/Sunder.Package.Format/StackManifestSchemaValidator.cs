@@ -12,6 +12,7 @@ internal static class StackManifestSchemaValidator
     public static void Validate(
         SunderStackManifest? manifest,
         string stagingPath,
+        ICollection<string> warnings,
         ICollection<string> errors)
     {
         if (manifest is null)
@@ -29,6 +30,8 @@ internal static class StackManifestSchemaValidator
         {
             errors.Add($"Stack manifest requires reader version {manifest.MinReaderVersion}, but this Sunder reader supports {SunderStackFormat.CurrentReaderVersion}.");
         }
+
+        ValidateFeatures(manifest.Features, manifest.RequiredFeatures, warnings, errors);
 
         if (string.IsNullOrWhiteSpace(manifest.StackId) || !StackIdRegex.IsMatch(manifest.StackId))
         {
@@ -51,6 +54,62 @@ internal static class StackManifestSchemaValidator
         ValidateFragments(fragments, stagingPath, errors);
     }
 
+    private static void ValidateFeatures(
+        IReadOnlyList<string>? features,
+        IReadOnlyList<string>? requiredFeatures,
+        ICollection<string> warnings,
+        ICollection<string> errors)
+    {
+        ValidateFeatureList(features, "feature", errors);
+        ValidateFeatureList(requiredFeatures, "required feature", errors);
+        foreach (var feature in features ?? [])
+        {
+            if (feature is null)
+            {
+                continue;
+            }
+            if (!SunderStackFormat.SupportedFeatures.Contains(feature))
+            {
+                warnings.Add($"Stack declares unknown optional feature '{feature}', which this reader will ignore.");
+            }
+        }
+        foreach (var feature in requiredFeatures ?? [])
+        {
+            if (feature is null)
+            {
+                continue;
+            }
+            if (!SunderStackFormat.SupportedFeatures.Contains(feature))
+            {
+                errors.Add($"Stack requires unsupported feature '{feature}'.");
+            }
+        }
+    }
+
+    private static void ValidateFeatureList(
+        IReadOnlyList<string>? features,
+        string label,
+        ICollection<string> errors)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var feature in features ?? [])
+        {
+            if (feature is null)
+            {
+                errors.Add($"Stack {label} entry is null.");
+                continue;
+            }
+            if (!SunderPackageFormat.IsSdkCapabilityId(feature))
+            {
+                errors.Add($"Stack {label} '{feature}' must be a lowercase versioned feature id such as 'media.v1'.");
+            }
+            else if (!seen.Add(feature))
+            {
+                errors.Add($"Stack {label} '{feature}' is declared more than once.");
+            }
+        }
+    }
+
     private static void ValidatePackages(
         IReadOnlyList<SunderStackPackageRequirement> packages,
         ICollection<string> errors)
@@ -58,6 +117,11 @@ internal static class StackManifestSchemaValidator
         var seenPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var package in packages)
         {
+            if (package is null)
+            {
+                errors.Add("Stack package requirement is null.");
+                continue;
+            }
             if (!PackageId.TryParse(package.PackageId, out _))
             {
                 errors.Add($"Stack package id '{package.PackageId}' must use lowercase dot-separated ASCII identifiers.");
@@ -97,6 +161,11 @@ internal static class StackManifestSchemaValidator
         var seenFragments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var fragment in fragments)
         {
+            if (fragment is null)
+            {
+                errors.Add("Stack fragment entry is null.");
+                continue;
+            }
             var fragmentId = fragment.FragmentId ?? "unknown";
             if (string.IsNullOrWhiteSpace(fragment.FragmentId) || !FragmentIdRegex.IsMatch(fragment.FragmentId))
             {
@@ -134,6 +203,7 @@ internal static class StackManifestSchemaValidator
 
             ValidatePayload(fragment, fragmentId, stagingPath, errors);
             ValidateRequiredInputs(fragment.RequiredInputs ?? [], $"Stack fragment '{fragmentId}'", errors);
+            ValidatePreview(fragment.Preview, $"Stack fragment '{fragmentId}'", errors);
         }
     }
 
@@ -154,13 +224,40 @@ internal static class StackManifestSchemaValidator
             return;
         }
 
-        if (!path.ToString().StartsWith(SunderStackFormat.PayloadRoot, StringComparison.OrdinalIgnoreCase))
+        if (!path.ToString().StartsWith(SunderStackFormat.FragmentPayloadRoot, StringComparison.Ordinal))
         {
-            errors.Add($"Stack fragment '{fragmentId}' payloadPath '{fragment.PayloadPath}' must be under payload/.");
+            errors.Add($"Stack fragment '{fragmentId}' payloadPath '{fragment.PayloadPath}' must be under {SunderStackFormat.FragmentPayloadRoot}.");
         }
         else if (!File.Exists(SunderArchive.ResolveFile(stagingPath, path)))
         {
             errors.Add($"Stack fragment '{fragmentId}' payloadPath '{fragment.PayloadPath}' was not found in the Stack archive.");
+        }
+        else
+        {
+            ValidateFragmentJson(fragmentId, SunderArchive.ResolveFile(stagingPath, path), errors);
+        }
+    }
+
+    private static void ValidateFragmentJson(string fragmentId, string payloadPath, ICollection<string> errors)
+    {
+        const long maxFragmentJsonBytes = 4L * 1024L * 1024L;
+        if (new FileInfo(payloadPath).Length > maxFragmentJsonBytes)
+        {
+            errors.Add($"Stack fragment '{fragmentId}' JSON payload must be 4 MiB or smaller.");
+            return;
+        }
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(payloadPath));
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                errors.Add($"Stack fragment '{fragmentId}' payload must contain one JSON object.");
+            }
+        }
+        catch (System.Text.Json.JsonException exception)
+        {
+            errors.Add($"Stack fragment '{fragmentId}' payload is not strict JSON: {exception.Message}");
         }
     }
 
@@ -172,6 +269,11 @@ internal static class StackManifestSchemaValidator
         var seenInputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var input in inputs)
         {
+            if (input is null)
+            {
+                errors.Add($"{label} required input entry is null.");
+                continue;
+            }
             if (string.IsNullOrWhiteSpace(input.InputId) || !FragmentIdRegex.IsMatch(input.InputId))
             {
                 errors.Add($"{label} required input id '{input.InputId}' must use lowercase ASCII identifiers separated by dot, dash, or underscore.");
@@ -189,6 +291,25 @@ internal static class StackManifestSchemaValidator
             if (input.Required is null)
             {
                 errors.Add($"{label} required input '{input.InputId ?? "unknown"}' must declare required.");
+            }
+        }
+    }
+
+    private static void ValidatePreview(
+        SunderStackFragmentPreview? preview,
+        string label,
+        ICollection<string> errors)
+    {
+        foreach (var detail in preview?.DisplayDetails ?? [])
+        {
+            if (detail is null)
+            {
+                errors.Add($"{label} preview display detail is null.");
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(detail.Label) || string.IsNullOrWhiteSpace(detail.Value))
+            {
+                errors.Add($"{label} preview display detail must declare label and value.");
             }
         }
     }

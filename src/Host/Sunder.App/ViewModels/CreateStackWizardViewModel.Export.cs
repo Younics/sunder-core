@@ -210,6 +210,7 @@ public sealed partial class CreateStackWizardViewModel
             SchemaVersion = generatedManifest.SchemaVersion ?? _editManifest?.SchemaVersion ?? SunderStackFormat.CurrentSchemaVersion,
             MinReaderVersion = generatedManifest.MinReaderVersion ?? _editManifest?.MinReaderVersion ?? SunderStackFormat.CurrentReaderVersion,
             Features = _editManifest?.Features ?? generatedManifest.Features,
+            RequiredFeatures = _editManifest?.RequiredFeatures ?? generatedManifest.RequiredFeatures,
             StackId = StackId.Trim(),
             Name = StackName.Trim(),
             Summary = NormalizeOptionalText(StackShortDescription),

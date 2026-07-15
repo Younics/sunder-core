@@ -26,6 +26,7 @@ internal sealed class RegistryPackageArtifactDownloader(
                 new HttpRequestMessage(HttpMethod.Get, new Uri(origin, item.Artifact.DownloadUrl)),
                 HttpCompletionOption.ResponseHeadersRead,
                 linked.Token);
+            ValidateArtifactUri(origin, response.RequestMessage?.RequestUri);
             await registryClient.EnsureSuccessAsync(response, linked.Token);
             if (response.Content.Headers.ContentLength is > MaxArtifactBytes)
             {
@@ -58,10 +59,16 @@ internal sealed class RegistryPackageArtifactDownloader(
 
     private static void ValidateArtifactUri(Uri origin, string downloadUrl)
     {
-        var artifact = new Uri(origin, downloadUrl);
-        if (!string.Equals(artifact.Scheme, origin.Scheme, StringComparison.OrdinalIgnoreCase)
+        ValidateArtifactUri(origin, new Uri(origin, downloadUrl));
+    }
+
+    private static void ValidateArtifactUri(Uri origin, Uri? artifact)
+    {
+        if (artifact is null
+            || !string.Equals(artifact.Scheme, origin.Scheme, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(artifact.Host, origin.Host, StringComparison.OrdinalIgnoreCase)
-            || artifact.Port != origin.Port)
+            || artifact.Port != origin.Port
+            || !string.IsNullOrEmpty(artifact.UserInfo))
         {
             throw new InvalidDataException("Registry artifact URL must remain on the trusted Registry origin.");
         }

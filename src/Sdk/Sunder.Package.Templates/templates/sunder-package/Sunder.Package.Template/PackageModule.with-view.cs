@@ -27,7 +27,8 @@ public sealed partial class PackageModule : ISunderRuntimePackageModule, ISunder
     {
         registry.RegisterPackageView<DefaultPackageView>(new PackageViewRegistration(
             "sunder.package.template.default",
-            "Sunder Package Template"));
+            "Sunder Package Template",
+            iconAssetPath: "assets/icon.png"));
     }
 
     partial void RegisterHostContractContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services);

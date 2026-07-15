@@ -142,7 +142,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
                 Interlocked.Increment(ref commitCount);
                 return Task.FromResult(CreateReloadResult(success: true));
             });
-        await watcher.SetIntentAsync(true);
+        await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
 
         for (var index = 0; index < 20; index++)
         {
@@ -156,6 +156,29 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "after-dispose");
         await Task.Delay(150);
         Assert.Equal(1, commitCount);
+        TryDeleteDirectory(folder);
+    }
+
+    [Fact]
+    public async Task DevWatcher_OwnerDerivedTargetsReplacePreviousRegistrations()
+    {
+        var folder = CreateDevPackageFolder();
+        var events = new RuntimeEventStreamService();
+        await using var watcher = new DevPackageWatchService(
+            (request, _) => Task.FromResult(CreateStage(request.PackageIds)),
+            (_, _) => Task.FromResult(CreateReloadResult(success: true)),
+            (_, _) => Task.FromResult(true),
+            events,
+            NullLogger<DevPackageWatchService>.Instance,
+            Task.Delay);
+
+        await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
+        await watcher.SynchronizeAsync([]);
+        watcher.NotifyChangedForTest("test.package");
+        await Task.Delay(100);
+        Assert.DoesNotContain(
+            events.GetSnapshot().Events,
+            item => item.Kind == RuntimeEventKind.DevReloadCompleted);
         TryDeleteDirectory(folder);
     }
 
@@ -174,7 +197,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
                 Interlocked.Increment(ref commitCount);
                 return Task.FromResult(CreateReloadResult(success: true));
             });
-        await watcher.SetIntentAsync(true);
+        await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
 
         for (var index = 0; index < 3; index++)
         {
@@ -202,7 +225,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             folder,
             events,
             commit: (_, _) => Task.FromResult(CreateReloadResult(success: false, "stage is stale because the session generation changed")));
-        await watcher.SetIntentAsync(true);
+        await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
 
         watcher.NotifyChangedForTest("test.package");
         await WaitUntilAsync(() => events.GetSnapshot().Events.Any(item => item.Kind == RuntimeEventKind.DevReloadCompleted));
@@ -235,11 +258,9 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         Func<PackageLifecycleStageRequest, CancellationToken, Task<PackageLifecycleStageResult>>? stage = null,
         Func<string, CancellationToken, Task<PackageLifecycleOperationResult>>? commit = null)
         => new(
-            (enabled, _) => Task.FromResult<IReadOnlyList<DevPackageWatchTarget>>(enabled ? [new("test.package", folder)] : []),
             stage ?? ((request, _) => Task.FromResult(CreateStage(request.PackageIds))),
             commit ?? ((_, _) => Task.FromResult(CreateReloadResult(success: true))),
             (_, _) => Task.FromResult(true),
-            () => 7,
             events,
             NullLogger<DevPackageWatchService>.Instance,
             async (delay, cancellationToken) =>

@@ -2,13 +2,12 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Stacks;
 
-/// <summary>Discovers, exports, previews, and imports Stack content owned by one package feature.</summary>
-/// <remarks>Contributor instances are activation-scoped and may be called concurrently. Preview must be side-effect free. The host binds a preview to an expiring, single-use import plan. Import owns committed mutations but not host-provided fragment collections or temporary files. Imports are atomic only within the guarantees made by each contributor; the host cannot roll back another contributor.</remarks>
+/// <summary>Discovers and exports Stack content owned by one package feature.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 [SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
-public interface IPackageStackContributor
+public interface IPackageStackExporter
 {
-    /// <summary>Gets a stable globally unique id used in Stack fragments.</summary>
+    /// <summary>Gets the stable package-scoped contributor id.</summary>
     string ContributorId { get; }
 
     /// <summary>Gets the user-facing contributor name.</summary>
@@ -23,6 +22,16 @@ public interface IPackageStackContributor
     ValueTask<StackExportContribution> ExportAsync(
         StackExportRequest request,
         CancellationToken cancellationToken = default);
+}
+
+/// <summary>Previews and imports Stack content owned by one package feature.</summary>
+/// <remarks>Contributor instances are activation-scoped and may be called concurrently. Preview must be side-effect free. The host binds a preview to an expiring, single-use import plan. Imports are atomic only within the guarantees made by each contributor; the host cannot roll back another contributor.</remarks>
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
+public interface IPackageStackImporter
+{
+    /// <summary>Gets the stable package-scoped contributor id.</summary>
+    string ContributorId { get; }
 
     /// <summary>Builds a side-effect-free import plan and reports required inputs and conflicts.</summary>
     ValueTask<StackImportPreview> PreviewImportAsync(

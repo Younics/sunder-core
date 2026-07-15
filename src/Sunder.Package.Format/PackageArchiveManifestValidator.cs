@@ -49,6 +49,7 @@ public static class SunderPackageManifestValidator
         }
 
         PackageAssetValidator.ValidateEntryAssembly(manifest, rootPath, errors, layout);
+        PackageHostRoleValidator.Validate(manifest, rootPath, errors, layout);
         PackageAssetValidator.ValidateIcon(manifest, rootPath, errors, layout);
         PackageDependencyValidator.Validate(manifest.DependsOn, errors);
 

@@ -66,11 +66,16 @@ internal sealed class PackagesInstalledCatalog(
             var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
                 new RuntimeRegistryPackageBatchRequest(
                     registryUrl.AbsoluteUri,
-                    _installedPackages.Select(package => new RegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray()),
+                    _installedPackages.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray()),
                 cancellationToken).ConfigureAwait(false);
             _availableUpdates.AddRange(plan.Items
                 .Where(item => item.CurrentVersion is not null && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase))
-                .Select(item => new RegistryPackageUpdate(item.PackageId, item.CurrentVersion!, item.Version, item.DeprecatedMessage, item.Artifact)));
+                 .Select(item => new RegistryPackageUpdate(
+                     item.PackageId,
+                     item.CurrentVersion!,
+                     item.Version,
+                     item.DeprecatedMessage,
+                     new RegistryPackageArtifact(item.Artifact.Sha256, item.Artifact.Size, item.Artifact.DownloadUrl))));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

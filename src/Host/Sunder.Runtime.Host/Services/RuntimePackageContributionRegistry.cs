@@ -1,7 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Configuration;
 using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Settings;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -20,7 +20,7 @@ internal sealed class RuntimePackageContributionRegistry(
 
     public IReadOnlyList<IPackageBackgroundService> BackgroundServices => _backgroundServices;
 
-    public PackageConfigurationSchema? ConfigurationSchema { get; private set; }
+    public PackageSettingsSchema? SettingsSchema { get; private set; }
 
     public IReadOnlyDictionary<string, RuntimePackageOperationRegistration> RuntimeOperations => _runtimeOperations;
 
@@ -38,9 +38,16 @@ internal sealed class RuntimePackageContributionRegistry(
         extensionCatalog.Add(packageId, extensionPoint, contribution);
     }
 
-    public void RegisterConfigurationSchema(PackageConfigurationSchema schema)
+    public void RegisterSettingsSchema(PackageSettingsSchema schema)
     {
-        ConfigurationSchema = schema;
+        ArgumentNullException.ThrowIfNull(schema);
+        if (SettingsSchema is not null)
+        {
+            throw new InvalidOperationException(
+                $"Package '{packageId}' registered more than one settings schema.");
+        }
+
+        SettingsSchema = schema;
     }
 
     public void RegisterRuntimeOperation<TRequest, TResponse>(
@@ -76,4 +83,5 @@ internal sealed class RuntimePackageContributionRegistry(
                 $"Package '{packageId}' registered duplicate Runtime stream '{stream.StreamId}'.");
         }
     }
+
 }

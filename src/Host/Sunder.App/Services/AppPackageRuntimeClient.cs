@@ -7,11 +7,12 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageRuntimeClient(
     string packageId,
-    RuntimePackageOperationClient client) : IPackageRuntimeClient
+    RuntimePackageOperationClient client,
+    AppPackageGenerationPublication? publication = null) : IPackageRuntimeClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public bool IsAvailable => true;
+    public bool IsAvailable => publication?.IsPublished ?? true;
 
     public async ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(
         PackageRuntimeOperation<TRequest, TResponse> operation,
@@ -22,6 +23,7 @@ internal sealed class AppPackageRuntimeClient(
     {
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(request);
+        publication?.RequirePublished("Runtime operations");
         var payload = JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions);
         var response = await client.InvokeAsync(
             packageId,
@@ -42,6 +44,7 @@ internal sealed class AppPackageRuntimeClient(
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(request);
+        publication?.RequirePublished("Runtime streams");
         var payload = JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions);
         await foreach (var value in client.SubscribeAsync(
                            packageId,

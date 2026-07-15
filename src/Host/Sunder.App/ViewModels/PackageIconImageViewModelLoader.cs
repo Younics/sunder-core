@@ -7,6 +7,7 @@ internal static class PackageIconImageViewModelLoader
 {
     public static async Task LoadAsync(
         Uri iconUri,
+        PackageIconTransport transport,
         IUiDispatcher uiDispatcher,
         Func<bool> isDisposed,
         Action<string, IImage?> applyResult,
@@ -15,7 +16,9 @@ internal static class PackageIconImageViewModelLoader
         PackageIconImageLoadResult result;
         try
         {
-            result = await PackageIconImageLoader.LoadAsync(iconUri, cancellationToken);
+            result = transport == PackageIconTransport.RuntimeAsset
+                ? await PackageIconImageLoader.LoadRuntimeAssetAsync(iconUri, cancellationToken)
+                : await PackageIconImageLoader.LoadAnonymousMediaAsync(iconUri, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

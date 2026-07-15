@@ -74,22 +74,26 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
 
 internal sealed class FakeRegistryClient : IRegistryClient
 {
-    public Uri RegistryUrl { get; } = new("https://registry.test/");
+    public Uri RegistryApiUrl { get; } = new("https://registry.test/");
     public Func<string?, int, int, CancellationToken, Task<IReadOnlyList<RegistryPackageSummary>>> Search { get; set; }
         = (_, _, _, _) => Task.FromResult<IReadOnlyList<RegistryPackageSummary>>([]);
-    public Func<RegistryStackArtifact, string, string, CancellationToken, Task> Download { get; set; }
-        = (_, _, _, _) => Task.CompletedTask;
+    public Func<string?, int, int, CancellationToken, Task<IReadOnlyList<RegistryStackSummary>>> SearchStacks { get; set; }
+        = (_, _, _, _) => Task.FromResult<IReadOnlyList<RegistryStackSummary>>([]);
+    public Func<string, CancellationToken, Task<RegistryStackDetails?>> GetStack { get; set; }
+        = (_, _) => Task.FromResult<RegistryStackDetails?>(null);
+    public Func<RegistryStackArtifact, string, string, bool, CancellationToken, Task> Download { get; set; }
+        = (_, _, _, _, _) => Task.CompletedTask;
     public Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, CancellationToken token) => Search(query, skip, take, token);
-    public Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, CancellationToken token) => Task.FromResult<IReadOnlyList<RegistryStackSummary>>([]);
+    public Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, CancellationToken token) => SearchStacks(query, skip, take, token);
     public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken token) => Task.FromResult<RegistryPackageDetails?>(null);
     public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken token) => Task.FromResult<RegistryPackageVersionDetails?>(null);
-    public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken token) => Task.FromResult<RegistryStackDetails?>(null);
+    public Task<RegistryStackDetails?> GetStackAsync(string stackId, CancellationToken token) => GetStack(stackId, token);
     public Task<RegistryPackageDistTagsResponse?> GetDistTagsAsync(string packageId, CancellationToken token) => Task.FromResult<RegistryPackageDistTagsResponse?>(null);
     public Task<RegistryPublishPackageResponse> PublishLocalPackageAsync(string packagePath, bool setLatest, CancellationToken token)
         => Task.FromResult(new RegistryPublishPackageResponse(false, null, null, "Publishing is not configured for this test.", [], ["Publishing is not configured for this test."]));
     public Task<RegistryPublishStackResponse> PublishLocalStackAsync(string stackPath, CancellationToken token)
         => Task.FromResult(new RegistryPublishStackResponse(false, null, "Publishing is not configured for this test.", [], ["Publishing is not configured for this test."]));
-    public Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken token) => Download(artifact, stackId, destinationPath, token);
+    public Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, bool force, CancellationToken token) => Download(artifact, stackId, destinationPath, force, token);
     public void Dispose() { }
 }
 
@@ -117,7 +121,7 @@ internal static class CliTestHost
         {
             "--registry-api-url", "https://registry.test/",
             "--registry-web-url", "https://registry.test/",
-            "--runtime-url", "http://runtime.test/",
+            "--runtime-url", "http://127.0.0.1:5275/",
         };
         var exit = await app.RunAsync([.. args, .. globals], token);
         return (exit, stdout.ToString().Replace("\r\n", "\n"), stderr.ToString().Replace("\r\n", "\n"));

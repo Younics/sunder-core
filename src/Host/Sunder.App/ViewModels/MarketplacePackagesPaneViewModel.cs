@@ -4,9 +4,15 @@ using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
-internal sealed class MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalog catalog) : IDisposable
+public sealed class MarketplacePackagesPaneViewModel : IDisposable
 {
     private readonly MarketplacePackageProfileViewModel _profile = new();
+
+    internal MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalog catalog)
+    {
+        Catalog = catalog;
+        SelectionLoader = new MarketplacePackageSelectionLoader(catalog);
+    }
 
     public event Func<IReadOnlyList<RegistryPackageMediaItemViewModel>, int, Task>? ImageGalleryRequested
     {
@@ -14,11 +20,17 @@ internal sealed class MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalo
         remove => _profile.ImageGalleryRequested -= value;
     }
 
-    public PackagesMarketplaceCatalog Catalog { get; } = catalog;
+    internal PackagesMarketplaceCatalog Catalog { get; }
 
-    public MarketplacePackageSelectionLoader SelectionLoader { get; } = new(catalog);
+    internal MarketplacePackageSelectionLoader SelectionLoader { get; }
 
     public ObservableCollection<RegistryPackageSearchItemViewModel> Packages { get; } = [];
+
+    public string SearchText { get; set; } = string.Empty;
+
+    public RegistryPackageSearchItemViewModel? SelectedPackage { get; internal set; }
+
+    public RegistryPackageVersionItemViewModel? SelectedVersion { get; internal set; }
 
     public ObservableCollection<RegistryPackageVersionItemViewModel> Versions { get; } = [];
 
@@ -29,6 +41,12 @@ internal sealed class MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalo
     public ObservableCollection<string> ProfileTags => _profile.Tags;
 
     public ObservableCollection<RegistryPackageMediaItemViewModel> ProfileMedia => _profile.Media;
+
+    public ObservableCollection<RegistryUserAttributionViewModel> Attributions { get; } = [];
+
+    public ObservableCollection<RegistryUserAttributionViewModel> Creators { get; } = [];
+
+    public ObservableCollection<RegistryUserAttributionViewModel> Maintainers { get; } = [];
 
     public ObservableStringBuilder ReadmeMarkdownBuilder => _profile.ReadmeMarkdownBuilder;
 
@@ -47,6 +65,12 @@ internal sealed class MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalo
     public bool HasProfile => _profile.HasProfile;
 
     public bool HasProfileMedia => _profile.HasMedia;
+
+    public bool HasAttributions => Attributions.Count > 0;
+
+    public bool HasCreators => Creators.Count > 0;
+
+    public bool HasMaintainers => Maintainers.Count > 0;
 
     public void ReplacePackages(IReadOnlyList<RegistryPackageSearchItemViewModel> packages)
     {

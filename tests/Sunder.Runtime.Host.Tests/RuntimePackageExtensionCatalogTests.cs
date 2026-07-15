@@ -61,6 +61,27 @@ public sealed class RuntimePackageExtensionCatalogTests
         Assert.Same(contribution, Assert.Single(catalog.GetExtensions(TestPoint)));
     }
 
+    [Fact]
+    public void Batch_PublishesOneDefensivelyCopiedRevision()
+    {
+        var catalog = new RuntimePackageExtensionCatalog();
+        var revisions = new List<PackageExtensionCatalogChangedEventArgs>();
+        catalog.Changed += (_, change) => revisions.Add(change);
+
+        using (var batch = catalog.BeginBatch(PackageExtensionCatalogChangeReason.PackageActivated))
+        {
+            catalog.Add("test.package", TestPoint, new TestContribution("first"));
+            catalog.Add("test.package", TestPoint, new TestContribution("second"));
+            batch.Commit();
+        }
+
+        var revision = Assert.Single(revisions);
+        Assert.Equal(1, revision.Revision);
+        Assert.Equal(2, revision.Changes.Count);
+        var mutableView = Assert.IsAssignableFrom<IList<PackageExtensionChange>>(revision.Changes);
+        Assert.Throws<NotSupportedException>(() => mutableView[0] = revision.Changes[1]);
+    }
+
     private interface ITestContribution
     {
         string Name { get; }

@@ -30,7 +30,7 @@ internal sealed class ShellHotbarCoordinator(
 
         return await AddViewToHotbarAsync(
             viewId,
-            ShellPlacementCatalog.ToPackageHotbarPlacement(packageView.Placement),
+            ShellPlacementCatalog.ToPackageViewPlacement(packageView.Placement),
             null,
             openPanel,
             parameters);
@@ -38,7 +38,7 @@ internal sealed class ShellHotbarCoordinator(
 
     public async ValueTask<bool> AddViewToHotbarAsync(
         string viewId,
-        PackageHotbarPlacement placement,
+        PackageViewPlacement placement,
         int? index = null,
         bool openPanel = false,
         IReadOnlyDictionary<string, string?>? parameters = null)
@@ -94,7 +94,7 @@ internal sealed class ShellHotbarCoordinator(
         if (!IsViewInHotbar(viewId))
         {
             _tasks.Observe(
-                AddViewToHotbarAsync(viewId, ShellPlacementCatalog.ToPackageHotbarPlacement(placement), targetIndex, openPanel: true).AsTask(),
+                AddViewToHotbarAsync(viewId, ShellPlacementCatalog.ToPackageViewPlacement(placement), targetIndex, openPanel: true).AsTask(),
                 $"moving package view '{viewId}' into the hotbar");
             return;
         }

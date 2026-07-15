@@ -1,8 +1,11 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Features.Shell.Layout;
 using Sunder.App.Features.Shell.Lifecycle;
+using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Features.Shell.Panels;
 using Sunder.App.Models;
 using Sunder.App.Services;
@@ -12,14 +15,108 @@ using Sunder.App.Views.Controls;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
+using Sunder.Sdk.Notifications;
+using Xunit;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
 using static Sunder.App.Tests.TestSupport.TestPaths;
-using Xunit;
 
 namespace Sunder.App.Tests;
 
 public sealed class MainWindowViewModelShellViewTests
 {
+    [Fact]
+    public async Task InitialHostedViewNavigation_CompletesBeforeRevealAndShellPersistence()
+    {
+        var rootPath = CreateTempDirectory();
+        var probe = new InitialNavigationProbe();
+        var packageViewHostService = CreateNavigationPackageViewHostService(probe);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService,
+            deferInitialHostedViews: true,
+            uiDispatcher: new ImmediateUiDispatcher()
+        );
+        var releaseNavigation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        probe.NavigateAsync = async (context, cancellationToken) =>
+        {
+            probe.Context = context;
+            probe.Started.SetResult();
+            await releaseNavigation.Task.WaitAsync(cancellationToken);
+        };
+        var attachmentObserved = false;
+
+        var activation = harness.ViewModel.ActivateDeferredInitialHostedViewsAsync(() =>
+        {
+            attachmentObserved = harness.ViewModel.MiddlePanel.HostedView is not null;
+            return Task.CompletedTask;
+        });
+        await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(attachmentObserved);
+        Assert.False(activation.IsCompleted);
+        Assert.False(File.Exists(harness.StatePath));
+        Assert.Equal("agent.chat", probe.Context?.ViewId);
+        Assert.Empty(
+            probe.Context?.Parameters
+                ?? throw new InvalidOperationException("Navigation context was not captured.")
+        );
+
+        releaseNavigation.SetResult();
+        await activation;
+        Assert.False(File.Exists(harness.StatePath));
+
+        harness.ViewModel.CompleteInitialReveal();
+        await WaitForConditionAsync(() => File.Exists(harness.StatePath));
+    }
+
+    [Fact]
+    public async Task InitialHostedViewNavigation_PropagatesStartupCancellationBeforeReveal()
+    {
+        var rootPath = CreateTempDirectory();
+        var probe = new InitialNavigationProbe();
+        var packageViewHostService = CreateNavigationPackageViewHostService(probe);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService,
+            deferInitialHostedViews: true,
+            uiDispatcher: new ImmediateUiDispatcher()
+        );
+        var navigationCancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        probe.NavigateAsync = async (_, cancellationToken) =>
+        {
+            probe.Started.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                navigationCancelled.SetResult();
+                throw;
+            }
+        };
+        using var cancellation = new CancellationTokenSource();
+
+        var activation = harness.ViewModel.ActivateDeferredInitialHostedViewsAsync(
+            cancellationToken: cancellation.Token
+        );
+        await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => activation);
+        await navigationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(File.Exists(harness.StatePath));
+    }
+
     [Fact]
     public async Task OpenPackageViewPanelAsync_AddsHiddenViewToHotbarAndOpensPanel()
     {
@@ -27,15 +124,18 @@ public sealed class MainWindowViewModelShellViewTests
 
         Assert.False(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
 
-        var opened = await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions", new Dictionary<string, string?>
-        {
-            ["sessionId"] = Guid.NewGuid().ToString("N"),
-        });
+        var opened = await harness.ViewModel.OpenPackageViewPanelAsync(
+            "agent.subsessions",
+            new Dictionary<string, string?> { ["sessionId"] = Guid.NewGuid().ToString("N") }
+        );
 
         Assert.True(opened);
         Assert.True(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
         Assert.True(harness.ViewModel.HasRightTopPanelContent);
-        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.subsessions" && view.IsOpen);
+        Assert.Contains(
+            harness.ViewModel.ListHotbarViews(),
+            view => view.ViewId == "agent.subsessions" && view.IsOpen
+        );
     }
 
     [Fact]
@@ -49,7 +149,10 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.True(closed);
         Assert.True(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
         Assert.False(harness.ViewModel.HasRightTopPanelContent);
-        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.subsessions" && !view.IsOpen);
+        Assert.Contains(
+            harness.ViewModel.ListHotbarViews(),
+            view => view.ViewId == "agent.subsessions" && !view.IsOpen
+        );
     }
 
     [Fact]
@@ -62,7 +165,10 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.True(closed);
         Assert.False(harness.ViewModel.HasMiddleSelection);
         Assert.False(harness.ViewModel.MiddlePanel.HasHostedView);
-        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.chat" && !view.IsOpen);
+        Assert.Contains(
+            harness.ViewModel.ListHotbarViews(),
+            view => view.ViewId == "agent.chat" && !view.IsOpen
+        );
     }
 
     [Fact]
@@ -78,7 +184,13 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.True(closed);
         Assert.True(harness.ViewModel.HasMiddleSelection);
         Assert.Contains(hotbarViews, view => view.ViewId == "agent.chat" && !view.IsOpen);
-        Assert.Contains(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
+        Assert.Contains(
+            hotbarViews,
+            view =>
+                view.ViewId == "agent.workspaces"
+                && view.Placement == PackageViewPlacement.Middle
+                && view.IsOpen
+        );
     }
 
     [Fact]
@@ -92,7 +204,10 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.True(removed);
         Assert.False(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
         Assert.False(harness.ViewModel.HasRightTopPanelContent);
-        Assert.DoesNotContain(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.subsessions");
+        Assert.DoesNotContain(
+            harness.ViewModel.ListHotbarViews(),
+            view => view.ViewId == "agent.subsessions"
+        );
     }
 
     [Fact]
@@ -100,18 +215,30 @@ public sealed class MainWindowViewModelShellViewTests
     {
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService();
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
-        var originalView = AssertHostedView<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+        var originalView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.MiddlePanel.HostedView
+        );
 
         var reloaded = await harness.ViewModel.ReloadPackageViewAsync("agent.chat");
-        var reloadedView = AssertHostedView<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
+        var reloadedView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.MiddlePanel.HostedView
+        );
 
         Assert.True(reloaded);
         Assert.True(originalView.IsDisposed);
         Assert.NotSame(originalView, reloadedView);
         Assert.True(harness.ViewModel.HasMiddleSelection);
-        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.chat" && view.IsOpen);
+        Assert.Contains(
+            harness.ViewModel.ListHotbarViews(),
+            view => view.ViewId == "agent.chat" && view.IsOpen
+        );
     }
 
     [Fact]
@@ -120,9 +247,15 @@ public sealed class MainWindowViewModelShellViewTests
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService(
             ("agent", "agent.chat"),
-            ("agent", "agent.workspaces"));
+            ("agent", "agent.workspaces")
+        );
         DisposablePackageView.ResetCreatedCount();
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
         var createdCountAfterInitialSelection = DisposablePackageView.CreatedCount;
 
         var reloaded = await harness.ViewModel.ReloadPackageViewAsync("agent.workspaces");
@@ -133,16 +266,25 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
-    public void GetPackageViewGroups_IncludesGlyphsAndHotbarState()
+    public void GetMainMenuItems_IncludesCommandGlyphsAndHotbarState()
     {
         using var harness = CreateHarness();
 
-        var group = Assert.Single(harness.ViewModel.GetPackageViewGroups());
+        var group = Assert.Single(GetPackageMenuGroups(harness.ViewModel));
 
-        Assert.Equal("A", group.PackageGlyph);
-        Assert.Contains(group.Views, view => view.ViewId == "agent.chat" && view.Glyph == "A" && view.IsInHotbar);
-        Assert.Contains(group.Views, view => view.ViewId == "agent.workspaces" && view.Glyph == "W" && view.IsInHotbar);
-        Assert.Contains(group.Views, view => view.ViewId == "agent.subsessions" && view.Glyph == "S" && !view.IsInHotbar);
+        Assert.Equal("A", group.Glyph);
+        Assert.Contains(
+            group.Children,
+            view => view.Id == "view:agent.chat" && view.Glyph == "A" && !view.IsEnabled
+        );
+        Assert.Contains(
+            group.Children,
+            view => view.Id == "view:agent.workspaces" && view.Glyph == "W" && !view.IsEnabled
+        );
+        Assert.Contains(
+            group.Children,
+            view => view.Id == "view:agent.subsessions" && view.Glyph == "S" && view.IsEnabled
+        );
     }
 
     [Fact]
@@ -189,23 +331,41 @@ public sealed class MainWindowViewModelShellViewTests
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService(
             ("agent", "agent.workspaces"),
-            ("agent", "agent.subsessions"));
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+            ("agent", "agent.subsessions")
+        );
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
 
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
-        var workspaceView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+        var workspaceView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.RightTopPanel.HostedView
+        );
 
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
-        var subsessionsView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+        var subsessionsView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.RightTopPanel.HostedView
+        );
 
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
-        var reopenedWorkspaceView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+        var reopenedWorkspaceView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.RightTopPanel.HostedView
+        );
 
         Assert.Same(workspaceView, reopenedWorkspaceView);
         Assert.NotSame(workspaceView, subsessionsView);
         Assert.Equal(2, DisposablePackageView.CreatedCount);
-        Assert.Contains(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.workspaces");
-        Assert.Contains(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.subsessions");
+        Assert.Contains(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.workspaces"
+        );
+        Assert.Contains(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.subsessions"
+        );
     }
 
     [Fact]
@@ -215,16 +375,28 @@ public sealed class MainWindowViewModelShellViewTests
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService(
             ("agent", "agent.workspaces"),
-            ("agent", "agent.subsessions"));
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+            ("agent", "agent.subsessions")
+        );
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
 
         var removed = harness.ViewModel.RemovePackageViewFromHotbar("agent.workspaces");
 
         Assert.True(removed);
-        Assert.DoesNotContain(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.workspaces");
-        Assert.Contains(harness.ViewModel.RightTopPanel.HostedViews, view => view.ViewId == "agent.subsessions");
+        Assert.DoesNotContain(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.workspaces"
+        );
+        Assert.Contains(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.subsessions"
+        );
         AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
     }
 
@@ -250,36 +422,364 @@ public sealed class MainWindowViewModelShellViewTests
     {
         using var harness = CreateHarness(new EmptyRuntimeApiClientFactory());
 
-        Assert.Contains(harness.ViewModel.GetPackageViewGroups(), group => group.PackageId == "agent");
+        Assert.Contains(
+            GetPackageMenuGroups(harness.ViewModel),
+            group => group.Id == "package:agent"
+        );
         Assert.True(harness.ViewModel.IsViewInHotbar("agent.chat"));
 
-        await harness.ViewModel.ApplyPackageLifecycleChangesAsync();
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []));
 
-        Assert.Empty(harness.ViewModel.GetPackageViewGroups());
+        Assert.Empty(GetPackageMenuGroups(harness.ViewModel));
         Assert.Empty(harness.ViewModel.ListHotbarViews());
         Assert.False(harness.ViewModel.HasMiddleSelection);
         Assert.Equal("No packages loaded", harness.ViewModel.SyncStatusText);
     }
 
     [Fact]
-    public async Task ApplyPackageLifecycleChangesAsync_WhenPackageRemoved_DisposesCachedPackageViewsOnCallingThread()
+    public async Task ApplyPackageLifecycleChangesAsync_WhenPackageRemoved_RetiresCachedPackageViewsAfterCommit()
     {
         var rootPath = CreateTempDirectory();
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var packageViewHostService = CreatePackageViewHostService();
         await packageViewHostService.ApplyPackageDeltaAsync(
             [CreateActiveAgentPackage()],
-            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]);
-        using var harness = CreateHarness(rootPath, new EmptyRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]
+        );
+        using var harness = CreateHarness(
+            rootPath,
+            new EmptyRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
-        var hostedBoundary = Assert.IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView);
+        var hostedBoundary = Assert.IsType<HostedPackageViewBoundary>(
+            harness.ViewModel.MiddlePanel.HostedView
+        );
         var hostedView = hostedBoundary.HostedView;
-        var ownerThreadId = Assert.IsType<int>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.OwnerThreadId))?.GetValue(hostedView));
 
-        await harness.ViewModel.ApplyPackageLifecycleChangesAsync();
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []));
+        await packageViewHostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(Assert.IsType<bool>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))?.GetValue(hostedView)));
-        Assert.Equal(ownerThreadId, Assert.IsType<int>(hostedView.GetType().GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.DisposeThreadId))?.GetValue(hostedView)));
+        Assert.True(
+            Assert.IsType<bool>(
+                hostedView
+                    .GetType()
+                    .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))
+                    ?.GetValue(hostedView)
+            )
+        );
+    }
+
+    [Fact]
+    public async Task ApplyPackageLifecycleSnapshotAsync_StabilizesSelectedCandidateBeforeVisibleCommit()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var navigationGatePath = Path.Combine(rootPath, "navigation-gate");
+        var package = CreateActiveAgentPackage();
+        var firstSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+        var packageViewHostService = CreatePackageViewHostService();
+        await packageViewHostService.ApplyPackageDeltaAsync([package], [firstSource]);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
+        var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
+            harness.ViewModel.MiddlePanel.HostedView
+        );
+        var originalView = originalBoundary.HostedView;
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.NavigationGatePathFileName
+            ),
+            navigationGatePath
+        );
+        File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+        var replacementSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+
+        var apply = harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+            CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+            ["agent"]
+        );
+        try
+        {
+            await WaitForConditionAsync(() => File.Exists(navigationGatePath + ".started"));
+
+            Assert.False(apply.IsCompleted);
+            Assert.Same(originalBoundary, harness.ViewModel.MiddlePanel.HostedView);
+            Assert.Same(originalView, packageViewHostService.GetOrCreateView("agent.chat"));
+            Assert.False(
+                Assert.IsType<bool>(
+                    originalView
+                        .GetType()
+                        .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))
+                        ?.GetValue(originalView)
+                )
+            );
+
+            File.WriteAllText(navigationGatePath + ".release", string.Empty);
+            await apply.WaitAsync(TimeSpan.FromSeconds(5));
+            await packageViewHostService
+                .WaitForRetirementsAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            var replacementBoundary = Assert.IsType<HostedPackageViewBoundary>(
+                harness.ViewModel.MiddlePanel.HostedView
+            );
+            Assert.NotSame(originalBoundary, replacementBoundary);
+            Assert.NotSame(originalView, replacementBoundary.HostedView);
+            Assert.True(
+                Assert.IsType<bool>(
+                    originalView
+                        .GetType()
+                        .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))
+                        ?.GetValue(originalView)
+                )
+            );
+        }
+        finally
+        {
+            File.WriteAllText(navigationGatePath + ".release", string.Empty);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPackageLifecycleSnapshotAsync_StagesAllSelectionsBeforeExactOnceAttachmentAwareNavigation()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var activityPath = Path.Combine(rootPath, "navigation-activity");
+        var package = CreateActiveAgentPackage();
+        var firstSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+        var packageViewHostService = CreatePackageViewHostService();
+        await packageViewHostService.ApplyPackageDeltaAsync([package], [firstSource]);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.NavigationActivityPathFileName
+            ),
+            activityPath
+        );
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.WaitForAttachmentMarkerFileName
+            ),
+            string.Empty
+        );
+        File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+        var replacementSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+
+        await harness
+            .ViewModel.ApplyPackageLifecycleSnapshotAsync(
+                CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+                ["agent"]
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        var activity = File.ReadAllLines(activityPath);
+        Assert.Equal(1, activity.Count(line => line == "navigation-started:agent.chat"));
+        Assert.Equal(1, activity.Count(line => line == "navigation-completed:agent.chat"));
+        Assert.Equal(1, activity.Count(line => line == "navigation-started:agent.workspaces"));
+        Assert.Equal(1, activity.Count(line => line == "navigation-completed:agent.workspaces"));
+        Assert.True(
+            Array.IndexOf(activity, "loaded")
+                < Array.IndexOf(activity, "navigation-started:agent.chat")
+        );
+        Assert.Equal(2, harness.StagingSurface.MaximumStagedViewCount);
+        Assert.Equal(2, harness.StagingSurface.StagedViews.Count);
+        Assert.Empty(harness.StagingSurface.ActiveViews);
+        Assert.Same(
+            harness.StagingSurface.StagedViews.Single(view => GetViewId(view) == "agent.chat"),
+            Assert
+                .IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView)
+                .HostedView
+        );
+        Assert.Same(
+            harness.StagingSurface.StagedViews.Single(view =>
+                GetViewId(view) == "agent.workspaces"
+            ),
+            Assert
+                .IsType<HostedPackageViewBoundary>(harness.ViewModel.RightTopPanel.HostedView)
+                .HostedView
+        );
+    }
+
+    [Fact]
+    public async Task ApplyPackageLifecycleSnapshotAsync_WhenAttachmentAwareNavigationFails_DetachesAndDisposesCandidate()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var activityPath = Path.Combine(rootPath, "navigation-activity");
+        var package = CreateActiveAgentPackage();
+        var firstSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+        var packageViewHostService = CreatePackageViewHostService();
+        await packageViewHostService.ApplyPackageDeltaAsync([package], [firstSource]);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
+        var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
+            harness.ViewModel.MiddlePanel.HostedView
+        );
+        var originalView = originalBoundary.HostedView;
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.NavigationActivityPathFileName
+            ),
+            activityPath
+        );
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.WaitForAttachmentMarkerFileName
+            ),
+            string.Empty
+        );
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName
+            ),
+            string.Empty
+        );
+        File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+        var replacementSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+                CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+                ["agent"]
+            )
+        );
+
+        var candidateView = Assert.Single(harness.StagingSurface.StagedViews);
+        await packageViewHostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("requested navigation failure", error.Message, StringComparison.Ordinal);
+        Assert.Same(originalBoundary, harness.ViewModel.MiddlePanel.HostedView);
+        Assert.Same(originalView, packageViewHostService.GetOrCreateView("agent.chat"));
+        Assert.False(GetIsDisposed(originalView));
+        Assert.True(GetIsDisposed(candidateView));
+        Assert.Null(candidateView.Parent);
+        Assert.Empty(harness.StagingSurface.ActiveViews);
+        Assert.Equal(
+            1,
+            File.ReadAllLines(activityPath).Count(line => line == "navigation-started:agent.chat")
+        );
+    }
+
+    [Fact]
+    public async Task ApplyPackageLifecycleSnapshotAsync_WhenAttachmentAwareNavigationIsCancelled_DetachesAndPreservesCurrentGeneration()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var navigationGatePath = Path.Combine(rootPath, "navigation-gate");
+        var package = CreateActiveAgentPackage();
+        var firstSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+        var packageViewHostService = CreatePackageViewHostService();
+        await packageViewHostService.ApplyPackageDeltaAsync([package], [firstSource]);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
+        var originalBoundary = Assert.IsType<HostedPackageViewBoundary>(
+            harness.ViewModel.MiddlePanel.HostedView
+        );
+        var originalView = originalBoundary.HostedView;
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.NavigationGatePathFileName
+            ),
+            navigationGatePath
+        );
+        File.WriteAllText(
+            Path.Combine(
+                packageSourceFolder,
+                ShellLifecycleTestPackageModule.WaitForAttachmentMarkerFileName
+            ),
+            string.Empty
+        );
+        File.WriteAllText(Path.Combine(packageSourceFolder, "replacement-content"), string.Empty);
+        var replacementSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
+        using var cancellation = new CancellationTokenSource();
+
+        var apply = harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+            CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+            ["agent"],
+            cancellation.Token
+        );
+        try
+        {
+            await WaitForConditionAsync(() => File.Exists(navigationGatePath + ".started"));
+            var candidateView = Assert.Single(harness.StagingSurface.StagedViews);
+            Assert.Single(harness.StagingSurface.ActiveViews);
+
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => apply);
+            await packageViewHostService
+                .WaitForRetirementsAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(originalBoundary, harness.ViewModel.MiddlePanel.HostedView);
+            Assert.Same(originalView, packageViewHostService.GetOrCreateView("agent.chat"));
+            Assert.False(GetIsDisposed(originalView));
+            Assert.True(GetIsDisposed(candidateView));
+            Assert.Null(candidateView.Parent);
+            Assert.Empty(harness.StagingSurface.ActiveViews);
+        }
+        finally
+        {
+            File.WriteAllText(navigationGatePath + ".release", string.Empty);
+        }
     }
 
     [Fact]
@@ -292,7 +792,10 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.True(harness.ViewModel.HasMiddleSelection);
         Assert.False(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
 
-        await harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+            harness.RuntimeSnapshot!,
+            ["agent"]
+        );
 
         var hotbarViews = harness.ViewModel.ListHotbarViews();
         Assert.True(harness.ViewModel.HasLeftTopPanelContent);
@@ -300,19 +803,35 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.False(harness.ViewModel.IsViewInHotbar("agent.subsessions"));
         Assert.Equal(333, harness.ViewModel.LeftPanelWidth);
         Assert.Equal(444, harness.ViewModel.RightPanelWidth);
-        Assert.Contains(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.LeftTop && view.IsOpen);
-        Assert.Contains(hotbarViews, view => view.ViewId == "agent.chat" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
+        Assert.Contains(
+            hotbarViews,
+            view =>
+                view.ViewId == "agent.workspaces"
+                && view.Placement == PackageViewPlacement.LeftTop
+                && view.IsOpen
+        );
+        Assert.Contains(
+            hotbarViews,
+            view =>
+                view.ViewId == "agent.chat"
+                && view.Placement == PackageViewPlacement.Middle
+                && view.IsOpen
+        );
         Assert.DoesNotContain(hotbarViews, view => view.ViewId == "agent.subsessions");
-        Assert.Contains(harness.ViewModel.GetPackageViewGroups(), group => group.PackageId == "agent");
+        Assert.Contains(
+            GetPackageMenuGroups(harness.ViewModel),
+            group => group.Id == "package:agent"
+        );
         Assert.Equal("1 package(s) active", harness.ViewModel.SyncStatusText);
     }
 
     [Fact]
-    public async Task ShellPackageLifecyclePresenter_WhenOnlyPackageOnSameRailIsImpacted_PreservesUnimpactedHostedViewAndHotbarItem()
+    public async Task ShellPackageLifecyclePresenter_PreparedCommitRebuildsItemsWithoutRenavigatingStabilizedSelection()
     {
         var packageViewHostService = CreateRegisteredPackageViewHostService(
             ("agent", "agent.chat"),
-            ("tools", "tools.dashboard"));
+            ("tools", "tools.dashboard")
+        );
         try
         {
             var shellState = new ShellState
@@ -325,26 +844,59 @@ public sealed class MainWindowViewModelShellViewTests
                 },
                 SelectedMiddleViewId = "tools.dashboard",
             };
-            var viewsById = new Dictionary<string, ShellPackageView>(StringComparer.OrdinalIgnoreCase)
+            var viewsById = new Dictionary<string, ShellPackageView>(
+                StringComparer.OrdinalIgnoreCase
+            )
             {
-                ["agent.chat"] = new("agent.chat", "agent", "Agent", "1.0.0", "Chat", "A", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "A"),
-                ["tools.dashboard"] = new("tools.dashboard", "tools", "Tools", "1.0.0", "Dashboard", "T", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "T"),
+                ["agent.chat"] = new(
+                    "agent.chat",
+                    "agent",
+                    "Agent",
+                    "1.0.0",
+                    "Chat",
+                    "A",
+                    RailPlacement.Middle,
+                    PackageReadinessState.Ready,
+                    ShowInHotbarByDefault: true,
+                    PackageGlyph: "A"
+                ),
+                ["tools.dashboard"] = new(
+                    "tools.dashboard",
+                    "tools",
+                    "Tools",
+                    "1.0.0",
+                    "Dashboard",
+                    "T",
+                    RailPlacement.Middle,
+                    PackageReadinessState.Ready,
+                    ShowInHotbarByDefault: true,
+                    PackageGlyph: "T"
+                ),
             };
             var middleBar = new PackageIconBarViewModel(
                 RailPlacement.Middle,
                 Orientation.Horizontal,
                 (_, _, _) => { },
                 _ => ValueTask.FromResult(false),
-                _ => false);
+                _ => false
+            );
             var middlePanel = new ShellPanelViewModel();
             var selectionPresenter = new ShellSelectionPresenter();
-            var panelContentPresenter = new ShellPanelContentPresenter(packageViewHostService, [], []);
+            var panelContentPresenter = new ShellPanelContentPresenter(
+                packageViewHostService,
+                [],
+                []
+            );
+            var navigatedViewIds = new List<string>();
             var railCollectionPresenter = new ShellRailCollectionPresenter(
                 viewsById,
                 shellState,
                 selectionPresenter,
                 panelContentPresenter,
-                CreateShellItem);
+                CreateShellItem,
+                navigatedViewIds.Add,
+                _ => { }
+            );
             var slots = new[]
             {
                 new ShellPlacementSlot(RailPlacement.Middle, middleBar, middlePanel, _ => { }),
@@ -356,25 +908,49 @@ public sealed class MainWindowViewModelShellViewTests
                 [],
                 [],
                 _ => { },
-                createHostedViews => railCollectionPresenter.Rebuild(slots, createHostedViews),
-                (placements, impactedPackageIds, createHostedViews) => railCollectionPresenter.Update(slots, placements, impactedPackageIds, createHostedViews),
-                () => { });
+                (createHostedViews, stabilizedViewIds) =>
+                    railCollectionPresenter.Rebuild(slots, createHostedViews, stabilizedViewIds),
+                () => { },
+                _ => middlePanel.ClearRetainedViews()
+            );
             railCollectionPresenter.Rebuild(slots, createHostedViews: true);
-            var originalHostedBoundary = Assert.IsType<HostedPackageViewBoundary>(middlePanel.HostedView);
-            var originalHostedView = Assert.IsType<DisposablePackageView>(originalHostedBoundary.HostedView);
-            var originalToolsItem = Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard");
+            var originalHostedBoundary = Assert.IsType<HostedPackageViewBoundary>(
+                middlePanel.HostedView
+            );
+            var originalHostedView = Assert.IsType<DisposablePackageView>(
+                originalHostedBoundary.HostedView
+            );
+            var originalToolsItem = Assert.Single(
+                middleBar.Items,
+                item => item.Id == "tools.dashboard"
+            );
             var originalAgentItem = Assert.Single(middleBar.Items, item => item.Id == "agent.chat");
+            Assert.Equal(["tools.dashboard"], navigatedViewIds);
 
-            lifecyclePresenter.ApplyLifecycleChanges(
-                [CreateActiveAgentPackage() with { Version = "1.0.1" }, CreateActiveToolsPackage()],
-                ["agent"],
-                deferHostedViewCreation: true);
+            var presentation = lifecyclePresenter.PrepareLifecycleChanges([
+                CreateActiveAgentPackage() with
+                {
+                    Version = "1.0.1",
+                },
+                CreateActiveToolsPackage(),
+            ]);
+            lifecyclePresenter.CommitPreparedLifecycleChanges(
+                presentation,
+                new HashSet<string>(["tools.dashboard"], StringComparer.OrdinalIgnoreCase)
+            );
 
-            Assert.Same(originalHostedBoundary, middlePanel.HostedView);
-            Assert.Same(originalHostedView, originalHostedBoundary.HostedView);
-            Assert.Same(originalToolsItem, Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard"));
-            Assert.NotSame(originalAgentItem, Assert.Single(middleBar.Items, item => item.Id == "agent.chat"));
+            Assert.NotSame(originalHostedBoundary, middlePanel.HostedView);
+            Assert.False(originalHostedView.IsDisposed);
+            Assert.NotSame(
+                originalToolsItem,
+                Assert.Single(middleBar.Items, item => item.Id == "tools.dashboard")
+            );
+            Assert.NotSame(
+                originalAgentItem,
+                Assert.Single(middleBar.Items, item => item.Id == "agent.chat")
+            );
             Assert.True(selectionPresenter.HasMiddleSelection);
+            Assert.Equal(["tools.dashboard"], navigatedViewIds);
         }
         finally
         {
@@ -387,58 +963,62 @@ public sealed class MainWindowViewModelShellViewTests
     {
         var rootPath = CreateTempDirectory();
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        var packageSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var packageSource = RuntimeContractTestData.Snapshot(
+            "agent",
+            PackageSourceKind.Dev,
+            packageSourceFolder
+        );
         var runtimeApiClientFactory = new MutableRuntimeApiClientFactory
         {
             ActivePackages = [CreateActiveAgentPackage()],
             PackageSources = [packageSource],
         };
         var packageViewHostService = CreatePackageViewHostService();
-        using var harness = CreateHarness(rootPath, runtimeApiClientFactory, packageViewHostService, packageViewHostService);
+        using var harness = CreateHarness(
+            rootPath,
+            runtimeApiClientFactory,
+            packageViewHostService,
+            packageViewHostService
+        );
 
         for (var index = 0; index < 3; index++)
         {
             runtimeApiClientFactory.ActivePackages = [];
             runtimeApiClientFactory.PackageSources = [];
-            await harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+            await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+                CreateRuntimeSnapshot([], [], index * 2 + 2),
+                ["agent"]
+            );
 
             runtimeApiClientFactory.ActivePackages = [CreateActiveAgentPackage()];
             runtimeApiClientFactory.PackageSources = [packageSource];
-            await harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
+            await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
+                CreateRuntimeSnapshot([CreateActiveAgentPackage()], [packageSource], index * 2 + 3),
+                ["agent"]
+            );
         }
 
-        var hotbarViewIds = harness.ViewModel.ListHotbarViews()
+        var hotbarViewIds = harness
+            .ViewModel.ListHotbarViews()
             .Select(view => view.ViewId)
             .ToArray();
 
-        Assert.Equal(hotbarViewIds.Distinct(StringComparer.OrdinalIgnoreCase).Count(), hotbarViewIds.Length);
-        Assert.Single(hotbarViewIds, viewId => string.Equals(viewId, "agent.chat", StringComparison.OrdinalIgnoreCase));
-        Assert.Single(hotbarViewIds, viewId => string.Equals(viewId, "agent.workspaces", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(hotbarViewIds, viewId => string.Equals(viewId, "agent.subsessions", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task ApplyPackageLifecycleChangesAsync_WhenCalledConcurrently_SerializesRuntimeRefreshes()
-    {
-        var gatedRuntime = new GatedPackageLifecycleRuntime();
-        var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
-            [],
-            [],
-            getActivePackagesAsync: gatedRuntime.GetActivePackagesAsync,
-            getActivePackageSourcesAsync: gatedRuntime.GetActivePackageUiSnapshotsAsync);
-        using var harness = CreateHarness(runtimeApiClientFactory);
-
-        var firstRefresh = harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
-        Assert.Equal(1, gatedRuntime.ActivePackageCallCount);
-
-        var secondRefresh = harness.ViewModel.ApplyPackageLifecycleChangesAsync(["agent"]);
-        Assert.Equal(1, gatedRuntime.ActivePackageCallCount);
-
-        gatedRuntime.ReleaseNextActivePackageCall();
-        await WaitForConditionAsync(() => gatedRuntime.ActivePackageCallCount == 2);
-
-        gatedRuntime.ReleaseNextActivePackageCall();
-        await Task.WhenAll(firstRefresh, secondRefresh);
+        Assert.Equal(
+            hotbarViewIds.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            hotbarViewIds.Length
+        );
+        Assert.Single(
+            hotbarViewIds,
+            viewId => string.Equals(viewId, "agent.chat", StringComparison.OrdinalIgnoreCase)
+        );
+        Assert.Single(
+            hotbarViewIds,
+            viewId => string.Equals(viewId, "agent.workspaces", StringComparison.OrdinalIgnoreCase)
+        );
+        Assert.DoesNotContain(
+            hotbarViewIds,
+            viewId => string.Equals(viewId, "agent.subsessions", StringComparison.OrdinalIgnoreCase)
+        );
     }
 
     [Fact]
@@ -446,18 +1026,45 @@ public sealed class MainWindowViewModelShellViewTests
     {
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService();
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.Middle, 1);
-        Assert.Contains(harness.ViewModel.ListHotbarViews(), view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
+        Assert.Contains(
+            harness.ViewModel.ListHotbarViews(),
+            view =>
+                view.ViewId == "agent.workspaces"
+                && view.Placement == PackageViewPlacement.Middle
+                && view.IsOpen
+        );
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.RightTop, 0);
 
         var hotbarViews = harness.ViewModel.ListHotbarViews();
         Assert.True(harness.ViewModel.HasMiddleSelection);
-        Assert.Contains(hotbarViews, view => view.ViewId == "agent.chat" && view.Placement == PackageHotbarPlacement.Middle && view.IsOpen);
-        Assert.Contains(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.RightTop && view.IsOpen);
-        Assert.DoesNotContain(hotbarViews, view => view.ViewId == "agent.workspaces" && view.Placement == PackageHotbarPlacement.Middle);
+        Assert.Contains(
+            hotbarViews,
+            view =>
+                view.ViewId == "agent.chat"
+                && view.Placement == PackageViewPlacement.Middle
+                && view.IsOpen
+        );
+        Assert.Contains(
+            hotbarViews,
+            view =>
+                view.ViewId == "agent.workspaces"
+                && view.Placement == PackageViewPlacement.RightTop
+                && view.IsOpen
+        );
+        Assert.DoesNotContain(
+            hotbarViews,
+            view =>
+                view.ViewId == "agent.workspaces" && view.Placement == PackageViewPlacement.Middle
+        );
         Assert.True(harness.ViewModel.MiddlePanel.HasHostedView);
         Assert.False(harness.ViewModel.MiddlePanel.ShowFallbackLines);
         AssertHostedView<DisposablePackageView>(harness.ViewModel.MiddlePanel.HostedView);
@@ -469,22 +1076,36 @@ public sealed class MainWindowViewModelShellViewTests
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService(
             ("agent", "agent.chat"),
-            ("agent", "agent.workspaces"));
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+            ("agent", "agent.workspaces")
+        );
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
-        var hostedView = AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView);
+        var hostedView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.RightTopPanel.HostedView
+        );
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.LeftTop, 0);
 
         Assert.Equal("agent.workspaces", harness.ViewModel.LeftTopPanel.ActiveViewId);
-        Assert.Same(hostedView, AssertHostedView<DisposablePackageView>(harness.ViewModel.LeftTopPanel.HostedView));
+        Assert.Same(
+            hostedView,
+            AssertHostedView<DisposablePackageView>(harness.ViewModel.LeftTopPanel.HostedView)
+        );
         Assert.Null(harness.ViewModel.RightTopPanel.ActiveViewId);
         Assert.False(harness.ViewModel.RightTopPanel.HasHostedView);
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.RightTop, 0);
 
         Assert.Equal("agent.workspaces", harness.ViewModel.RightTopPanel.ActiveViewId);
-        Assert.Same(hostedView, AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView));
+        Assert.Same(
+            hostedView,
+            AssertHostedView<DisposablePackageView>(harness.ViewModel.RightTopPanel.HostedView)
+        );
         Assert.Null(harness.ViewModel.LeftTopPanel.ActiveViewId);
         Assert.False(harness.ViewModel.LeftTopPanel.HasHostedView);
     }
@@ -495,12 +1116,22 @@ public sealed class MainWindowViewModelShellViewTests
         var rootPath = CreateTempDirectory();
         var packageViewHostService = CreateRegisteredPackageViewHostService(
             ("agent", "agent.chat"),
-            ("agent", "agent.workspaces"));
-        using var harness = CreateHarness(rootPath, new ThrowingRuntimeApiClientFactory(), packageViewHostService, packageViewHostService);
+            ("agent", "agent.workspaces")
+        );
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService
+        );
 
-        await packageViewHostService.DisablePackageAsync("agent", "Hosted view failed.", PackageFailureOrigin.AppHostedView);
+        await packageViewHostService.DisablePackageAsync(
+            "agent",
+            "Hosted view failed.",
+            PackageFailureOrigin.AppHostedView
+        );
 
-        Assert.Empty(harness.ViewModel.GetPackageViewGroups());
+        Assert.Empty(GetPackageMenuGroups(harness.ViewModel));
         Assert.Empty(harness.ViewModel.ListHotbarViews());
         Assert.False(harness.ViewModel.HasMiddleSelection);
     }
@@ -509,42 +1140,81 @@ public sealed class MainWindowViewModelShellViewTests
     public async Task MovePackageView_WhenMovedForwardWithinSameBar_UsesTargetIndexAfterRemoval()
     {
         using var harness = CreateHarness();
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.Middle, 2));
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.workspaces",
+                PackageViewPlacement.Middle,
+                1
+            )
+        );
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.subsessions",
+                PackageViewPlacement.Middle,
+                2
+            )
+        );
 
         harness.ViewModel.MovePackageView("agent.chat", RailPlacement.Middle, 2);
 
         Assert.Equal(
             ["agent.workspaces", "agent.subsessions", "agent.chat"],
-            GetMiddleHotbarOrder(harness.ViewModel));
+            GetMiddleHotbarOrder(harness.ViewModel)
+        );
     }
 
     [Fact]
     public async Task MovePackageView_WhenDroppedIntoSameSlotWithinSameBar_DoesNotReorder()
     {
         using var harness = CreateHarness();
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.Middle, 2));
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.workspaces",
+                PackageViewPlacement.Middle,
+                1
+            )
+        );
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.subsessions",
+                PackageViewPlacement.Middle,
+                2
+            )
+        );
 
         harness.ViewModel.MovePackageView("agent.workspaces", RailPlacement.Middle, 1);
 
         Assert.Equal(
             ["agent.chat", "agent.workspaces", "agent.subsessions"],
-            GetMiddleHotbarOrder(harness.ViewModel));
+            GetMiddleHotbarOrder(harness.ViewModel)
+        );
     }
 
     [Fact]
     public async Task MovePackageView_WhenMovedUpWithinSameBar_PreservesRequestedTargetIndex()
     {
         using var harness = CreateHarness();
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.Middle, 1));
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.Middle, 2));
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.workspaces",
+                PackageViewPlacement.Middle,
+                1
+            )
+        );
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.subsessions",
+                PackageViewPlacement.Middle,
+                2
+            )
+        );
 
         harness.ViewModel.MovePackageView("agent.subsessions", RailPlacement.Middle, 1);
 
         Assert.Equal(
             ["agent.chat", "agent.subsessions", "agent.workspaces"],
-            GetMiddleHotbarOrder(harness.ViewModel));
+            GetMiddleHotbarOrder(harness.ViewModel)
+        );
     }
 
     [Fact]
@@ -552,13 +1222,20 @@ public sealed class MainWindowViewModelShellViewTests
     {
         using var harness = CreateHarness();
         harness.ViewModel.MovePackageView("agent.chat", RailPlacement.RightTop, 0);
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.subsessions", PackageHotbarPlacement.RightTop, 2));
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.subsessions",
+                PackageViewPlacement.RightTop,
+                2
+            )
+        );
 
         harness.ViewModel.MovePackageView("agent.chat", RailPlacement.RightTop, 2);
 
         Assert.Equal(
             ["agent.workspaces", "agent.subsessions", "agent.chat"],
-            GetRightTopHotbarOrder(harness.ViewModel));
+            GetRightTopHotbarOrder(harness.ViewModel)
+        );
     }
 
     [Fact]
@@ -569,12 +1246,26 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.False(harness.ViewModel.HasAnyBottomPanelContent);
         Assert.False(harness.ViewModel.HasBottomSplitPanelContent);
 
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.chat", PackageHotbarPlacement.LeftBottom, 0, openPanel: true));
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.chat",
+                PackageViewPlacement.LeftBottom,
+                0,
+                openPanel: true
+            )
+        );
 
         Assert.True(harness.ViewModel.HasAnyBottomPanelContent);
         Assert.False(harness.ViewModel.HasBottomSplitPanelContent);
 
-        Assert.True(await harness.ViewModel.AddPackageViewToHotbarAsync("agent.workspaces", PackageHotbarPlacement.RightBottom, 0, openPanel: true));
+        Assert.True(
+            await harness.ViewModel.AddPackageViewToHotbarAsync(
+                "agent.workspaces",
+                PackageViewPlacement.RightBottom,
+                0,
+                openPanel: true
+            )
+        );
 
         Assert.True(harness.ViewModel.HasAnyBottomPanelContent);
         Assert.True(harness.ViewModel.HasBottomSplitPanelContent);
@@ -588,7 +1279,8 @@ public sealed class MainWindowViewModelShellViewTests
             requestedLeftWidth: 360,
             requestedRightWidth: 360,
             hasLeftPanel: true,
-            hasRightPanel: true);
+            hasRightPanel: true
+        );
 
         Assert.Equal(360, widths.LeftWidth);
         Assert.Equal(360, widths.RightWidth);
@@ -602,7 +1294,8 @@ public sealed class MainWindowViewModelShellViewTests
             requestedLeftWidth: 360,
             requestedRightWidth: 360,
             hasLeftPanel: true,
-            hasRightPanel: true);
+            hasRightPanel: true
+        );
 
         Assert.True(widths.LeftWidth < 360);
         Assert.True(widths.RightWidth < 360);
@@ -627,11 +1320,36 @@ public sealed class MainWindowViewModelShellViewTests
     [Fact]
     public void ShellLayoutCalculator_CalculatesBottomColumnWeightsForVisiblePanels()
     {
-        Assert.Equal((1, 0), ShellLayoutCalculator.CalculateBottomColumnWeights(0.35, hasLeftBottom: true, hasRightBottom: false));
-        Assert.Equal((0, 1), ShellLayoutCalculator.CalculateBottomColumnWeights(0.35, hasLeftBottom: false, hasRightBottom: true));
-        Assert.Equal((0, 0), ShellLayoutCalculator.CalculateBottomColumnWeights(0.35, hasLeftBottom: false, hasRightBottom: false));
+        Assert.Equal(
+            (1, 0),
+            ShellLayoutCalculator.CalculateBottomColumnWeights(
+                0.35,
+                hasLeftBottom: true,
+                hasRightBottom: false
+            )
+        );
+        Assert.Equal(
+            (0, 1),
+            ShellLayoutCalculator.CalculateBottomColumnWeights(
+                0.35,
+                hasLeftBottom: false,
+                hasRightBottom: true
+            )
+        );
+        Assert.Equal(
+            (0, 0),
+            ShellLayoutCalculator.CalculateBottomColumnWeights(
+                0.35,
+                hasLeftBottom: false,
+                hasRightBottom: false
+            )
+        );
 
-        var both = ShellLayoutCalculator.CalculateBottomColumnWeights(1, hasLeftBottom: true, hasRightBottom: true);
+        var both = ShellLayoutCalculator.CalculateBottomColumnWeights(
+            1,
+            hasLeftBottom: true,
+            hasRightBottom: true
+        );
         Assert.Equal(0.99, both.LeftWeight);
         Assert.Equal(0.01, both.RightWeight, precision: 10);
     }
@@ -656,8 +1374,12 @@ public sealed class MainWindowViewModelShellViewTests
         var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
             [],
             [],
-            _ => Task.FromException<SystemStatusResponse?>(new InvalidOperationException("status failed")),
-            _ => Task.FromException<bool>(new InvalidOperationException("health failed")));
+            _ =>
+                Task.FromException<SystemStatusResponse?>(
+                    new InvalidOperationException("status failed")
+                ),
+            _ => Task.FromException<bool>(new InvalidOperationException("health failed"))
+        );
         using var harness = CreateHarness(runtimeApiClientFactory);
 
         await harness.ViewModel.RefreshRuntimeCommand.ExecuteAsync(null);
@@ -670,27 +1392,52 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.Equal("status failed", harness.ViewModel.RuntimeLastError);
     }
 
+    private static IReadOnlyList<ShellMenuItem> GetPackageMenuGroups(
+        MainWindowViewModel viewModel
+    ) =>
+        viewModel
+            .GetMainMenuItems()
+            .Single(item => item.Id == "view")
+            .Children.Single(item => item.Id == "view:packages")
+            .Children.Where(item => item.Id.StartsWith("package:", StringComparison.Ordinal))
+            .ToArray();
+
     private static MainWindowViewModelHarness CreateHarness(
         IRuntimeApiClientFactory? runtimeApiClientFactory = null,
-        AppPackageShellViewService? shellViewService = null)
+        AppPackageShellViewService? shellViewService = null
+    )
     {
         var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreatePackageViewHostService();
         return CreateHarness(
             rootPath,
             runtimeApiClientFactory ?? new ThrowingRuntimeApiClientFactory(),
-            PackageViewHostService.Empty,
-            shellViewService: shellViewService);
+            packageViewHostService,
+            packageViewHostService,
+            shellViewService: shellViewService
+        );
     }
 
     private static MainWindowViewModelHarness CreateActivePackageHarness()
     {
         var rootPath = CreateTempDirectory();
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
+        var runtimeSnapshot = CreateRuntimeSnapshot(
             [CreateActiveAgentPackage()],
-            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]);
+            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]
+        );
+        var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
+            runtimeSnapshot.ActivePackages,
+            runtimeSnapshot.PackageUiSnapshots
+        );
         var packageViewHostService = CreatePackageViewHostService();
-        return CreateHarness(rootPath, runtimeApiClientFactory, packageViewHostService, packageViewHostService);
+        return CreateHarness(
+            rootPath,
+            runtimeApiClientFactory,
+            packageViewHostService,
+            packageViewHostService,
+            runtimeSnapshot: runtimeSnapshot
+        );
     }
 
     private static MainWindowViewModelHarness CreateHarness(
@@ -698,7 +1445,11 @@ public sealed class MainWindowViewModelShellViewTests
         IRuntimeApiClientFactory runtimeApiClientFactory,
         PackageViewHostService packageViewHostService,
         PackageViewHostService? disposablePackageViewHostService = null,
-        AppPackageShellViewService? shellViewService = null)
+        AppPackageShellViewService? shellViewService = null,
+        RuntimePackageSnapshot? runtimeSnapshot = null,
+        bool deferInitialHostedViews = false,
+        IUiDispatcher? uiDispatcher = null
+    )
     {
         var state = new ShellState
         {
@@ -716,15 +1467,49 @@ public sealed class MainWindowViewModelShellViewTests
         };
         var snapshot = new ShellSnapshot(
             [
-                new ShellPackageView("agent.chat", "agent", "Agent", "1.0.0", "Chat", "A", RailPlacement.Middle, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "A"),
-                new ShellPackageView("agent.workspaces", "agent", "Agent", "1.0.0", "Workspaces", "W", RailPlacement.RightTop, PackageReadinessState.Ready, ShowInHotbarByDefault: true, PackageGlyph: "A"),
-                new ShellPackageView("agent.subsessions", "agent", "Agent", "1.0.0", "Subsessions", "S", RailPlacement.RightTop, PackageReadinessState.Ready, ShowInHotbarByDefault: false, PackageGlyph: "A"),
+                new ShellPackageView(
+                    "agent.chat",
+                    "agent",
+                    "Agent",
+                    "1.0.0",
+                    "Chat",
+                    "A",
+                    RailPlacement.Middle,
+                    PackageReadinessState.Ready,
+                    ShowInHotbarByDefault: true,
+                    PackageGlyph: "A"
+                ),
+                new ShellPackageView(
+                    "agent.workspaces",
+                    "agent",
+                    "Agent",
+                    "1.0.0",
+                    "Workspaces",
+                    "W",
+                    RailPlacement.RightTop,
+                    PackageReadinessState.Ready,
+                    ShowInHotbarByDefault: true,
+                    PackageGlyph: "A"
+                ),
+                new ShellPackageView(
+                    "agent.subsessions",
+                    "agent",
+                    "Agent",
+                    "1.0.0",
+                    "Subsessions",
+                    "S",
+                    RailPlacement.RightTop,
+                    PackageReadinessState.Ready,
+                    ShowInHotbarByDefault: false,
+                    PackageGlyph: "A"
+                ),
             ],
             state,
             StartupWarnings: [],
             StartupErrors: [],
             SystemStatusText: "Runtime Ready",
-            SyncStatusText: "3 package view(s) active");
+            SyncStatusText: "3 package view(s) active"
+        );
         var statePath = Path.Combine(rootPath, "shell-state.json");
         var viewModel = new MainWindowViewModel(
             new TestWindowLauncher(),
@@ -736,38 +1521,102 @@ public sealed class MainWindowViewModelShellViewTests
             new RuntimeHostProcessManager(new AppStartupOptions()),
             new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow),
             new NotificationCenterService(Path.Combine(rootPath, "notifications.json")),
-            shellViewService);
-        return new MainWindowViewModelHarness(viewModel, rootPath, disposablePackageViewHostService);
+            shellViewService,
+            deferInitialHostedViews: deferInitialHostedViews,
+            uiDispatcher: uiDispatcher ?? new ImmediateUiDispatcher()
+        );
+        var stagingSurface = new TestPackageViewStagingSurface();
+        viewModel.ConfigurePackageViewStagingSurface(
+            stagingSurface.Stage,
+            stagingSurface.DetachAll
+        );
+        return new MainWindowViewModelHarness(
+            viewModel,
+            rootPath,
+            statePath,
+            stagingSurface,
+            disposablePackageViewHostService,
+            runtimeSnapshot
+        );
     }
 
-    private static ActivePackageDescriptor CreateActiveAgentPackage()
-        => new(
+    private static RuntimePackageSnapshot CreateRuntimeSnapshot(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
+        long generation = 1
+    ) =>
+        new(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            generation,
+            generation,
+            RuntimeBootstrapState.Ready,
+            activePackages,
+            [],
+            packageSources,
+            [],
+            []
+        );
+
+    private static ActivePackageDescriptor CreateActiveAgentPackage() =>
+        new(
             "agent",
             "Agent",
             "1.0.0",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
             null,
             true,
             PackageReadinessState.Ready,
             [
-                new PackageViewDescriptor("agent.chat", "agent", "Chat", new PackageIconDescriptor("A", AssetPath: null), "middle"),
-                new PackageViewDescriptor("agent.workspaces", "agent", "Workspaces", new PackageIconDescriptor("W", AssetPath: null), "right-top"),
-                new PackageViewDescriptor("agent.subsessions", "agent", "Subsessions", new PackageIconDescriptor("S", AssetPath: null), "right-top", ShowInHotbarByDefault: false),
-            ]);
+                new PackageViewDescriptor(
+                    "agent.chat",
+                    "agent",
+                    "Chat",
+                    new PackageIconDescriptor("A", AssetPath: null),
+                    "middle"
+                ),
+                new PackageViewDescriptor(
+                    "agent.workspaces",
+                    "agent",
+                    "Workspaces",
+                    new PackageIconDescriptor("W", AssetPath: null),
+                    "right-top"
+                ),
+                new PackageViewDescriptor(
+                    "agent.subsessions",
+                    "agent",
+                    "Subsessions",
+                    new PackageIconDescriptor("S", AssetPath: null),
+                    "right-top",
+                    ShowInHotbarByDefault: false
+                ),
+            ]
+        );
 
-    private static ActivePackageDescriptor CreateActiveToolsPackage()
-        => new(
+    private static ActivePackageDescriptor CreateActiveToolsPackage() =>
+        new(
             "tools",
             "Tools",
             "1.0.0",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
             null,
             true,
             PackageReadinessState.Ready,
             [
-                new PackageViewDescriptor("tools.dashboard", "tools", "Dashboard", new PackageIconDescriptor("T", AssetPath: null), "middle"),
-            ]);
+                new PackageViewDescriptor(
+                    "tools.dashboard",
+                    "tools",
+                    "Dashboard",
+                    new PackageIconDescriptor("T", AssetPath: null),
+                    "middle"
+                ),
+            ]
+        );
 
-    private static ShellItemViewModel CreateShellItem(ShellPackageView packageView, Action<ShellItemViewModel> onSelect)
-        => new(
+    private static ShellItemViewModel CreateShellItem(
+        ShellPackageView packageView,
+        Action<ShellItemViewModel> onSelect
+    ) =>
+        new(
             packageView.ViewId,
             packageView.Glyph,
             iconUri: null,
@@ -775,19 +1624,24 @@ public sealed class MainWindowViewModelShellViewTests
             packageView.PackageDisplayName,
             packageView.Title,
             packageView.Placement,
-            onSelect);
+            onSelect
+        );
 
-    private static PackageViewHostService CreatePackageViewHostService()
-        => new(
+    private static PackageViewHostService CreatePackageViewHostService() =>
+        new(
             new AppPackageViewRegistry(),
             [],
             [],
             [],
             faultReporter: null,
             sessionFolder: null,
-            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: new ImmediateUiDispatcher()
+        );
 
-    private static PackageViewHostService CreateRegisteredPackageViewHostService(params (string PackageId, string ViewId)[] registrations)
+    private static PackageViewHostService CreateRegisteredPackageViewHostService(
+        params (string PackageId, string ViewId)[] registrations
+    )
     {
         var registry = new AppPackageViewRegistry();
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
@@ -801,7 +1655,8 @@ public sealed class MainWindowViewModelShellViewTests
             registry.RegisterPackageView<DisposablePackageView>(
                 registration.PackageId,
                 new PackageViewRegistration(registration.ViewId, registration.ViewId),
-                serviceProvider);
+                serviceProvider
+            );
         }
 
         return new PackageViewHostService(
@@ -810,7 +1665,31 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [],
             faultReporter: null,
-            sessionFolder: null);
+            sessionFolder: null,
+            uiDispatcher: new ImmediateUiDispatcher()
+        );
+    }
+
+    private static PackageViewHostService CreateNavigationPackageViewHostService(
+        InitialNavigationProbe probe
+    )
+    {
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        registry.RegisterPackageView<InitialNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider
+        );
+        return new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: new ImmediateUiDispatcher()
+        );
     }
 
     private static string CreateAppPackageSource(string rootPath, string packageId)
@@ -821,12 +1700,16 @@ public sealed class MainWindowViewModelShellViewTests
 
         var assemblyPath = typeof(ShellLifecycleTestPackageModule).Assembly.Location;
         var entryAssemblyFileName = Path.GetFileName(assemblyPath);
-        File.WriteAllText(Path.Combine(packageSourceFolder, "sunder-package.json"), $$"""
+        File.WriteAllText(
+            Path.Combine(packageSourceFolder, "sunder-package.json"),
+            $$"""
             {
               "id": "{{packageId}}",
               "entryAssembly": "{{entryAssemblyFileName}}"
             }
-            """);
+            """
+        );
+        File.WriteAllBytes(Path.Combine(packageSourceFolder, "icon.png"), [1, 2, 3]);
 
         foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
         {
@@ -836,22 +1719,28 @@ public sealed class MainWindowViewModelShellViewTests
         var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
         if (File.Exists(depsPath))
         {
-            File.Copy(depsPath, Path.Combine(libraryFolder, Path.GetFileName(depsPath)), overwrite: true);
+            File.Copy(
+                depsPath,
+                Path.Combine(libraryFolder, Path.GetFileName(depsPath)),
+                overwrite: true
+            );
         }
 
         return packageSourceFolder;
     }
 
-    private static string[] GetMiddleHotbarOrder(MainWindowViewModel viewModel)
-        => viewModel.ListHotbarViews()
-            .Where(view => view.Placement == PackageHotbarPlacement.Middle)
+    private static string[] GetMiddleHotbarOrder(MainWindowViewModel viewModel) =>
+        viewModel
+            .ListHotbarViews()
+            .Where(view => view.Placement == PackageViewPlacement.Middle)
             .OrderBy(view => view.Order)
             .Select(view => view.ViewId)
             .ToArray();
 
-    private static string[] GetRightTopHotbarOrder(MainWindowViewModel viewModel)
-        => viewModel.ListHotbarViews()
-            .Where(view => view.Placement == PackageHotbarPlacement.RightTop)
+    private static string[] GetRightTopHotbarOrder(MainWindowViewModel viewModel) =>
+        viewModel
+            .ListHotbarViews()
+            .Where(view => view.Placement == PackageViewPlacement.RightTop)
             .OrderBy(view => view.Order)
             .Select(view => view.ViewId)
             .ToArray();
@@ -863,12 +1752,36 @@ public sealed class MainWindowViewModelShellViewTests
         return Assert.IsType<TView>(boundary.HostedView);
     }
 
+    private static bool GetIsDisposed(object view) =>
+        Assert.IsType<bool>(
+            view.GetType()
+                .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.IsDisposed))
+                ?.GetValue(view)
+        );
+
+    private static string GetViewId(Control view) =>
+        Assert.IsType<string>(
+            view.GetType()
+                .GetProperty(nameof(ShellLifecycleThreadAffinedPackageView.NavigatedViewId))
+                ?.GetValue(view)
+        );
+
     private sealed class MainWindowViewModelHarness(
         MainWindowViewModel viewModel,
         string rootPath,
-        PackageViewHostService? packageViewHostService = null) : IDisposable
+        string statePath,
+        TestPackageViewStagingSurface stagingSurface,
+        PackageViewHostService? packageViewHostService = null,
+        RuntimePackageSnapshot? runtimeSnapshot = null
+    ) : IDisposable
     {
         public MainWindowViewModel ViewModel { get; } = viewModel;
+
+        public RuntimePackageSnapshot? RuntimeSnapshot { get; } = runtimeSnapshot;
+
+        public string StatePath { get; } = statePath;
+
+        public TestPackageViewStagingSurface StagingSurface { get; } = stagingSurface;
 
         public void Dispose()
         {
@@ -890,43 +1803,35 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class TestWindowLauncher : IWindowLauncher
     {
-        public void ShowSettings()
-        {
-        }
+        public void ShowSettings() { }
 
         public Task<bool> ShowPackageSettingsAsync(
             string packageId,
             IReadOnlyDictionary<string, string?>? parameters = null,
-            CancellationToken cancellationToken = default)
-            => Task.FromResult(false);
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(false);
 
-        public void ShowPackages()
-        {
-        }
+        public void ShowPackages() { }
 
-        public void ShowStacks()
-        {
-        }
+        public void ShowStacks() { }
 
-        public void ShowDeveloperLogs()
-        {
-        }
+        public void ShowDeveloperLogs() { }
 
-        public void CloseForShutdown()
-        {
-        }
+        public void CloseForShutdown() { }
     }
 
     private sealed class ThrowingRuntimeApiClientFactory : IRuntimeApiClientFactory
     {
-        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
-            => throw new InvalidOperationException("Runtime API is not used by these tests.");
+        public TClient CreateClient<TClient>()
+            where TClient : class, IRuntimeClient =>
+            throw new InvalidOperationException("Runtime API is not used by these tests.");
     }
 
     private sealed class EmptyRuntimeApiClientFactory : IRuntimeApiClientFactory
     {
-        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
-            => (TClient)(object)new StaticRuntimeApiClient([], []);
+        public TClient CreateClient<TClient>()
+            where TClient : class, IRuntimeClient =>
+            (TClient)(object)new StaticRuntimeApiClient([], []);
     }
 
     private sealed class MutableRuntimeApiClientFactory : IRuntimeApiClientFactory
@@ -935,8 +1840,9 @@ public sealed class MainWindowViewModelShellViewTests
 
         public IReadOnlyList<PackageUiSnapshotDescriptor> PackageSources { get; set; } = [];
 
-        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
-            => (TClient)(object)new StaticRuntimeApiClient(ActivePackages, PackageSources);
+        public TClient CreateClient<TClient>()
+            where TClient : class, IRuntimeClient =>
+            (TClient)(object)new StaticRuntimeApiClient(ActivePackages, PackageSources);
     }
 
     private sealed class StaticRuntimeApiClientFactory(
@@ -944,17 +1850,28 @@ public sealed class MainWindowViewModelShellViewTests
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
         Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeApiClientFactory
+        Func<
+            CancellationToken,
+            Task<IReadOnlyList<ActivePackageDescriptor>>
+        >? getActivePackagesAsync = null,
+        Func<
+            CancellationToken,
+            Task<IReadOnlyList<PackageUiSnapshotDescriptor>>
+        >? getActivePackageSourcesAsync = null
+    ) : IRuntimeApiClientFactory
     {
-        public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
-            => (TClient)(object)new StaticRuntimeApiClient(
-                activePackages,
-                packageSources,
-                getSystemStatusAsync,
-                isRuntimeHealthyAsync,
-                getActivePackagesAsync,
-                getActivePackageSourcesAsync);
+        public TClient CreateClient<TClient>()
+            where TClient : class, IRuntimeClient =>
+            (TClient)
+                (object)
+                    new StaticRuntimeApiClient(
+                        activePackages,
+                        packageSources,
+                        getSystemStatusAsync,
+                        isRuntimeHealthyAsync,
+                        getActivePackagesAsync,
+                        getActivePackageSourcesAsync
+                    );
     }
 
     private sealed class StaticRuntimeApiClient(
@@ -962,111 +1879,98 @@ public sealed class MainWindowViewModelShellViewTests
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         Func<CancellationToken, Task<SystemStatusResponse?>>? getSystemStatusAsync = null,
         Func<CancellationToken, Task<bool>>? isRuntimeHealthyAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<ActivePackageDescriptor>>>? getActivePackagesAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>? getActivePackageSourcesAsync = null) : IRuntimeShellClient
+        Func<
+            CancellationToken,
+            Task<IReadOnlyList<ActivePackageDescriptor>>
+        >? getActivePackagesAsync = null,
+        Func<
+            CancellationToken,
+            Task<IReadOnlyList<PackageUiSnapshotDescriptor>>
+        >? getActivePackageSourcesAsync = null
+    ) : IRuntimeShellClient
     {
-        public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
-            => getSystemStatusAsync?.Invoke(cancellationToken) ?? Task.FromResult<SystemStatusResponse?>(null);
+        public Task<SystemStatusResponse?> GetSystemStatusAsync(
+            CancellationToken cancellationToken = default
+        ) =>
+            getSystemStatusAsync?.Invoke(cancellationToken)
+            ?? Task.FromResult<SystemStatusResponse?>(null);
 
-        public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
-            => isRuntimeHealthyAsync?.Invoke(cancellationToken) ?? Task.FromResult(true);
+        public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default) =>
+            isRuntimeHealthyAsync?.Invoke(cancellationToken) ?? Task.FromResult(true);
 
-        public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
-            => getActivePackagesAsync?.Invoke(cancellationToken) ?? Task.FromResult(activePackages);
+        public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(
+            CancellationToken cancellationToken = default
+        ) => getActivePackagesAsync?.Invoke(cancellationToken) ?? Task.FromResult(activePackages);
 
-        public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
+        public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
-            => getActivePackageSourcesAsync?.Invoke(cancellationToken) ?? Task.FromResult(packageSources);
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
+            CancellationToken cancellationToken = default
+        ) =>
+            getActivePackageSourcesAsync?.Invoke(cancellationToken)
+            ?? Task.FromResult(packageSources);
 
-        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => Task.FromResult<PackageSessionStatus?>(null);
+        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(
+            string packageId,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult<PackageSessionStatus?>(null);
 
-        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(
+            PackageSessionLoadRequest request,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
 
-        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
+        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(
+            string packageId,
+            PackageSourceKind sourceKind,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
 
-        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
-            => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
+        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
+            IReadOnlyList<string> impactedPackageIds,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
 
-        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
+        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(
+            PackageLifecycleStageRequest request,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
 
-        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
+        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(
+            string stageId,
+            CancellationToken cancellationToken = default
+        ) =>
+            Task.FromResult(
+                PackageLifecycleOperationResult.Failed("Not configured for this test.")
+            );
 
-        public Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        public Task DiscardPackageLifecycleStageAsync(
+            string stageId,
+            CancellationToken cancellationToken = default
+        ) => Task.CompletedTask;
 
-        public Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        public Task ReportPackageFaultAsync(
+            string packageId,
+            PackageFailureOrigin origin,
+            string message,
+            CancellationToken cancellationToken = default
+        ) => Task.CompletedTask;
 
-        public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        public Task DownloadPackageUiSnapshotAsync(
+            PackageUiSnapshotDescriptor snapshot,
+            Stream destination,
+            CancellationToken cancellationToken = default
+        ) => Task.CompletedTask;
 
-        public Uri CreatePackageAssetUri(string packageId, string assetPath)
-            => new($"https://runtime.test/api/v1/packages/{packageId}/assets/{assetPath}");
+        public Uri CreatePackageAssetUri(string packageId, string assetPath) =>
+            new($"https://runtime.test/api/v1/packages/{packageId}/assets/{assetPath}");
 
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(PackageLifecycleLoadRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
+        public Task ShutdownAsync(CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
 
-        public Task ShutdownAsync(CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class GatedPackageLifecycleRuntime
-    {
-        private readonly object _gate = new();
-        private readonly Queue<TaskCompletionSource> _activePackageCallReleases = [];
-        private int _activePackageCallCount;
-
-        public int ActivePackageCallCount
-        {
-            get
-            {
-                lock (_gate)
-                {
-                    return _activePackageCallCount;
-                }
-            }
-        }
-
-        public async Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken)
-        {
-            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            lock (_gate)
-            {
-                _activePackageCallCount++;
-                _activePackageCallReleases.Enqueue(release);
-            }
-
-            await release.Task.WaitAsync(cancellationToken);
-            return [];
-        }
-
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
-        }
-
-        public void ReleaseNextActivePackageCall()
-        {
-            TaskCompletionSource release;
-            lock (_gate)
-            {
-                release = _activePackageCallReleases.Dequeue();
-            }
-
-            release.SetResult();
-        }
+        public void Dispose() { }
     }
 
     private sealed class DisposablePackageView : Control, IDisposable
@@ -1087,71 +1991,298 @@ public sealed class MainWindowViewModelShellViewTests
             IsDisposed = true;
         }
     }
+
+    private sealed class InitialNavigationPackageView(InitialNavigationProbe probe)
+        : Control,
+            IPackageViewNavigationTarget
+    {
+        public ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default
+        ) => probe.NavigateAsync(context, cancellationToken);
+    }
+
+    private sealed class InitialNavigationProbe
+    {
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PackageViewNavigationContext? Context { get; set; }
+
+        public Func<
+            PackageViewNavigationContext,
+            CancellationToken,
+            ValueTask
+        >
+            NavigateAsync
+        { get; set; } = static (_, _) => ValueTask.CompletedTask;
+    }
+
+    private sealed class ImmediateUiDispatcher : IUiDispatcher
+    {
+        public bool CheckAccess() => true;
+
+        public Task InvokeAsync(Action action)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        public Task InvokeAsync(Func<Task> action) => action();
+
+        public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
+
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
+    }
+
+    private sealed class TestPackageViewStagingSurface
+    {
+        private readonly List<Control> _activeViews = [];
+
+        public List<Control> StagedViews { get; } = [];
+
+        public IReadOnlyList<Control> ActiveViews => _activeViews;
+
+        public int MaximumStagedViewCount { get; private set; }
+
+        public void Stage(Control view)
+        {
+            StagedViews.Add(view);
+            _activeViews.Add(view);
+            view.Measure(new Size(800, 600));
+            view.Arrange(new Rect(new Size(800, 600)));
+            MaximumStagedViewCount = Math.Max(MaximumStagedViewCount, _activeViews.Count);
+            view.RaiseEvent(new RoutedEventArgs(Control.LoadedEvent));
+        }
+
+        public void DetachAll() => _activeViews.Clear();
+    }
 }
 
 public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 {
+    public const string ActivationGatePathFileName = "activation-gate-path";
+
+    public const string NavigationGatePathFileName = "navigation-gate-path";
+
+    public const string NavigationActivityPathFileName = "navigation-activity-path";
+
+    public const string WaitForAttachmentMarkerFileName = "wait-for-attachment";
+
+    public const string ThrowNavigationMarkerFileName = "throw-navigation";
+
     public const string SkipViewMarkerFileName = "skip-view";
 
     public const string ThrowAfterViewMarkerFileName = "throw-after-view";
 
-    public const string ResolveDevelopmentSessionControlMarkerFileName = "resolve-development-session-control";
+    public const string ResolveDevelopmentSessionControlMarkerFileName =
+        "resolve-development-session-control";
 
-    public const string DevelopmentSessionControlResolvedFileName = "development-session-control-resolved";
+    public const string DevelopmentSessionControlResolvedFileName =
+        "development-session-control-resolved";
+
+    public const string RegisterReservedHostCapabilityMarkerFileName =
+        "register-reserved-host-capability";
+
+    public const string StageSideEffectsPathFileName = "stage-side-effects-path";
 
     private string? _packageFolder;
 
     public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
-        _packageFolder = context.InstallPath;
+        _packageFolder = context.ContentRootPath;
+        if (HasMarker(RegisterReservedHostCapabilityMarkerFileName))
+        {
+            services.AddSingleton<IPackageContext>(context);
+        }
     }
 
-    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
+    public void RegisterAppContributions(
+        ISunderAppContributionRegistry registry,
+        IServiceProvider services
+    )
     {
         if (!HasMarker(SkipViewMarkerFileName))
         {
-            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration("agent.chat", "Chat"));
-            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration(
-                "agent.workspaces",
-                "Workspaces",
-                defaultPlacement: PackageViewPlacement.RightTop));
-            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(new PackageViewRegistration(
-                "agent.subsessions",
-                "Subsessions",
-                defaultPlacement: PackageViewPlacement.LeftTop,
-                showInHotbarByDefault: false));
+            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(
+                new PackageViewRegistration("agent.chat", "Chat", iconAssetPath: "icon.png")
+            );
+            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(
+                new PackageViewRegistration(
+                    "agent.workspaces",
+                    "Workspaces",
+                    defaultPlacement: PackageViewPlacement.RightTop
+                )
+            );
+            registry.RegisterPackageView<ShellLifecycleThreadAffinedPackageView>(
+                new PackageViewRegistration(
+                    "agent.subsessions",
+                    "Subsessions",
+                    defaultPlacement: PackageViewPlacement.LeftTop,
+                    showInHotbarByDefault: false
+                )
+            );
+        }
+
+        var sideEffectsPathDescriptor = Path.Combine(_packageFolder!, StageSideEffectsPathFileName);
+        if (File.Exists(sideEffectsPathDescriptor))
+        {
+            var sideEffectsPath = File.ReadAllText(sideEffectsPathDescriptor);
+            services
+                .GetRequiredService<IPackageNotificationService>()
+                .PublishAsync(new PackageNotificationRequest("Candidate", "Candidate notification"))
+                .GetAwaiter()
+                .GetResult();
+            services
+                .GetRequiredService<IBackgroundProcessQueue>()
+                .Enqueue(
+                    new BackgroundProcessRequest(
+                        "Candidate work",
+                        "candidate",
+                        BackgroundProcessIndicator.Hidden,
+                        BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+                        CanCancel: true,
+                        _ =>
+                        {
+                            File.WriteAllText(sideEffectsPath, "executed");
+                            return Task.CompletedTask;
+                        }
+                    )
+                );
+        }
+
+        var activationGateDescriptor = Path.Combine(_packageFolder!, ActivationGatePathFileName);
+        if (File.Exists(activationGateDescriptor))
+        {
+            var activationGatePath = File.ReadAllText(activationGateDescriptor);
+            File.WriteAllText(activationGatePath + ".started", string.Empty);
+            while (!File.Exists(activationGatePath + ".release"))
+            {
+                Thread.Sleep(10);
+            }
         }
 
         if (HasMarker(ThrowAfterViewMarkerFileName))
         {
-            throw new InvalidOperationException("Test package requested activation failure after registering contributions.");
+            throw new InvalidOperationException(
+                "Test package requested activation failure after registering contributions."
+            );
         }
 
         if (HasMarker(ResolveDevelopmentSessionControlMarkerFileName))
         {
             if (services.GetService<IPackageDevelopmentSessionControl>() is not null)
             {
-                File.WriteAllText(Path.Combine(_packageFolder!, DevelopmentSessionControlResolvedFileName), string.Empty);
+                File.WriteAllText(
+                    Path.Combine(_packageFolder!, DevelopmentSessionControlResolvedFileName),
+                    string.Empty
+                );
             }
         }
     }
 
-    private bool HasMarker(string fileName)
-        => !string.IsNullOrWhiteSpace(_packageFolder)
-           && File.Exists(Path.Combine(_packageFolder, fileName));
+    private bool HasMarker(string fileName) =>
+        !string.IsNullOrWhiteSpace(_packageFolder)
+        && File.Exists(Path.Combine(_packageFolder, fileName));
 }
 
-public sealed class ShellLifecycleThreadAffinedPackageView : Control, IDisposable
+public sealed class ShellLifecycleThreadAffinedPackageView
+    : Control,
+        IDisposable,
+        IPackageViewNavigationTarget
 {
+    private readonly TaskCompletionSource _attachedOrLoaded = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
+
+    public ShellLifecycleThreadAffinedPackageView()
+    {
+        AttachedToVisualTree += (_, _) => RecordAttachment("attached");
+        Loaded += (_, _) => RecordAttachment("loaded");
+    }
+
     public int OwnerThreadId { get; } = Environment.CurrentManagedThreadId;
 
     public bool IsDisposed { get; private set; }
 
     public int DisposeThreadId { get; private set; }
 
+    public string? NavigatedViewId { get; private set; }
+
+    public async ValueTask OnNavigatedToAsync(
+        PackageViewNavigationContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        NavigatedViewId = context.ViewId;
+        AppendNavigationActivity($"navigation-started:{context.ViewId}");
+        var packageFolder = GetPackageFolder();
+        if (
+            HasMarker(
+                packageFolder,
+                ShellLifecycleTestPackageModule.WaitForAttachmentMarkerFileName
+            )
+        )
+        {
+            await _attachedOrLoaded.Task.WaitAsync(cancellationToken);
+        }
+
+        var gateDescriptor = packageFolder is null
+            ? null
+            : Path.Combine(
+                packageFolder,
+                ShellLifecycleTestPackageModule.NavigationGatePathFileName
+            );
+        if (gateDescriptor is not null && File.Exists(gateDescriptor))
+        {
+            var gatePath = File.ReadAllText(gateDescriptor);
+            File.WriteAllText(gatePath + ".started", context.ViewId);
+            while (!File.Exists(gatePath + ".release"))
+            {
+                await Task.Delay(10, cancellationToken);
+            }
+        }
+
+        if (HasMarker(packageFolder, ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName))
+        {
+            throw new InvalidOperationException("Test package requested navigation failure.");
+        }
+
+        AppendNavigationActivity($"navigation-completed:{context.ViewId}");
+    }
+
     public void Dispose()
     {
         IsDisposed = true;
         DisposeThreadId = Environment.CurrentManagedThreadId;
     }
+
+    private void RecordAttachment(string eventName)
+    {
+        AppendNavigationActivity(eventName);
+        _attachedOrLoaded.TrySetResult();
+    }
+
+    private void AppendNavigationActivity(string activity)
+    {
+        var packageFolder = GetPackageFolder();
+        var activityDescriptor = packageFolder is null
+            ? null
+            : Path.Combine(
+                packageFolder,
+                ShellLifecycleTestPackageModule.NavigationActivityPathFileName
+            );
+        if (activityDescriptor is null || !File.Exists(activityDescriptor))
+        {
+            return;
+        }
+
+        File.AppendAllLines(File.ReadAllText(activityDescriptor), [activity]);
+    }
+
+    private string? GetPackageFolder() =>
+        Directory.GetParent(Path.GetDirectoryName(GetType().Assembly.Location)!)?.FullName;
+
+    private static bool HasMarker(string? packageFolder, string markerFileName) =>
+        packageFolder is not null && File.Exists(Path.Combine(packageFolder, markerFileName));
 }

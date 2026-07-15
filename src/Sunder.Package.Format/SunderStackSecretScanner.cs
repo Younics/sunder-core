@@ -5,10 +5,13 @@ namespace Sunder.Package.Format;
 
 internal static class SunderStackSecretScanner
 {
-    private const long MaxScannedFileBytes = 1024 * 1024;
+    private const long MaxScannedFileBytes = 8L * 1024L * 1024L;
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly Regex SensitiveJsonStringRegex = new(
         "\"(?<name>password|passwd|apiKey|api_key|api-key|secret|secretKey|secret_key|secret-key|accessToken|access_token|access-token|refreshToken|refresh_token|refresh-token|clientSecret|client_secret|client-secret|authorization)\"\\s*:\\s*\"(?<value>(?:\\\\.|[^\"\\\\]){12,})\"",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex SensitiveAssignmentRegex = new(
+        "(?m)^\\s*(?<name>[A-Za-z0-9_.-]*(?:password|passwd|api[_-]?key|secret|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization)[A-Za-z0-9_.-]*)\\s*[:=]\\s*[\\\"']?(?<value>[^\\s\\\"']{12,})",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly SecretPattern[] SecretPatterns =
     [
@@ -18,6 +21,9 @@ internal static class SunderStackSecretScanner
         new("GitHub token", new Regex("\\bgh[pousr]_[A-Za-z0-9_]{36,255}\\b", RegexOptions.Compiled | RegexOptions.CultureInvariant)),
         new("Google API key", new Regex("\\bAIza[0-9A-Za-z_-]{35}\\b", RegexOptions.Compiled | RegexOptions.CultureInvariant)),
         new("Slack token", new Regex("\\bxox[baprs]-[A-Za-z0-9-]{20,}\\b", RegexOptions.Compiled | RegexOptions.CultureInvariant)),
+        new("GitLab token", new Regex("\\bglpat-[A-Za-z0-9_-]{20,}\\b", RegexOptions.Compiled | RegexOptions.CultureInvariant)),
+        new("npm access token", new Regex("\\bnpm_[A-Za-z0-9]{36,}\\b", RegexOptions.Compiled | RegexOptions.CultureInvariant)),
+        new("Stripe secret key", new Regex("\\bsk_(?:live|test)_[A-Za-z0-9]{20,}\\b", RegexOptions.Compiled | RegexOptions.CultureInvariant)),
         new("Azure storage account key", new Regex("\\bAccountKey=[A-Za-z0-9+/=]{40,}", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
     ];
 
@@ -59,6 +65,14 @@ internal static class SunderStackSecretScanner
             }
 
             findings.Add(BuildFinding(relativePath, $"raw {match.Groups["name"].Value} value", text, match.Index));
+        }
+
+        foreach (Match match in SensitiveAssignmentRegex.Matches(text))
+        {
+            if (!IsPlaceholderValue(match.Groups["value"].Value))
+            {
+                findings.Add(BuildFinding(relativePath, $"raw {match.Groups["name"].Value} assignment", text, match.Index));
+            }
         }
     }
 

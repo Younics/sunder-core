@@ -4,7 +4,8 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.Cli;
 
 internal sealed class StackCommandHandler(
-    ICliRuntimeClient runtime,
+    ICliRuntimePublishClient runtimePublisher,
+    ICliRuntimeManagementClient runtimeManager,
     IRegistryClient registry,
     ArchiveValidationService archives,
     CliOutput output,
@@ -14,7 +15,6 @@ internal sealed class StackCommandHandler(
     public async Task<int> ExecuteAsync(SearchStacksCommand command, CancellationToken token)
     {
         var stacks = (await registry.SearchStacksAsync(command.Query, command.Skip, command.Take, token).ConfigureAwait(false))
-            .OrderBy(stack => stack.StackId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         output.Data(stacks);
         if (stacks.Length == 0)
@@ -54,7 +54,7 @@ internal sealed class StackCommandHandler(
         if (stack is null) return CliExitCodes.NotFound;
         var destination = ResolveOutput(command.Output, stack.StackId);
         progress.Report($"Downloading Stack '{stack.StackId}'...");
-        await registry.DownloadStackAsync(stack.Artifact, stack.StackId, destination, token).ConfigureAwait(false);
+        await registry.DownloadStackAsync(stack.Artifact, stack.StackId, destination, command.Force, token).ConfigureAwait(false);
         output.Data(new { stackId = stack.StackId, output = destination, stack.Artifact.Sha256, stack.Artifact.Size });
         output.Success($"Downloaded Stack '{stack.StackId}' to {destination}.");
         return CliExitCodes.Success;
@@ -71,7 +71,7 @@ internal sealed class StackCommandHandler(
             : $"Publishing Stack '{validation.Manifest.StackId}' through the Runtime...");
         var result = command.DevLocal
             ? await registry.PublishLocalStackAsync(fullPath, token).ConfigureAwait(false)
-            : await runtime.PublishRegistryStackAsync(options.RegistryApiUrl.AbsoluteUri, fullPath, token).ConfigureAwait(false);
+            : await runtimePublisher.PublishRegistryStackAsync(options.RegistryApiUrl.AbsoluteUri, fullPath, token).ConfigureAwait(false);
         return CliRenderers.StackPublish(output, result);
     }
 
@@ -87,13 +87,13 @@ internal sealed class StackCommandHandler(
             return CliExitCodes.Usage;
         }
         progress.Report($"Updating Stack '{validation.Manifest.StackId}' through the Runtime...");
-        var result = await runtime.PublishRegistryStackAsync(options.RegistryApiUrl.AbsoluteUri, fullPath, token).ConfigureAwait(false);
+        var result = await runtimePublisher.PublishRegistryStackAsync(options.RegistryApiUrl.AbsoluteUri, fullPath, token).ConfigureAwait(false);
         return CliRenderers.StackPublish(output, result);
     }
 
     public async Task<int> ExecuteAsync(DeleteStackCommand command, CancellationToken token)
     {
-        var result = await runtime.DeleteRegistryStackAsync(
+        var result = await runtimeManager.DeleteRegistryStackAsync(
             new RuntimeRegistryDeleteStackRequest(options.RegistryApiUrl.AbsoluteUri, command.StackId), token).ConfigureAwait(false);
         return CliRenderers.StackManagement(output, result);
     }
@@ -114,8 +114,12 @@ internal sealed class StackCommandHandler(
     private static string ResolveOutput(string? output, string stackId)
     {
         if (string.IsNullOrWhiteSpace(output)) return Path.GetFullPath(SunderStackFormat.BuildStackFileName(stackId));
+        if (Path.EndsInDirectorySeparator(output))
+            throw new CliUsageException("Option '--output' must name the exact destination file, not a directory.");
         var path = Path.GetFullPath(output);
-        return Directory.Exists(path) ? Path.Combine(path, SunderStackFormat.BuildStackFileName(stackId)) : path;
+        if (Directory.Exists(path))
+            throw new CliUsageException("Option '--output' must name the exact destination file, not a directory.");
+        return path;
     }
 
     private static string BuildShowLink(string stackId) => $"sunder://stacks/{Uri.EscapeDataString(stackId)}";

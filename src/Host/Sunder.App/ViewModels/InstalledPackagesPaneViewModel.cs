@@ -5,56 +5,70 @@ using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
-internal sealed class InstalledPackagesPaneViewModel(
-    PackagesInstalledCatalog catalog,
-    Func<string, PackageIconDescriptor?, Uri?> createPackageIconUri,
-    Action<PackageCatalogItemViewModel> selectPackage)
-    : IDisposable
+public sealed class InstalledPackagesPaneViewModel : IDisposable
 {
+    private readonly PackagesInstalledCatalog _catalog;
+    private readonly Func<string, PackageIconDescriptor?, Uri?> _createPackageIconUri;
+    private readonly Action<PackageCatalogItemViewModel> _selectPackage;
+
+    internal InstalledPackagesPaneViewModel(
+        PackagesInstalledCatalog catalog,
+        Func<string, PackageIconDescriptor?, Uri?> createPackageIconUri,
+        Action<PackageCatalogItemViewModel> selectPackage)
+    {
+        _catalog = catalog;
+        _createPackageIconUri = createPackageIconUri;
+        _selectPackage = selectPackage;
+    }
+
     public ObservableCollection<PackageCatalogItemViewModel> Packages { get; } = [];
 
-    public PackagesInstalledCatalog Catalog => catalog;
+    public string SearchText { get; set; } = string.Empty;
+
+    public PackageCatalogItemViewModel? SelectedPackage { get; internal set; }
+
+    internal PackagesInstalledCatalog Catalog => _catalog;
 
     public bool IsDirty { get; set; }
 
     public bool HasPackages => Packages.Count > 0;
 
-    public bool IsEmpty => catalog.IsEmpty;
+    public bool IsEmpty => _catalog.IsEmpty;
 
-    public int InstalledPackageCount => catalog.InstalledPackageCount;
+    public int InstalledPackageCount => _catalog.InstalledPackageCount;
 
-    public int ActivePackageCount => catalog.ActivePackageCount;
+    public int ActivePackageCount => _catalog.ActivePackageCount;
 
-    public int DisabledPackageCount => catalog.DisabledPackageCount;
+    public int DisabledPackageCount => _catalog.DisabledPackageCount;
 
-    public int FailedPackageCount => catalog.FailedPackageCount;
+    public int FailedPackageCount => _catalog.FailedPackageCount;
 
-    public int AvailableUpdateCount => catalog.AvailableUpdateCount;
+    public int AvailableUpdateCount => _catalog.AvailableUpdateCount;
 
     public async Task RefreshAsync(Action<string> addWarning, CancellationToken cancellationToken = default)
     {
-        await catalog.RefreshAsync(addWarning, cancellationToken).ConfigureAwait(false);
+        await _catalog.RefreshAsync(addWarning, cancellationToken).ConfigureAwait(false);
         IsDirty = false;
     }
 
     public async Task RefreshInstalledPackageStateOnlyAsync(Action<string> addWarning, CancellationToken cancellationToken = default)
     {
-        await catalog.RefreshInstalledPackageStateOnlyAsync(addWarning, cancellationToken).ConfigureAwait(false);
+        await _catalog.RefreshInstalledPackageStateOnlyAsync(addWarning, cancellationToken).ConfigureAwait(false);
     }
 
     public void RebuildList(string searchText)
     {
         var packageStates = InstalledPackageCatalogProjector.Build(
-            catalog.SessionPackages,
-            catalog.InstalledPackages,
-            catalog.AvailableUpdates,
+            _catalog.SessionPackages,
+            _catalog.InstalledPackages,
+            _catalog.AvailableUpdates,
             searchText,
-            createPackageIconUri);
+            _createPackageIconUri);
         var existingById = Packages.ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
         var filteredPackages = packageStates
             .Select(state => existingById.TryGetValue(state.PackageId, out var existingPackage) && existingPackage.HasState(state)
                 ? existingPackage
-                : new PackageCatalogItemViewModel(state, selectPackage))
+                : new PackageCatalogItemViewModel(state, _selectPackage))
             .ToArray();
 
         Packages.SyncWith(filteredPackages, removeItem: package => package.Dispose());
@@ -67,10 +81,10 @@ internal sealed class InstalledPackagesPaneViewModel(
            ?? Packages.FirstOrDefault();
 
     public InstalledPackageDescriptor? GetInstalledPackage(string packageId)
-        => catalog.GetInstalledPackage(packageId);
+        => _catalog.GetInstalledPackage(packageId);
 
     public RegistryPackageUpdate? GetPackageUpdate(string packageId)
-        => catalog.GetPackageUpdate(packageId);
+        => _catalog.GetPackageUpdate(packageId);
 
     public void Dispose()
     {

@@ -10,6 +10,7 @@ internal static class SunderStackManifestProjection
             SchemaVersion = source.SchemaVersion,
             MinReaderVersion = source.MinReaderVersion,
             Features = ReadOnly(source.Features, static feature => feature),
+            RequiredFeatures = ReadOnly(source.RequiredFeatures, static feature => feature),
             StackId = source.StackId,
             Name = source.Name,
             Summary = source.Summary,

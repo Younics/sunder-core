@@ -100,7 +100,11 @@
         }
       },
       "sunder.package.hosting": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.8, )",
+          "Sunder.Sdk": "[1.1.0, )"
+        }
       },
       "sunder.registry.contracts": {
         "type": "Project"
@@ -108,15 +112,13 @@
       "sunder.runtime.client": {
         "type": "Project",
         "dependencies": {
+          "Sunder.Registry.Contracts": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
-          "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
+          "Sunder.Runtime.LocalState": "[1.0.0, )"
         }
       },
       "sunder.runtime.contracts": {
-        "type": "Project",
-        "dependencies": {
-          "Sunder.Registry.Contracts": "[1.0.0, )"
-        }
+        "type": "Project"
       },
       "sunder.runtime.host": {
         "type": "Project",
@@ -124,10 +126,16 @@
           "Sunder.Package.Format": "[1.0.0, )",
           "Sunder.Package.Hosting": "[1.0.0, )",
           "Sunder.Registry.Contracts": "[1.0.0, )",
-          "Sunder.Runtime.Client": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
+          "Sunder.Runtime.LocalState": "[1.0.0, )",
           "Sunder.Sdk": "[1.1.0, )",
           "Sunder.Sdk.Stacks": "[1.1.0, )",
+          "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
+        }
+      },
+      "sunder.runtime.localstate": {
+        "type": "Project",
+        "dependencies": {
           "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
         }
       },

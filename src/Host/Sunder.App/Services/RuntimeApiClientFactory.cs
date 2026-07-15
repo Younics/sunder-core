@@ -1,12 +1,14 @@
+using Sunder.Runtime.Client;
+
 namespace Sunder.App.Services;
 
-public sealed class RuntimeApiClientFactory(RuntimeConnectionState runtimeConnectionState) : IRuntimeApiClientFactory
+public sealed class RuntimeApiClientFactory(RuntimeClientTransport transport) : IRuntimeApiClientFactory
 {
-    private readonly RuntimeConnectionState _runtimeConnectionState = runtimeConnectionState;
+    private readonly RuntimeClientTransport _transport = transport;
 
     public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
     {
-        var client = new RuntimeApiClient(_runtimeConnectionState);
+        var client = new RuntimeApiClient(_transport);
         if (client is TClient capability)
         {
             return capability;

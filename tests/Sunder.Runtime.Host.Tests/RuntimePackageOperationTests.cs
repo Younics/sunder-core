@@ -203,9 +203,9 @@ public sealed class RuntimePackageOperationTests
         Directory.CreateDirectory(root);
         var assemblyPath = typeof(RuntimePackageOperationTests).Assembly.Location;
         var loadedPackage = new ActiveLoadedPackage(
-            new ActivePackageDescriptor(packageId, packageId, "1.0.0", null, true, PackageReadinessState.Ready, []),
+            new ActivePackageDescriptor(packageId, packageId, "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
             new RuntimePackageSource(packageId, PackageSourceKind.Dev, root),
-            ConfigurationSchema: null,
+            SettingsSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(root, "state.json")),
             new JsonPackageSecretsStore(
                 Path.Combine(root, "secrets.json"),
@@ -229,6 +229,7 @@ public sealed class RuntimePackageOperationTests
             packageId,
             packageId,
             "1.0.0",
+            PackageHostRoles.Runtime,
             null,
             true,
             PackageReadinessState.Ready,

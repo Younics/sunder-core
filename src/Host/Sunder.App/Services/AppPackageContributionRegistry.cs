@@ -16,19 +16,9 @@ internal sealed class AppPackageContributionRegistry(
         viewRegistry.RegisterPackageView<TView>(packageId, registration, serviceProvider);
     }
 
-    public void RegisterPackageViewFactory<TFactory>(PackageViewRegistration registration) where TFactory : class, IPackageWorkspaceFactory
-    {
-        viewRegistry.RegisterPackageViewFactory<TFactory>(packageId, registration, serviceProvider);
-    }
-
     public void RegisterSettingsView<TView>() where TView : Control
     {
         viewRegistry.RegisterSettingsView<TView>(packageId, serviceProvider);
-    }
-
-    public void RegisterSettingsViewFactory<TFactory>() where TFactory : class, IPackageWorkspaceFactory
-    {
-        viewRegistry.RegisterSettingsViewFactory<TFactory>(packageId, serviceProvider);
     }
 
     public void RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)

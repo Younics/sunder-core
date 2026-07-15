@@ -6,7 +6,7 @@ public sealed partial class StacksWindowViewModel
 {
     private bool TryResolveRegistryUrlForRegistryAction(out Uri registryUrl)
     {
-        if (RegistryUrlHelper.TryParse(RegistryUrlText, out registryUrl!) && registryUrl is not null)
+        if (Registry.TryResolveRegistryUrl(out registryUrl))
         {
             return true;
         }

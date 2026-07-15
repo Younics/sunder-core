@@ -8,21 +8,22 @@ namespace Sunder.App.Services;
 internal sealed class AppPackageHostComposition : IDisposable
 {
     private readonly OwnedTaskObserver _tasks = new(nameof(AppPackageHostComposition));
-    private readonly AppPackageDeltaCoordinator _deltaCoordinator;
+    private readonly AppPackageActivator _packageActivator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
-    private readonly AppPackagePreflightCoordinator _preflightCoordinator;
-    private readonly AppPackageResourceAssemblyRegistry? _resourceAssemblyRegistry;
     private readonly AppSharedAssemblyRegistry _sharedAssemblyRegistry;
     private readonly AppPackageHostState _state;
     private readonly AppPackageUnloadCoordinator _unloadCoordinator;
+    private readonly AppPackagePublicationServices _publicationServices;
+    private readonly AppPackageGenerationPublication _publication = new();
+    private readonly BackgroundProcessQueueService? _ownedBackgroundProcessQueue;
 
     public AppPackageHostComposition(
         object eventSender,
+        Guid generationId,
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
         PackageRuntimeFaultReporter? faultReporter,
-        string? sessionFolder,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry,
         AppPackageExtensionCatalog? extensionCatalog,
         IPackageShellViewService? shellViewService,
@@ -30,12 +31,9 @@ internal sealed class AppPackageHostComposition : IDisposable
         AppPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
-        AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
-        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
-        Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task>? downloadPackageUiSnapshotAsync = null)
+        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo)
     {
         _eventSender = eventSender;
-        _resourceAssemblyRegistry = resourceAssemblyRegistry;
         _state = state;
         AssemblyTracker = new AppPackageAssemblyTracker();
         var faultNotificationService = notificationCenter is null
@@ -47,92 +45,41 @@ internal sealed class AppPackageHostComposition : IDisposable
             _state.IsPackageDisabled,
             (packageId, message, exception) => DisablePackage(packageId, message, PackageFailureOrigin.AppHostedView, exception));
 
-        async Task DownloadSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken)
-        {
-            if (downloadPackageUiSnapshotAsync is not null)
-            {
-                await downloadPackageUiSnapshotAsync(snapshot, destination, cancellationToken);
-                return;
-            }
-
-            if (getRuntimeConnectionInfo is null)
-            {
-                throw new InvalidOperationException("Runtime connection information is required to download package UI snapshots.");
-            }
-
-            using var client = new RuntimeApiClient(getRuntimeConnectionInfo);
-            await client.DownloadPackageUiSnapshotAsync(snapshot, destination, cancellationToken);
-        }
-
-        var sourceLoader = new AppPackageSourceLoader(new AppPackageSourcePreparer(sessionFolder), DownloadSnapshotAsync);
-        var resolvedSharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
-        _sharedAssemblyRegistry = resolvedSharedAssemblyRegistry;
-        var resolvedExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
-        ExtensionCatalog = resolvedExtensionCatalog;
+        _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
+        ExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
-        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue);
+        _ownedBackgroundProcessQueue = backgroundProcessQueue is null ? resolvedBackgroundProcessQueue : null;
+        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue, generationId);
+        _publicationServices = new AppPackagePublicationServices(shellViewService, settingsNavigationService, _publication);
         var serviceProviderFactory = new AppPackageServiceProviderFactory(
-            resolvedExtensionCatalog,
-            shellViewService,
-            settingsNavigationService,
+            ExtensionCatalog,
+            _publicationServices,
+            _publicationServices,
             packageSessionService,
             notificationCenter,
-            resolvedBackgroundProcessQueue);
-        var packageActivator = new AppPackageActivator(
-            resolvedSharedAssemblyRegistry,
+            resolvedBackgroundProcessQueue,
+            _publication,
+            generationId);
+        _packageActivator = new AppPackageActivator(
+            _sharedAssemblyRegistry,
             serviceProviderFactory,
             viewRegistry,
-            resolvedExtensionCatalog,
+            ExtensionCatalog,
             getRuntimeConnectionInfo: getRuntimeConnectionInfo);
-
         _unloadCoordinator = new AppPackageUnloadCoordinator(
             viewRegistry,
-            resolvedExtensionCatalog,
+            ExtensionCatalog,
             runtimeWorkStopper,
             AssemblyTracker,
-            resolvedSharedAssemblyRegistry,
+            _sharedAssemblyRegistry,
             _state.RemoveOwnedDisposable,
-            _state.RemoveLoadContext,
-            RemovePackageResourceAssemblies);
+            _state.RemoveLoadContext);
         _disableCoordinator = new AppPackageDisableCoordinator(
             viewRegistry,
-            resolvedExtensionCatalog,
+            ExtensionCatalog,
             runtimeWorkStopper,
             FaultNotifier,
             _state.TryMarkPackageDisabled);
-        var loadCoordinator = new AppPackageLoadCoordinator(
-            sourceLoader,
-            packageActivator,
-            _unloadCoordinator,
-            DisablePackageAsync,
-            RegisterPackageAssembly,
-            _state.TrackLoadContext,
-            _state.TrackOwnedDisposable,
-            _state.SetLoadedPackage);
-        _deltaCoordinator = new AppPackageDeltaCoordinator(
-            _state.SnapshotLoadedPackageIds,
-            _state.GetLoadedPackage,
-            _state.IsPackageDisabled,
-            UnloadPackageAsync,
-            loadCoordinator.LoadPackageAsync,
-            DisablePackageAsync,
-            RequiresSharedAssemblyReset,
-            resolvedSharedAssemblyRegistry.ResetPackageAssemblies,
-            loadCoordinator.PreparePackageAsync,
-            loadCoordinator.ActivatePreparedPackageAsync,
-            resolvedSharedAssemblyRegistry.AddProbeDirectories);
-        _preflightCoordinator = new AppPackagePreflightCoordinator(
-            _state.GetLoadedPackage,
-            _state.IsPackageDisabled,
-            RequiresSharedAssemblyReset,
-            DownloadSnapshotAsync);
-
-        bool RequiresSharedAssemblyReset(IReadOnlyList<PackageUiSnapshotDescriptor> packageSources)
-        {
-            return packageSources.Any(snapshot =>
-                _state.GetLoadedPackage(snapshot.PackageId) is { } loaded
-                && !string.Equals(loaded.Source.ContentHash, snapshot.ContentHash, StringComparison.OrdinalIgnoreCase));
-        }
     }
 
     public AppPackageAssemblyTracker AssemblyTracker { get; }
@@ -143,19 +90,58 @@ internal sealed class AppPackageHostComposition : IDisposable
 
     public AppPackageExtensionCatalog ExtensionCatalog { get; }
 
-    public Task ApplyPackageDeltaAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        IReadOnlyCollection<string>? forceReloadPackageIds,
-        CancellationToken cancellationToken)
-        => _deltaCoordinator.ApplyPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
+    public void PublishServices() => _publication.Publish();
 
-    public Task<AppPackagePreflightResult> PreflightPackageDeltaAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        IReadOnlyCollection<string>? forceReloadPackageIds,
+    public void UnpublishServices() => _publication.Revoke();
+
+    public void AddSharedAssemblyProbeDirectories(IEnumerable<string> probeDirectories)
+        => _sharedAssemblyRegistry.AddProbeDirectories(probeDirectories);
+
+    public async Task ActivatePackageAsync(
+        ActivePackageDescriptor package,
+        PackageUiSnapshotDescriptor source,
+        AppPreparedPackageSource preparedSource,
         CancellationToken cancellationToken)
-        => _preflightCoordinator.PreflightPackageDeltaAsync(activePackages, packageSources, forceReloadPackageIds, cancellationToken);
+    {
+        var activation = new AppPackageActivationState();
+        var activated = false;
+        try
+        {
+            await _packageActivator.ActivateAsync(
+                package,
+                preparedSource,
+                activation,
+                RegisterPackageAssembly,
+                _state.TrackLoadContext,
+                _state.TrackOwnedDisposable,
+                cancellationToken).ConfigureAwait(false);
+            if (activation.PackageInfo is null || activation.ServiceProvider is null || activation.LoadContext is null)
+            {
+                throw new InvalidOperationException($"Package '{package.PackageId}' activation did not produce a complete app-side package handle.");
+            }
+
+            _state.SetLoadedPackage(
+                package.PackageId,
+                new AppLoadedPackageHandle(
+                    package,
+                    source,
+                    activation.PackageInfo.Folder,
+                    activation.ServiceProvider,
+                    activation.LoadContext));
+            activated = true;
+        }
+        finally
+        {
+            if (!activated)
+            {
+                await _unloadCoordinator.RollBackActivationAsync(
+                    package.PackageId,
+                    activation.PackageInfo,
+                    activation.ServiceProvider,
+                    activation.LoadContext).ConfigureAwait(false);
+            }
+        }
+    }
 
     public void DisablePackage(
         string packageId,
@@ -166,7 +152,11 @@ internal sealed class AppPackageHostComposition : IDisposable
             DisablePackageAndLogAsync(packageId, message, origin, exception),
             $"disabling package '{packageId}'");
 
-    public void Dispose() => _tasks.Dispose();
+    public void Dispose()
+    {
+        _tasks.Dispose();
+        _ownedBackgroundProcessQueue?.Dispose();
+    }
 
     public async Task DisablePackageAsync(
         string packageId,
@@ -181,7 +171,7 @@ internal sealed class AppPackageHostComposition : IDisposable
             origin,
             exception,
             UnloadPackageAsync,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
     public async Task<bool> UnloadPackageAsync(
         string packageId,
@@ -194,37 +184,24 @@ internal sealed class AppPackageHostComposition : IDisposable
             return false;
         }
 
-        await _unloadCoordinator.UnloadPackageAsync(packageId, handle);
+        await _unloadCoordinator.UnloadPackageAsync(packageId, handle).ConfigureAwait(false);
+        PackageStateChanged?.Invoke();
         return true;
     }
 
     public async Task DisposeRemainingOwnedResourcesAsync()
     {
         var (ownedDisposables, loadContexts) = _state.SnapshotOwnedResources();
-        await _unloadCoordinator.DisposeOwnedResourcesAsync(ownedDisposables, loadContexts);
+        await _unloadCoordinator.DisposeOwnedResourcesAsync(ownedDisposables, loadContexts).ConfigureAwait(false);
     }
 
     public void RegisterPackageAssembly(string packageId, Assembly assembly)
-    {
-        AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
-        if (_resourceAssemblyRegistry is not null)
-        {
-            AppPackageAvaloniaAssetLoader.TryInvalidateAssemblyCache(_resourceAssemblyRegistry.RegisterPackageAssembly(packageId, assembly));
-        }
-    }
+        => AssemblyTracker.RegisterPackageAssembly(packageId, assembly);
 
     public void DisposeSharedAssemblies()
         => _sharedAssemblyRegistry.Dispose();
 
-    private void RemovePackageResourceAssemblies(string packageId)
-    {
-        if (_resourceAssemblyRegistry is null)
-        {
-            return;
-        }
-
-        AppPackageAvaloniaAssetLoader.TryInvalidateAssemblyCache(_resourceAssemblyRegistry.RemovePackage(packageId));
-    }
+    public event Action? PackageStateChanged;
 
     private async Task DisablePackageAndLogAsync(
         string packageId,
@@ -234,7 +211,7 @@ internal sealed class AppPackageHostComposition : IDisposable
     {
         try
         {
-            await DisablePackageAsync(packageId, message, origin, exception);
+            await DisablePackageAsync(packageId, message, origin, exception).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

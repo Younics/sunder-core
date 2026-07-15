@@ -3,7 +3,7 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.Cli;
 
 internal sealed class PackageCommandHandler(
-    ICliRuntimeClient runtime,
+    ICliRuntimePackageClient runtime,
     CliOutput output,
     ICliProgress progress,
     CliOptions options,

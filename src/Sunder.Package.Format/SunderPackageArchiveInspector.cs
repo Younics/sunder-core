@@ -1,11 +1,16 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Sunder.Package.Format;
 
 public static class SunderPackageArchiveInspector
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    };
     private static readonly SunderPackageJsonContext JsonContext = new(JsonOptions);
     private static readonly ArchiveRelativePath ManifestPath = ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath);
     private static readonly ArchiveRelativePath ContentIndexPath = ArchiveRelativePath.Parse(SunderPackageFormat.ContentIndexPath);

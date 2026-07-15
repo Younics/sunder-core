@@ -2,13 +2,14 @@ using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Settings;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed record ActiveLoadedPackage(
     ActivePackageDescriptor Descriptor,
     RuntimePackageSource Source,
-    PackageConfigurationSchemaDescriptor? ConfigurationSchema,
+    PackageSettingsSchemaDescriptor? SettingsSchema,
     IPackageKeyValueStore StateStore,
     JsonPackageSecretsStore SecretsStore,
     IPackageAuthHandler? AuthHandler,
@@ -18,6 +19,8 @@ internal sealed record ActiveLoadedPackage(
     RuntimePackageLoadContext LoadContext,
     IPackageSettings Settings)
 {
+    public PackageSettingsSchema? CanonicalSettingsSchema { get; init; }
+
     public IReadOnlyDictionary<string, RuntimePackageOperationRegistration> RuntimeOperations { get; init; }
         = new Dictionary<string, RuntimePackageOperationRegistration>(StringComparer.Ordinal);
 
@@ -32,6 +35,7 @@ internal sealed class ActivePackageSession
 {
     private readonly Dictionary<string, ActiveLoadedPackage> _loadedPackageMap;
     private readonly Dictionary<string, SessionPackageDescriptor> _sessionPackageMap;
+    private readonly Dictionary<string, RuntimePackageSource> _packageSourceMap;
     private readonly RuntimePackageExtensionCatalog _extensionCatalog;
 
     public ActivePackageSession(
@@ -40,11 +44,14 @@ internal sealed class ActivePackageSession
         IDictionary<string, SessionPackageDescriptor> sessionPackages,
         RuntimePackageExtensionCatalog? extensionCatalog = null,
         RuntimeSharedAssemblyRegistry? sharedAssemblyRegistry = null,
-        bool backgroundServicesStarted = true)
+        bool backgroundServicesStarted = true,
+        IEnumerable<RuntimePackageSource>? readySources = null)
     {
         SessionFolder = sessionFolder;
         _loadedPackageMap = new Dictionary<string, ActiveLoadedPackage>(loadedPackages, StringComparer.OrdinalIgnoreCase);
         _sessionPackageMap = new Dictionary<string, SessionPackageDescriptor>(sessionPackages, StringComparer.OrdinalIgnoreCase);
+        _packageSourceMap = (readySources ?? loadedPackages.Values.Select(static package => package.Source))
+            .ToDictionary(static source => source.PackageId, StringComparer.OrdinalIgnoreCase);
         _extensionCatalog = extensionCatalog ?? new RuntimePackageExtensionCatalog();
         SharedAssemblyRegistry = sharedAssemblyRegistry;
         _backgroundServicesStarted = backgroundServicesStarted;
@@ -111,10 +118,26 @@ internal sealed class ActivePackageSession
     }
 
     public IReadOnlyList<RuntimePackageSource> GetActivePackageSources()
-        => _loadedPackageMap.Values
-            .Where(package => IsPackageEnabled(package.Descriptor.PackageId))
-            .Select(package => package.Source)
+        => _packageSourceMap.Values
+            .Where(source => IsPackageEnabled(source.PackageId))
             .ToArray();
+
+    public IReadOnlyList<RuntimePackageSource> GetAppPackageSources()
+    {
+        var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<string>(_packageSourceMap.Values
+            .Where(source => IsPackageEnabled(source.PackageId) && (source.HostRoles & PackageHostRoles.App) != 0)
+            .Select(static source => source.PackageId));
+        while (pending.TryPop(out var packageId))
+        {
+            if (!required.Add(packageId) || !_packageSourceMap.TryGetValue(packageId, out var source)) continue;
+            foreach (var dependency in source.PackageDependencies) pending.Push(dependency);
+        }
+
+        return _packageSourceMap.Values
+            .Where(source => required.Contains(source.PackageId) && IsPackageEnabled(source.PackageId))
+            .ToArray();
+    }
 
     public IReadOnlyList<SessionPackageDescriptor> GetSessionPackages()
     {
@@ -151,16 +174,16 @@ internal sealed class ActivePackageSession
 
     public string? TryResolvePackageAssetPath(string packageId, string assetPath)
     {
-        if (!_loadedPackageMap.TryGetValue(packageId, out var package)
+        if (!_packageSourceMap.TryGetValue(packageId, out var source)
             || !IsPackageEnabled(packageId))
         {
             return null;
         }
 
-        return package.Source.Kind switch
+        return source.Kind switch
         {
-            PackageSourceKind.Dev => PackageAssetPathResolver.TryResolveDevAssetPath(package.Source.SourceFolder, assetPath),
-            PackageSourceKind.Installed => PackageAssetPathResolver.TryResolveInstalledAssetPath(package.Source.SourceFolder, assetPath),
+            PackageSourceKind.Dev => PackageAssetPathResolver.TryResolveDevAssetPath(source.SourceFolder, assetPath),
+            PackageSourceKind.Installed => PackageAssetPathResolver.TryResolveInstalledAssetPath(source.SourceFolder, assetPath),
             _ => null,
         };
     }
@@ -219,6 +242,7 @@ internal sealed class ActivePackageSession
     {
         var removedSessionPackage = _sessionPackageMap.Remove(packageId);
         var removedLoadedPackage = _loadedPackageMap.Remove(packageId, out packageToDeactivate);
+        _packageSourceMap.Remove(packageId);
         if (removedSessionPackage || removedLoadedPackage)
         {
             _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageUninstalled);
@@ -334,6 +358,7 @@ internal sealed class ActivePackageSession
             package.PackageId,
             package.DisplayName,
             package.Version,
+            package.HostRoles,
             package.Icon,
             package.IsEnabled,
             package.Readiness,

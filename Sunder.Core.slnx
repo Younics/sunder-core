@@ -5,12 +5,14 @@
     <Project Path="src/Host/Sunder.Cli/Sunder.Cli.csproj" />
     <Project Path="src/Host/Sunder.Runtime.Client/Sunder.Runtime.Client.csproj" />
     <Project Path="src/Host/Sunder.Runtime.Contracts/Sunder.Runtime.Contracts.csproj" />
+    <Project Path="src/Host/Sunder.Runtime.LocalState/Sunder.Runtime.LocalState.csproj" />
     <Project Path="src/Host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj" />
     <Project Path="src/Sunder.Package.Format/Sunder.Package.Format.csproj" />
     <Project Path="tests/Sunder.App.Tests/Sunder.App.Tests.csproj" />
     <Project Path="tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj" />
     <Project Path="tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" />
     <Project Path="tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
+    <Project Path="tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
   </Folder>
   <Folder Name="/Sdk/">
     <Project Path="src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj" />

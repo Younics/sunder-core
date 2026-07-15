@@ -104,6 +104,71 @@ public sealed class PackageCallbackSessionCoordinatorTests
         handler.ReleaseStart();
     }
 
+    [Fact]
+    public async Task CompletingCallback_IsCancelledByPackageSessionRetirement()
+    {
+        var handler = new TestCallbackHandler(blockCompletion: true);
+        var (state, callbacks) = await CreateCoordinatorAsync(handler);
+        await using var server = CreateServer();
+        PackageCallbackSessionResponse started;
+        using (var startLease = state.AcquireLease())
+        {
+            started = (await callbacks.StartAsync(
+                startLease,
+                "test.package",
+                handler.CallbackHandlerId,
+                null,
+                server))!;
+        }
+        var completionLease = state.AcquireLease();
+        var completion = callbacks.CompleteAsync(
+            completionLease,
+            started.CallbackSessionId,
+            new Dictionary<string, string?> { ["code"] = "late" });
+        await handler.CompletionEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var retirement = state.ClearActiveSessionAsync();
+
+        Assert.False(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        completionLease.Dispose();
+        await retirement.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(handler.CompletedCode);
+        await callbacks.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task CompletingCallback_IsCancelledWhenHostStops()
+    {
+        using var hostStopping = new CancellationTokenSource();
+        var handler = new TestCallbackHandler(blockCompletion: true);
+        var (state, callbacks) = await CreateCoordinatorAsync(handler, hostStopping.Token);
+        await using var server = CreateServer();
+        PackageCallbackSessionResponse started;
+        using (var startLease = state.AcquireLease())
+        {
+            started = (await callbacks.StartAsync(
+                startLease,
+                "test.package",
+                handler.CallbackHandlerId,
+                null,
+                server))!;
+        }
+        using var completionLease = state.AcquireLease();
+        var completion = callbacks.CompleteAsync(
+            completionLease,
+            started.CallbackSessionId,
+            new Dictionary<string, string?> { ["code"] = "late" });
+        await handler.CompletionEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        hostStopping.Cancel();
+
+        Assert.False(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Null(handler.CompletedCode);
+        await callbacks.ShutdownAsync();
+        completionLease.Dispose();
+        await state.ClearActiveSessionAsync();
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -140,14 +205,15 @@ public sealed class PackageCallbackSessionCoordinatorTests
     }
 
     private static async Task<(PackageSessionState State, PackageCallbackSessionCoordinator Callbacks)> CreateCoordinatorAsync(
-        TestCallbackHandler handler)
+        TestCallbackHandler handler,
+        CancellationToken hostStopping = default)
     {
         PackageCallbackSessionCoordinator? callbacks = null;
         var state = new PackageSessionState(
             NullLogger.Instance,
             () => callbacks?.Clear(),
             packageId => callbacks?.RemovePackageSessions(packageId));
-        callbacks = new PackageCallbackSessionCoordinator(state);
+        callbacks = new PackageCallbackSessionCoordinator(state, hostStopping: hostStopping);
         var packageId = "test.package";
         var loadedPackage = CreateLoadedPackage(handler);
         var session = new ActivePackageSession(
@@ -162,6 +228,7 @@ public sealed class PackageCallbackSessionCoordinatorTests
                     packageId,
                     loadedPackage.Descriptor.DisplayName,
                     loadedPackage.Descriptor.Version,
+                    loadedPackage.Descriptor.HostRoles,
                     loadedPackage.Descriptor.Icon,
                     IsEnabled: true,
                     PackageReadinessState.Ready,
@@ -184,9 +251,9 @@ public sealed class PackageCallbackSessionCoordinatorTests
         Directory.CreateDirectory(tempDirectory);
         var assemblyPath = typeof(PackageCallbackSessionCoordinator).Assembly.Location;
         return new ActiveLoadedPackage(
-            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", null, true, PackageReadinessState.Ready, []),
+            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
             new RuntimePackageSource("test.package", PackageSourceKind.Dev, tempDirectory),
-            ConfigurationSchema: null,
+            SettingsSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(
                 Path.Combine(tempDirectory, "secrets.json"),

@@ -114,9 +114,11 @@ public static class SunderStackArchiveWriter
             }
 
             var normalizedPath = archivePath.ToString();
-            if (!normalizedPath.StartsWith(SunderStackFormat.PayloadRoot, StringComparison.OrdinalIgnoreCase))
+            if (!normalizedPath.StartsWith(SunderStackFormat.PayloadRoot, StringComparison.Ordinal)
+                || !SunderStackFormat.IsAllowedArchivePath(normalizedPath))
             {
-                throw new InvalidOperationException($"Stack payload file '{relativePath}' must be written under payload/.");
+                throw new InvalidOperationException(
+                    $"Stack payload file '{relativePath}' must be written under payload/fragments/, payload/files/, or payload/media/.");
             }
 
             var destinationPath = Path.Combine(stagingPath, normalizedPath.Replace('/', Path.DirectorySeparatorChar));
@@ -138,6 +140,11 @@ public static class SunderStackArchiveWriter
     private static void CopyPreservedArchivePath(string sourceRoot, string destinationRoot, string archivePath)
     {
         var normalizedPath = ValidateArchiveRelativePath(archivePath).ToString();
+        if (!normalizedPath.StartsWith(SunderStackFormat.PayloadRoot, StringComparison.Ordinal)
+            || !SunderStackFormat.IsAllowedArchivePath(normalizedPath))
+        {
+            throw new InvalidOperationException($"Preserved Stack path '{archivePath}' must be under a canonical payload root.");
+        }
         var sourcePath = Path.Combine(sourceRoot, normalizedPath.Replace('/', Path.DirectorySeparatorChar));
         var destinationPath = Path.Combine(destinationRoot, normalizedPath.Replace('/', Path.DirectorySeparatorChar));
         if (Directory.Exists(sourcePath))
@@ -189,7 +196,7 @@ public static class SunderStackArchiveWriter
     private static void WriteContentIndex(string stagingPath)
     {
         var files = Directory.EnumerateFiles(stagingPath, "*", SearchOption.AllDirectories)
-            .Where(static path => !string.Equals(Path.GetFileName(path), "content-index.json", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !SunderStackFormat.IsContentIndexPath(ToArchivePath(stagingPath, path)))
             .Select(path => CreateIndexEntry(stagingPath, path))
             .OrderBy(entry => entry.Path, StringComparer.Ordinal)
             .ToArray();
@@ -205,11 +212,18 @@ public static class SunderStackArchiveWriter
         using var stream = File.OpenRead(filePath);
         var hash = SHA256.HashData(stream);
         var relativePath = Path.GetRelativePath(stagingPath, filePath).Replace('\\', '/');
+        if (!SunderStackFormat.IsAllowedArchivePath(relativePath))
+        {
+            throw new InvalidDataException($"Stack staging contains file outside canonical archive roots: '{relativePath}'.");
+        }
         return new SunderStackContentIndexEntry(
             relativePath,
             Convert.ToHexString(hash).ToLowerInvariant(),
             stream.Length);
     }
+
+    private static string ToArchivePath(string stagingPath, string filePath)
+        => Path.GetRelativePath(stagingPath, filePath).Replace('\\', '/');
 
     private static ArchiveRelativePath ValidateArchiveRelativePath(string path)
     {

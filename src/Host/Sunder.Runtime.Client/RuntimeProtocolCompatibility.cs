@@ -7,8 +7,11 @@ public static class RuntimeProtocolCompatibility
     public static bool IsCompatible(RuntimeHandshakeResponse? handshake)
         => GetIncompatibility(handshake) is null;
 
-    public static string? GetIncompatibility(RuntimeHandshakeResponse? handshake)
+    public static string? GetIncompatibility(
+        RuntimeHandshakeResponse? handshake,
+        params string[] requiredFeatures)
     {
+        ArgumentNullException.ThrowIfNull(requiredFeatures);
         if (handshake is null)
         {
             return "Runtime did not return a handshake.";
@@ -33,6 +36,17 @@ public static class RuntimeProtocolCompatibility
             || !handshake.SupportedFeatures.Contains(RuntimeProtocolFeatures.VersionedApiV1, StringComparer.Ordinal))
         {
             return $"Runtime does not support required feature '{RuntimeProtocolFeatures.VersionedApiV1}'.";
+        }
+        foreach (var feature in requiredFeatures)
+        {
+            if (string.IsNullOrWhiteSpace(feature))
+            {
+                throw new ArgumentException("Required Runtime protocol features cannot be empty.", nameof(requiredFeatures));
+            }
+            if (!handshake.SupportedFeatures.Contains(feature, StringComparer.Ordinal))
+            {
+                return $"Runtime does not support required feature '{feature}'.";
+            }
         }
         if (handshake.Product is null
             || string.IsNullOrWhiteSpace(handshake.Product.ProductName)

@@ -18,6 +18,7 @@ internal static class CliExitCodes
 }
 
 internal sealed class CliUsageException(string message) : Exception(message);
+internal sealed class CliConflictException(string message, Exception? innerException = null) : Exception(message, innerException);
 
 internal sealed class CliHttpException(
     HttpStatusCode statusCode,
@@ -31,20 +32,39 @@ internal sealed class CliHttpException(
 
 internal static class CliErrorMapper
 {
-    public static int FromException(Exception exception) => exception switch
+    public static int FromException(Exception exception)
     {
-        CliUsageException => CliExitCodes.Usage,
-        RuntimeClientException runtime => FromStatus(runtime.StatusCode),
-        CliHttpException http => FromStatus(http.StatusCode),
-        HttpRequestException => CliExitCodes.Unavailable,
-        _ => CliExitCodes.Failure,
-    };
+        if (IsTimeout(exception)) return CliExitCodes.Timeout;
+        return exception switch
+        {
+            CliUsageException => CliExitCodes.Usage,
+            RuntimeClientException runtime => FromStatus(runtime.StatusCode),
+            CliHttpException http => FromStatus(http.StatusCode),
+            HttpRequestException => CliExitCodes.Unavailable,
+            _ => CliExitCodes.Failure,
+        };
+    }
+
+    public static bool IsTimeout(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is OperationCanceledException or TimeoutException
+                || current is RuntimeClientException runtime && IsTimeoutStatus(runtime.StatusCode)
+                || current is CliHttpException http && IsTimeoutStatus(http.StatusCode))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public static int FromRegistryCode(RuntimeRegistryErrorCode code) => code switch
     {
         RuntimeRegistryErrorCode.AuthenticationRequired => CliExitCodes.Authentication,
         RuntimeRegistryErrorCode.Forbidden => CliExitCodes.Forbidden,
         RuntimeRegistryErrorCode.NotFound => CliExitCodes.NotFound,
+        RuntimeRegistryErrorCode.Conflict => CliExitCodes.Failure,
         RuntimeRegistryErrorCode.RegistryUnavailable => CliExitCodes.Unavailable,
         RuntimeRegistryErrorCode.Cancelled => CliExitCodes.Cancelled,
         _ => CliExitCodes.Failure,
@@ -53,10 +73,13 @@ internal static class CliErrorMapper
     private static int FromStatus(HttpStatusCode status) => status switch
     {
         HttpStatusCode.Unauthorized => CliExitCodes.Authentication,
-        HttpStatusCode.Forbidden or HttpStatusCode.Conflict => CliExitCodes.Forbidden,
+        HttpStatusCode.Forbidden => CliExitCodes.Forbidden,
         HttpStatusCode.NotFound => CliExitCodes.NotFound,
         HttpStatusCode.RequestTimeout or HttpStatusCode.GatewayTimeout => CliExitCodes.Timeout,
         HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable => CliExitCodes.Unavailable,
         _ => CliExitCodes.Failure,
     };
+
+    private static bool IsTimeoutStatus(HttpStatusCode status)
+        => status is HttpStatusCode.RequestTimeout or HttpStatusCode.GatewayTimeout;
 }

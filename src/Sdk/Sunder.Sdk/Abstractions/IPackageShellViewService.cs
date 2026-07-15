@@ -23,7 +23,7 @@ public interface IPackageShellViewService
     /// <summary>Adds or moves a view to a placement and optional zero-based index, optionally opening it with copied navigation parameters.</summary>
     ValueTask<bool> AddViewToHotbarAsync(
         string viewId,
-        PackageHotbarPlacement placement,
+        PackageViewPlacement placement,
         int? index = null,
         bool openPanel = false,
         IReadOnlyDictionary<string, string?>? parameters = null,
@@ -47,7 +47,7 @@ public interface IPackageShellViewService
 }
 
 /// <summary>Provides an immutable snapshot of one shell hotbar entry.</summary>
-/// <param name="ViewId">Stable package-scoped view id.</param>
+/// <param name="ViewId">Stable globally unique view id.</param>
 /// <param name="PackageId">Owning package id.</param>
 /// <param name="PackageDisplayName">User-facing owner name.</param>
 /// <param name="Title">User-facing view title.</param>
@@ -62,22 +62,6 @@ public sealed record PackageHotbarView(
     string PackageDisplayName,
     string Title,
     string Glyph,
-    PackageHotbarPlacement Placement,
+    PackageViewPlacement Placement,
     int Order,
     bool IsOpen);
-
-/// <summary>Specifies a shell hotbar region.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.ShellViewV1)]
-public enum PackageHotbarPlacement
-{
-    /// <summary>Upper section of the left hotbar.</summary>
-    LeftTop = 0,
-    /// <summary>Central primary hotbar section.</summary>
-    Middle = 1,
-    /// <summary>Upper section of the right hotbar.</summary>
-    RightTop = 2,
-    /// <summary>Lower section of the left hotbar.</summary>
-    LeftBottom = 3,
-    /// <summary>Lower section of the right hotbar.</summary>
-    RightBottom = 4,
-}

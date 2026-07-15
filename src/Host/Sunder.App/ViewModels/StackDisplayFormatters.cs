@@ -1,3 +1,4 @@
+using Sunder.App.Services;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Registry.Contracts;
@@ -76,4 +77,8 @@ internal static class StackDisplayFormatters
     }
 }
 
-public sealed record StackPackageInfo(string DisplayName, PackageIconDescriptor? Icon, Uri? IconUri);
+public sealed record StackPackageInfo(
+    string DisplayName,
+    PackageIconDescriptor? Icon,
+    Uri? IconUri,
+    PackageIconTransport IconTransport = PackageIconTransport.RuntimeAsset);

@@ -138,6 +138,45 @@ public sealed class PackageSessionStateTests
         }
     }
 
+    [Fact]
+    public async Task PublishSessionAsync_WhenPostSwapCallbackFails_KeepsCommittedCandidateActive()
+    {
+        var callbackCount = 0;
+        var state = new PackageSessionState(
+            NullLogger.Instance,
+            () =>
+            {
+                if (Interlocked.Increment(ref callbackCount) == 2)
+                {
+                    throw new IOException("Injected post-swap publication failure.");
+                }
+            },
+            static _ => { });
+        var oldFolder = CreateTempDirectory();
+        var newFolder = CreateTempDirectory();
+        var oldSession = CreateSession(oldFolder);
+        var newSession = CreateSession(newFolder);
+
+        try
+        {
+            await state.PublishSessionAsync(oldSession);
+
+            await Assert.ThrowsAsync<IOException>(() => state.PublishSessionAsync(newSession));
+
+            using var lease = state.AcquireLease();
+            Assert.Same(newSession, lease.Session);
+            Assert.Equal(2, lease.Generation);
+            Assert.True(Directory.Exists(newFolder));
+            Assert.False(Directory.Exists(oldFolder));
+        }
+        finally
+        {
+            await state.ClearActiveSessionAsync();
+            TryDeleteDirectory(oldFolder);
+            TryDeleteDirectory(newFolder);
+        }
+    }
+
     private static PackageSessionState CreateState()
         => new(NullLogger.Instance, static () => { }, static _ => { });
 

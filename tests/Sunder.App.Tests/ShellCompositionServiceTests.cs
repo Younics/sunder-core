@@ -1,4 +1,5 @@
 using Sunder.App.Models;
+using Sunder.App.Features.Shell.State;
 using Sunder.App.Services;
 using Sunder.Runtime.Contracts;
 using Xunit;
@@ -31,7 +32,8 @@ public sealed class ShellCompositionServiceTests
             state,
             new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow),
             warnings: [],
-            errors: []);
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
 
         Assert.False(snapshot.State.ViewPlacements.ContainsKey("stale"));
         Assert.False(snapshot.State.ViewOrder.ContainsKey("stale"));
@@ -50,7 +52,8 @@ public sealed class ShellCompositionServiceTests
             new ShellState(),
             systemStatus: null,
             warnings: [],
-            errors: []);
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
 
         var view = Assert.Single(snapshot.PackageViews);
         Assert.Equal("F", view.Glyph);
@@ -68,6 +71,7 @@ public sealed class ShellCompositionServiceTests
                 "agent",
                 "Agent",
                 "1.0.0",
+                PackageHostRoles.App | PackageHostRoles.Runtime,
                 packageIcon,
                 IsEnabled: true,
                 PackageReadinessState.Ready,
@@ -75,7 +79,8 @@ public sealed class ShellCompositionServiceTests
             new ShellState(),
             systemStatus: null,
             warnings: [],
-            errors: []);
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
 
         var view = Assert.Single(snapshot.PackageViews);
         Assert.Equal("P", view.PackageGlyph);
@@ -93,7 +98,8 @@ public sealed class ShellCompositionServiceTests
             new ShellState(),
             systemStatus: null,
             warnings: [],
-            errors: []);
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
 
         var view = Assert.Single(snapshot.PackageViews);
         Assert.Equal("C", view.Glyph);
@@ -110,7 +116,8 @@ public sealed class ShellCompositionServiceTests
             new ShellState(),
             systemStatus: null,
             warnings: [],
-            errors: []);
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
 
         Assert.Contains("agent.subsessions", snapshot.State.HiddenHotbarViewIds);
         Assert.Equal("agent.chat", snapshot.State.SelectedMiddleViewId);
@@ -128,7 +135,8 @@ public sealed class ShellCompositionServiceTests
             new ShellState(),
             systemStatus: null,
             warnings: [],
-            errors: []);
+            errors: [],
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
 
         var view = Assert.Single(snapshot.PackageViews);
         Assert.Equal("agent.chat", view.ViewId);
@@ -137,11 +145,39 @@ public sealed class ShellCompositionServiceTests
         Assert.Single(snapshot.State.ViewPlacements);
     }
 
+    [Fact]
+    public void Compose_EmptySnapshot_AppliesExplicitNormalizationPolicy()
+    {
+        var service = new ShellCompositionService();
+        var safeModeState = CreateSavedState();
+        var runtimeState = CreateSavedState();
+
+        service.Compose([], safeModeState, null, [], [], ShellNormalizationPolicy.SafeModePreserveLayout);
+        service.Compose([], runtimeState, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+
+        Assert.Equal("agent.chat", safeModeState.SelectedMiddleViewId);
+        Assert.True(safeModeState.ViewPlacements.ContainsKey("agent.chat"));
+        Assert.Null(runtimeState.SelectedMiddleViewId);
+        Assert.Empty(runtimeState.ViewPlacements);
+        Assert.Empty(runtimeState.ViewOrder);
+        Assert.Empty(runtimeState.HiddenHotbarViewIds);
+    }
+
+    private static ShellState CreateSavedState()
+        => new()
+        {
+            HasInitializedLayout = true,
+            ViewPlacements = new Dictionary<string, RailPlacement> { ["agent.chat"] = RailPlacement.Middle },
+            ViewOrder = new Dictionary<string, int> { ["agent.chat"] = 0 },
+            HiddenHotbarViewIds = ["agent.hidden"],
+            SelectedMiddleViewId = "agent.chat",
+        };
+
     private static ActivePackageDescriptor CreatePackage(
         string packageId,
         string displayName,
         IReadOnlyList<PackageViewDescriptor> views)
-        => new(packageId, displayName, "1.0.0", Icon: null, IsEnabled: true, PackageReadinessState.Ready, views);
+        => new(packageId, displayName, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, Icon: null, IsEnabled: true, PackageReadinessState.Ready, views);
 
     private static PackageViewDescriptor CreateView(
         string viewId,

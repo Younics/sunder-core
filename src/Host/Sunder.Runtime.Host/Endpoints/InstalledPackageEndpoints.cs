@@ -30,7 +30,6 @@ internal static class InstalledPackageEndpoints
             async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
                 var result = await installedPackages.SetEnabledAsync(packageId, enabled: true, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
                 return Results.Ok(result);
             });
 
@@ -39,7 +38,6 @@ internal static class InstalledPackageEndpoints
             async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
                 var result = await installedPackages.SetEnabledAsync(packageId, enabled: false, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
                 return Results.Ok(result);
             });
 
@@ -48,7 +46,6 @@ internal static class InstalledPackageEndpoints
             async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
                 var result = await installedPackages.UninstallAsync(packageId, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
                 return Results.Ok(result);
             });
 
@@ -57,7 +54,6 @@ internal static class InstalledPackageEndpoints
             async (PackageStoreStageRequest request, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
                 var result = await installedPackages.StageAsync(request, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.OperationResult.Message, packageValidation: true);
                 return Results.Ok(result);
             });
 
@@ -66,7 +62,6 @@ internal static class InstalledPackageEndpoints
             async (string stageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
                 var result = await installedPackages.CommitStageAsync(stageId, cancellationToken);
-                if (!result.Success) RuntimeEndpointErrors.ThrowFailure(result.Message, packageValidation: true);
                 return Results.Ok(result);
             });
 

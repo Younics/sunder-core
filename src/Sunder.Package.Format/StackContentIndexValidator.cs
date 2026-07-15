@@ -31,12 +31,21 @@ internal static class StackContentIndexValidator
         foreach (var entry in contentIndex.Files)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (entry is null)
+            {
+                errors.Add("Stack content index contains a null file entry.");
+                continue;
+            }
             if (!StackArchivePathValidator.TryParse(entry.Path, "content-index path", errors, out var path))
             {
                 continue;
             }
 
             var normalizedPath = path.ToString();
+            if (!SunderStackFormat.IsAllowedArchivePath(normalizedPath))
+            {
+                errors.Add($"Stack content index path '{normalizedPath}' is outside canonical manifest and payload roots.");
+            }
             if (indexedPaths.TryGetValue(normalizedPath, out var existing))
             {
                 var collision = string.Equals(existing, normalizedPath, StringComparison.Ordinal) ? "duplicate" : "case-colliding";
@@ -45,7 +54,7 @@ internal static class StackContentIndexValidator
             }
 
             indexedPaths.Add(normalizedPath, normalizedPath);
-            if (string.Equals(normalizedPath, SunderStackFormat.ContentIndexPath, StringComparison.OrdinalIgnoreCase))
+            if (SunderStackFormat.IsContentIndexPath(normalizedPath))
             {
                 errors.Add($"Stack content index must not index itself at '{normalizedPath}'.");
                 continue;
@@ -67,7 +76,11 @@ internal static class StackContentIndexValidator
         foreach (var actualFileEntry in SunderArchive.EnumerateFiles(stagingPath))
         {
             var actualPath = actualFileEntry.Path.ToString();
-            if (!string.Equals(actualPath, SunderStackFormat.ContentIndexPath, StringComparison.OrdinalIgnoreCase)
+            if (!SunderStackFormat.IsAllowedArchivePath(actualPath))
+            {
+                errors.Add($"Stack archive contains file outside canonical roots: '{actualPath}'.");
+            }
+            if (!SunderStackFormat.IsContentIndexPath(actualPath)
                 && !indexedPaths.ContainsKey(actualPath))
             {
                 errors.Add($"Stack archive contains unindexed file '{actualPath}'.");

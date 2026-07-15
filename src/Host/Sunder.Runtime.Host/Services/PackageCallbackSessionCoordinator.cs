@@ -219,7 +219,8 @@ internal sealed class PackageCallbackSessionCoordinator
         try
         {
             using var timeout = new CancellationTokenSource(_policy.PackageCallbackCompletionTimeout, _timeProvider);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+            using var lifecycle = lease.CreateLinkedCancellation(cancellationToken, _hostStopping);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(lifecycle.Token, timeout.Token);
             var context = new PackageCallbackCompletionContext(callbackSessionId, queryValues);
             var packageTask = Task.Run(() => session.Handler.CompleteCallbackAsync(context, linked.Token));
             try

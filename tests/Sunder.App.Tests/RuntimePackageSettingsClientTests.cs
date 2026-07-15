@@ -24,7 +24,7 @@ public sealed class RuntimePackageSettingsClientTests
                         RuntimeProtocol.MinimumSupportedRevision,
                         RuntimeProtocol.MaximumSupportedRevision,
                         Guid.NewGuid(),
-                        [RuntimeProtocolFeatures.VersionedApiV1],
+                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
                         new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"))),
                 };
             }

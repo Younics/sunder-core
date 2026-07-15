@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Client;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Logging;
@@ -11,61 +10,56 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
     private readonly RuntimePackageDataClient? _runtimeClient;
     private readonly RuntimePackageOperationClient? _runtimeOperationClient;
     private readonly RuntimePackageCallbackClient? _runtimeCallbackClient;
+    private readonly RuntimeClientTransport? _ownedTransport;
 
     private AppPackageContext(
         string packageId,
         string version,
-        string installPath,
+        string contentRootPath,
         IPackageStorageContext storage,
         IPackageSettings settings,
         IPackageSecrets secrets,
         RuntimePackageDataClient? runtimeClient,
         RuntimePackageOperationClient? runtimeOperationClient,
-        RuntimePackageCallbackClient? runtimeCallbackClient)
+        RuntimePackageCallbackClient? runtimeCallbackClient,
+        RuntimeClientTransport? ownedTransport,
+        AppPackageGenerationPublication publication)
     {
         PackageId = packageId;
         Version = version;
-        InstallPath = installPath;
+        ContentRootPath = contentRootPath;
         Storage = storage;
         Settings = settings;
         Secrets = secrets;
         _runtimeClient = runtimeClient;
         _runtimeOperationClient = runtimeOperationClient;
         _runtimeCallbackClient = runtimeCallbackClient;
+        _ownedTransport = ownedTransport;
         Runtime = runtimeOperationClient is null
             ? NullPackageRuntimeClient.Instance
-            : new AppPackageRuntimeClient(packageId, runtimeOperationClient);
+            : new AppPackageRuntimeClient(packageId, runtimeOperationClient, publication);
         Callbacks = runtimeCallbackClient is null
             ? NullPackageCallbackClient.Instance
-            : new AppPackageCallbackClient(packageId, runtimeCallbackClient, new ExternalBrowserService());
+            : new AppPackageCallbackClient(packageId, runtimeCallbackClient, new ExternalBrowserService(), publication);
         Logging = new AppPackageLogging(PackageId);
     }
 
     public static Task<AppPackageContext> CreateAsync(
         string packageId,
         string version,
-        string installPath,
-        bool isPreflight,
+        string contentRootPath,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
+        AppPackageGenerationPublication publication,
         CancellationToken cancellationToken)
     {
-        if (isPreflight)
-        {
-            return Task.FromResult(new AppPackageContext(
-                packageId,
-                version,
-                installPath,
-                AppPreflightPackageStorageContext.Instance,
-                AppPreflightPackageSettings.Instance,
-                AppPreflightPackageSecrets.Instance,
-                runtimeClient: null,
-                runtimeOperationClient: null,
-                runtimeCallbackClient: null));
-        }
-
-        var runtimeClient = new RuntimePackageDataClient(getRuntimeConnectionInfo ?? (static () => null));
-        var runtimeOperationClient = new RuntimePackageOperationClient(getRuntimeConnectionInfo ?? (static () => null));
-        var runtimeCallbackClient = new RuntimePackageCallbackClient(getRuntimeConnectionInfo ?? (static () => null));
+        var sharedTransport = getRuntimeConnectionInfo?.Target as RuntimeClientTransport;
+        var ownedTransport = sharedTransport is null
+            ? new RuntimeClientTransport(getRuntimeConnectionInfo ?? (static () => null))
+            : null;
+        var transport = sharedTransport ?? ownedTransport!;
+        var runtimeClient = new RuntimePackageDataClient(transport);
+        var runtimeOperationClient = new RuntimePackageOperationClient(transport);
+        var runtimeCallbackClient = new RuntimePackageCallbackClient(transport);
         try
         {
             IPackageRoleLocalWorkspace workspace = new AppPackageRoleLocalWorkspace(packageId);
@@ -73,19 +67,22 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
             return Task.FromResult(new AppPackageContext(
                 packageId,
                 version,
-                installPath,
-                new AppRuntimePackageStorageContext(packageId, runtimeClient, workspace),
-                new AppRuntimePackageSettings(packageId, runtimeClient),
-                new AppRuntimePackageSecrets(packageId, runtimeClient),
+                contentRootPath,
+                new AppRuntimePackageStorageContext(packageId, runtimeClient, workspace, publication),
+                new AppRuntimePackageSettings(packageId, runtimeClient, publication),
+                new AppRuntimePackageSecrets(packageId, runtimeClient, publication),
                 runtimeClient,
                 runtimeOperationClient,
-                runtimeCallbackClient));
+                runtimeCallbackClient,
+                ownedTransport,
+                publication));
         }
         catch
         {
             runtimeClient.Dispose();
             runtimeOperationClient.Dispose();
             runtimeCallbackClient.Dispose();
+            ownedTransport?.Dispose();
             throw;
         }
     }
@@ -94,7 +91,7 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 
     public string Version { get; }
 
-    public string InstallPath { get; }
+    public string ContentRootPath { get; }
 
     public IPackageStorageContext Storage { get; }
 
@@ -106,8 +103,6 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 
     internal IPackageRuntimeClient Runtime { get; }
 
-    public ILoggerFactory LoggerFactory => Logging.LoggerFactory;
-
     public IPackageLogging Logging { get; }
 
     public ValueTask DisposeAsync()
@@ -115,6 +110,7 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
         _runtimeClient?.Dispose();
         _runtimeOperationClient?.Dispose();
         _runtimeCallbackClient?.Dispose();
+        _ownedTransport?.Dispose();
         if (Logging is IDisposable disposableLogging)
         {
             disposableLogging.Dispose();

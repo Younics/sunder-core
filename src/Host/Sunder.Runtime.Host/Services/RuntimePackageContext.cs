@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Host.Infrastructure.Logging;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
@@ -8,11 +7,11 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimePackageContext : IPackageContext
 {
-    public RuntimePackageContext(string packageId, string version, string installPath, string packageDataRootPath)
+    public RuntimePackageContext(string packageId, string version, string contentRootPath, string packageDataRootPath)
     {
         PackageId = packageId;
         Version = version;
-        InstallPath = installPath;
+        ContentRootPath = contentRootPath;
         LocalStorage = new LocalPackageStorageContext(packageId, packageDataRootPath);
         Storage = LocalStorage;
         PackageSettings = new PackageSettings(LocalStorage.SettingsStore);
@@ -25,7 +24,7 @@ internal sealed class RuntimePackageContext : IPackageContext
 
     public string Version { get; }
 
-    public string InstallPath { get; }
+    public string ContentRootPath { get; }
 
     public IPackageStorageContext Storage { get; }
 
@@ -40,8 +39,6 @@ internal sealed class RuntimePackageContext : IPackageContext
     public JsonPackageSecretsStore SecretsStore { get; }
 
     public IPackageCallbackClient Callbacks => NullPackageCallbackClient.Instance;
-
-    public ILoggerFactory LoggerFactory => Logging.LoggerFactory;
 
     public IPackageLogging Logging { get; }
 }

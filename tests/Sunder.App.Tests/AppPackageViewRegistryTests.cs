@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -22,6 +23,92 @@ public sealed class AppPackageViewRegistryTests
         Assert.NotNull(first);
         Assert.Same(first, second);
         Assert.NotSame(first, third);
+    }
+
+    [Fact]
+    public void RegisteredViews_ResolveConstructorDependenciesFromPackageServices()
+    {
+        var dependency = new ConstructorDependency();
+        var serviceProvider = new ServiceCollection()
+            .AddSingleton(dependency)
+            .BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<ConstructorInjectedPackageView>("test.package", "test.package.view", serviceProvider);
+        registry.RegisterSettingsView<ConstructorInjectedPackageView>("test.package", serviceProvider);
+
+        var packageView = Assert.IsType<ConstructorInjectedPackageView>(
+            registry.GetOrCreateView("test.package.view", _ => false, ReportFailure));
+        var settingsView = Assert.IsType<ConstructorInjectedPackageView>(
+            registry.GetOrCreateSettingsView("test.package", _ => false, ReportFailure));
+
+        Assert.Same(dependency, packageView.Dependency);
+        Assert.Same(dependency, settingsView.Dependency);
+    }
+
+    [Fact]
+    public void PackageViewContracts_AreImmutableSnapshots()
+    {
+        var sourceParameters = new Dictionary<string, string?> { ["item"] = "original" };
+        var navigation = new PackageViewNavigationContext("test.package.view", sourceParameters);
+        sourceParameters["item"] = "changed";
+
+        Assert.Equal("original", navigation.Parameters["item"]);
+        var parameters = Assert.IsAssignableFrom<IDictionary<string, string?>>(navigation.Parameters);
+        Assert.Throws<NotSupportedException>(() => parameters["item"] = "changed");
+        Assert.All(typeof(PackageViewRegistration).GetProperties(), property => Assert.False(property.CanWrite));
+    }
+
+    [Fact]
+    public async Task ViewNavigation_SupersedingOrClosingViewCancelsCurrentPresentation()
+    {
+        var probe = new NavigationProbe();
+        var serviceProvider = new ServiceCollection()
+            .AddSingleton(probe)
+            .BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<NavigationPackageView>("test.package", "test.package.view", serviceProvider);
+        var facade = new AppPackageHostedViewFacade(registry, _ => false, ReportFailure);
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callCount = 0;
+        probe.NavigateAsync = async (_, cancellationToken) =>
+        {
+            if (Interlocked.Increment(ref callCount) != 1)
+            {
+                return;
+            }
+
+            firstStarted.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                firstCancelled.SetResult();
+                throw;
+            }
+        };
+
+        var firstNavigation = facade.NotifyViewNavigatedAsync("test.package.view", null, CancellationToken.None).AsTask();
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await facade.NotifyViewNavigatedAsync("test.package.view", null, CancellationToken.None);
+
+        await firstCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstNavigation);
+
+        var closingNavigationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        probe.NavigateAsync = async (_, cancellationToken) =>
+        {
+            closingNavigationStarted.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        var closingNavigation = facade.NotifyViewNavigatedAsync("test.package.view", null, CancellationToken.None).AsTask();
+        await closingNavigationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        facade.CancelViewNavigation("test.package.view");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => closingNavigation);
     }
 
     [Fact]
@@ -188,6 +275,27 @@ public sealed class AppPackageViewRegistryTests
 
     private sealed class TestPackageView : Control
     {
+    }
+
+    private sealed class ConstructorInjectedPackageView(ConstructorDependency dependency) : Control
+    {
+        public ConstructorDependency Dependency { get; } = dependency;
+    }
+
+    private sealed class ConstructorDependency;
+
+    private sealed class NavigationPackageView(NavigationProbe probe) : Control, IPackageViewNavigationTarget
+    {
+        public ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+            => probe.NavigateAsync(context, cancellationToken);
+    }
+
+    private sealed class NavigationProbe
+    {
+        public Func<PackageViewNavigationContext, CancellationToken, ValueTask> NavigateAsync { get; set; }
+            = static (_, _) => ValueTask.CompletedTask;
     }
 
     private sealed class SelfUnregisteringPackageView : Control, IDisposable

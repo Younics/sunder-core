@@ -35,10 +35,9 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var preferredStackId = SelectedStack?.StackId;
-            await _stackLibrary.RefreshAsync(cancellationToken);
-            RebuildStackList(preferredStackId);
-            if (_stackLibrary.Count == 0)
+            var preferredStackId = Local.SelectedStack?.StackId;
+            await Local.RefreshAsync(preferredStackId, cancellationToken);
+            if (Local.Count == 0)
             {
                 StatusText = "No local Stacks yet. Import a .sunderstack file to start.";
             }
@@ -69,7 +68,7 @@ public sealed partial class StacksWindowViewModel
     private void ShowMarketplace()
     {
         BrowserMode = StackBrowserMode.Marketplace;
-        if (RegistryStacks.Count == 0 && HasRegistryUrlText)
+        if (Registry.Stacks.Count == 0 && HasRegistryUrlText)
         {
             QueueRegistrySearch(TimeSpan.Zero);
         }
@@ -78,15 +77,15 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand]
     private void ClearSearch()
     {
-        SearchText = string.Empty;
+        Local.SearchText = string.Empty;
     }
 
     [RelayCommand]
     private void ClearRegistrySearch()
     {
-        if (!string.IsNullOrEmpty(RegistrySearchText))
+        if (!string.IsNullOrEmpty(Registry.SearchText))
         {
-            RegistrySearchText = string.Empty;
+            Registry.SearchText = string.Empty;
             return;
         }
 
@@ -110,53 +109,36 @@ public sealed partial class StacksWindowViewModel
             return;
         }
 
-        using var request = _registrySearchRequest.Start(cancellationToken);
-        cancellationToken = request.Token;
-        var searchVersion = ++_registrySearchVersion;
         IsBusy = true;
-        SelectedRegistryStack = null;
-        RegistryStacks.Clear();
-        NotifyRegistryStackStateChanged();
         try
         {
             StatusText = "Searching Registry Stacks...";
-            using var registryClient = _registryClientFactory(registryUrl);
-            var query = string.IsNullOrWhiteSpace(RegistrySearchText) ? null : RegistrySearchText.Trim();
-            var results = await registryClient.SearchStacksAsync(
-                query,
-                0,
-                50,
-                SelectedRegistrySortOption?.Sort ?? RegistrySearchSort.Downloads,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (searchVersion != _registrySearchVersion || !request.IsCurrent)
+            var result = await Registry.SearchAsync(cancellationToken);
+            if (!result.Applied)
             {
                 return;
             }
 
-            foreach (var stack in results)
+            if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             {
-                RegistryStacks.Add(new RegistryStackSearchItemViewModel(stack));
+                StatusText = result.ErrorMessage;
+                return;
             }
 
-            SelectedRegistryStack = RegistryStacks.FirstOrDefault();
-            StatusText = RegistryStacks.Count == 0
+            StatusText = result.Count == 0
                 ? "No Registry Stacks matched the search."
-                : $"Found {RegistryStacks.Count} Registry Stack{(RegistryStacks.Count == 1 ? string.Empty : "s")}.";
+                : $"Found {result.Count} Registry Stack{(result.Count == 1 ? string.Empty : "s")}.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            if (searchVersion == _registrySearchVersion && request.IsCurrent)
-            {
-                StatusText = ex.Message;
-            }
+            StatusText = ex.Message;
         }
         finally
         {
-            if (searchVersion == _registrySearchVersion && request.IsCurrent)
+            if (!_disposed)
             {
                 IsBusy = false;
                 NotifyRegistryStackStateChanged();
@@ -172,14 +154,14 @@ public sealed partial class StacksWindowViewModel
         AppLaunchRequestKind launchKind = AppLaunchRequestKind.StackDetails,
         CancellationToken cancellationToken = default)
     {
-        if (_disposed || SelectedRegistryStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        if (_disposed || Registry.SelectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return false;
         }
 
         using var lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
         cancellationToken = lifetimeCancellation.Token;
-        return await ImportRegistryStackAsync(SelectedRegistryStack.StackId, registryUrl, launchKind, cancellationToken) is not null;
+        return await ImportRegistryStackAsync(Registry.SelectedStack.StackId, registryUrl, launchKind, cancellationToken) is not null;
     }
 
     [RelayCommand(CanExecute = nameof(CanImportStack))]
@@ -207,7 +189,7 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanExportSelectedStack))]
     private async Task ExportSelectedStackAsync()
     {
-        var selectedStack = SelectedStack;
+        var selectedStack = Local.SelectedStack;
         if (_disposed || selectedStack is null)
         {
             return;
@@ -223,7 +205,7 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            await _stackLibrary.ExportAsync(selectedStack.Item, path, cancellationToken);
+            await Local.ExportAsync(selectedStack, path, cancellationToken);
             StatusText = $"Exported '{selectedStack.Name}'.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -245,7 +227,7 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanPublishSelectedStack))]
     private async Task PublishSelectedStackAsync()
     {
-        var selectedStack = SelectedStack;
+        var selectedStack = Local.SelectedStack;
         if (_disposed || selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
@@ -255,26 +237,16 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var upload = await _runtimeApiClient.UploadStackAsync(selectedStack.LocalPath, cancellationToken);
-            var result = await _runtimeApiClient.PublishRegistryStackAsync(new RuntimeRegistryPublishRequest(registryUrl.AbsoluteUri, upload.UploadId), cancellationToken);
-            if (!result.Success)
-            {
-                StatusText = result.Errors.FirstOrDefault() ?? "Registry Stack publish failed.";
-                return;
-            }
-
-            var now = DateTimeOffset.UtcNow;
-            var publishedStackId = string.IsNullOrWhiteSpace(result.StackId) ? selectedStack.StackId : result.StackId!;
-            await _library.UpdatePublishStateAsync(
-                selectedStack.StackId,
-                registryUrl.ToString(),
-                publishedStackId,
-                now,
-                now,
+            var result = await _publishing.PublishAsync(
+                selectedStack,
+                registryUrl,
+                preserveOriginalPublishTime: false,
                 cancellationToken);
-            await _stackLibrary.RefreshAsync(cancellationToken);
-            RebuildStackList(selectedStack.StackId);
-            StatusText = result.Message ?? $"Published Stack '{publishedStackId}'.";
+            StatusText = result.Message;
+            if (result.Success)
+            {
+                await Local.RefreshAsync(selectedStack.StackId, cancellationToken);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -296,7 +268,7 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanUnpublishSelectedStack))]
     private async Task UnpublishSelectedStackAsync()
     {
-        var selectedStack = SelectedStack;
+        var selectedStack = Local.SelectedStack;
         var publishedStackId = selectedStack?.PublishedStackId;
         if (_disposed || selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
         {
@@ -312,19 +284,12 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var result = await _runtimeApiClient.DeleteRegistryStackAsync(new RuntimeRegistryDeleteStackRequest(registryUrl.AbsoluteUri, publishedStackId), cancellationToken);
-            if (!result.Success)
+            var result = await _publishing.UnpublishAsync(selectedStack, registryUrl, cancellationToken);
+            StatusText = result.Message;
+            if (result.Success)
             {
-                StatusText = result.Forbidden
-                    ? "Registry Stack unpublish requires sign-in as the Stack owner."
-                    : result.Errors.FirstOrDefault() ?? "Registry Stack unpublish failed.";
-                return;
+                await Local.RefreshAsync(selectedStack.StackId, cancellationToken);
             }
-
-            await _library.ClearPublishStateAsync(selectedStack.StackId, cancellationToken);
-            await _stackLibrary.RefreshAsync(cancellationToken);
-            RebuildStackList(selectedStack.StackId);
-            StatusText = result.Message ?? $"Unpublished Stack '{publishedStackId}'.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -346,7 +311,7 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanToggleSelectedStackStar))]
     private async Task ToggleSelectedStackStarAsync()
     {
-        var selectedStack = SelectedStack;
+        var selectedStack = Local.SelectedStack;
         var publishedStackId = selectedStack?.PublishedStackId;
         if (_disposed || selectedStack is null || string.IsNullOrWhiteSpace(publishedStackId))
         {
@@ -362,19 +327,9 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var result = await _runtimeApiClient.SetRegistryStackStarAsync(
-                new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, publishedStackId, !SelectedStackIsStarred),
-                cancellationToken);
-            if (!result.Success)
-            {
-                StatusText = result.Forbidden
-                    ? "Sign in to the Registry before starring a Stack."
-                    : result.Errors.FirstOrDefault() ?? "Registry Stack star update failed.";
-                return;
-            }
-
+            var result = await _publishing.ToggleStarAsync(registryUrl, publishedStackId, SelectedStackIsStarred, cancellationToken);
             ApplySelectedStackStats(result.Stats);
-            StatusText = result.Message ?? "Updated Stack star.";
+            StatusText = result.Message;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -396,7 +351,7 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanToggleSelectedRegistryStackStar))]
     private async Task ToggleSelectedRegistryStackStarAsync()
     {
-        var selectedStack = SelectedRegistryStack;
+        var selectedStack = Registry.SelectedStack;
         if (_disposed || selectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
@@ -406,19 +361,9 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var result = await _runtimeApiClient.SetRegistryStackStarAsync(
-                new RuntimeRegistryStarRequest(registryUrl.AbsoluteUri, selectedStack.StackId, !SelectedRegistryStackIsStarred),
-                cancellationToken);
-            if (!result.Success)
-            {
-                StatusText = result.Forbidden
-                    ? "Sign in to the Registry before starring a Stack."
-                    : result.Errors.FirstOrDefault() ?? "Registry Stack star update failed.";
-                return;
-            }
-
+            var result = await _publishing.ToggleStarAsync(registryUrl, selectedStack.StackId, SelectedRegistryStackIsStarred, cancellationToken);
             ApplySelectedRegistryStackStats(result.Stats);
-            StatusText = result.Message ?? "Updated Stack star.";
+            StatusText = result.Message;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -441,12 +386,12 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanDeleteSelectedRegistryStack))]
     private async Task DeleteSelectedRegistryStackAsync()
     {
-        if (_disposed || SelectedRegistryStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
+        if (_disposed || Registry.SelectedStack is null || !TryResolveRegistryUrlForRegistryAction(out var registryUrl))
         {
             return;
         }
 
-        var selectedStack = SelectedRegistryStack;
+        var selectedStack = Registry.SelectedStack;
         var cancellationToken = _tasks.Token;
         IsBusy = true;
         try
@@ -462,8 +407,8 @@ public sealed partial class StacksWindowViewModel
                 return;
             }
 
-            RegistryStacks.Remove(selectedStack);
-            SelectedRegistryStack = RegistryStacks.FirstOrDefault();
+            Registry.Stacks.Remove(selectedStack);
+            Registry.SelectedStack = Registry.Stacks.FirstOrDefault();
             StatusText = result.Message ?? $"Deleted Registry Stack '{selectedStack.StackId}'.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -486,7 +431,7 @@ public sealed partial class StacksWindowViewModel
     [RelayCommand(CanExecute = nameof(CanRemoveSelectedStack))]
     private async Task RemoveSelectedStackAsync()
     {
-        var selectedStack = SelectedStack;
+        var selectedStack = Local.SelectedStack;
         if (_disposed || selectedStack is null)
         {
             return;
@@ -497,8 +442,7 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            await _stackLibrary.DeleteAsync(selectedStack.Item, cancellationToken);
-            RebuildStackList();
+            await Local.DeleteAsync(selectedStack, cancellationToken);
             StatusText = $"Removed local Stack '{removedName}'.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -527,8 +471,7 @@ public sealed partial class StacksWindowViewModel
         IsBusy = true;
         try
         {
-            var item = await _stackLibrary.ImportAsync(path, cancellationToken);
-            RebuildStackList(item.StackId);
+            var item = await Local.ImportAsync(path, cancellationToken);
             StatusText = $"Imported '{item.Name}'. Review it before use.";
             return item;
         }
@@ -559,16 +502,16 @@ public sealed partial class StacksWindowViewModel
 
         if (request.RegistryUrl is not null)
         {
-            RegistryUrlText = request.RegistryUrl.ToString();
+            Registry.RegistryUrlText = request.RegistryUrl.ToString();
         }
 
         BrowserMode = StackBrowserMode.Marketplace;
-        RegistrySearchText = request.StackId;
+        Registry.SearchText = request.StackId;
         CancelQueuedRegistrySearch();
         if (!TryResolveRegistryUrlForRegistryAction(out _))
         {
-            RegistryStacks.Clear();
-            SelectedRegistryStack = null;
+            Registry.Stacks.Clear();
+            Registry.SelectedStack = null;
             NotifyRegistryStackStateChanged();
             return;
         }
@@ -576,34 +519,25 @@ public sealed partial class StacksWindowViewModel
         await SearchRegistryStacksCoreAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var selectedStack = RegistryStacks.FirstOrDefault(stack =>
+        var selectedStack = Registry.Stacks.FirstOrDefault(stack =>
             string.Equals(stack.StackId, request.StackId, StringComparison.OrdinalIgnoreCase));
         if (selectedStack is null)
         {
-            RegistryStacks.Clear();
-            SelectedRegistryStack = null;
+            Registry.Stacks.Clear();
+            Registry.SelectedStack = null;
             NotifyRegistryStackStateChanged();
             StatusText = $"Registry Stack '{request.StackId}' was not found.";
             return;
         }
 
         KeepOnlyRegistryStack(selectedStack);
-        SelectedRegistryStack = selectedStack;
+        Registry.SelectedStack = selectedStack;
         StatusText = $"Loaded {selectedStack.StackId}.";
     }
 
     private void KeepOnlyRegistryStack(RegistryStackSearchItemViewModel stack)
     {
-        for (var index = RegistryStacks.Count - 1; index >= 0; index--)
-        {
-            if (ReferenceEquals(RegistryStacks[index], stack))
-            {
-                continue;
-            }
-
-            RegistryStacks.RemoveAt(index);
-        }
-
+        Registry.KeepOnly(stack);
         NotifyRegistryStackStateChanged();
     }
 
@@ -625,7 +559,7 @@ public sealed partial class StacksWindowViewModel
         {
             Directory.CreateDirectory(tempDirectory);
             StatusText = $"Downloading Registry Stack '{stackId}'...";
-            using var registryClient = _registryClientFactory(registryUrl);
+            using var registryClient = Registry.CreateClient(registryUrl);
             var stack = await registryClient.GetStackAsync(stackId, cancellationToken);
             if (stack is null)
             {
@@ -634,8 +568,7 @@ public sealed partial class StacksWindowViewModel
             }
 
             await registryClient.DownloadStackAsync(stack.Artifact, stack.StackId, tempPath, cancellationToken);
-            var item = await _stackLibrary.ImportAsync(tempPath, cancellationToken);
-            RebuildStackList(item.StackId);
+            var item = await Local.ImportAsync(tempPath, cancellationToken);
             StatusText = launchKind == AppLaunchRequestKind.StackUse
                 ? $"Downloaded '{item.Name}' from the Registry. Review it before use."
                 : $"Downloaded '{item.Name}' from the Registry.";

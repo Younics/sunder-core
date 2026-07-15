@@ -8,6 +8,8 @@ The compatibility boundary is the generated package manifest, public `Sunder.Sdk
 
 The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, an overlapping supported revision range, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
 
+The unreleased 1.1 App and Runtime use clean-break protocol revision `3`. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent. There is no revision-2 or global-watch compatibility path.
+
 ## Version Fields
 
 - `manifestVersion`: package manifest/archive schema version. This is not the SDK API version.
@@ -49,12 +51,11 @@ Current SDK capabilities are:
 | `views.v1` | package view registration and placement |
 | `settings-views.v1` | settings view registration |
 | `settings-navigation.v1` | package settings navigation service |
-| `workspaces.v1` | package view/workspace factories |
 | `background-services.v1` | package background services |
 | `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
 | `extensions.v1` | extension points, contribution registration, extension catalog queries |
 | `extensions.changes.v1` | extension catalog change monitoring |
-| `configuration.schema.v1` | package configuration schema contracts |
+| `settings.schema.v1` | host-rendered package settings schema contracts |
 | `settings.v1` | validated writable package settings, stored independently from opaque state |
 | `storage.v1` | package storage/file/key-value abstractions |
 | `role-local-workspace.v1` | activation-owned App/Runtime role-local workspace capability |
@@ -62,7 +63,6 @@ Current SDK capabilities are:
 | `logging.v1` | package logging abstractions |
 | `notifications.v1` | package notifications |
 | `shell-view.v1` | shell view/hotbar/navigation services |
-| `installed-package-sessions.v1` | installed package session control |
 | `development-package-sessions.v1` | optional development session control, availability, and structured outcomes |
 | `runtime-operations.v1` | package-scoped typed App-to-Runtime operations and streams |
 | `stacks.v1` | `Sunder.Sdk.Stacks` Stack import/export data contracts |
@@ -71,13 +71,14 @@ Current SDK capabilities are:
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |
 
-`Sunder.Package.Build` infers required capabilities automatically by scanning SDK contract usage in the compiled package assembly. Capability annotations are recognized from the base `Sunder.Sdk` assembly and explicit `Sunder.Sdk.*` contract assemblies such as `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks`. Inference is fail-closed: unreadable types/metadata, unresolved IL tokens, or dynamic/reflection access in package code produce diagnostics and fail manifest generation rather than emitting an incomplete requirement set.
+`Sunder.Package.Build` infers required capabilities from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the entry assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
 
-Manual MSBuild capability entries are required for unusual dynamic/reflection scenarios. Declare every capability that dynamically reached code can use; the declaration acknowledges that static inference cannot prove that portion complete:
+Manual MSBuild capability entries are required for unusual dynamic/reflection scenarios. Declare every capability that dynamically reached code can use and add the exact `SunderSdkDynamicAccess` call-site acknowledgment printed by the build. A capability declaration does not acknowledge unrelated unresolved sites:
 
 ```xml
 <ItemGroup>
   <SunderSdkCapability Include="callbacks.v1" />
+  <SunderSdkDynamicAccess Include="MyCompany.Package.DynamicFactory.CreateHandler" />
 </ItemGroup>
 ```
 
@@ -89,12 +90,10 @@ Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one
 
 `callbacks.v1` is the generic host-owned callback-session capability. It includes Runtime handler registration, immutable bounded start parameters, App-side start/poll/launch access through `IPackageContext.Callbacks`, single callback completion, expiry, and activation/shutdown cancellation. Package-owned network listeners are outside V1.
 
-`auth.v1` is only for auth-specific Host/App integration, including status and disconnect behavior. OAuth packages normally require both `callbacks.v1` and `auth.v1`; non-auth callback packages require only `callbacks.v1`.
+`auth.v1` is only for auth-specific Host/App integration, including status and disconnect behavior. It always implies `callbacks.v1`; non-auth callback packages require only `callbacks.v1`.
 
 ## Extension Catalog Changes
 
 Use `IPackageExtensionCatalogMonitor` for structured extension catalog changes. It exposes `Changed` with `PackageExtensionCatalogChangedEventArgs` including revision, reason, and per-extension-point additions/removals.
 
-`IPackageExtensionCatalogChangeNotifier` remains the simple compatibility invalidation contract.
-
-`IPackageExtensionCatalog.GetExtensionContributions` is mandatory. Hosts and test catalogs must supply a canonical non-empty owner package id for every contribution so Stack and other dependency-producing consumers cannot silently omit package requirements.
+`IPackageExtensionCatalog.GetExtensionContributions` is mandatory. Hosts and test catalogs must supply the canonical non-empty id of the package that registered each contribution. The extension-point definition or contracts assembly does not own contributions from other packages; explicit ownership prevents Stack and other dependency-producing consumers from silently omitting package requirements.

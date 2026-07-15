@@ -10,7 +10,7 @@ internal sealed class SettingsPackageSelectionCoordinator(
 {
     public async Task<SettingsPackageSelectionResult> LoadAsync(
         string packageId,
-        PackageConfigurationSchemaDescriptor? schema,
+        PackageSettingsSchemaDescriptor? schema,
         CancellationToken cancellationToken)
     {
         if (packageViewHostService.HasSettingsView(packageId))
@@ -19,29 +19,28 @@ internal sealed class SettingsPackageSelectionCoordinator(
                 packageId,
                 $"settings:{packageId}",
                 packageViewHostService.GetOrCreateSettingsView(packageId));
-            return new SettingsPackageSelectionResult(
-                hostedSettingsView,
-                [],
-                hostedSettingsView is null ? "Package settings view is unavailable." : string.Empty);
+            return hostedSettingsView is null
+                ? new UnavailablePackageSettingsSelection("Package settings view is unavailable.")
+                : new HostedPackageSettingsSelection(hostedSettingsView);
         }
 
         if (schema is null)
         {
-            return new SettingsPackageSelectionResult(
-                HostedSettingsView: null,
-                PackageSections: [],
-                StatusText: "This package does not provide configurable settings.");
+            return new UnavailablePackageSettingsSelection("This package does not provide configurable settings.");
         }
 
         var values = await runtimeApiClient.GetPackageSettingsValuesAsync(packageId, cancellationToken);
-        return new SettingsPackageSelectionResult(
-            HostedSettingsView: null,
-            PackageSections: SettingsPackageConfigurationFormFactory.Create(schema, values),
-            StatusText: string.Empty);
+        return new PackageSettingsFormSelection(SettingsPackageConfigurationFormFactory.Create(schema, values));
     }
 }
 
-internal sealed record SettingsPackageSelectionResult(
-    Control? HostedSettingsView,
-    IReadOnlyList<SettingsFieldSectionViewModel> PackageSections,
-    string StatusText);
+internal abstract record SettingsPackageSelectionResult(string StatusText);
+
+internal sealed record HostedPackageSettingsSelection(Control View)
+    : SettingsPackageSelectionResult(string.Empty);
+
+internal sealed record PackageSettingsFormSelection(IReadOnlyList<SettingsFieldSectionViewModel> Sections)
+    : SettingsPackageSelectionResult(string.Empty);
+
+internal sealed record UnavailablePackageSettingsSelection(string Message)
+    : SettingsPackageSelectionResult(Message);

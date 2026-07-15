@@ -26,7 +26,7 @@ internal sealed class CliApplication
         => new(
             stdout,
             stderr,
-            options => new CliRuntimeClient(options.RuntimeUrl),
+            options => new CliRuntimeClient(options.RuntimeUrl, options.RequestTimeout),
             options => new RegistryClient(options.RegistryApiUrl),
             new BrowserLauncher());
 
@@ -37,7 +37,7 @@ internal sealed class CliApplication
         try
         {
             invocation = CliCommandParser.Parse(args);
-            output = new CliOutput(_stdout, _stderr, invocation.Options.Json);
+            output = new CliOutput(_stdout, _stderr, invocation.Json);
         }
         catch (Exception exception) when (exception is CliUsageException or ArgumentException)
         {
@@ -55,13 +55,15 @@ internal sealed class CliApplication
             return CliExitCodes.Success;
         }
 
-        using var timeout = new CancellationTokenSource(invocation.Options.RequestTimeout);
+        var options = invocation.Options
+            ?? throw new InvalidOperationException("Operational CLI commands require parsed options.");
+        using var timeout = new CancellationTokenSource(options.RequestTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            using var runtime = _runtimeFactory(invocation.Options);
-            using var registry = _registryFactory(invocation.Options);
-            var dispatcher = new CliCommandDispatcher(runtime, registry, output, new CliProgress(output), _browser, invocation.Options);
+            using var runtime = _runtimeFactory(options);
+            using var registry = _registryFactory(options);
+            var dispatcher = new CliCommandDispatcher(runtime, registry, output, new CliProgress(output), _browser, options);
             var exitCode = await dispatcher.ExecuteAsync(invocation.Command, linked.Token).ConfigureAwait(false);
             output.Complete(exitCode);
             return exitCode;
@@ -72,7 +74,7 @@ internal sealed class CliApplication
             output.Complete(CliExitCodes.Cancelled);
             return CliExitCodes.Cancelled;
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        catch (Exception exception) when (timeout.IsCancellationRequested || CliErrorMapper.IsTimeout(exception))
         {
             output.Error("Operation timed out. Use --timeout <duration> to increase the request timeout.");
             output.Complete(CliExitCodes.Timeout);

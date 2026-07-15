@@ -34,6 +34,10 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     public ITaskItem[] RuntimeCopyLocalPaths { get; set; } = [];
 
+    public ITaskItem[] AuthoredAssemblyPaths { get; set; } = [];
+
+    public ITaskItem[] DynamicAccessAcknowledgements { get; set; } = [];
+
     public override bool Execute()
     {
         var generator = new PackageManifestGenerator
@@ -52,6 +56,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             SdkCapabilities = SdkCapabilities,
             ReferencePaths = ReferencePaths,
             RuntimeCopyLocalPaths = RuntimeCopyLocalPaths,
+            AuthoredAssemblyPaths = AuthoredAssemblyPaths,
+            DynamicAccessAcknowledgements = DynamicAccessAcknowledgements,
         };
         return generator.Execute();
     }

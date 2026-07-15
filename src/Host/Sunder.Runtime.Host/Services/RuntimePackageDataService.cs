@@ -11,13 +11,14 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return null;
         }
 
-        var value = await package.StateStore.GetValueAsync(key, cancellationToken);
+        var value = await package.StateStore.GetValueAsync(key, linked.Token);
         return new PackageDataValueResponse(value is not null, value);
     }
 
@@ -27,10 +28,11 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         return package is null
             ? null
-            : await package.StateStore.ListKeysAsync(prefix, cancellationToken);
+            : await package.StateStore.ListKeysAsync(prefix, linked.Token);
     }
 
     public async Task<bool> SetStateAsync(
@@ -40,26 +42,28 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
         }
 
-        await package.StateStore.SetValueAsync(key, value, cancellationToken);
+        await package.StateStore.SetValueAsync(key, value, linked.Token);
         return true;
     }
 
     public async Task<bool> DeleteStateAsync(string packageId, string key, CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
         }
 
-        await package.StateStore.DeleteValueAsync(key, cancellationToken);
+        await package.StateStore.DeleteValueAsync(key, linked.Token);
         return true;
     }
 
@@ -69,13 +73,14 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return null;
         }
 
-        var value = await package.SecretsStore.GetSecretAsync(key, cancellationToken);
+        var value = await package.SecretsStore.GetSecretAsync(key, linked.Token);
         return new PackageDataValueResponse(value is not null, value);
     }
 
@@ -86,26 +91,28 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
         }
 
-        await package.SecretsStore.SetSecretAsync(key, value, cancellationToken);
+        await package.SecretsStore.SetSecretAsync(key, value, linked.Token);
         return true;
     }
 
     public async Task<bool> DeleteSecretAsync(string packageId, string key, CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessionState.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
         }
 
-        await package.SecretsStore.DeleteSecretAsync(key, cancellationToken);
+        await package.SecretsStore.DeleteSecretAsync(key, linked.Token);
         return true;
     }
 
@@ -116,6 +123,7 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var filePath = TryGetFilePath(lease, packageId, relativePath);
         if (filePath is null || !File.Exists(filePath))
         {
@@ -127,7 +135,7 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
             throw new InvalidDataException("The package file exceeds the Runtime read limit.");
         }
 
-        return await File.ReadAllBytesAsync(filePath, cancellationToken);
+        return await File.ReadAllBytesAsync(filePath, linked.Token);
     }
 
     public async Task<bool> WriteFileAsync(
@@ -137,6 +145,7 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var filePath = TryGetFilePath(lease, packageId, relativePath);
         if (filePath is null)
         {
@@ -144,14 +153,15 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllBytesAsync(filePath, contents, cancellationToken);
+        await File.WriteAllBytesAsync(filePath, contents, linked.Token);
         return true;
     }
 
     public Task<bool> DeleteFileAsync(string packageId, string relativePath, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         using var lease = sessionState.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
+        linked.Token.ThrowIfCancellationRequested();
         var filePath = TryGetFilePath(lease, packageId, relativePath);
         if (filePath is null)
         {

@@ -53,7 +53,7 @@
                        VerticalAlignment="Center" />
             <TextBox Grid.Column="1"
                      Classes="search-box"
-                     Text="{Binding RegistryUrlText}"
+                      Text="{Binding Registry.RegistryUrlText}"
                      PlaceholderText="https://hub.sunderapp.io/" />
           </Grid>
         </Border>
@@ -127,12 +127,12 @@
                         ColumnSpacing="8"
                         VerticalAlignment="Center">
                     <TextBox Classes="search-box"
-                             Text="{Binding SearchText}"
+                             Text="{Binding Local.SearchText}"
                              PlaceholderText="Search local Stacks" />
                     <Button Grid.Column="1"
                             Classes="search-clear-button"
                             Command="{Binding ClearSearchCommand}"
-                            IsVisible="{Binding HasSearchText}"
+                            IsVisible="{Binding Local.HasSearchText}"
                             ToolTip.Tip="Clear search">
                       <Path Width="10"
                             Height="10"
@@ -149,12 +149,12 @@
                           ColumnSpacing="8"
                           VerticalAlignment="Center">
                       <TextBox Classes="search-box"
-                               Text="{Binding RegistrySearchText}"
+                               Text="{Binding Registry.SearchText}"
                                PlaceholderText="Search Marketplace Stacks" />
                       <Button Grid.Column="1"
                               Classes="search-clear-button"
                               Command="{Binding ClearRegistrySearchCommand}"
-                              IsVisible="{Binding HasRegistrySearchText}"
+                              IsVisible="{Binding Registry.HasSearchText}"
                               ToolTip.Tip="Clear Marketplace search">
                         <Path Width="10"
                               Height="10"
@@ -163,8 +163,8 @@
                       </Button>
                     </Grid>
                   </Border>
-                  <ComboBox ItemsSource="{Binding RegistrySortOptions}"
-                            SelectedItem="{Binding SelectedRegistrySortOption}"
+                  <ComboBox ItemsSource="{Binding Registry.SortOptions}"
+                             SelectedItem="{Binding Registry.SelectedSortOption}"
                             HorizontalAlignment="Stretch">
                     <ComboBox.ItemTemplate>
                       <DataTemplate x:DataType="vm:RegistrySearchSortOptionViewModel">
@@ -177,8 +177,8 @@
 
               <Grid Grid.Row="2">
                 <ListBox Classes="package-list"
-                         ItemsSource="{Binding Stacks}"
-                         SelectedItem="{Binding SelectedStack, Mode=TwoWay}"
+                         ItemsSource="{Binding Local.Stacks}"
+                         SelectedItem="{Binding Local.SelectedStack, Mode=TwoWay}"
                          IsVisible="{Binding IsLocalMode}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:LocalStackLibraryItemViewModel">
@@ -212,8 +212,8 @@
                 </ListBox>
 
                 <ListBox Classes="package-list"
-                         ItemsSource="{Binding RegistryStacks}"
-                         SelectedItem="{Binding SelectedRegistryStack, Mode=TwoWay}"
+                         ItemsSource="{Binding Registry.Stacks}"
+                         SelectedItem="{Binding Registry.SelectedStack, Mode=TwoWay}"
                          IsVisible="{Binding IsMarketplaceMode}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:RegistryStackSearchItemViewModel">

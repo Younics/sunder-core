@@ -10,9 +10,9 @@ namespace Sunder.App.Tests;
 public sealed class RuntimeHostProcessManagerTests
 {
     [Theory]
-    [InlineData("dev.sunder.runtime", 1, 1, 1, true)]
-    [InlineData("dev.sunder.runtime", 2, 1, 2, true)]
-    [InlineData("dev.sunder.runtime", 2, 2, 2, false)]
+    [InlineData("dev.sunder.runtime", 1, 1, 1, false)]
+    [InlineData("dev.sunder.runtime", 2, 1, 2, false)]
+    [InlineData("dev.sunder.runtime", 3, 3, 3, true)]
     [InlineData("dev.sunder.runtime", 0, 0, 0, false)]
     [InlineData("other.runtime", 1, 1, 1, false)]
     public void CanReuseRunningRuntime_UsesProtocolIdentityAndRange(
@@ -28,18 +28,29 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public void CanReuseRunningRuntime_RejectsMissingRequiredFeature()
+    public void CanReuseRunningRuntime_RequiresBaseFeatureAndLeavesAtomicSnapshotOperationScoped()
     {
         var handshake = CreateHandshake() with { SupportedFeatures = [] };
 
         Assert.False(RuntimeHostProcessManager.CanReuseRunningRuntime(handshake));
+        var versionedApiOnly = CreateHandshake() with
+        {
+            SupportedFeatures = [RuntimeProtocolFeatures.VersionedApiV1],
+        };
+        Assert.True(RuntimeHostProcessManager.CanReuseRunningRuntime(versionedApiOnly));
+        Assert.Contains(
+            RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
+            RuntimeProtocolCompatibility.GetIncompatibility(
+                versionedApiOnly,
+                RuntimeProtocolFeatures.AtomicPackageSnapshotV1),
+            StringComparison.Ordinal);
     }
 
     [Fact]
     public void ShouldReplaceRunningRuntime_ReplacesOnlyKnownIncompatibleProtocol()
     {
         Assert.True(RuntimeHostProcessManager.ShouldReplaceRunningRuntime(
-            CreateHandshake(revision: 2, minimum: 2, maximum: 2)));
+            CreateHandshake(revision: 1, minimum: 1, maximum: 1)));
         Assert.False(RuntimeHostProcessManager.ShouldReplaceRunningRuntime(
             CreateHandshake(identity: "other.runtime")));
         Assert.False(RuntimeHostProcessManager.ShouldReplaceRunningRuntime(null));
@@ -123,7 +134,7 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public async Task EnsureStartedAsync_WhenDevPackagesConfigured_PassesSecretsOutOfArguments()
+    public async Task EnsureStartedAsync_WhenDevPackagesConfigured_DoesNotPassDevFoldersToRuntime()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
         var runtimeUrl = new Uri("http://localhost:54321/");
@@ -139,6 +150,7 @@ public sealed class RuntimeHostProcessManagerTests
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
             startProcess: startInfo =>
             {
+                Assert.Null(RuntimeConnectionInfoStore.Load(connectionInfoPath));
                 capturedStartInfo = startInfo;
                 runtimeStarted = true;
             },
@@ -150,12 +162,53 @@ public sealed class RuntimeHostProcessManagerTests
             await manager.EnsureStartedAsync(runtimeUrl);
 
             Assert.NotNull(capturedStartInfo);
-            Assert.Contains("--dev-package", capturedStartInfo.ArgumentList);
-            Assert.Contains(devPackageFolder, capturedStartInfo.ArgumentList);
-            Assert.True(capturedStartInfo.Environment.TryGetValue("SUNDER_RUNTIME_BEARER_TOKEN", out var bearerToken));
-            Assert.False(string.IsNullOrWhiteSpace(bearerToken));
-            Assert.DoesNotContain(capturedStartInfo.ArgumentList, argument => string.Equals(argument, bearerToken, StringComparison.Ordinal));
+            Assert.DoesNotContain("--dev-package", capturedStartInfo.ArgumentList);
+            Assert.DoesNotContain(devPackageFolder, capturedStartInfo.ArgumentList);
+            Assert.False(capturedStartInfo.Environment.ContainsKey("SUNDER_RUNTIME_BEARER_TOKEN"));
             Assert.Equal(connectionInfoPath, capturedStartInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"]);
+            Assert.Null(RuntimeConnectionInfoStore.Load(connectionInfoPath));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenDevPackagesConfigured_ReusesWarmManagedRuntime()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        RuntimeConnectionInfoStore.Save(new RuntimeConnectionInfo(runtimeUrl, "old-managed-token"), connectionInfoPath);
+        var runtimeRunning = true;
+        var shutdownCount = 0;
+        var startCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions { DevPackageFolders = [Path.Combine(rootPath, "dev-package")] },
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(runtimeRunning ? CreateHandshake() : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeRunning),
+            shutdownRuntimeAsync: (_, _) =>
+            {
+                shutdownCount++;
+                runtimeRunning = false;
+                return Task.CompletedTask;
+            },
+            startProcess: _ =>
+            {
+                startCount++;
+                runtimeRunning = true;
+            },
+            delayAsync: (_, _) => Task.CompletedTask,
+            connectionInfoPath: connectionInfoPath);
+
+        try
+        {
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(0, shutdownCount);
+            Assert.Equal(0, startCount);
         }
         finally
         {
@@ -223,7 +276,7 @@ public sealed class RuntimeHostProcessManagerTests
             minimum,
             maximum,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
             new RuntimeProductVersionDiagnostics("Other.Runtime", "not-a-protocol-version", "diagnostic-build"));
 
     private static async Task<(string RootPath, string RuntimeHostPath)> CreateRuntimeHostFileAsync()

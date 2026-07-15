@@ -65,7 +65,7 @@ public sealed partial class StacksWindowViewModel
             await Task.Delay(_registryDetailSpinnerDelay, spinnerCancellation.Token);
             if (!_disposed
                 && _selection.IsCurrent(selectionRequest)
-                && ReferenceEquals(SelectedRegistryStack, stack)
+                && ReferenceEquals(Registry.SelectedStack, stack)
                 && IsRegistryStackDetailsLoading
                 && !RegistryStackDetailsLoaded)
             {
@@ -141,7 +141,7 @@ public sealed partial class StacksWindowViewModel
 
         try
         {
-            using var registryClient = _registryClientFactory(registryUrl);
+            using var registryClient = Registry.CreateClient(registryUrl);
             var loadResult = await _detailLoader.LoadRegistryAsync(stackId, registryClient, cancellationToken);
             if (!_selection.IsCurrent(selectionRequest))
             {

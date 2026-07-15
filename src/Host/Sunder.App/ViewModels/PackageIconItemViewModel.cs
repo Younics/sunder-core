@@ -16,7 +16,8 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
         IImage? iconImage = null,
         bool ownsIconImage = true,
         bool loadIcon = true,
-        IUiDispatcher? uiDispatcher = null)
+        IUiDispatcher? uiDispatcher = null,
+        PackageIconTransport iconTransport = PackageIconTransport.RuntimeAsset)
     {
         IconUri = iconUri;
         _ownsIconImage = ownsIconImage;
@@ -27,6 +28,7 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
             _iconLoadCts = new CancellationTokenSource();
             _iconLoadTask = PackageIconImageViewModelLoader.LoadAsync(
                 IconUri,
+                iconTransport,
                 uiDispatcher ?? AvaloniaUiDispatcher.Instance,
                 () => _isDisposed,
                 (error, image) =>

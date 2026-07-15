@@ -3,6 +3,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
@@ -13,18 +14,29 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePaths paths)
 {
+    private static readonly Type[] ReservedServiceTypes =
+    [
+        typeof(IPackageContext),
+        typeof(ILoggerFactory),
+        typeof(ILogger<>),
+        typeof(IPackageExtensionCatalog),
+        typeof(IPackageShellViewService),
+        typeof(IPackageSettingsNavigationService),
+        typeof(IPackageNotificationService),
+        typeof(IPackageRuntimeClient),
+        typeof(IPackageCallbackClient),
+    ];
+
     public async Task<PackageActivationResult> ActivateAsync(
         PreparedRuntimePackage package,
         RuntimeSharedAssemblyRegistry sharedAssemblies,
         RuntimePackageExtensionCatalog extensionCatalog,
         ICollection<string> warnings,
         ICollection<string> errors,
-        bool startBackgroundServices,
         CancellationToken cancellationToken)
     {
         RuntimePackageLoadContext? loadContext = null;
         ServiceProvider? serviceProvider = null;
-        var startedBackgroundServices = new List<IPackageBackgroundService>();
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -48,9 +60,12 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             }
             var module = moduleInstance as ISunderRuntimePackageModule;
             var packageContext = new RuntimePackageContext(package.PackageId, package.Version, package.ShadowFolder, paths.PackageDataRootPath);
+            var packageServices = new ConstrainedPackageServiceCollection(ReservedServiceTypes);
+            module?.ConfigureRuntimeServices(packageServices, packageContext);
             var services = new ServiceCollection();
+            packageServices.CopyTo(services);
             services.AddSingleton<IPackageContext>(packageContext);
-            services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
+            services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
             services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
             services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(EmptyPackageShellViewService.Instance);
@@ -58,24 +73,19 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             services.AddSingleton<IPackageNotificationService>(NullPackageNotificationService.Instance);
             services.AddSingleton<IPackageRuntimeClient>(NullPackageRuntimeClient.Instance);
             services.AddSingleton<IPackageCallbackClient>(NullPackageCallbackClient.Instance);
-            module?.ConfigureRuntimeServices(services, packageContext);
             serviceProvider = services.BuildServiceProvider();
 
             var contributions = new RuntimePackageContributionRegistry(serviceProvider, extensionCatalog, package.PackageId);
-            module?.RegisterRuntimeContributions(contributions, serviceProvider);
-            packageContext.PackageSettings.Schema = contributions.ConfigurationSchema;
-            foreach (var backgroundService in contributions.BackgroundServices)
+            using (var extensionBatch = extensionCatalog.BeginBatch(PackageExtensionCatalogChangeReason.PackageActivated))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!startBackgroundServices) continue;
-                await backgroundService.StartAsync(cancellationToken);
-                startedBackgroundServices.Add(backgroundService);
+                module?.RegisterRuntimeContributions(contributions, serviceProvider);
+                extensionBatch.Commit();
             }
-
+            packageContext.PackageSettings.Schema = contributions.SettingsSchema;
             var loadedPackage = new ActiveLoadedPackage(
                 BuildDescriptor(package.Activation, true, PackageReadinessState.Ready, []),
                 package.Source,
-                ToProtocolConfigurationSchema(contributions.ConfigurationSchema),
+                ToProtocolSettingsSchema(package.PackageId, package.Activation.Name, contributions.SettingsSchema),
                 packageContext.Storage.State,
                 packageContext.SecretsStore,
                 serviceProvider.GetService<IPackageAuthHandler>(),
@@ -85,13 +95,14 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
                 loadContext,
                 packageContext.Settings)
             {
+                CanonicalSettingsSchema = contributions.SettingsSchema,
                 RuntimeOperations = contributions.RuntimeOperations,
                 RuntimeStreams = contributions.RuntimeStreams,
             };
             var descriptor = BuildSessionDescriptor(package.Activation, true, PackageReadinessState.Ready, packageViews: []);
             if (!contributions.HasRegisteredExtensions
                 && !contributions.HasRegisteredBackgroundServices
-                && contributions.ConfigurationSchema is null
+                && contributions.SettingsSchema is null
                 && contributions.RuntimeOperations.Count == 0
                 && contributions.RuntimeStreams.Count == 0)
             {
@@ -101,7 +112,6 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
         }
         catch (Exception exception)
         {
-            await PackageSessionLifecycle.StopBackgroundServicesAsync(startedBackgroundServices, package.PackageId, logger);
             if (serviceProvider is not null) await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
             loadContext?.Unload();
             extensionCatalog.RemovePackage(package.PackageId, PackageExtensionCatalogChangeReason.PackageFaulted);

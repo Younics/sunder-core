@@ -26,15 +26,13 @@ public sealed partial class RuntimeManagementClient
             CreateUri("packages/store/stage"),
             new PackageStoreStageRequest([new PackageStoreMutationRequest(kind, kind == PackageStoreMutationKind.Upgrade ? packageId : null, upload.UploadId, allowDowngrade, reinstall)]),
             token).ConfigureAwait(false);
-        var stage = await _responses.ReadRequiredJsonAsync<PackageStoreStageResult>(stageResponse, token, acceptErrorPayload: true).ConfigureAwait(false);
+        var stage = await _responses.ReadRequiredJsonAsync<PackageStoreStageResult>(stageResponse, token).ConfigureAwait(false);
         if (!stage.Success || stage.StageId is null)
         {
             return stage.OperationResult;
         }
 
-        using var commitResponse = await _httpClient.PostAsync(
-            CreateUri($"packages/store/stage/{Uri.EscapeDataString(stage.StageId)}/commit"), null, token).ConfigureAwait(false);
-        return await _responses.ReadRequiredJsonAsync<PackageOperationResult>(commitResponse, token, acceptErrorPayload: true).ConfigureAwait(false);
+        return await CommitPackageStageAsync(stage.StageId, stage.OperationResult, token).ConfigureAwait(false);
     }
 
     private async Task<ContentUploadDescriptor> UploadAsync(string filePath, string endpoint, string contentType, CancellationToken token)
@@ -50,4 +48,5 @@ public sealed partial class RuntimeManagementClient
         using var response = await _httpClient.PostAsync(CreateUri(endpoint), content, token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<ContentUploadDescriptor>(response, token).ConfigureAwait(false);
     }
+
 }

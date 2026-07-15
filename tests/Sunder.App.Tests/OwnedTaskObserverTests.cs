@@ -33,4 +33,17 @@ public sealed class OwnedTaskObserverTests
         Assert.True(finished.Task.IsCompletedSuccessfully);
         Assert.True(observer.Token.IsCancellationRequested);
     }
+
+    [Fact]
+    public async Task StopAsync_CancellationCallbackCanReenterObserverWithoutDeadlock()
+    {
+        using var observer = new OwnedTaskObserver("test");
+        using var registration = observer.Token.Register(() =>
+            observer.Observe(Task.CompletedTask, "handling cancellation"));
+        observer.Run(token => Task.Delay(Timeout.InfiniteTimeSpan, token), "waiting");
+
+        await observer.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(observer.Token.IsCancellationRequested);
+    }
 }

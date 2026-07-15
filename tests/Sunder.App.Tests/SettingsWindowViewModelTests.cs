@@ -1,3 +1,5 @@
+using Avalonia.Controls;
+using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Runtime.Contracts;
@@ -10,6 +12,81 @@ namespace Sunder.App.Tests;
 public sealed class SettingsWindowViewModelTests
 {
     [Fact]
+    public async Task HostedSettings_DirectSelectionAndRestorationNavigateExactlyOnceEach()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var probe = new SettingsNavigationProbe();
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+
+        await viewModel.SelectSectionAsync(Assert.Single(viewModel.PackageSettings.PackageSections));
+
+        var directContext = Assert.Single(probe.Contexts);
+        Assert.Equal("settings:agent", directContext.ViewId);
+        Assert.Empty(directContext.Parameters);
+        Assert.Equal(0, probe.DataContextNavigationCount);
+
+        viewModel.DetachHostedPackageSettingsView();
+        await viewModel.RefreshPackageSectionsAsync();
+
+        Assert.Equal(2, probe.Contexts.Count);
+        Assert.Equal(0, probe.DataContextNavigationCount);
+    }
+
+    [Fact]
+    public async Task SelectPackageSettingsAsync_SnapshotsParametersAndCancelsSupersededNavigation()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var probe = new SettingsNavigationProbe();
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callCount = 0;
+        probe.NavigateAsync = async (_, cancellationToken) =>
+        {
+            if (Interlocked.Increment(ref callCount) != 1)
+            {
+                return;
+            }
+
+            firstStarted.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                firstCancelled.SetResult();
+                throw;
+            }
+        };
+        var parameters = new Dictionary<string, string?> { ["workspace"] = "original" };
+
+        var firstSelection = viewModel.SelectPackageSettingsAsync("agent", parameters);
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        parameters["workspace"] = "changed";
+        var secondSelection = viewModel.SelectPackageSettingsAsync("agent");
+
+        await firstCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(await firstSelection);
+        Assert.True(await secondSelection);
+        Assert.Equal(2, probe.Contexts.Count);
+        Assert.Equal("original", probe.Contexts[0].Parameters["workspace"]);
+        Assert.Throws<NotSupportedException>(() =>
+            Assert.IsAssignableFrom<IDictionary<string, string?>>(probe.Contexts[0].Parameters)["workspace"] = "mutated");
+        Assert.Equal(0, probe.DataContextNavigationCount);
+    }
+
+    [Fact]
     public async Task RefreshPackageSectionsAsync_LoadsNewPackageSchemas()
     {
         using var runtimeClient = new FakeRuntimeApiClient
@@ -21,7 +98,7 @@ public sealed class SettingsWindowViewModelTests
         await viewModel.RefreshPackageSectionsAsync();
 
         Assert.Collection(
-            viewModel.PackageSections,
+            viewModel.PackageSettings.PackageSections,
             section => Assert.Equal("agent", section.PackageId));
 
         runtimeClient.ConfigurationSchemas =
@@ -33,10 +110,58 @@ public sealed class SettingsWindowViewModelTests
         await viewModel.RefreshPackageSectionsAsync();
 
         Assert.Collection(
-            viewModel.PackageSections,
+            viewModel.PackageSettings.PackageSections,
             section => Assert.Equal("agent", section.PackageId),
             section => Assert.Equal("tools", section.PackageId));
-        Assert.True(viewModel.HasPackageSections);
+        Assert.True(viewModel.PackageSettings.HasPackageSections);
+    }
+
+    [Fact]
+    public async Task RefreshPackageSectionsAsync_WhenEarlierRefreshCompletesLater_AppliesLatestOnly()
+    {
+        var staleStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var staleCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callCount = 0;
+        using var runtimeClient = new FakeRuntimeApiClient
+        {
+            GetConfigurationSchemasAsyncCallback = async cancellationToken =>
+            {
+                var call = Interlocked.Increment(ref callCount);
+                if (call == 1)
+                {
+                    return [];
+                }
+
+                if (call == 2)
+                {
+                    staleStarted.SetResult();
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        staleCancelled.SetResult();
+                        throw;
+                    }
+                }
+
+                return [CreateSchema("tools", "Tools")];
+            },
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await WaitForConditionAsync(() => Volatile.Read(ref callCount) == 1);
+
+        var staleRefresh = viewModel.RefreshPackageSectionsAsync();
+        await staleStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var latestRefresh = viewModel.RefreshPackageSectionsAsync();
+
+        await staleCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.WhenAll(staleRefresh, latestRefresh);
+
+        var section = Assert.Single(viewModel.PackageSettings.PackageSections);
+        Assert.Equal("tools", section.PackageId);
+        Assert.False(viewModel.IsBusy);
     }
 
     [Fact]
@@ -54,7 +179,7 @@ public sealed class SettingsWindowViewModelTests
 
         await viewModel.RefreshPackageSectionsAsync();
         Assert.True(await viewModel.SelectPackageSettingsAsync("agent"));
-        var field = Assert.IsType<TextSettingsFieldViewModel>(Assert.Single(Assert.Single(viewModel.SelectedPackageSections).Fields));
+        var field = Assert.IsType<TextSettingsFieldViewModel>(Assert.Single(Assert.Single(viewModel.PackageSettings.SelectedPackageSections).Fields));
         field.Value = "unsaved";
 
         runtimeClient.ConfigurationSchemas = [CreateSchema("agent", "Agent Updated", "Updated summary.")];
@@ -64,8 +189,8 @@ public sealed class SettingsWindowViewModelTests
         Assert.Equal("Agent Updated", viewModel.SelectedTitle);
         Assert.Equal("Updated summary.", viewModel.SelectedDescription);
         Assert.Equal(1, runtimeClient.GetPackageConfigurationValuesCallCount);
-        Assert.True(Assert.Single(viewModel.PackageSections).IsSelected);
-        var refreshedField = Assert.IsType<TextSettingsFieldViewModel>(Assert.Single(Assert.Single(viewModel.SelectedPackageSections).Fields));
+        Assert.True(Assert.Single(viewModel.PackageSettings.PackageSections).IsSelected);
+        var refreshedField = Assert.IsType<TextSettingsFieldViewModel>(Assert.Single(Assert.Single(viewModel.PackageSettings.SelectedPackageSections).Fields));
         Assert.Same(field, refreshedField);
         Assert.Equal("unsaved", refreshedField.Value);
     }
@@ -89,8 +214,8 @@ public sealed class SettingsWindowViewModelTests
         Assert.False(viewModel.IsPackageSelection);
         Assert.Equal("Appearance", viewModel.SelectedTitle);
         Assert.True(viewModel.CoreSections[0].IsSelected);
-        Assert.Empty(viewModel.PackageSections);
-        Assert.Empty(viewModel.SelectedPackageSections);
+        Assert.Empty(viewModel.PackageSettings.PackageSections);
+        Assert.Empty(viewModel.PackageSettings.SelectedPackageSections);
     }
 
     [Fact]
@@ -130,9 +255,31 @@ public sealed class SettingsWindowViewModelTests
         Assert.False(await agentSelectionTask);
 
         Assert.Equal("Tools", viewModel.SelectedTitle);
-        var section = Assert.Single(viewModel.SelectedPackageSections);
+        var section = Assert.Single(viewModel.PackageSettings.SelectedPackageSections);
         var field = Assert.IsType<TextSettingsFieldViewModel>(Assert.Single(section.Fields));
         Assert.Equal("tools", field.Value);
+    }
+
+    [Fact]
+    public async Task SelectPackageSettingsAsync_WhenHostedNavigationFails_PreservesUsefulErrorText()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var probe = new SettingsNavigationProbe
+        {
+            NavigateAsync = (_, _) => ValueTask.FromException(new InvalidOperationException("Navigation target failed.")),
+        };
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+
+        var selected = await viewModel.SelectPackageSettingsAsync("agent");
+
+        Assert.False(selected);
+        Assert.Equal("Appearance", viewModel.SelectedTitle);
+        Assert.Contains("Navigation target failed.", viewModel.StatusText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -219,7 +366,7 @@ public sealed class SettingsWindowViewModelTests
         viewModel.Dispose();
 
         await loadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Empty(viewModel.PackageSections);
+        Assert.Empty(viewModel.PackageSettings.PackageSections);
     }
 
     [Fact]
@@ -263,7 +410,24 @@ public sealed class SettingsWindowViewModelTests
             PackageViewHostService.Empty,
             new CliInstallationService());
 
-    private static PackageConfigurationSchemaDescriptor CreateSchema(
+    private static PackageViewHostService CreateHostedSettingsViewHost(SettingsNavigationProbe probe)
+    {
+        var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterSettingsView<SettingsNavigationView>("agent", services);
+        return new PackageViewHostService(
+            registry,
+            [],
+            [services],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: new ImmediateUiDispatcher());
+    }
+
+    private static PackageSettingsSchemaDescriptor CreateSchema(
         string packageId,
         string displayName,
         string? summary = null) =>
@@ -272,15 +436,15 @@ public sealed class SettingsWindowViewModelTests
             displayName,
             summary,
             [
-                new PackageConfigurationSectionDescriptor(
+                new PackageSettingsSectionDescriptor(
                     "general",
                     "General",
                     null,
                     [
-                        new PackageConfigurationFieldDescriptor(
+                        new PackageSettingsFieldDescriptor(
                             "apiKey",
                             "API key",
-                            PackageConfigurationFieldKind.Text,
+                            PackageSettingsFieldKind.Text,
                             null,
                             false,
                             null,
@@ -291,11 +455,11 @@ public sealed class SettingsWindowViewModelTests
 
     private sealed class FakeRuntimeApiClient : IRuntimePackageSettingsClient
     {
-        public IReadOnlyList<PackageConfigurationSchemaDescriptor> ConfigurationSchemas { get; set; } = [];
+        public IReadOnlyList<PackageSettingsSchemaDescriptor> ConfigurationSchemas { get; set; } = [];
 
         public Dictionary<string, PackageSettingsValuesResponse?> ConfigurationValues { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-        public Func<CancellationToken, Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>>>? GetConfigurationSchemasAsyncCallback { get; init; }
+        public Func<CancellationToken, Task<IReadOnlyList<PackageSettingsSchemaDescriptor>>>? GetConfigurationSchemasAsyncCallback { get; init; }
 
         public Func<string, CancellationToken, Task<PackageSettingsValuesResponse?>>? GetConfigurationValuesAsyncCallback { get; init; }
 
@@ -303,7 +467,7 @@ public sealed class SettingsWindowViewModelTests
 
         public int GetPackageConfigurationValuesCallCount { get; private set; }
 
-        public Task<IReadOnlyList<PackageConfigurationSchemaDescriptor>> GetConfigurationSchemasAsync(
+        public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -342,5 +506,62 @@ public sealed class SettingsWindowViewModelTests
         public void Dispose()
         {
         }
+    }
+
+    private sealed class SettingsNavigationView : Control, IPackageViewNavigationTarget
+    {
+        private readonly SettingsNavigationProbe _probe;
+
+        public SettingsNavigationView(SettingsNavigationProbe probe)
+        {
+            _probe = probe;
+            DataContext = new SettingsNavigationDataContext(probe);
+        }
+
+        public async ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            _probe.Contexts.Add(context);
+            await _probe.NavigateAsync(context, cancellationToken);
+        }
+    }
+
+    private sealed class SettingsNavigationDataContext(SettingsNavigationProbe probe) : IPackageViewNavigationTarget
+    {
+        public ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            probe.DataContextNavigationCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class SettingsNavigationProbe
+    {
+        public List<PackageViewNavigationContext> Contexts { get; } = [];
+
+        public int DataContextNavigationCount { get; set; }
+
+        public Func<PackageViewNavigationContext, CancellationToken, ValueTask> NavigateAsync { get; set; }
+            = static (_, _) => ValueTask.CompletedTask;
+    }
+
+    private sealed class ImmediateUiDispatcher : IUiDispatcher
+    {
+        public bool CheckAccess() => true;
+
+        public Task InvokeAsync(Action action)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        public Task InvokeAsync(Func<Task> action) => action();
+
+        public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
+
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
     }
 }

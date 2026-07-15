@@ -26,7 +26,7 @@ public sealed partial class PackagesWindowViewModel
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (Mode == PackageWindowMode.Marketplace && MarketplacePackages.Count == 0)
+        if (Mode == PackageWindowMode.Marketplace && Marketplace.Packages.Count == 0)
         {
             await RefreshMarketplaceAsync(cancellationToken);
         }
@@ -48,12 +48,12 @@ public sealed partial class PackagesWindowViewModel
         }
 
         Mode = PackageWindowMode.Marketplace;
-        _marketplaceSearchText = request.PackageId;
+        Marketplace.SearchText = request.PackageId;
         ApplySearchTextForCurrentMode();
         CancelQueuedMarketplaceSearch();
         await RefreshMarketplaceAsync(cancellationToken);
 
-        var selectedPackage = MarketplacePackages.FirstOrDefault(package =>
+        var selectedPackage = Marketplace.Packages.FirstOrDefault(package =>
             string.Equals(package.PackageId, request.PackageId, StringComparison.OrdinalIgnoreCase));
         if (selectedPackage is null)
         {
@@ -61,7 +61,7 @@ public sealed partial class PackagesWindowViewModel
             OnPropertyChanged(nameof(HasMarketplacePackages));
             OnPropertyChanged(nameof(ShowNoMarketplacePackages));
             ClearMarketplaceSelection();
-            StatusText = $"Package '{request.PackageId}' was not found in the Registry.";
+            Operations.StatusText = $"Package '{request.PackageId}' was not found in the Registry.";
             return;
         }
 
@@ -69,7 +69,7 @@ public sealed partial class PackagesWindowViewModel
         OnPropertyChanged(nameof(HasMarketplacePackages));
         OnPropertyChanged(nameof(ShowNoMarketplacePackages));
         await SelectMarketplacePackageAsync(selectedPackage, cancellationToken);
-        StatusText = request.Kind == AppLaunchRequestKind.PackageInstall
+        Operations.StatusText = request.Kind == AppLaunchRequestKind.PackageInstall
             ? $"Review {selectedPackage.PackageId} before installing."
             : $"Loaded {selectedPackage.PackageId}.";
     }
@@ -85,13 +85,13 @@ public sealed partial class PackagesWindowViewModel
         Mode = PackageWindowMode.Marketplace;
         ApplySearchTextForCurrentMode();
         ClearWarnings();
-        if (MarketplacePackages.Count == 0)
+        if (Marketplace.Packages.Count == 0)
         {
             await RefreshMarketplaceAsync();
             return;
         }
 
-        var selected = _marketplace.ResolvePackageSelection(_selectedMarketplacePackage?.PackageId);
+        var selected = _marketplace.ResolvePackageSelection(Marketplace.SelectedPackage?.PackageId);
         if (selected is not null)
         {
             await SelectMarketplacePackageAsync(selected);
@@ -109,18 +109,18 @@ public sealed partial class PackagesWindowViewModel
         Mode = PackageWindowMode.Installed;
         ApplySearchTextForCurrentMode();
         ClearWarnings();
-        if (_installedPackages.IsDirty || InstalledPackages.Count == 0)
+        if (_installedPackages.IsDirty || Installed.Packages.Count == 0)
         {
-            await RefreshInstalledAsync(_selectedInstalledPackage?.PackageId);
+            await RefreshInstalledAsync(Installed.SelectedPackage?.PackageId);
             return;
         }
 
-        RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
+        RebuildInstalledPackageList(Installed.SelectedPackage?.PackageId);
     }
 
     private void ApplySearchTextForCurrentMode()
     {
-        var value = IsMarketplaceMode ? _marketplaceSearchText : _installedSearchText;
+        var value = IsMarketplaceMode ? Marketplace.SearchText : Installed.SearchText;
         if (string.Equals(SearchText, value, StringComparison.Ordinal))
         {
             OnPropertyChanged(nameof(HasSearchText));
@@ -160,7 +160,7 @@ public sealed partial class PackagesWindowViewModel
 
         if (IsInstalledMode)
         {
-            RebuildInstalledPackageList(_selectedInstalledPackage?.PackageId);
+            RebuildInstalledPackageList(Installed.SelectedPackage?.PackageId);
             return;
         }
 
@@ -180,7 +180,7 @@ public sealed partial class PackagesWindowViewModel
             return;
         }
 
-        await RefreshInstalledAsync(_selectedInstalledPackage?.PackageId);
+        await RefreshInstalledAsync(Installed.SelectedPackage?.PackageId);
     }
 
     [RelayCommand(CanExecute = nameof(CanInstallPackage))]
@@ -243,7 +243,7 @@ public sealed partial class PackagesWindowViewModel
         }
 
         var cancellationToken = _tasks.Token;
-        IsBusy = true;
+        using var busy = Operations.EnterBusy();
         try
         {
             var result = SelectedMarketplacePackageIsStarred
@@ -255,7 +255,7 @@ public sealed partial class PackagesWindowViewModel
             }
             if (!result.Success)
             {
-                StatusText = result.Forbidden
+                Operations.StatusText = result.Forbidden
                     ? "Sign in to the Registry before starring a package."
                     : result.Errors.FirstOrDefault() ?? "Registry package star update failed.";
                 return;
@@ -263,20 +263,19 @@ public sealed partial class PackagesWindowViewModel
 
             selectedPackage.Stats = result.Stats;
             ApplyMarketplacePackageStats(result.Stats);
-            StatusText = result.Message ?? "Updated package star.";
+            Operations.StatusText = result.Message ?? "Updated package star.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            Operations.StatusText = ex.Message;
         }
         finally
         {
             if (!_disposed)
             {
-                IsBusy = false;
                 NotifyDetailsChanged();
                 NotifyCommandStateChanged();
             }

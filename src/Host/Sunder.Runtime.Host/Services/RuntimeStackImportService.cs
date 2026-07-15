@@ -1,8 +1,7 @@
-using System.Collections.ObjectModel;
-using System.Security.Cryptography;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Stacks;
+using static Sunder.Runtime.Host.Services.RuntimeStackImportSupport;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -47,17 +46,19 @@ internal sealed class RuntimeStackImportService : IDisposable
                 return PreviewFailure(loaded.Warnings, loaded.Errors);
             }
 
-            var contributors = GetContributors(lease);
+            var errors = new List<string>();
+            var contributors = RuntimeStackContributorCatalog.GetImporters(_sessions, lease, errors);
             var inputValues = Copy(request.InputValues);
             var idRemaps = Copy(request.IdRemaps);
             var actions = new List<RuntimeStackImportActionDescriptor>();
             var inputs = new List<RuntimeStackRequiredInputDescriptor>();
             var conflicts = new List<RuntimeStackImportConflictDescriptor>();
             var warnings = loaded.Warnings.ToList();
-            var errors = new List<string>();
+            RuntimeStackContributorCatalog.ValidateScopedValues(inputValues, RuntimeStackScopedKey.InputKind, contributors, "input", errors);
+            RuntimeStackContributorCatalog.ValidateScopedValues(idRemaps, RuntimeStackScopedKey.RemapKind, contributors, "remap", errors);
             var bindings = new List<StackContributorBinding>();
             foreach (var group in loaded.Fragments.GroupBy(
-                         fragment => Key(fragment.OwnerPackageId, fragment.ContributorId),
+                         fragment => RuntimeStackContributorCatalog.Key(fragment.OwnerPackageId, fragment.ContributorId),
                          StringComparer.OrdinalIgnoreCase))
             {
                 var first = group.First();
@@ -67,24 +68,43 @@ internal sealed class RuntimeStackImportService : IDisposable
                     continue;
                 }
 
-                var fragments = Array.AsReadOnly(group.ToArray());
+                var fragments = Array.AsReadOnly(group.Select(fragment =>
+                    RuntimeStackContractMapper.OwnImportFragment(
+                        registration.PackageId,
+                        registration.Importer.ContributorId,
+                        fragment)).ToArray());
                 try
                 {
-                    var preview = await registration.Contributor.PreviewImportAsync(
-                        new StackImportPreviewRequest(fragments, inputValues, idRemaps),
+                    var preview = await registration.Importer.PreviewImportAsync(
+                        new StackImportPreviewRequest(
+                            fragments,
+                            RuntimeStackContractMapper.ToContributorValues(
+                                inputValues,
+                                RuntimeStackScopedKey.InputKind,
+                                registration.PackageId,
+                                registration.Importer.ContributorId),
+                            RuntimeStackContractMapper.ToContributorValues(
+                                idRemaps,
+                                RuntimeStackScopedKey.RemapKind,
+                                registration.PackageId,
+                                registration.Importer.ContributorId)),
                         linked.Token);
+                    if (!RuntimeStackContributorCatalog.ValidatePreviewIds(preview, registration, errors))
+                    {
+                        continue;
+                    }
                     var contributorActions = preview.Actions
-                        .Select(value => RuntimeStackContractMapper.ToAction(registration.PackageId, registration.Contributor.ContributorId, value))
+                        .Select(value => RuntimeStackContractMapper.ToAction(registration.PackageId, registration.Importer.ContributorId, value))
                         .ToArray();
                     actions.AddRange(contributorActions);
-                    inputs.AddRange(preview.RequiredInputs.Select(value => RuntimeStackContractMapper.ToRequiredInput(registration.PackageId, registration.Contributor.ContributorId, value)));
-                    conflicts.AddRange(preview.Conflicts.Select(value => RuntimeStackContractMapper.ToConflict(registration.PackageId, registration.Contributor.ContributorId, value)));
+                    inputs.AddRange(preview.RequiredInputs.Select(value => RuntimeStackContractMapper.ToRequiredInput(registration.PackageId, registration.Importer.ContributorId, value)));
+                    conflicts.AddRange(preview.Conflicts.Select(value => RuntimeStackContractMapper.ToConflict(registration.PackageId, registration.Importer.ContributorId, value)));
                     warnings.AddRange(preview.Warnings);
                     bindings.Add(new StackContributorBinding(registration, fragments, contributorActions));
                 }
                 catch (Exception) when (!linked.IsCancellationRequested)
                 {
-                    errors.Add($"Stack contributor '{registration.Contributor.ContributorId}' preview failed.");
+                    errors.Add($"Stack importer '{registration.Importer.ContributorId}' preview failed.");
                 }
             }
 
@@ -173,12 +193,17 @@ internal sealed class RuntimeStackImportService : IDisposable
                 return ImportFailure($"Stack import selected unknown action id(s): {string.Join(", ", unknownActionIds)}.", plan.IdRemaps);
             }
 
-            var currentContributors = GetContributors(lease);
+            var currentErrors = new List<string>();
+            var currentContributors = RuntimeStackContributorCatalog.GetImporters(_sessions, lease, currentErrors);
+            if (currentErrors.Count > 0)
+            {
+                return ImportFailure(currentErrors[0], plan.IdRemaps);
+            }
             foreach (var binding in plan.Contributors)
             {
-                var key = Key(binding.Registration.PackageId, binding.Registration.Contributor.ContributorId);
+                var key = RuntimeStackContributorCatalog.Key(binding.Registration.PackageId, binding.Registration.Importer.ContributorId);
                 if (!currentContributors.TryGetValue(key, out var current)
-                    || !ReferenceEquals(current.Contributor, binding.Registration.Contributor))
+                    || !ReferenceEquals(current.Importer, binding.Registration.Importer))
                 {
                     return ImportFailure("Stack import plan is stale because a contributor changed.", plan.IdRemaps);
                 }
@@ -195,17 +220,32 @@ internal sealed class RuntimeStackImportService : IDisposable
                 var fragmentIds = binding.Fragments.Select(fragment => fragment.FragmentId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var selectedActionIds = request.SelectedActionIds
                     .Where(selected => binding.Actions.Any(action => string.Equals(action.ActionId, selected, StringComparison.OrdinalIgnoreCase)))
+                    .Select(selected => binding.Actions.First(action => string.Equals(action.ActionId, selected, StringComparison.OrdinalIgnoreCase)).LocalActionId)
                     .ToArray();
                 try
                 {
-                    var result = await registration.Contributor.ImportAsync(
-                        new StackImportRequest(binding.Fragments, plan.InputValues, Copy(remaps), selectedActionIds),
+                    var contributorId = registration.Importer.ContributorId;
+                    var result = await registration.Importer.ImportAsync(
+                        new StackImportRequest(
+                            binding.Fragments,
+                            RuntimeStackContractMapper.ToContributorValues(
+                                plan.InputValues,
+                                RuntimeStackScopedKey.InputKind,
+                                registration.PackageId,
+                                contributorId),
+                            RuntimeStackContractMapper.ToContributorValues(
+                                remaps,
+                                RuntimeStackScopedKey.RemapKind,
+                                registration.PackageId,
+                                contributorId),
+                            selectedActionIds),
                         linked.Token);
                     var mapped = result.ImportedItems
-                        .Select(item => RuntimeStackContractMapper.ToImportedItem(registration.PackageId, registration.Contributor.ContributorId, item))
+                        .Select(item => RuntimeStackContractMapper.ToImportedItem(registration.PackageId, contributorId, item))
                         .ToArray();
                     imported.AddRange(mapped);
-                    foreach (var pair in result.IdRemaps)
+                    var scopedResultRemaps = RuntimeStackContractMapper.ToHostRemaps(result.IdRemaps, registration.PackageId, contributorId);
+                    foreach (var pair in scopedResultRemaps)
                     {
                         remaps[pair.Key] = pair.Value;
                     }
@@ -218,11 +258,11 @@ internal sealed class RuntimeStackImportService : IDisposable
                     };
                     var contributorErrors = result.Errors.Count > 0 || contributorOutcome == RuntimeStackImportOutcome.Completed
                         ? result.Errors
-                        : [$"Stack contributor '{registration.Contributor.ContributorId}' reported failure."];
-                    var resultRemaps = new Dictionary<string, string>(result.IdRemaps, StringComparer.OrdinalIgnoreCase);
+                        : [$"Stack importer '{contributorId}' reported failure."];
+                    var resultRemaps = new Dictionary<string, string>(scopedResultRemaps, StringComparer.OrdinalIgnoreCase);
                     contributorResults.Add(new RuntimeStackImportContributorResultDescriptor(
                         registration.PackageId,
-                        registration.Contributor.ContributorId,
+                        contributorId,
                         fragmentIds,
                         contributorOutcome,
                         mapped,
@@ -234,10 +274,10 @@ internal sealed class RuntimeStackImportService : IDisposable
                 }
                 catch (Exception) when (!linked.IsCancellationRequested)
                 {
-                    var message = $"Stack contributor '{registration.Contributor.ContributorId}' import failed.";
+                    var message = $"Stack importer '{registration.Importer.ContributorId}' import failed.";
                     contributorResults.Add(new RuntimeStackImportContributorResultDescriptor(
                         registration.PackageId,
-                        registration.Contributor.ContributorId,
+                        registration.Importer.ContributorId,
                         fragmentIds,
                         RuntimeStackImportOutcome.Failed,
                         [],
@@ -270,93 +310,6 @@ internal sealed class RuntimeStackImportService : IDisposable
     public void Dispose()
     {
         _plans.Dispose();
-    }
-
-    private Dictionary<string, StackContributorRegistration> GetContributors(PackageSessionLease lease)
-        => _sessions.State.GetExtensionContributions(lease, SunderStackExtensionPoints.StackContributors)
-            .Where(value => !string.IsNullOrWhiteSpace(value.PackageId) && !string.IsNullOrWhiteSpace(value.Contribution.ContributorId))
-            .GroupBy(value => Key(value.PackageId, value.Contribution.ContributorId), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => new StackContributorRegistration(group.First().PackageId, group.First().Contribution), StringComparer.OrdinalIgnoreCase);
-
-    private static string? ValidateSelectedFragments(IReadOnlyList<string> requested, IReadOnlyList<string> planned)
-    {
-        var plannedSet = planned.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var unknown = requested
-            .Where(id => string.IsNullOrWhiteSpace(id) || !plannedSet.Contains(id))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (unknown.Length > 0)
-        {
-            return $"Stack import selected unknown fragment id(s): {string.Join(", ", unknown)}.";
-        }
-
-        var requestedSet = requested.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return requestedSet.SetEquals(plannedSet)
-            ? null
-            : "Stack import fragment selection does not match the previewed plan.";
-    }
-
-    private static RuntimeStackImportOutcome GetOutcome(IReadOnlyList<RuntimeStackImportContributorResultDescriptor> results)
-    {
-        if (results.Count > 0 && results.All(result => result.Outcome == RuntimeStackImportOutcome.Completed))
-        {
-            return RuntimeStackImportOutcome.Completed;
-        }
-
-        return results.Any(result => result.Outcome is RuntimeStackImportOutcome.Completed or RuntimeStackImportOutcome.Partial)
-            ? RuntimeStackImportOutcome.Partial
-            : RuntimeStackImportOutcome.Failed;
-    }
-
-    private static RuntimeStackImportPreviewResponse PreviewFailure(string error)
-        => PreviewFailure([], [error]);
-
-    private static RuntimeStackImportPreviewResponse PreviewFailure(
-        IReadOnlyList<string> warnings,
-        IReadOnlyList<string> errors)
-        => new(false, null, null, [], [], [], warnings, errors);
-
-    private static RuntimeStackImportResponse ImportFailure(
-        string error,
-        IReadOnlyDictionary<string, string>? idRemaps = null)
-        => new(
-            RuntimeStackImportOutcome.Failed,
-            [],
-            idRemaps ?? new Dictionary<string, string>(),
-            [],
-            [],
-            [error]);
-
-    private static IReadOnlyDictionary<string, string> Copy(IReadOnlyDictionary<string, string> source)
-        => new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(source, StringComparer.OrdinalIgnoreCase));
-
-    private static async Task<string> ComputeHashAsync(string path, CancellationToken cancellationToken)
-    {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
-    }
-
-    private static string Key(string? packageId, string contributorId)
-        => string.IsNullOrWhiteSpace(packageId) ? string.Empty : packageId.Trim() + "\u001f" + contributorId.Trim();
-
-    private static string CreatePlanId()
-        => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-
-    private static string CreateStagingPath()
-        => Path.Combine(Path.GetTempPath(), "Sunder.Stacks", "V1", "runtime", Guid.NewGuid().ToString("N"));
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
-        }
-        catch
-        {
-        }
     }
 
 }

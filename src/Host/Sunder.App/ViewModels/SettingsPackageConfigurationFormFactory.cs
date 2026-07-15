@@ -5,7 +5,7 @@ namespace Sunder.App.ViewModels;
 internal static class SettingsPackageConfigurationFormFactory
 {
     public static IReadOnlyList<SettingsFieldSectionViewModel> Create(
-        PackageConfigurationSchemaDescriptor schema,
+        PackageSettingsSchemaDescriptor schema,
         PackageSettingsValuesResponse? values)
     {
         var valueMap = values?.StoredValues ?? new Dictionary<string, string?>();

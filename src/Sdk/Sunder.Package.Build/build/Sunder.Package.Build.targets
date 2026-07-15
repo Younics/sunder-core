@@ -29,6 +29,8 @@
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
   <UsingTask TaskName="Sunder.Package.Build.Tasks.PackSunderPackageTask"
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask"
+             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
 
   <Target Name="_BuildSunderPackageBuildTasks"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and Exists('$(SunderPackageBuildProject)') and !Exists('$(SunderPackageBuildTaskAssembly)')">
@@ -55,6 +57,11 @@
   <Target Name="GenerateSunderPackageManifest"
           DependsOnTargets="_PrepareSunderPackageBuildTasks"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+    <ItemGroup>
+      <_SunderAuthoredAssembly Include="$(TargetPath)" />
+      <_SunderAuthoredAssembly Include="@(ReferenceCopyLocalPaths)"
+                               Condition="'%(ReferenceCopyLocalPaths.ReferenceSourceTarget)' == 'ProjectReference' and '%(ReferenceCopyLocalPaths.Extension)' == '.dll'" />
+    </ItemGroup>
     <GenerateSunderPackageManifestTask TargetAssemblyPath="$(TargetPath)"
                                        ManifestOutputPath="$(SunderGeneratedPackageManifest)"
                                        EntryAssembly="$(TargetFileName)"
@@ -65,22 +72,37 @@
                                          SdkApiVersion="$(SunderSdkApiVersion)"
                                          SdkPackageVersion="$(SunderSdkPackageVersion)"
                                          SdkCapabilities="@(SunderSdkCapability)"
-                                         ReferencePaths="@(ReferencePath)"
-                                         RuntimeCopyLocalPaths="@(ReferenceCopyLocalPaths)" />
+                                          ReferencePaths="@(ReferencePath)"
+                                         RuntimeCopyLocalPaths="@(ReferenceCopyLocalPaths)"
+                                         AuthoredAssemblyPaths="@(_SunderAuthoredAssembly)"
+                                         DynamicAccessAcknowledgements="@(SunderSdkDynamicAccess)" />
+  </Target>
+
+  <Target Name="_ValidateSunderDevOutputPath"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+    <PropertyGroup>
+      <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))</SunderDevOutputPath>
+    </PropertyGroup>
+
+    <ValidateSunderDevOutputPathTask DevOutputPath="$(SunderDevOutputPath)"
+                                     ProjectDirectory="$(MSBuildProjectDirectory)"
+                                     TargetDirectory="$(TargetDir)">
+      <Output TaskParameter="NormalizedDevOutputPath" PropertyName="SunderDevOutputPath" />
+    </ValidateSunderDevOutputPathTask>
   </Target>
 
   <Target Name="EmitSunderDevOutput"
           AfterTargets="Build"
-          DependsOnTargets="GenerateSunderPackageManifest"
+          DependsOnTargets="GenerateSunderPackageManifest;_ValidateSunderDevOutputPath"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
-    <PropertyGroup>
-      <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine($([System.IO.Path]::GetDirectoryName('$(TargetPath)')), 'sunder-dev'))\</SunderDevOutputPath>
-    </PropertyGroup>
-
     <RemoveDir Directories="$(SunderDevOutputPath)"
-               Condition="Exists('$(SunderDevOutputPath)')" />
+                Condition="Exists('$(SunderDevOutputPath)')" />
 
     <MakeDir Directories="$(SunderDevOutputPath)" />
+    <WriteLinesToFile File="$(SunderDevOutputPath).sunder-generated-output"
+                      Lines="Sunder.Package.Build generated output v1"
+                      Overwrite="true" />
     <MakeDir Directories="$(SunderDevOutputPath)lib" />
     <MakeDir Directories="$(SunderDevOutputPath)assets" />
 

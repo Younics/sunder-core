@@ -21,25 +21,57 @@ public sealed class AppPackageSettingsNavigationService(IUiDispatcher? uiDispatc
     public async ValueTask<bool> OpenSettingsAsync(
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var launcher = _windowLauncher;
-        if (launcher is null)
-        {
-            return false;
-        }
+        => await OpenSettingsCoreAsync(parameters, publication: null, cancellationToken);
 
-        return await _uiDispatcher.InvokeAsync(() =>
-        {
-            launcher.ShowSettings();
-            return true;
-        });
-    }
+    internal ValueTask<bool> OpenSettingsAsync(
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => OpenSettingsCoreAsync(parameters, publication, cancellationToken);
 
     public async ValueTask<bool> OpenPackageSettingsAsync(
         string packageId,
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
+        => await OpenPackageSettingsCoreAsync(packageId, parameters, publication: null, cancellationToken);
+
+    internal ValueTask<bool> OpenPackageSettingsAsync(
+        string packageId,
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => OpenPackageSettingsCoreAsync(packageId, parameters, publication, cancellationToken);
+
+    private async ValueTask<bool> OpenSettingsCoreAsync(
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication? publication,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return await _uiDispatcher.InvokeAsync(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (publication is not null && !publication.IsPublished)
+            {
+                return false;
+            }
+
+            var launcher = _windowLauncher;
+            if (launcher is null)
+            {
+                return false;
+            }
+
+            launcher.ShowSettings();
+            return true;
+        });
+    }
+
+    private async ValueTask<bool> OpenPackageSettingsCoreAsync(
+        string packageId,
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication? publication,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(packageId))
@@ -47,12 +79,17 @@ public sealed class AppPackageSettingsNavigationService(IUiDispatcher? uiDispatc
             return false;
         }
 
-        var launcher = _windowLauncher;
-        if (launcher is null)
+        return await _uiDispatcher.InvokeAsync(async () =>
         {
-            return false;
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (publication is not null && !publication.IsPublished)
+            {
+                return false;
+            }
 
-        return await _uiDispatcher.InvokeAsync(() => launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken));
+            var launcher = _windowLauncher;
+            return launcher is not null
+                   && await launcher.ShowPackageSettingsAsync(packageId, parameters, cancellationToken);
+        });
     }
 }

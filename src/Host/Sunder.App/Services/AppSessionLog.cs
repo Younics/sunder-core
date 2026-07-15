@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Threading.Channels;
 using Sunder.Sdk.Logging;
 
 namespace Sunder.App.Services;
@@ -7,6 +6,7 @@ namespace Sunder.App.Services;
 internal static class AppSessionLog
 {
     private const int MaxRecentEntries = 5000;
+    private static readonly TimeSpan FlushTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly string LogRootPath = AppLocalState.GetPath("logs");
     private static readonly object RecentEntriesGate = new();
@@ -15,13 +15,7 @@ internal static class AppSessionLog
     private static readonly string SessionLogPath = Path.Combine(
         LogRootPath,
         $"app-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Environment.ProcessId}.log");
-    private static readonly Channel<AppSessionLogEntry> Entries = Channel.CreateBounded<AppSessionLogEntry>(
-        new BoundedChannelOptions(1024)
-        {
-            FullMode = BoundedChannelFullMode.DropOldest,
-            SingleReader = true,
-            SingleWriter = false,
-        });
+    private static readonly AppSessionLogQueue Entries = new(1024);
     private static readonly Task Processor = Task.Run(ProcessEntriesAsync);
 
     public static event Action<AppSessionLogSnapshotEntry>? EntryWritten;
@@ -59,13 +53,7 @@ internal static class AppSessionLog
     public static async Task FlushAsync(CancellationToken cancellationToken = default)
     {
         EnsureProcessorStarted();
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!Entries.Writer.TryWrite(AppSessionLogEntry.Flush(completion)))
-        {
-            return;
-        }
-
-        await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await Entries.FlushAsync(FlushTimeout, cancellationToken).ConfigureAwait(false);
     }
 
     private static void Write(
@@ -78,7 +66,7 @@ internal static class AppSessionLog
     {
         Trace.WriteLine(exception is null ? message : $"{message}{Environment.NewLine}{exception}");
         EnsureProcessorStarted();
-        Entries.Writer.TryWrite(AppSessionLogEntry.Write(level, message, exception));
+        Entries.TryWrite(AppSessionLogEntry.Write(level, message, exception));
         if (!visibleInDeveloperLog)
         {
             return;
@@ -108,13 +96,13 @@ internal static class AppSessionLog
 
     private static async Task ProcessEntriesAsync()
     {
-        await foreach (var entry in Entries.Reader.ReadAllAsync().ConfigureAwait(false))
+        await foreach (var entry in Entries.ReadAllAsync().ConfigureAwait(false))
         {
             try
             {
                 if (entry.FlushCompletion is not null)
                 {
-                    entry.FlushCompletion.SetResult();
+                    entry.FlushCompletion.TrySetResult();
                     continue;
                 }
 
@@ -134,18 +122,22 @@ internal static class AppSessionLog
         }
     }
 
-    private sealed record AppSessionLogEntry(
-        PackageLogLevel Level,
-        string Message,
-        Exception? Exception,
-        TaskCompletionSource? FlushCompletion)
-    {
-        public static AppSessionLogEntry Write(PackageLogLevel level, string message, Exception? exception)
-            => new(level, message, exception, FlushCompletion: null);
+}
 
-        public static AppSessionLogEntry Flush(TaskCompletionSource completion)
-            => new(PackageLogLevel.Information, string.Empty, Exception: null, completion);
-    }
+internal sealed record AppSessionLogEntry(
+    PackageLogLevel Level,
+    string Message,
+    Exception? Exception,
+    TaskCompletionSource? FlushCompletion)
+{
+    public static AppSessionLogEntry Write(PackageLogLevel level, string message, Exception? exception)
+        => new(level, message, exception, FlushCompletion: null);
+
+    public static AppSessionLogEntry Dropped(long count)
+        => Write(PackageLogLevel.Warning, $"Dropped {count} file log entr{(count == 1 ? "y" : "ies")} because the log queue was full.", null);
+
+    public static AppSessionLogEntry Flush(TaskCompletionSource completion)
+        => new(PackageLogLevel.Information, string.Empty, Exception: null, completion);
 }
 
 internal sealed record AppSessionLogSnapshotEntry(

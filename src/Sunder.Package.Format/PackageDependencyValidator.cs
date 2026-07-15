@@ -11,6 +11,11 @@ internal static class PackageDependencyValidator
         var seenDependencies = new HashSet<string>(StringComparer.Ordinal);
         foreach (var dependency in dependencies ?? [])
         {
+            if (dependency is null)
+            {
+                errors.Add("Package dependency entry is null.");
+                continue;
+            }
             if (!PackageId.TryParse(dependency.PackageId, out _))
             {
                 errors.Add($"Dependency package id '{dependency.PackageId}' must use lowercase dot-separated ASCII identifiers.");

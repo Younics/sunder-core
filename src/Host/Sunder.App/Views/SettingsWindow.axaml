@@ -111,15 +111,15 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
-              <StackPanel IsVisible="{Binding HasPackageSections}">
+              <StackPanel IsVisible="{Binding PackageSettings.HasPackageSections}">
                 <Border Height="1"
                         Margin="0,8,0,8"
                         Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
                 <TextBlock Classes="section-title" Text="Packages" />
               </StackPanel>
 
-              <ItemsControl ItemsSource="{Binding PackageSections}"
-                            IsVisible="{Binding HasPackageSections}">
+              <ItemsControl ItemsSource="{Binding PackageSettings.PackageSections}"
+                            IsVisible="{Binding PackageSettings.HasPackageSections}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
                     <Button Classes="secondary-action settings-nav-button"
@@ -176,16 +176,16 @@
                     <StackPanel Spacing="14">
                       <StackPanel Spacing="4">
                         <TextBlock Classes="section-title" Text="Command Status" />
-                        <TextBlock Classes="page-title" Text="{Binding CliStatusText}" TextWrapping="Wrap" />
-                        <TextBlock Classes="caption" Text="{Binding CliStatusDescription}" TextWrapping="Wrap" />
+                        <TextBlock Classes="page-title" Text="{Binding Cli.StatusText}" TextWrapping="Wrap" />
+                        <TextBlock Classes="caption" Text="{Binding Cli.StatusDescription}" TextWrapping="Wrap" />
                       </StackPanel>
 
-                      <Border IsVisible="{Binding HasCliWarning}"
+                      <Border IsVisible="{Binding Cli.HasWarning}"
                               Padding="12"
                               CornerRadius="10"
                               Background="{DynamicResource Sunder.Brush.Surface.Raised}">
                         <TextBlock Classes="muted"
-                                   Text="{Binding CliWarningText}"
+                                   Text="{Binding Cli.WarningText}"
                                    TextWrapping="Wrap" />
                       </Border>
 
@@ -193,14 +193,14 @@
                                   Spacing="12">
                         <Button Classes="primary-action"
                                 Content="Install or Repair CLI"
-                                IsEnabled="{Binding CanInstallOrRepairCli}"
+                                IsEnabled="{Binding Cli.CanInstallOrRepair}"
                                 Command="{Binding InstallOrRepairCliFromUiCommand}" />
                         <Button Classes="secondary-action"
                                 Content="Refresh Status"
                                 Command="{Binding RefreshCliStatusFromUiCommand}" />
                         <Button Classes="secondary-action"
                                 Content="Uninstall CLI"
-                                IsEnabled="{Binding CanUninstallCli}"
+                                IsEnabled="{Binding Cli.CanUninstall}"
                                 Command="{Binding UninstallCliFromUiCommand}" />
                       </StackPanel>
                     </StackPanel>
@@ -212,21 +212,21 @@
                           RowSpacing="10"
                           ColumnSpacing="16">
                       <TextBlock Grid.Row="0" Grid.Column="0" Classes="section-title" Text="Platform" />
-                      <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted" Text="{Binding CliPlatformText}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted" Text="{Binding Cli.PlatformText}" TextWrapping="Wrap" />
 
                       <TextBlock Grid.Row="1" Grid.Column="0" Classes="section-title" Text="Bundled CLI" />
-                      <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted" Text="{Binding CliBundledPath}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted" Text="{Binding Cli.BundledPath}" TextWrapping="Wrap" />
 
                       <TextBlock Grid.Row="2" Grid.Column="0" Classes="section-title" Text="Installed CLI" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Classes="muted" Text="{Binding CliInstalledPath}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Classes="muted" Text="{Binding Cli.InstalledPath}" TextWrapping="Wrap" />
 
                       <TextBlock Grid.Row="3" Grid.Column="0" Classes="section-title" Text="Command Shim" />
-                      <TextBlock Grid.Row="3" Grid.Column="1" Classes="muted" Text="{Binding CliShimPath}" TextWrapping="Wrap" />
+                      <TextBlock Grid.Row="3" Grid.Column="1" Classes="muted" Text="{Binding Cli.ShimPath}" TextWrapping="Wrap" />
                     </Grid>
                   </Border>
 
                   <Border Classes="card-surface"
-                          IsVisible="{Binding HasCliPathInstructions}">
+                          IsVisible="{Binding Cli.HasPathInstructions}">
                     <StackPanel Spacing="8">
                       <Grid ColumnDefinitions="*,Auto"
                             ColumnSpacing="12">
@@ -237,7 +237,7 @@
                                 Classes="toolbar-icon"
                                 Width="28"
                                 Height="28"
-                                IsEnabled="{Binding HasCliPathInstructions}"
+                                IsEnabled="{Binding Cli.HasPathInstructions}"
                                 Click="CopyCliPathInstructionsButton_OnClick"
                                 ToolTip.Tip="Copy PATH instructions">
                           <Path Width="14"
@@ -250,7 +250,7 @@
                                 StrokeThickness="1.35" />
                         </Button>
                       </Grid>
-                      <TextBox Text="{Binding CliPathInstructions}"
+                      <TextBox Text="{Binding Cli.PathInstructions}"
                                IsReadOnly="True"
                                AcceptsReturn="True"
                                TextWrapping="Wrap" />
@@ -270,7 +270,7 @@
                       </StackPanel>
 
                       <CheckBox Content="Download updates automatically"
-                                IsChecked="{Binding DownloadUpdatesAutomatically}" />
+                                IsChecked="{Binding Updates.DownloadUpdatesAutomatically}" />
 
                       <Border Classes="settings-note-card">
                         <TextBlock Classes="muted"
@@ -291,7 +291,7 @@
                         <Button Grid.Column="1"
                                 Classes="secondary-action"
                                 Content="Check Now"
-                                IsEnabled="{Binding CanCheckForAppUpdates}"
+                                IsEnabled="{Binding Updates.CanCheckForAppUpdates}"
                                 Command="{Binding CheckForUpdatesFromUiCommand}" />
                       </Grid>
 
@@ -300,19 +300,19 @@
                             RowSpacing="10"
                             ColumnSpacing="16">
                         <TextBlock Grid.Row="0" Grid.Column="0" Classes="section-title" Text="Current Version" />
-                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted" Text="{Binding UpdateCurrentVersionText}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted" Text="{Binding Updates.CurrentVersionText}" TextWrapping="Wrap" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Classes="section-title" Text="Source" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted" Text="{Binding UpdateSourceText}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted" Text="{Binding Updates.SourceText}" TextWrapping="Wrap" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Classes="section-title" Text="Status" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Classes="muted" Text="{Binding UpdateStatusText}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Classes="muted" Text="{Binding Updates.StatusText}" TextWrapping="Wrap" />
                       </Grid>
                     </StackPanel>
                   </Border>
                 </StackPanel>
 
-                <ItemsControl ItemsSource="{Binding SelectedPackageSections}"
+                <ItemsControl ItemsSource="{Binding PackageSettings.SelectedPackageSections}"
                                IsVisible="{Binding ShowGenericPackageSettings}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:SettingsFieldSectionViewModel">

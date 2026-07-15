@@ -52,6 +52,7 @@ internal static class PackageSessionImpactAnalyzer
         return string.Equals(current.PackageId, staged.PackageId, StringComparison.OrdinalIgnoreCase)
                && string.Equals(current.DisplayName, staged.DisplayName, StringComparison.Ordinal)
                && string.Equals(current.Version, staged.Version, StringComparison.OrdinalIgnoreCase)
+               && current.HostRoles == staged.HostRoles
                && current.Icon == staged.Icon
                && current.IsEnabled == staged.IsEnabled
                && current.Readiness == staged.Readiness

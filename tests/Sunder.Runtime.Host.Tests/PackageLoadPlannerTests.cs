@@ -71,7 +71,8 @@ public sealed class PackageLoadPlannerTests
             LibraryFolder: "/shadow/" + packageId + "/lib",
             packageId,
             Version: "1.0.0",
-            Activation: new RuntimePackageActivationState(packageId, packageId, "1.0.0", null),
+            HostRoles: PackageHostRoles.Runtime,
+            Activation: new RuntimePackageActivationState(packageId, packageId, "1.0.0", PackageHostRoles.Runtime, null),
             EntryAssemblyPath: "/shadow/" + packageId + "/lib/" + packageId + ".dll",
             Dependencies: dependencies ?? []);
 }

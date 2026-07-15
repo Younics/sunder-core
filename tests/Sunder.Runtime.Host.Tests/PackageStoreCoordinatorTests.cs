@@ -530,6 +530,24 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
+    public async Task OperationGate_ShutdownPhaseIsNotOverwrittenByLeaseRelease()
+    {
+        var events = new RuntimeEventStreamService();
+        var gate = new RuntimeOperationGate(events);
+        await using var operation = await gate.EnterAsync();
+
+        var shutdown = gate.ShutdownAsync(static () => Task.CompletedTask);
+        await operation.DisposeAsync();
+        await shutdown;
+
+        var phases = events.GetSnapshot().Events
+            .Where(item => item.Kind == RuntimeEventKind.OperationPhaseChanged)
+            .Select(item => item.OperationPhase)
+            .ToArray();
+        Assert.Equal([RuntimeOperationPhase.PackageOperation, RuntimeOperationPhase.ShuttingDown], phases);
+    }
+
+    [Fact]
     public void RuntimeRootLease_WhenRootIsAlreadyOwned_ReturnsClearContentionError()
     {
         var paths = new RuntimePackagePaths(Path.Combine(CreateTempDirectory(), "store"));
@@ -557,6 +575,7 @@ public sealed class PackageStoreCoordinatorTests
                     "test.package",
                     "Test Package",
                     "2.0.0",
+                    PackageHostRoles.Runtime,
                     Icon: null,
                     IsEnabled: true,
                     PackageReadinessState.Ready,
@@ -610,6 +629,7 @@ public sealed class PackageStoreCoordinatorTests
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "lib"));
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "assets"));
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
         {
@@ -618,6 +638,7 @@ public sealed class PackageStoreCoordinatorTests
             Name = packageId,
             Version = version,
             EntryAssembly = packageId + ".dll",
+            HostRoles = [SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole],
             SdkApiVersion = 1,
             SdkPackageVersion = "1.1.0",
             RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
@@ -627,7 +648,10 @@ public sealed class PackageStoreCoordinatorTests
                 VersionRange = dependency.VersionRange,
             }).ToArray(),
         }));
-        File.WriteAllText(Path.Combine(sourceRoot, "payload", "lib", packageId + ".dll"), payloadContent);
+        File.Copy(
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            Path.Combine(sourceRoot, "payload", "lib", packageId + ".dll"));
+        File.WriteAllText(Path.Combine(sourceRoot, "payload", "assets", "test-content.txt"), payloadContent);
         var entries = Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories)
             .Select(path => CreateIndexEntry(sourceRoot, path))
             .ToArray();
@@ -646,17 +670,18 @@ public sealed class PackageStoreCoordinatorTests
         File.ReadAllText(Path.Combine(
             paths.GetInstalledPackagePath(packageId, version),
             "payload",
-            "lib",
-            packageId + ".dll"));
+            "assets",
+            "test-content.txt"));
 
     private static SunderPackageContentIndexEntry CreateIndexEntry(string sourceRoot, string path)
     {
+        var relativePath = Path.GetRelativePath(sourceRoot, path).Replace('\\', '/');
         using var stream = File.OpenRead(path);
         return new SunderPackageContentIndexEntry(
-            Path.GetRelativePath(sourceRoot, path).Replace('\\', '/'),
+            relativePath,
             Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
             new FileInfo(path).Length,
-            "runtime");
+            SunderPackageFormat.GetContentRole(relativePath) ?? "file");
     }
 
     private static string CreateTempDirectory()

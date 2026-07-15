@@ -55,6 +55,14 @@ internal sealed class AppPackageHostState(
         }
     }
 
+    public HashSet<string> SnapshotDisabledPackageIds()
+    {
+        lock (_syncRoot)
+        {
+            return new HashSet<string>(disabledPackageIds, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
     public string[] SnapshotLoadedPackageIds()
     {
         lock (_syncRoot)
@@ -159,6 +167,14 @@ internal sealed class AppPackageHostState(
         lock (_syncRoot)
         {
             _loadContexts.Remove(loadContext);
+        }
+    }
+
+    public IReadOnlyList<WeakReference> SnapshotLoadContextWeakReferences()
+    {
+        lock (_syncRoot)
+        {
+            return _loadContexts.Select(loadContext => new WeakReference(loadContext)).ToArray();
         }
     }
 }

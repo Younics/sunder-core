@@ -1,5 +1,5 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -19,8 +19,9 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
         Directory.CreateDirectory(shadowRoot);
         var sequence = Interlocked.Increment(ref _shadowFolderSequence);
         var shadowFolder = Path.Combine(shadowRoot, $"{sequence:D4}-{SanitizeFolderName(snapshot.PackageId)}");
-        Directory.CreateDirectory(shadowFolder);
-        var archivePath = Path.Combine(shadowFolder, ".snapshot.zip");
+        var archivePath = Path.Combine(
+            shadowRoot,
+            $".{sequence:D4}-{SanitizeFolderName(snapshot.PackageId)}-{Guid.NewGuid():N}.snapshot.zip");
         var prepared = false;
         try
         {
@@ -49,7 +50,16 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
                 }
             }
 
-            ExtractSnapshot(archivePath, shadowFolder, cancellationToken);
+            await SunderArchive.ExtractAtomicAsync(
+                archivePath,
+                shadowFolder,
+                SunderArchiveExtractionOptions.Default with
+                {
+                    MaxEntries = MaxSnapshotFiles,
+                    MaxEntryUncompressedBytes = MaxSnapshotBytes,
+                    MaxTotalUncompressedBytes = MaxSnapshotBytes,
+                    CancellationToken = cancellationToken,
+                }).ConfigureAwait(false);
             File.Delete(archivePath);
             var manifestPath = Path.Combine(shadowFolder, "sunder-package.json");
             var manifest = File.Exists(manifestPath) ? AppPackageManifest.Load(manifestPath) : null;
@@ -63,6 +73,7 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
         }
         finally
         {
+            TryDeleteFile(archivePath);
             if (!prepared)
             {
                 TryDeleteDirectory(shadowFolder);
@@ -85,42 +96,6 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
         }
     }
 
-    private static void ExtractSnapshot(string archivePath, string destinationRoot, CancellationToken cancellationToken)
-    {
-        using var archive = ZipFile.OpenRead(archivePath);
-        if (archive.Entries.Count > MaxSnapshotFiles)
-        {
-            throw new InvalidDataException($"Package UI snapshot exceeds the {MaxSnapshotFiles} file limit.");
-        }
-
-        long totalLength = 0;
-        var root = Path.GetFullPath(destinationRoot) + Path.DirectorySeparatorChar;
-        foreach (var entry in archive.Entries)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            totalLength += entry.Length;
-            if (totalLength > MaxSnapshotBytes)
-            {
-                throw new InvalidDataException($"Package UI snapshot exceeds the {MaxSnapshotBytes} uncompressed byte limit.");
-            }
-
-            var destinationPath = Path.GetFullPath(Path.Combine(destinationRoot, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
-            if (!destinationPath.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            {
-                throw new InvalidDataException($"Package UI snapshot entry '{entry.FullName}' escapes the destination root.");
-            }
-
-            if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
-            {
-                Directory.CreateDirectory(destinationPath);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-            entry.ExtractToFile(destinationPath, overwrite: false);
-        }
-    }
-
     private static string SanitizeFolderName(string? folderName)
     {
         if (string.IsNullOrWhiteSpace(folderName))
@@ -130,5 +105,20 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
 
         var invalidCharacters = Path.GetInvalidFileNameChars();
         return new string(folderName.Select(ch => invalidCharacters.Contains(ch) ? '_' : ch).ToArray());
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppSessionLog.WriteError("Failed to delete an app package snapshot archive.", ex);
+        }
     }
 }

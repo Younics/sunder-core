@@ -36,6 +36,38 @@ public sealed class AppPackageResourceAssemblyRegistry
         return changedAssemblyNames.ToArray();
     }
 
+    public IReadOnlyList<string> ReplacePackageAssemblies(
+        IReadOnlyList<(string PackageId, Assembly Assembly)> packageAssemblies)
+    {
+        var changedAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        lock (_syncRoot)
+        {
+            changedAssemblyNames.UnionWith(_registrationsByAssemblyName.Keys);
+            _registrationsByAssemblyName.Clear();
+            foreach (var (packageId, assembly) in packageAssemblies)
+            {
+                var assemblyName = assembly.GetName().Name;
+                if (string.IsNullOrWhiteSpace(packageId) || string.IsNullOrWhiteSpace(assemblyName))
+                {
+                    continue;
+                }
+
+                if (!_registrationsByAssemblyName.TryGetValue(assemblyName, out var registrations))
+                {
+                    registrations = [];
+                    _registrationsByAssemblyName[assemblyName] = registrations;
+                }
+
+                registrations.Add(new AppPackageResourceAssemblyRegistration(packageId, assembly, ++_nextGeneration));
+                changedAssemblyNames.Add(assemblyName);
+            }
+
+            PruneUnregisteredCatalogs();
+        }
+
+        return changedAssemblyNames.ToArray();
+    }
+
     public IReadOnlyList<string> RemovePackage(string packageId)
     {
         if (string.IsNullOrWhiteSpace(packageId))

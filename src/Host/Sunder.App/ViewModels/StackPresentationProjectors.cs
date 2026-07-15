@@ -1,5 +1,5 @@
 using Sunder.App.Services;
-using Sunder.Registry.Contracts;
+using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.ViewModels;
 
@@ -21,7 +21,7 @@ internal static class StackDetailTreeProjector
 
 internal static class StackInstallPlanProjector
 {
-    public static StackInstallPlanPresentation Project(RegistryResolveInstallPlanResponse plan)
+    public static StackInstallPlanPresentation Project(RuntimeRegistryResolveInstallPlanResponse plan)
         => new(
             plan.Items.Select(item => new StackPackageInstallPlanItemViewModel(item)).ToArray(),
             plan.Warnings.ToArray(),

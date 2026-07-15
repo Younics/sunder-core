@@ -50,6 +50,56 @@ public sealed class PackageStorageServicesTests
     }
 
     [Fact]
+    public async Task LocalPackageFileStore_StreamWriteAtomicallyReplacesAndOpensContent()
+    {
+        var root = CreateTempDirectory();
+        var store = new LocalPackageFileStore(root);
+        await store.WriteAsync("nested/value.bin", new byte[] { 1, 2, 3 });
+        await using var replacement = new MemoryStream([4, 5, 6, 7], writable: false);
+
+        await store.WriteAsync("nested/value.bin", replacement);
+        await using var opened = await store.OpenReadAsync("nested/value.bin");
+
+        Assert.NotNull(opened);
+        using var copied = new MemoryStream();
+        await opened.CopyToAsync(copied);
+        Assert.Equal(new byte[] { 4, 5, 6, 7 }, copied.ToArray());
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "nested"), ".value.bin.*.tmp"));
+    }
+
+    [Fact]
+    public async Task LocalPackageFileStore_CancelledStreamWritePreservesPriorFileAndCleansTemp()
+    {
+        var root = CreateTempDirectory();
+        var store = new LocalPackageFileStore(root);
+        await store.WriteAsync("value.bin", new byte[] { 1, 2, 3 });
+        using var cancellation = new CancellationTokenSource();
+        await using var replacement = new CancelAfterFirstReadStream(
+            Enumerable.Repeat((byte)9, 128 * 1024).ToArray(),
+            cancellation);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => store.WriteAsync("value.bin", replacement, cancellation.Token));
+
+        Assert.Equal(new byte[] { 1, 2, 3 }, await store.ReadAsync("value.bin"));
+        Assert.Empty(Directory.EnumerateFiles(root, ".value.bin.*.tmp"));
+    }
+
+    [Fact]
+    public async Task LocalPackageFileStore_PreCancelledWriteDoesNotCreateTargetOrTemp()
+    {
+        var root = CreateTempDirectory();
+        var store = new LocalPackageFileStore(root);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => store.WriteAsync("value.bin", new byte[] { 1 }, cancellation.Token));
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+    }
+
+    [Fact]
     public async Task JsonPackageKeyValueStore_RejectsLegacyDictionaryWithoutMutation()
     {
         var statePath = Path.Combine(CreateTempDirectory(), "state.json");
@@ -107,6 +157,22 @@ public sealed class PackageStorageServicesTests
 
         using var document = JsonDocument.Parse(File.ReadAllBytes(statePath));
         Assert.Equal(writeCount, document.RootElement.GetProperty("revision").GetInt64());
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_UnchangedSetAndReplaceDoNotAdvanceRevisionOrRewriteDocument()
+    {
+        var statePath = Path.Combine(CreateTempDirectory(), "state.json");
+        var store = new JsonPackageKeyValueStore(statePath);
+        await store.SetValueAsync("key", "value");
+        var committed = File.ReadAllBytes(statePath);
+
+        await store.SetValueAsync("key", "value");
+        await store.ReplaceValuesAsync(new Dictionary<string, string> { ["key"] = "value" });
+
+        Assert.Equal(committed, File.ReadAllBytes(statePath));
+        using var document = JsonDocument.Parse(committed);
+        Assert.Equal(1, document.RootElement.GetProperty("revision").GetInt64());
     }
 
     [Fact]
@@ -372,6 +438,20 @@ public sealed class PackageStorageServicesTests
         {
             Assert.Equal($"secret-{index}", await stores[1].GetSecretAsync($"key-{index}"));
         }
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_UnchangedSetAndReplaceDoNotAdvanceRevisionOrRewriteDocument()
+    {
+        var secretsPath = Path.Combine(CreateTempDirectory(), "secrets.json");
+        var store = CreateSecretsStore(secretsPath);
+        await store.SetSecretAsync("key", "value");
+        var committed = File.ReadAllBytes(secretsPath);
+
+        await store.SetSecretAsync("key", "value");
+        await store.ReplaceValuesAsync(new Dictionary<string, string> { ["key"] = "value" });
+
+        Assert.Equal(committed, File.ReadAllBytes(secretsPath));
     }
 
     [Fact]
@@ -1473,6 +1553,47 @@ public sealed class PackageStorageServicesTests
         IReadOnlyList<string> Arguments,
         string? StandardInput,
         TimeSpan Timeout);
+
+    private sealed class CancelAfterFirstReadStream(
+        byte[] contents,
+        CancellationTokenSource cancellation) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => contents.Length;
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            if (_position >= contents.Length)
+            {
+                return 0;
+            }
+
+            var count = Math.Min(buffer.Length, contents.Length - _position);
+            contents.AsMemory(_position, count).CopyTo(buffer);
+            _position += count;
+            cancellation.Cancel();
+            return count;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     private sealed class MacOsExternalKeyStoreFactAttribute : FactAttribute
     {

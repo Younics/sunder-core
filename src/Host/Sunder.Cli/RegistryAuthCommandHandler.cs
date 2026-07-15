@@ -3,7 +3,7 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.Cli;
 
 internal sealed class RegistryAuthCommandHandler(
-    ICliRuntimeClient runtime,
+    ICliRuntimeAuthClient runtime,
     CliOutput output,
     IBrowserLauncher browser,
     CliOptions options)
@@ -28,10 +28,27 @@ internal sealed class RegistryAuthCommandHandler(
         } while (true);
 
         output.Data(status);
-        if (status?.State != RuntimeRegistryAuthSessionState.Succeeded || status.User is null)
+        if (status is null)
         {
-            output.Error(status?.Message ?? "Registry sign-in timed out.");
-            return status is null ? CliExitCodes.Timeout : CliErrorMapper.FromRegistryCode(status.ErrorCode);
+            output.Error("Registry sign-in session was not found.");
+            return CliExitCodes.NotFound;
+        }
+        if (status.State is RuntimeRegistryAuthSessionState.Pending or RuntimeRegistryAuthSessionState.Expired)
+        {
+            output.Error(status.Message ?? (status.State == RuntimeRegistryAuthSessionState.Expired
+                ? "Registry sign-in expired."
+                : "Registry sign-in is still pending."));
+            return CliExitCodes.Timeout;
+        }
+        if (status.State == RuntimeRegistryAuthSessionState.Failed)
+        {
+            output.Error(status.Message ?? "Registry sign-in failed.");
+            return CliErrorMapper.FromRegistryCode(status.ErrorCode);
+        }
+        if (status.User is null)
+        {
+            output.Error("Registry sign-in succeeded without a user identity.");
+            return CliExitCodes.Failure;
         }
         output.Success($"Signed in to {options.RegistryApiUrl} as {FormatUser(status.User)}.");
         if (status.CredentialExpiresAtUtc is { } expires) output.Info($"Registry sign-in expires (UTC) {expires.UtcDateTime:O}.");
@@ -42,6 +59,11 @@ internal sealed class RegistryAuthCommandHandler(
     {
         var status = await runtime.GetRegistryAuthStatusAsync(options.RegistryApiUrl.AbsoluteUri, token).ConfigureAwait(false);
         output.Data(status);
+        if (status.ErrorCode != RuntimeRegistryErrorCode.None)
+        {
+            output.Error(status.Message ?? "Registry sign-in status could not be read.");
+            return CliErrorMapper.FromRegistryCode(status.ErrorCode);
+        }
         if (!status.IsSignedIn || status.User is null)
         {
             output.Info($"Not signed in to {options.RegistryApiUrl}. Run 'sunder auth login'.");
@@ -56,6 +78,11 @@ internal sealed class RegistryAuthCommandHandler(
     {
         var status = await runtime.LogoutRegistryAsync(options.RegistryApiUrl.AbsoluteUri, token).ConfigureAwait(false);
         output.Data(status);
+        if (status.ErrorCode != RuntimeRegistryErrorCode.None)
+        {
+            output.Error(status.Message ?? "Registry sign-out failed.");
+            return CliErrorMapper.FromRegistryCode(status.ErrorCode);
+        }
         output.Success($"Signed out from {options.RegistryApiUrl}.");
         return CliExitCodes.Success;
     }

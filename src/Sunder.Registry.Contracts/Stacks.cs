@@ -76,6 +76,8 @@ public sealed record RegistryStackFragmentDetail(
 
 public sealed record RegistryStackRequiredInput(
     string InputId,
+    string OwnerPackageId,
+    string ContributorId,
     string Label,
     string? Description,
     bool Required);

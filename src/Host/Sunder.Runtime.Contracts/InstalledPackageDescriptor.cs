@@ -4,6 +4,7 @@ public sealed record InstalledPackageDescriptor(
     string PackageId,
     string Name,
     string Version,
+    PackageHostRoles HostRoles,
     string? Summary,
     PackageIconDescriptor? Icon,
     bool IsEnabled,

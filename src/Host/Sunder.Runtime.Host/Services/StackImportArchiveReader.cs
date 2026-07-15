@@ -55,12 +55,26 @@ internal sealed class StackImportArchiveReader
         return new StackFragmentLoadResult(true, fragments.AsReadOnly(), selected.ToArray(), validation.Warnings, []);
     }
 
-    private static IReadOnlyList<StackImportPayloadFile> ResolveFiles(string stagingPath, string fragmentId)
+    private static IReadOnlyList<StackImportPayloadHandle> ResolveFiles(string stagingPath, string fragmentId)
     {
         var root = Path.Combine(stagingPath, "payload", "files", fragmentId);
         return Directory.Exists(root)
             ? Array.AsReadOnly(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                .Select(path => new StackImportPayloadFile(Path.GetRelativePath(root, path).Replace('\\', '/'), path))
+                .Select(path => new StackImportPayloadHandle(
+                    Path.GetRelativePath(root, path).Replace('\\', '/'),
+                    cancellationToken =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Stream stream = new FileStream(
+                            path,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.Read | FileShare.Delete,
+                            64 * 1024,
+                            FileOptions.Asynchronous | FileOptions.SequentialScan);
+                        return ValueTask.FromResult(stream);
+                    },
+                    new FileInfo(path).Length))
                 .ToArray())
             : [];
     }

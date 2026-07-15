@@ -3,11 +3,19 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.ViewModels;
 
-internal sealed class SettingsPackageSectionsViewModel(
-    SettingsPackageSectionLoader sectionLoader,
-    SettingsPackageSelectionCoordinator selectionCoordinator)
+public sealed class SettingsPackageSectionsViewModel : ViewModelBase
 {
-    private readonly Dictionary<string, PackageConfigurationSchemaDescriptor> _schemasByPackageId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SettingsPackageSectionLoader _sectionLoader;
+    private readonly SettingsPackageSelectionCoordinator _selectionCoordinator;
+    private readonly Dictionary<string, PackageSettingsSchemaDescriptor> _schemasByPackageId = new(StringComparer.OrdinalIgnoreCase);
+
+    internal SettingsPackageSectionsViewModel(
+        SettingsPackageSectionLoader sectionLoader,
+        SettingsPackageSelectionCoordinator selectionCoordinator)
+    {
+        _sectionLoader = sectionLoader;
+        _selectionCoordinator = selectionCoordinator;
+    }
 
     public ObservableCollection<SettingsSectionItemViewModel> PackageSections { get; } = [];
 
@@ -15,9 +23,11 @@ internal sealed class SettingsPackageSectionsViewModel(
 
     public bool HasPackageSections => PackageSections.Count > 0;
 
-    public async Task LoadSectionsAsync(CancellationToken cancellationToken)
+    internal Task<SettingsPackageSectionsLoadResult> LoadSectionsAsync(CancellationToken cancellationToken)
+        => _sectionLoader.LoadAsync(cancellationToken);
+
+    internal void ApplySections(SettingsPackageSectionsLoadResult result)
     {
-        var result = await sectionLoader.LoadAsync(cancellationToken);
         PackageSections.Clear();
         _schemasByPackageId.Clear();
 
@@ -30,28 +40,31 @@ internal sealed class SettingsPackageSectionsViewModel(
         {
             PackageSections.Add(section);
         }
+
+        OnPropertyChanged(nameof(HasPackageSections));
     }
 
-    public SettingsSectionItemViewModel? FindSection(string packageId)
+    internal SettingsSectionItemViewModel? FindSection(string packageId)
         => PackageSections.FirstOrDefault(section => string.Equals(section.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
-    public bool TryGetSchema(string packageId, out PackageConfigurationSchemaDescriptor? schema)
+    internal bool TryGetSchema(string packageId, out PackageSettingsSchemaDescriptor? schema)
         => _schemasByPackageId.TryGetValue(packageId, out schema);
 
-    public void ClearSelectedSections()
+    internal void ClearSelectedSections()
     {
         SelectedPackageSections.Clear();
     }
 
-    public async Task<SettingsPackageSelectionResult> LoadSelectionAsync(
+    internal async Task<SettingsPackageSelectionResult> LoadSelectionAsync(
         string packageId,
-        PackageConfigurationSchemaDescriptor? schema,
+        PackageSettingsSchemaDescriptor? schema,
         CancellationToken cancellationToken)
-        => await selectionCoordinator.LoadAsync(packageId, schema, cancellationToken);
+        => await _selectionCoordinator.LoadAsync(packageId, schema, cancellationToken);
 
-    public void ApplySelectionResult(SettingsPackageSelectionResult result)
+    internal void ApplySelectionResult(SettingsPackageSelectionResult result)
     {
-        foreach (var section in result.PackageSections)
+        var sections = result is PackageSettingsFormSelection form ? form.Sections : [];
+        foreach (var section in sections)
         {
             SelectedPackageSections.Add(section);
         }

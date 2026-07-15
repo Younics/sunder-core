@@ -9,16 +9,21 @@ internal static class CliCommandParser
     {
         var args = arguments.ToList();
         var help = TakeFlag(args, "--help") | TakeFlag(args, "-h");
-        var options = CliOptions.Parse(args);
-        if (help || args.Count == 0)
+        if (help || args.Count == 0 || args.All(arg => string.Equals(arg, "--json", StringComparison.OrdinalIgnoreCase)))
         {
-            return new(options, new HelpCommand());
+            return new(new HelpCommand(), TakeFlag(args, "--json"), null);
         }
 
+        var options = CliOptions.Parse(args);
+        if (args.Count == 0)
+        {
+            return new(new HelpCommand(), options.Json, null);
+        }
         var family = TakeFirst(args).ToLowerInvariant();
         var command = family switch
         {
-            "system" or "runtime" => ParseSystem(args),
+            "system" => ParseSystem(args),
+            "runtime" => ParseRuntime(args),
             "auth" => ParseAuth(args),
             "search" => ParseSearchPackages(args),
             "info" => ParsePackageInfo(args),
@@ -36,7 +41,8 @@ internal static class CliCommandParser
             "stack" or "stacks" => ParseStack(args),
             _ => throw Usage($"Unknown command '{family}'.")
         };
-        return new(options, command);
+        EnsureDevelopmentRegistry(command, options.RegistryApiUrl);
+        return new(command, options.Json, options);
     }
 
     private static CliCommand ParseSystem(List<string> args)
@@ -45,6 +51,11 @@ internal static class CliCommandParser
         {
             return new SystemStatusCommand();
         }
+        throw Usage("Usage: sunder system status");
+    }
+
+    private static CliCommand ParseRuntime(List<string> args)
+    {
         if (args.Count > 0 && string.Equals(args[0], "reset", StringComparison.OrdinalIgnoreCase))
         {
             args.RemoveAt(0);
@@ -57,7 +68,7 @@ internal static class CliCommandParser
 
             return new RuntimeResetCommand(yes);
         }
-        throw Usage("Usage: sunder runtime <status|reset --yes>");
+        throw Usage("Usage: sunder runtime reset --yes");
     }
 
     private static CliCommand ParseAuth(List<string> args)
@@ -115,12 +126,12 @@ internal static class CliCommandParser
     {
         var all = TakeFlag(args, "--all");
         var prerelease = TakeFlag(args, "--include-prerelease");
-        var packageId = ZeroOrOne(args, "sunder update [package-id|--all] [--include-prerelease]");
-        if (all && packageId is not null)
+        var packageId = ZeroOrOne(args, "sunder update <package-id|--all> [--include-prerelease]");
+        if (all == (packageId is not null))
         {
-            throw Usage("Usage: sunder update [package-id|--all] [--include-prerelease]");
+            throw Usage("Usage: sunder update <package-id|--all> [--include-prerelease]");
         }
-        return new UpdatePackagesCommand(packageId is null ? null : PackageIdArgument(packageId), all, prerelease);
+        return new UpdatePackagesCommand(packageId is null ? null : PackageIdArgument(packageId), prerelease);
     }
 
     private static CliCommand ParsePublishPackage(List<string> args)
@@ -211,7 +222,8 @@ internal static class CliCommandParser
     private static CliCommand ParseStackDownload(List<string> args)
     {
         var output = TakeOption(args, "--output") ?? TakeOption(args, "-o");
-        return new DownloadStackCommand(One(args, "sunder stack download <stack-id> [--output <path>]"), output);
+        var force = TakeFlag(args, "--force");
+        return new DownloadStackCommand(One(args, "sunder stack download <stack-id> [--output <file>] [--force]"), output, force);
     }
 
     private static CliCommand ParseStackPublish(List<string> args)
@@ -302,6 +314,15 @@ internal static class CliCommandParser
         => SemanticVersion.TryParse(value, out _)
             ? value
             : throw Usage($"Version '{value}' must be strict SemVer 2.0 and at most {SemanticVersion.MaximumLength} characters.");
+
+    private static void EnsureDevelopmentRegistry(CliCommand command, Uri registryApiUrl)
+    {
+        if (command is PublishPackageCommand { DevLocal: true } or PublishStackCommand { DevLocal: true }
+            && !registryApiUrl.IsLoopback)
+        {
+            throw Usage("Option '--dev-local' requires a loopback Registry API URL.");
+        }
+    }
 
     private static CliUsageException Usage(string message) => new(message);
 }

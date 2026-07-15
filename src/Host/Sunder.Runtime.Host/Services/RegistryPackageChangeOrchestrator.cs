@@ -10,7 +10,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
     InstalledPackageLifecycleService installedPackages,
     ILogger<RegistryPackageChangeOrchestrator> logger)
 {
-    public async Task<RegistryResolveInstallPlanResponse> ResolveAsync(
+    public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveAsync(
         RuntimeRegistryPackageBatchRequest request,
         CancellationToken cancellationToken)
         => await planResolver.ResolveAsync(request, cancellationToken);
@@ -21,7 +21,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         => ExecuteAsync(
             new RuntimeRegistryPackageBatchRequest(
                 request.RegistryOrigin,
-                [new RegistryPackageChangeRequest(request.PackageId, request.Version, request.Version is null ? request.Tag : null)],
+                [new RuntimeRegistryPackageChangeRequest(request.PackageId, request.Version, request.Version is null ? request.Tag : null)],
                 request.IncludePrerelease,
                 request.AllowDowngrade,
                 request.Reinstall),
@@ -45,7 +45,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         return await ExecuteAsync(
             new RuntimeRegistryPackageBatchRequest(
                 request.RegistryOrigin,
-                selected.Select(package => new RegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray(),
+                selected.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray(),
                 request.IncludePrerelease),
             cancellationToken);
     }
@@ -75,12 +75,15 @@ internal sealed class RegistryPackageChangeOrchestrator(
         if (!plan.Success)
         {
             var errors = plan.Errors.Concat(plan.Conflicts.Select(conflict => conflict.Message)).DefaultIfEmpty("Package plan resolution failed.").ToArray();
-            return new RuntimeRegistryPackageChangeResult(false, RuntimeRegistryErrorCode.Conflict, errors[0], false, false, plan.Warnings, errors, [], plan.Items);
+            return new RuntimeRegistryPackageChangeResult(false, RuntimeRegistryErrorCode.Conflict, errors[0], false, false, plan.Warnings, errors, [], RuntimeRegistryContractMapper.ToRuntime(plan.Items));
         }
 
         if (plan.Items.Count == 0)
         {
-            return new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "No package changes required.", true, false, plan.Warnings, [], [], []);
+            return new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "No package changes required.", true, false, plan.Warnings, [], [], [])
+            {
+                CommittedStamp = installedPackages.Stamp,
+            };
         }
 
         var uploadIds = new List<string>();
@@ -107,7 +110,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
             if (!stage.Success || stageId is null)
             {
                 var errors = stage.Errors.DefaultIfEmpty(stage.OperationResult.Message ?? "Package transaction staging failed.").ToArray();
-                return new RuntimeRegistryPackageChangeResult(false, RuntimeRegistryErrorCode.Conflict, errors[0], false, false, plan.Warnings.Concat(stage.Warnings).ToArray(), errors, stage.ImpactedPackageIds, plan.Items);
+                return new RuntimeRegistryPackageChangeResult(false, RuntimeRegistryErrorCode.Conflict, errors[0], false, false, plan.Warnings.Concat(stage.Warnings).ToArray(), errors, stage.ImpactedPackageIds, RuntimeRegistryContractMapper.ToRuntime(plan.Items));
             }
 
             var commit = await installedPackages.CommitStageAsync(stageId, cancellationToken);
@@ -122,7 +125,10 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 plan.Warnings.Concat(commit.Warnings).ToArray(),
                 commit.Success ? [] : commitErrors,
                 commit.ImpactedPackageIds,
-                plan.Items);
+                RuntimeRegistryContractMapper.ToRuntime(plan.Items))
+            {
+                CommittedStamp = commit.CommittedStamp,
+            };
         }
         catch (OperationCanceledException)
         {
@@ -167,6 +173,6 @@ internal sealed class RegistryPackageChangeOrchestrator(
         string message,
         RuntimeRegistryErrorCode errorCode,
         RegistryResolveInstallPlanResponse? plan = null)
-        => new(false, errorCode, message, false, false, plan?.Warnings ?? [], [message], [], plan?.Items ?? []);
+        => new(false, errorCode, message, false, false, plan?.Warnings ?? [], [message], [], plan is null ? [] : RuntimeRegistryContractMapper.ToRuntime(plan.Items));
 
 }

@@ -11,9 +11,9 @@ absolute paths and parent traversal are rejected by Runtime.
 
 `Sunder.Sdk` contains the public contracts used to build Sunder runtime packages.
 
-Avalonia view/settings/workspace contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`.
+Avalonia view/settings contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`.
 
-Use this package for explicit Runtime/App lifecycle roles, background services, typed extension points, and package-scoped storage, settings, secrets, and logging. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings, workspaces, and theme resources.
+Use this package for explicit Runtime/App lifecycle roles, background services, typed extension points, and package-scoped storage, settings, secrets, and logging. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
@@ -124,27 +124,25 @@ public sealed class PackageModule : ISunderRuntimePackageModule
 }
 ```
 
-Runtime and App roles have separate service providers and explicit `ConfigureRuntimeServices`/`ConfigureAppServices` and contribution methods. A host never invokes the other host's role.
+Runtime and App roles have separate module instances, service providers, and explicit `ConfigureRuntimeServices`/`ConfigureAppServices` and contribution methods. Each host constructs its module through the public parameterless constructor, configures and builds the role-specific provider, and then registers contributions; the module itself is not resolved from that provider. A host never invokes the other host's role.
 
 `Sunder.Sdk.Packaging` owns the canonical `PackageId`, strict `SemanticVersion`, and `PackageVersionRange` primitives used by package authors, build tooling, Hosts, and Registry clients. Their `Parse`/`TryParse` methods are the V1 validators; do not implement a second package identity or version grammar.
 
 ## Contributions
 
-`ISunderRuntimeContributionRegistry` supports background services, Runtime extensions, and configuration schemas. Base `ISunderAppContributionRegistry` supports App extensions; `Sunder.Sdk.Avalonia` adds:
+`ISunderRuntimeContributionRegistry` supports background services, Runtime extensions, and host-stamped `PackageSettingsSchema` registration. Base `ISunderAppContributionRegistry` supports App extensions; `Sunder.Sdk.Avalonia` adds:
 
 - `RegisterPackageView<TView>(PackageViewRegistration registration)`
-- `RegisterPackageViewFactory<TFactory>(PackageViewRegistration registration)`
 - `RegisterSettingsView<TView>()`
-- `RegisterSettingsViewFactory<TFactory>()`
 - `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
 
-Package views are Avalonia controls registered by code. Use stable view ids scoped under your package id.
+Package views are Avalonia controls registered by code and constructed from the package App service provider, so their constructors may request registered dependencies. View ids must be globally unique and stable; conventionally prefix them with your package id.
 
 ```csharp
 registry.RegisterPackageView<MyView>(new PackageViewRegistration(
     "my.company.package.main",
     "My Package",
-    icon: "assets/icon.png"));
+    iconAssetPath: "assets/icon.png"));
 ```
 
 ## Package Context
@@ -153,14 +151,13 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 
 - `PackageId`
 - `Version` (the canonical SemVer 2.0 string from the package manifest)
-- `InstallPath`
+- `ContentRootPath`
 - `Storage`
 - `Settings`
 - `Secrets`
-- `LoggerFactory`
 - `Logging`
 
-Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, `IPackageSettingsNavigationService` for opening settings, `IPackageInstalledSessionControl` for installed package activation, and optional `IPackageDevelopmentSessionControl` for host-local development output.
+Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, `IPackageSettingsNavigationService` for opening settings, and optional `IPackageDevelopmentSessionControl` for host-local development output.
 
 Use `Settings` for schema-declared user preferences, `Storage.State` for opaque operational state, and `Secrets` for sensitive values. Settings are writable and persisted independently from state. `GetValueAsync` returns a stored setting or its schema default; `GetStoredValueAsync` returns only a stored value. Setting writes reject undeclared keys, secret fields, and values that do not satisfy the schema.
 
@@ -241,7 +238,7 @@ var opened = await settingsNavigation.OpenPackageSettingsAsync(
     cancellationToken: cancellationToken);
 ```
 
-Use `IPackageInstalledSessionControl` for installed package ids. Development loading is a separate optional capability because a remote Runtime cannot consume an App-local path. Check `IPackageDevelopmentSessionControl.Availability` before enabling development UI and handle its structured outcome:
+Development loading is an optional capability because a remote Runtime cannot consume an App-local path. Check `IPackageDevelopmentSessionControl.Availability` before enabling development UI and handle its structured outcome:
 
 ```csharp
 if (developmentSessions.Availability.IsAvailable)

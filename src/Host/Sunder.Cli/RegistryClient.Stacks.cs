@@ -1,5 +1,5 @@
-using System.Security.Cryptography;
 using Sunder.Registry.Contracts;
+using Sunder.Runtime.Client;
 
 namespace Sunder.Cli;
 
@@ -19,41 +19,41 @@ internal sealed partial class RegistryClient
         => PostAsync<RegistryPublishLocalStackRequest, RegistryPublishStackResponse>(
             $"{ApiRoot}/dev/stacks/publish/local", new(stackPath), token, acceptErrorPayload: true);
 
-    public async Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken token)
+    public async Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, bool force, CancellationToken token)
     {
         var fullPath = Path.GetFullPath(destinationPath);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        var temporaryPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
+        if (!force && File.Exists(fullPath))
+        {
+            throw new CliConflictException($"Output file '{fullPath}' already exists. Use --force to replace it.");
+        }
+
         try
         {
-            using var response = await _httpClient.GetAsync(CreateUri(artifact.DownloadUrl), HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            var downloadUri = CreateUri(artifact.DownloadUrl);
+            RegistryTransportSecurity.RequireSameOrigin(RegistryApiUrl, downloadUri);
+            using var response = await _httpClient.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            RegistryTransportSecurity.RequireSameOrigin(RegistryApiUrl, response.RequestMessage?.RequestUri);
             await EnsureSuccessAsync(response, token).ConfigureAwait(false);
             if (artifact.Size is < 0 or > MaxStackDownloadBytes)
             {
                 throw new InvalidDataException($"Downloaded Stack '{stackId}' exceeds the Stack download limit.");
             }
-            await using var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await CliHttpContentReader.CopyToAsync(
-                response.Content,
-                destination,
-                artifact.Size ?? MaxStackDownloadBytes,
-                token).ConfigureAwait(false);
-            await destination.DisposeAsync().ConfigureAwait(false);
 
-            var length = new FileInfo(temporaryPath).Length;
-            if (artifact.Size is { } expectedSize && length != expectedSize) throw new InvalidDataException($"Downloaded Stack '{stackId}' size mismatch.");
-            if (!string.IsNullOrWhiteSpace(artifact.Sha256))
-            {
-                await using var stream = File.OpenRead(temporaryPath);
-                var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false)).ToLowerInvariant();
-                if (!string.Equals(hash, artifact.Sha256, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException($"Downloaded Stack '{stackId}' SHA-256 mismatch.");
-            }
-            File.Move(temporaryPath, fullPath, overwrite: true);
+            await using var source = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            await VerifiedFileTransfer.PublishAsync(
+                source,
+                fullPath,
+                MaxStackDownloadBytes,
+                artifact.Size,
+                artifact.Sha256,
+                $"Downloaded Stack '{stackId}'",
+                token,
+                overwrite: force).ConfigureAwait(false);
         }
-        finally
+        catch (IOException exception) when (!force && File.Exists(fullPath))
         {
-            CliFileCleanup.TryDelete(temporaryPath);
+            throw new CliConflictException($"Output file '{fullPath}' already exists. Use --force to replace it.", exception);
         }
     }
+
 }

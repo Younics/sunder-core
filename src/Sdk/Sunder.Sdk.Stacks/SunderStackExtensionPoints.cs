@@ -7,7 +7,15 @@ namespace Sunder.Sdk.Stacks;
 [SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
 public static class SunderStackExtensionPoints
 {
-    /// <summary>Gets the extension point for activation-scoped Stack contributors.</summary>
-    public static readonly PackageExtensionPoint<IPackageStackContributor> StackContributors =
-        new("sunder:stack-contributors");
+    /// <summary>Gets the extension point for activation-scoped Stack exporters.</summary>
+    public static readonly PackageExtensionPoint<IPackageStackExporter> StackExporters =
+        new("sunder:stack-exporters");
+
+    /// <summary>Gets the extension point for activation-scoped Stack importers.</summary>
+    public static readonly PackageExtensionPoint<IPackageStackImporter> StackImporters =
+        new("sunder:stack-importers");
+
+    /// <summary>Gets the App extension point for post-import synchronization handlers.</summary>
+    public static readonly PackageExtensionPoint<IPackageStackImportAppliedHandler> StackImportAppliedHandlers =
+        new("sunder:stack-import-applied-handlers");
 }

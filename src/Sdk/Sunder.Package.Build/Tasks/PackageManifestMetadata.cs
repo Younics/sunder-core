@@ -7,5 +7,6 @@ internal sealed record PackageManifestMetadata(
     string Name,
     string? Summary,
     string? Icon,
+    IReadOnlyList<string> HostRoles,
     IReadOnlyList<SunderPackageDependencyManifest> Dependencies,
     IReadOnlyList<string> RequiredSdkCapabilities);

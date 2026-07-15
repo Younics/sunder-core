@@ -70,6 +70,14 @@
       "description": "The NuGet package id of the host package's published contracts package.",
       "replaces": "Sunder.Host.Package.Contracts"
     },
+    "hostPackageVersionRange": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": ">=1.0.0 <2.0.0",
+      "isEnabled": "withHostDependency || withHostContracts == true",
+      "description": "The runtime SemVer range accepted for the host package.",
+      "replaces": ">=1.0.0 <2.0.0"
+    },
     "hostContractsVersion": {
       "type": "parameter",
       "datatype": "text",
@@ -88,7 +96,7 @@
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Generate no default shell-visible package view."
+      "description": "With --withAvalonia, omit the default shell-visible view while retaining Avalonia SDK references."
     }
   },
   "primaryOutputs": [

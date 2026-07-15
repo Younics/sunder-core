@@ -6,6 +6,9 @@ namespace Sunder.App.Tests;
 
 public sealed class LocalStackLibraryServiceTests
 {
+    private static readonly byte[] MinimalPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+
     [Fact]
     public async Task ImportAsync_WhenStackIsValid_CopiesArchiveAndAddsLocalIndexEntry()
     {
@@ -79,12 +82,43 @@ public sealed class LocalStackLibraryServiceTests
         Assert.Equal(replaced.PublishedStackId, listed.PublishedStackId);
     }
 
+    [Fact]
+    public async Task ListAndDelete_WhenIndexPathEscapesRoot_DoNotAccessOutsideFile()
+    {
+        var root = CreateTempDirectory();
+        var libraryRoot = Path.Combine(root, "library");
+        Directory.CreateDirectory(libraryRoot);
+        var outside = Path.Combine(root, "outside.sunderstack");
+        await File.WriteAllTextAsync(outside, "outside");
+        var malicious = new LocalStackLibraryItem(
+            "test.stack",
+            "Test",
+            null,
+            outside,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            0,
+            0,
+            null,
+            null,
+            null,
+            null);
+        await File.WriteAllTextAsync(
+            Path.Combine(libraryRoot, "local-stacks.json"),
+            System.Text.Json.JsonSerializer.Serialize(new LocalStackLibraryIndex([malicious])));
+        var service = new LocalStackLibraryService(libraryRoot);
+
+        Assert.Empty(await service.ListAsync());
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.DeleteAsync(malicious));
+        Assert.True(File.Exists(outside));
+    }
+
     private static async Task<string> CreateStackArchiveAsync(string root, string name = "Fullstack Agent Dev")
     {
         var payloadPath = Path.Combine(root, "payload.json");
         var mediaPath = Path.Combine(root, "hero.png");
         await File.WriteAllTextAsync(payloadPath, "{\"profileId\":\"fullstack\"}");
-        await File.WriteAllBytesAsync(mediaPath, [1, 2, 3, 4]);
+        await File.WriteAllBytesAsync(mediaPath, MinimalPng);
 
         var archivePath = Path.Combine(root, "agent-fullstack.sunderstack");
         await SunderStackArchiveWriter.WriteAsync(
@@ -142,7 +176,7 @@ public sealed class LocalStackLibraryServiceTests
                     Path = "payload/media/hero.png",
                     FileName = "hero.png",
                     ContentType = "image/png",
-                    Size = 4,
+                    Size = MinimalPng.LongLength,
                     AltText = "Hero image",
                     SortOrder = 0,
                 },

@@ -16,7 +16,7 @@ public sealed class RuntimeStackImportPlanTests
         var preview = await fixture.PreviewAsync(["one-fragment"]);
 
         await fixture.PublishSessionAsync(new TestContributor("one"));
-        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["one-action"]));
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ActionIds(preview)));
 
         Assert.Equal(RuntimeStackImportOutcome.Failed, result.Outcome);
         Assert.Contains(result.Errors, error => error.Contains("generation", StringComparison.OrdinalIgnoreCase));
@@ -31,7 +31,7 @@ public sealed class RuntimeStackImportPlanTests
         var preview = await fixture.PreviewAsync(["one-fragment"]);
 
         fixture.Clock.Advance(new RuntimeStackPolicyOptions().ImportPlanLifetime);
-        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["one-action"]));
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ActionIds(preview)));
 
         Assert.Equal(RuntimeStackImportOutcome.Failed, result.Outcome);
         Assert.Contains(result.Errors, error => error.Contains("expired", StringComparison.OrdinalIgnoreCase));
@@ -47,7 +47,7 @@ public sealed class RuntimeStackImportPlanTests
 
         fixture.Clock.Advance(new RuntimeStackPolicyOptions().ImportPlanLifetime);
         fixture.Service.SweepExpired();
-        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["one-action"]));
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ActionIds(preview)));
 
         Assert.Equal(RuntimeStackImportOutcome.Failed, result.Outcome);
         Assert.Contains(result.Errors, error => error.Contains("not found", StringComparison.OrdinalIgnoreCase));
@@ -72,7 +72,7 @@ public sealed class RuntimeStackImportPlanTests
     {
         await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one"));
         var preview = await fixture.PreviewAsync(["one-fragment"]);
-        var request = new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["one-action"]);
+        var request = new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ActionIds(preview));
 
         var first = await fixture.Service.ImportAsync(request);
         var duplicate = await fixture.Service.ImportAsync(request);
@@ -103,7 +103,7 @@ public sealed class RuntimeStackImportPlanTests
         var preview = await fixture.PreviewAsync(["one-fragment"]);
 
         var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["unknown-action"]));
-        var duplicate = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ["one-action"]));
+        var duplicate = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ActionIds(preview)));
 
         Assert.Equal(RuntimeStackImportOutcome.Failed, result.Outcome);
         Assert.Contains(result.Errors, error => error.Contains("unknown action", StringComparison.OrdinalIgnoreCase));
@@ -135,7 +135,7 @@ public sealed class RuntimeStackImportPlanTests
         var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(
             preview.PlanId!,
             ["one-fragment", "two-fragment"],
-            ["one-action", "two-action"]));
+            ActionIds(preview)));
 
         Assert.Equal(RuntimeStackImportOutcome.Partial, result.Outcome);
         Assert.Collection(
@@ -155,6 +155,53 @@ public sealed class RuntimeStackImportPlanTests
         Assert.Single(result.ContributorResults, contributor => contributor.ImportedItems.Count > 0);
         Assert.All(fixture.Contributors, contributor => Assert.Equal(1, contributor.ImportCount));
     }
+
+    [Fact]
+    public async Task PreviewAndImport_ScopeDuplicateLocalIdsAcrossContributors()
+    {
+        await using var fixture = await StackImportFixture.CreateAsync(
+            new TestContributor("one", actionId: "shared", inputId: "shared"),
+            new TestContributor("two", actionId: "shared", inputId: "shared"));
+
+        var preview = await fixture.PreviewAsync(["one-fragment", "two-fragment"]);
+
+        Assert.True(preview.Success, string.Join(Environment.NewLine, preview.Errors));
+        Assert.Equal(2, preview.Actions.Select(action => action.ActionId).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2, preview.RequiredInputs.Select(input => input.InputId).Distinct(StringComparer.Ordinal).Count());
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(
+            preview.PlanId!,
+            ["one-fragment", "two-fragment"],
+            ActionIds(preview)));
+        Assert.Equal(RuntimeStackImportOutcome.Completed, result.Outcome);
+        Assert.All(fixture.Contributors, contributor => Assert.Equal(["shared"], contributor.LastSelectedActionIds));
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenContributorReturnsDuplicateActionId_ReturnsError()
+    {
+        await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one", duplicateAction: true));
+
+        var preview = await fixture.PreviewAsync(["one-fragment"]);
+
+        Assert.False(preview.Success);
+        Assert.Contains(preview.Errors, error => error.Contains("duplicate", StringComparison.OrdinalIgnoreCase)
+                                                && error.Contains("action", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenContributorReturnsDuplicateRequiredInputId_ReturnsError()
+    {
+        await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one", duplicateInput: true));
+
+        var preview = await fixture.PreviewAsync(["one-fragment"]);
+
+        Assert.False(preview.Success);
+        Assert.Contains(preview.Errors, error => error.Contains("duplicate", StringComparison.OrdinalIgnoreCase)
+                                                && error.Contains("required input", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string[] ActionIds(RuntimeStackImportPreviewResponse preview)
+        => preview.Actions.Select(action => action.ActionId).ToArray();
 
     private sealed class StackImportFixture : IAsyncDisposable
     {
@@ -196,14 +243,21 @@ public sealed class RuntimeStackImportPlanTests
             var catalog = new RuntimePackageExtensionCatalog();
             foreach (var contributor in contributors)
             {
-                catalog.Add(contributor.PackageId, SunderStackExtensionPoints.StackContributors, contributor);
+                catalog.Add(contributor.PackageId, SunderStackExtensionPoints.StackImporters, contributor);
             }
 
-            await Owner.PublishAsync(new ActivePackageSession(
+            var session = new ActivePackageSession(
                 sessionFolder: null,
                 new Dictionary<string, ActiveLoadedPackage>(),
                 new Dictionary<string, SessionPackageDescriptor>(),
-                catalog));
+                catalog);
+            await Owner.PublishAsync(
+                session,
+                Owner.Sources.Snapshot(),
+                [],
+                [],
+                [],
+                Owner.Generation);
         }
 
         public async Task<RuntimeStackImportPreviewResponse> PreviewAsync(IReadOnlyList<string> selectedFragmentIds)
@@ -254,11 +308,27 @@ public sealed class RuntimeStackImportPlanTests
                 Owner.Generation,
                 CancellationToken.None);
 
+            var inputValues = Contributors.ToDictionary(
+                contributor => RuntimeStackScopedKey.Create(
+                    RuntimeStackScopedKey.InputKind,
+                    contributor.PackageId,
+                    contributor.ContributorId,
+                    contributor.InputId),
+                _ => "preview-bound",
+                StringComparer.OrdinalIgnoreCase);
+            var remaps = Contributors.ToDictionary(
+                contributor => RuntimeStackScopedKey.Create(
+                    RuntimeStackScopedKey.RemapKind,
+                    contributor.PackageId,
+                    contributor.ContributorId,
+                    "source"),
+                _ => "target",
+                StringComparer.OrdinalIgnoreCase);
             return await Service.PreviewAsync(new RuntimeStackImportPreviewRequest(
                 upload.UploadId,
                 selectedFragmentIds,
-                new Dictionary<string, string> { ["input"] = "preview-bound" },
-                new Dictionary<string, string> { ["source"] = "target" }));
+                inputValues,
+                remaps));
         }
 
         public ValueTask DisposeAsync()
@@ -276,29 +346,38 @@ public sealed class RuntimeStackImportPlanTests
         }
     }
 
-    private sealed class TestContributor(string contributorId, bool succeeds = true) : IPackageStackContributor
+    private sealed class TestContributor(
+        string contributorId,
+        bool succeeds = true,
+        string? actionId = null,
+        string? inputId = null,
+        bool duplicateAction = false,
+        bool duplicateInput = false) : IPackageStackImporter
     {
         public string PackageId => "test.package." + contributorId;
         public string ContributorId => contributorId;
         public string DisplayName => contributorId;
         public int ImportCount { get; private set; }
-
-        public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
-            StackExportDiscoveryContext context,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>([]);
-
-        public ValueTask<StackExportContribution> ExportAsync(
-            StackExportRequest request,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(new StackExportContribution([], [], []));
+        public string ActionId { get; } = actionId ?? contributorId + "-action";
+        public string InputId { get; } = inputId ?? "input";
+        public IReadOnlyList<string> LastSelectedActionIds { get; private set; } = [];
 
         public ValueTask<StackImportPreview> PreviewImportAsync(
             StackImportPreviewRequest request,
             CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new StackImportPreview(
-                [new StackImportAction(ContributorId + "-action", "Import " + ContributorId, StackImportActionKind.Create)],
-                [],
+                duplicateAction
+                    ? [
+                        new StackImportAction(ActionId, "Import " + ContributorId, StackImportActionKind.Create),
+                        new StackImportAction(ActionId, "Import duplicate " + ContributorId, StackImportActionKind.Create),
+                    ]
+                    : [new StackImportAction(ActionId, "Import " + ContributorId, StackImportActionKind.Create)],
+                duplicateInput
+                    ? [
+                        new StackRequiredInputDescriptor(InputId, "Input"),
+                        new StackRequiredInputDescriptor(InputId, "Duplicate input"),
+                    ]
+                    : [new StackRequiredInputDescriptor(InputId, "Input")],
                 [],
                 []));
 
@@ -307,7 +386,8 @@ public sealed class RuntimeStackImportPlanTests
             CancellationToken cancellationToken = default)
         {
             ImportCount++;
-            Assert.Equal("preview-bound", request.InputValues["input"]);
+            LastSelectedActionIds = request.SelectedActionIds;
+            Assert.Equal("preview-bound", request.InputValues[InputId]);
             Assert.Equal("target", request.IdRemaps["source"]);
             return ValueTask.FromResult(succeeds
                 ? new StackImportResult(

@@ -1,7 +1,7 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Authentication;
-using Sunder.Sdk.Configuration;
+using Sunder.Sdk.Settings;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -23,7 +23,7 @@ internal static class PackageProtocolMapper
                     view.Id,
                     activation.PackageId,
                     view.Name,
-                    ToProtocolIcon(view.Icon, view.Name) ?? packageIcon,
+                    ToProtocolIcon(view.IconAssetPath, view.Name) ?? packageIcon,
                     ToProtocolPlacement(view.DefaultPlacement),
                     view.ShowInHotbarByDefault
                 )
@@ -34,6 +34,7 @@ internal static class PackageProtocolMapper
             activation.PackageId,
             activation.Name,
             activation.Version,
+            activation.HostRoles,
             packageIcon,
             isEnabled,
             readiness,
@@ -54,6 +55,7 @@ internal static class PackageProtocolMapper
             descriptor.PackageId,
             descriptor.DisplayName,
             descriptor.Version,
+            descriptor.HostRoles,
             descriptor.Icon,
             descriptor.IsEnabled,
             descriptor.Readiness,
@@ -78,6 +80,7 @@ internal static class PackageProtocolMapper
             descriptor.PackageId,
             descriptor.DisplayName,
             descriptor.Version,
+            descriptor.HostRoles,
             descriptor.Icon,
             descriptor.IsEnabled,
             descriptor.Readiness,
@@ -88,38 +91,41 @@ internal static class PackageProtocolMapper
             failureCount);
     }
 
-    public static PackageConfigurationSchemaDescriptor? ToProtocolConfigurationSchema(PackageConfigurationSchema? schema)
+    public static PackageSettingsSchemaDescriptor? ToProtocolSettingsSchema(
+        string ownerPackageId,
+        string ownerPackageDisplayName,
+        PackageSettingsSchema? schema)
     {
         if (schema is null)
         {
             return null;
         }
 
-        return new PackageConfigurationSchemaDescriptor(
-            schema.PackageId,
-            schema.PackageDisplayName,
+        return new PackageSettingsSchemaDescriptor(
+            ownerPackageId,
+            ownerPackageDisplayName,
             schema.Summary,
-            schema.Sections.Select(section => new PackageConfigurationSectionDescriptor(
+            schema.Sections.Select(section => new PackageSettingsSectionDescriptor(
                 section.SectionId,
                 section.Title,
                 section.Description,
-                section.Fields.Select(field => new PackageConfigurationFieldDescriptor(
+                section.Fields.Select(field => new PackageSettingsFieldDescriptor(
                     field.Key,
                     field.Label,
                     field.Kind switch
                     {
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Text => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Text,
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Secret => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Secret,
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Boolean => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Boolean,
-                        Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Select => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Select,
-                        _ => Sunder.Runtime.Contracts.PackageConfigurationFieldKind.Text,
+                        Sunder.Sdk.Settings.PackageSettingsFieldKind.Text => Sunder.Runtime.Contracts.PackageSettingsFieldKind.Text,
+                        Sunder.Sdk.Settings.PackageSettingsFieldKind.Secret => Sunder.Runtime.Contracts.PackageSettingsFieldKind.Secret,
+                        Sunder.Sdk.Settings.PackageSettingsFieldKind.Boolean => Sunder.Runtime.Contracts.PackageSettingsFieldKind.Boolean,
+                        Sunder.Sdk.Settings.PackageSettingsFieldKind.Select => Sunder.Runtime.Contracts.PackageSettingsFieldKind.Select,
+                        _ => throw new InvalidOperationException($"Unsupported settings field kind '{field.Kind}'."),
                     },
                     field.Description,
                     field.IsRequired,
                     field.Placeholder,
                     field.DefaultValue,
-                    (field.Options ?? [])
-                        .Select(option => new PackageConfigurationOptionDescriptor(option.Value, option.Label))
+                    field.Options
+                        .Select(option => new PackageSettingsOptionDescriptor(option.Value, option.Label))
                         .ToArray()
                 )).ToArray()
             )).ToArray()
@@ -141,32 +147,6 @@ internal static class PackageProtocolMapper
             status.CanAuthorize,
             status.CanDisconnect
         );
-    }
-
-    public static PackageAuthSessionStartResponse ToProtocolAuthSessionStart(PackageAuthSessionStatus status)
-    {
-        return new PackageAuthSessionStartResponse(
-            status.PackageId,
-            status.AuthSessionId,
-            Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser,
-            status.LaunchUrl ?? string.Empty,
-            status.Message);
-    }
-
-    public static PackageAuthSessionStatusResponse ToProtocolAuthSessionStatus(PackageAuthSessionStatus status)
-    {
-        return new PackageAuthSessionStatusResponse(
-            status.PackageId,
-            status.AuthSessionId,
-            status.State switch
-            {
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Connected => Sunder.Runtime.Contracts.PackageAuthSessionState.Connected,
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Failed => Sunder.Runtime.Contracts.PackageAuthSessionState.Failed,
-                Sunder.Sdk.Authentication.PackageAuthSessionState.Cancelled => Sunder.Runtime.Contracts.PackageAuthSessionState.Cancelled,
-                _ => Sunder.Runtime.Contracts.PackageAuthSessionState.Pending,
-            },
-            status.Message,
-            status.LaunchUrl);
     }
 
     private static PackageIconDescriptor? ToProtocolIcon(string? assetPath, string fallbackName)

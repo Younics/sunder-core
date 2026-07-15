@@ -96,6 +96,175 @@ public sealed class SunderPackageArchiveInstallerTests
     }
 
     [Fact]
+    public async Task CommitPackageStoreStageAsync_PublishesExactStagedSessionWithoutReloading()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var transfers = new RuntimeContentTransferStore(paths);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer, transferStore: transfers);
+
+        try
+        {
+            var upload = await UploadPackageAsync(transfers, CreatePackageArchive(root, "test.package", "1.0.0"));
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
+            ]));
+            Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
+            var stageId = Assert.IsType<string>(stage.StageId);
+            var stagedSession = service.GetStagedStoreSession(stageId);
+
+            var commit = await service.CommitPackageStoreStageAsync(stageId);
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.Same(stagedSession, service.ActiveSession);
+            Assert.Equal(service.SessionGeneration, commit.CommittedStamp?.SessionGeneration);
+            Assert.Equal("test.package", Assert.Single(await store.ListAsync()).PackageId);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageStoreStageAsync_WhenPublicationFaultsAfterStoreCommit_ReturnsDegradedAndReconciles()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var transfers = new RuntimeContentTransferStore(paths);
+        var faultInjector = new OneShotLifecycleFaultInjector();
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            transferStore: transfers,
+            lifecycleFaultInjector: faultInjector);
+
+        try
+        {
+            var upload = await UploadPackageAsync(transfers, CreatePackageArchive(root, "test.package", "1.0.0"));
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
+            ]));
+            Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
+            var stageId = Assert.IsType<string>(stage.StageId);
+            var stagedSession = service.GetStagedStoreSession(stageId);
+            var stagedFolder = stagedSession?.SessionFolder;
+
+            var commit = await service.CommitPackageStoreStageAsync(stageId);
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.True(commit.StoreCommitted);
+            Assert.False(commit.RuntimeSessionApplied);
+            Assert.True(commit.RuntimeSessionReconciliationPending);
+            Assert.NotSame(stagedSession, service.ActiveSession);
+            Assert.Equal("test.package", Assert.Single(await store.ListAsync()).PackageId);
+            if (stagedFolder is not null)
+            {
+                Assert.False(Directory.Exists(stagedFolder));
+            }
+            var pending = service.GetPackageStageStatus(stageId);
+            Assert.Equal(RuntimePackageStageState.Committed, pending?.State);
+            Assert.True(pending?.ReconciliationPending);
+
+            var reconciliation = await service.LoadInstalledPackagesAsync();
+
+            Assert.True(reconciliation.Success, string.Join(Environment.NewLine, reconciliation.Errors));
+            Assert.Equal("test.package", Assert.Single(service.GetSessionPackages()).PackageId);
+            var reconciled = service.GetPackageStageStatus(stageId);
+            Assert.False(reconciled?.ReconciliationPending);
+            Assert.True(reconciled?.RuntimeSessionApplied);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task SetEnabledAsync_WhenDesiredStoreIsUnchanged_DoesNotReloadSession()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer);
+
+        try
+        {
+            var install = await service.InstallPackageFromRuntimePathAsync(
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+            Assert.True(install.Success, string.Join(Environment.NewLine, install.Errors));
+            var generation = service.SessionGeneration;
+            var session = service.ActiveSession;
+
+            var noOp = await service.SetInstalledPackageEnabledAsync("test.package", isEnabled: true);
+
+            Assert.True(noOp.Success, string.Join(Environment.NewLine, noOp.Errors));
+            Assert.True(noOp.StoreCommitted);
+            Assert.False(noOp.RuntimeSessionApplied);
+            Assert.Equal(generation, service.SessionGeneration);
+            Assert.Same(session, service.ActiveSession);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageStoreStageAsync_WhenStale_PreservesCurrentGenerationAndStore()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var transfers = new RuntimeContentTransferStore(paths);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer, transferStore: transfers);
+
+        try
+        {
+            var staleUpload = await UploadPackageAsync(transfers, CreatePackageArchive(root, "stale.package", "1.0.0"));
+            var staleStage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: staleUpload.UploadId),
+            ]));
+            Assert.True(staleStage.Success, string.Join(Environment.NewLine, staleStage.Errors));
+            var staleStageId = Assert.IsType<string>(staleStage.StageId);
+            var currentUpload = await UploadPackageAsync(transfers, CreatePackageArchive(root, "current.package", "1.0.0"));
+            var currentStage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: currentUpload.UploadId),
+            ]));
+            Assert.True(currentStage.Success, string.Join(Environment.NewLine, currentStage.Errors));
+            var currentStageId = Assert.IsType<string>(currentStage.StageId);
+            var currentCommit = await service.CommitPackageStoreStageAsync(currentStageId);
+            Assert.True(currentCommit.Success, string.Join(Environment.NewLine, currentCommit.Errors));
+            var generation = service.SessionGeneration;
+
+            var staleCommit = await service.CommitPackageStoreStageAsync(staleStageId);
+
+            Assert.False(staleCommit.Success);
+            Assert.Contains(staleCommit.Errors, error => error.Contains("stale", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(generation, service.SessionGeneration);
+            Assert.Equal("current.package", Assert.Single(await store.ListAsync()).PackageId);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task UpgradeFromPathAsync_WhenArchiveIsNewer_ReplacesInstalledPackage()
     {
         var root = CreateTempDirectory();
@@ -169,13 +338,14 @@ public sealed class SunderPackageArchiveInstallerTests
             Name = "Test Package",
             Version = version,
             EntryAssembly = "Test.Package.dll",
+            HostRoles = [SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole],
             SdkApiVersion = 1,
             SdkPackageVersion = "1.1.0",
             RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
         }));
 
         var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "lib", "Test.Package.dll");
-        File.WriteAllText(entryAssemblyPath, "not a real assembly");
+        File.Copy(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, entryAssemblyPath);
 
         var contentIndex = new SunderPackageContentIndex(
             1,
@@ -188,6 +358,20 @@ public sealed class SunderPackageArchiveInstallerTests
         var archivePath = Path.Combine(root, $"{packageId}.{version}.{Guid.NewGuid():N}.sunderpkg");
         ZipFile.CreateFromDirectory(sourceRoot, archivePath);
         return archivePath;
+    }
+
+    private static async Task<ContentUploadDescriptor> UploadPackageAsync(RuntimeContentTransferStore transfers, string archivePath)
+    {
+        await using var archive = File.OpenRead(archivePath);
+        return await transfers.CreateUploadAsync(
+            RuntimeUploadKind.Package,
+            archive,
+            archive.Length,
+            null,
+            Path.GetFileName(archivePath),
+            "application/vnd.sunder.package",
+            generation: 0,
+            CancellationToken.None);
     }
 
     private static async Task<PackageOperationResult> ExecuteAsync(
@@ -203,6 +387,7 @@ public sealed class SunderPackageArchiveInstallerTests
 
     private static SunderPackageContentIndexEntry CreateIndexEntry(string sourceRoot, string path, bool corruptHash)
     {
+        var relativePath = Path.GetRelativePath(sourceRoot, path).Replace('\\', '/');
         using var stream = File.OpenRead(path);
         var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         if (corruptHash)
@@ -211,10 +396,10 @@ public sealed class SunderPackageArchiveInstallerTests
         }
 
         return new SunderPackageContentIndexEntry(
-            Path.GetRelativePath(sourceRoot, path).Replace('\\', '/'),
+            relativePath,
             hash,
             new FileInfo(path).Length,
-            Role: "runtime");
+            Role: SunderPackageFormat.GetContentRole(relativePath) ?? "file");
     }
 
     private static string CreateTempDirectory()
@@ -222,5 +407,30 @@ public sealed class SunderPackageArchiveInstallerTests
         var path = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed class OneShotLifecycleFaultInjector : IInstalledPackageLifecycleFaultInjector
+    {
+        private int _remaining = 1;
+
+        public void Hit(InstalledPackageLifecycleFaultPoint point)
+        {
+            if (point == InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication
+                && Interlocked.Exchange(ref _remaining, 0) == 1)
+            {
+                throw new IOException("Injected failure after the package store commit.");
+            }
+        }
     }
 }

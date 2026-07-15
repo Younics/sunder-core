@@ -163,6 +163,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
             packageId,
             packageId,
             version,
+            PackageHostRoles.App | PackageHostRoles.Runtime,
             Summary: null,
             Icon: null,
             IsEnabled: true,
@@ -211,12 +212,19 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         public bool ThrowOnResolveUpdates { get; set; }
 
-        public Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+        public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
         {
             if (ThrowOnResolveUpdates) throw new InvalidOperationException("registry unavailable");
-            return Task.FromResult(new RegistryResolveInstallPlanResponse(
+            return Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
                 PlanSuccess,
-                Updates.Select(update => new RegistryPackageInstallPlanItem(update.PackageId, update.CurrentVersion, update.AvailableVersion, true, update.DeprecatedMessage, [], update.Artifact)).ToArray(),
+                Updates.Select(update => new RuntimeRegistryPackageInstallPlanItem(
+                    update.PackageId,
+                    update.CurrentVersion,
+                    update.AvailableVersion,
+                    true,
+                    update.DeprecatedMessage,
+                    [],
+                    new RuntimeRegistryPackageArtifact(update.Artifact.Sha256, update.Artifact.Size, update.Artifact.DownloadUrl))).ToArray(),
                 [],
                 PlanSuccess ? [] : ["Registry is not reachable."],
                 []));

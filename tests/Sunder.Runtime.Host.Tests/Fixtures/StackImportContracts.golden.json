@@ -5,13 +5,14 @@
     "expiresAtUtc": "2026-01-02T03:04:05+00:00",
     "actions": [
       {
-        "actionId": "profile.create",
+        "actionId": "action-key",
+        "ownerPackageId": "test.package",
         "contributorId": "profiles",
+        "localActionId": "profile.create",
         "displayName": "Create profile",
         "kind": "Create",
         "defaultSelected": true,
-        "description": null,
-        "ownerPackageId": "test.package"
+        "description": null
       }
     ],
     "requiredInputs": [],
@@ -24,14 +25,14 @@
     "importedItems": [
       {
         "itemId": "profile-1",
+        "ownerPackageId": "test.package",
         "contributorId": "profiles",
         "displayName": "Profile",
-        "kind": "profile",
-        "ownerPackageId": "test.package"
+        "kind": "profile"
       }
     ],
     "idRemaps": {
-      "source-profile": "profile-1"
+      "remap-key": "profile-1"
     },
     "contributorResults": [
       {
@@ -44,14 +45,14 @@
         "importedItems": [
           {
             "itemId": "profile-1",
+            "ownerPackageId": "test.package",
             "contributorId": "profiles",
             "displayName": "Profile",
-            "kind": "profile",
-            "ownerPackageId": "test.package"
+            "kind": "profile"
           }
         ],
         "idRemaps": {
-          "source-profile": "profile-1"
+          "remap-key": "profile-1"
         },
         "warnings": [],
         "errors": []

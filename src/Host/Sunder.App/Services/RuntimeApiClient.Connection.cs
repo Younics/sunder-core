@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -6,116 +5,75 @@ namespace Sunder.App.Services;
 public sealed partial class RuntimeApiClient
 {
     public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
-        => GetJsonAsync<SystemStatusResponse>("system", cancellationToken);
+        => GetSystemStatusCoreAsync(cancellationToken);
 
-    public async Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            using var response = await _httpClient.GetAsync(CreateRequestUri("health"), cancellationToken);
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private async Task<SystemStatusResponse?> GetSystemStatusCoreAsync(CancellationToken cancellationToken)
+        => await _management.GetSystemStatusAsync(cancellationToken).ConfigureAwait(false);
 
-    public async Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
-        => await GetJsonAsync<IReadOnlyList<ActivePackageDescriptor>>("packages/active", cancellationToken) ?? [];
+    public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
+        => _management.IsRuntimeHealthyAsync(cancellationToken);
 
-    public async Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
-        => await GetJsonAsync<IReadOnlyList<SessionPackageDescriptor>>("packages/session", cancellationToken) ?? [];
+    public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
+        => _management.GetActivePackagesAsync(cancellationToken);
 
-    public async Task<DevPackageWatchStatus> SetDevPackageWatchIntentAsync(bool enabled, CancellationToken cancellationToken = default)
-    {
-        using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri("dev-packages/watch"),
-            new DevPackageWatchIntentRequest(enabled),
-            cancellationToken);
-        return await ReadRequiredAsync<DevPackageWatchStatus>(response, cancellationToken);
-    }
+    public Task<RuntimePackageSnapshot> GetRuntimePackageSnapshotAsync(CancellationToken cancellationToken = default)
+        => _management.GetPackageSnapshotAsync(cancellationToken);
 
-    public async Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(long afterSequenceId = 0, CancellationToken cancellationToken = default)
-        => await GetJsonAsync<RuntimeEventSnapshot>($"runtime-events/snapshot?after={Math.Max(0, afterSequenceId)}", cancellationToken)
-           ?? throw new InvalidDataException("Runtime returned an empty event snapshot.");
+    public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
+        => _management.GetSessionPackagesAsync(cancellationToken);
+
+    public Task<RuntimeHandshakeResponse> GetRuntimeHandshakeAsync(CancellationToken cancellationToken = default)
+        => _management.GetRuntimeHandshakeAsync(cancellationToken);
+
+    public Task<DevPackageOwnerLeaseResponse> ReplaceDevPackageOwnerAsync(
+        string ownerId,
+        DevPackageOwnerMutationRequest request,
+        CancellationToken cancellationToken = default)
+        => _management.ReplaceDevPackageOwnerAsync(ownerId, request, cancellationToken);
+
+    public Task<DevPackageOwnerLeaseResponse> HeartbeatDevPackageOwnerAsync(
+        string ownerId,
+        DevPackageOwnerHeartbeatRequest request,
+        CancellationToken cancellationToken = default)
+        => _management.HeartbeatDevPackageOwnerAsync(ownerId, request, cancellationToken);
+
+    public Task ReleaseDevPackageOwnerAsync(
+        string ownerId,
+        DevPackageOwnerReleaseRequest request,
+        CancellationToken cancellationToken = default)
+        => _management.ReleaseDevPackageOwnerAsync(ownerId, request, cancellationToken);
+
+    public Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(long afterSequenceId = 0, CancellationToken cancellationToken = default)
+        => _management.GetRuntimeEventSnapshotAsync(afterSequenceId, cancellationToken);
 
     public IAsyncEnumerable<RuntimeEventDescriptor> StreamRuntimeEventsAsync(long afterSequenceId, CancellationToken cancellationToken = default)
-        => ReadSseAsync<RuntimeEventDescriptor>("runtime-events/stream", afterSequenceId, cancellationToken);
+        => _management.StreamRuntimeEventsAsync(afterSequenceId, cancellationToken);
 
-    public async Task<PackageLogSnapshot> GetPackageLogSnapshotAsync(long afterSequenceId = 0, int limit = 500, CancellationToken cancellationToken = default)
-        => await GetJsonAsync<PackageLogSnapshot>(
-               $"package-logs/snapshot?after={Math.Max(0, afterSequenceId)}&limit={Math.Clamp(limit, 1, 1000)}",
-               cancellationToken)
-           ?? throw new InvalidDataException("Runtime returned an empty package-log snapshot.");
+    public Task<PackageLogSnapshot> GetPackageLogSnapshotAsync(long afterSequenceId = 0, int limit = 500, CancellationToken cancellationToken = default)
+        => _management.GetPackageLogSnapshotAsync(afterSequenceId, limit, cancellationToken);
 
     public IAsyncEnumerable<PackageLogEntryDescriptor> StreamPackageLogsAsync(long afterSequenceId, CancellationToken cancellationToken = default)
-        => ReadSseAsync<PackageLogEntryDescriptor>("package-logs/stream", afterSequenceId, cancellationToken);
+        => _management.StreamPackageLogsAsync(afterSequenceId, cancellationToken);
 
-    public async Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
-        => await GetJsonAsync<IReadOnlyList<PackageUiSnapshotDescriptor>>("packages/ui-snapshots", cancellationToken) ?? [];
+    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
+        => _management.GetActivePackageUiSnapshotsAsync(cancellationToken);
 
-    public async Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
-    {
-        using var response = await _httpClient.GetAsync(
-            CreateRequestUri(snapshot.SnapshotUri),
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        await _responses.EnsureSuccessAsync(response, cancellationToken);
-        if (response.Content.Headers.ContentLength is > AppPackageSourcePreparer.MaxSnapshotBytes)
-        {
-            throw new InvalidDataException("Runtime package UI snapshot exceeds the App stream limit.");
-        }
-
-        await BoundedHttpContentReader.CopyToAsync(
-            response.Content,
+    public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
+        => _management.DownloadPackageUiSnapshotAsync(
+            snapshot,
             destination,
             AppPackageSourcePreparer.MaxSnapshotBytes,
             cancellationToken);
-    }
 
-    public async Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
-        => await GetJsonAsync<IReadOnlyList<InstalledPackageDescriptor>>("packages/installed", cancellationToken) ?? [];
+    public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
+        => _management.GetInstalledPackagesAsync(cancellationToken);
 
-    public async Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
-    {
-        using var response = await _httpClient.GetAsync(
-            CreateRequestUri($"packages/session/{Uri.EscapeDataString(packageId)}/status"),
-            cancellationToken);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        await _responses.EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync<PackageSessionStatus>(response, cancellationToken);
-    }
-
-    public async Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
-    {
-        using var response = await _httpClient.PostAsJsonAsync(CreateRequestUri("packages/session/load"), request, cancellationToken);
-        await _responses.EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync<PackageSessionOperationResult>(response, cancellationToken)
-               ?? PackageSessionOperationResult.Failed("Runtime returned an empty package-session load response.");
-    }
-
-    public async Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
-    {
-        using var response = await _httpClient.PostAsJsonAsync(
-            CreateRequestUri($"packages/session/{Uri.EscapeDataString(packageId)}/unload"),
-            new PackageSessionUnloadRequest(sourceKind),
-            cancellationToken);
-        await _responses.EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync<PackageSessionOperationResult>(response, cancellationToken)
-               ?? PackageSessionOperationResult.Failed("Runtime returned an empty package-session unload response.");
-    }
+    public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
+        => _management.GetPackageSessionStatusAsync(packageId, cancellationToken);
 
     public Uri CreatePackageAssetUri(string packageId, string assetPath)
-        => CreateRequestUri($"packages/{Uri.EscapeDataString(packageId)}/assets/{EscapeRelativePath(assetPath)}");
+        => _management.CreatePackageAssetUri(packageId, assetPath);
 
-    public async Task ShutdownAsync(CancellationToken cancellationToken = default)
-    {
-        using var response = await _httpClient.PostAsync(CreateRequestUri("system/shutdown"), content: null, cancellationToken);
-        await _responses.EnsureSuccessAsync(response, cancellationToken);
-    }
+    public Task ShutdownAsync(CancellationToken cancellationToken = default)
+        => _management.ShutdownAsync(cancellationToken);
 }

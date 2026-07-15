@@ -4,4 +4,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
+  </ItemGroup>
 </Project>

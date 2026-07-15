@@ -51,19 +51,52 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => viewModel.AddPackageViewToDefaultHotbarAsync(viewId, openPanel, parameters), cancellationToken);
 
+    internal ValueTask<bool> AddViewToDefaultHotbarAsync(
+        string viewId,
+        bool openPanel,
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => InvokeAsync(
+            viewModel => viewModel.AddPackageViewToDefaultHotbarAsync(viewId, openPanel, parameters),
+            cancellationToken,
+            publication);
+
     public ValueTask<bool> AddViewToHotbarAsync(
         string viewId,
-        PackageHotbarPlacement placement,
+        PackageViewPlacement placement,
         int? index = null,
         bool openPanel = false,
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => viewModel.AddPackageViewToHotbarAsync(viewId, placement, index, openPanel, parameters), cancellationToken);
 
+    internal ValueTask<bool> AddViewToHotbarAsync(
+        string viewId,
+        PackageViewPlacement placement,
+        int? index,
+        bool openPanel,
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => InvokeAsync(
+            viewModel => viewModel.AddPackageViewToHotbarAsync(viewId, placement, index, openPanel, parameters),
+            cancellationToken,
+            publication);
+
     public ValueTask<bool> RemoveViewFromHotbarAsync(
         string viewId,
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => ValueTask.FromResult(viewModel.RemovePackageViewFromHotbar(viewId)), cancellationToken);
+
+    internal ValueTask<bool> RemoveViewFromHotbarAsync(
+        string viewId,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => InvokeAsync(
+            viewModel => ValueTask.FromResult(viewModel.RemovePackageViewFromHotbar(viewId)),
+            cancellationToken,
+            publication);
 
     public ValueTask<bool> OpenViewPanelAsync(
         string viewId,
@@ -71,23 +104,47 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => viewModel.OpenPackageViewPanelAsync(viewId, parameters), cancellationToken);
 
+    internal ValueTask<bool> OpenViewPanelAsync(
+        string viewId,
+        IReadOnlyDictionary<string, string?>? parameters,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => InvokeAsync(
+            viewModel => viewModel.OpenPackageViewPanelAsync(viewId, parameters),
+            cancellationToken,
+            publication);
+
     public ValueTask<bool> CloseViewPanelAsync(
         string viewId,
         CancellationToken cancellationToken = default)
         => InvokeAsync(viewModel => ValueTask.FromResult(viewModel.ClosePackageViewPanel(viewId)), cancellationToken);
 
+    internal ValueTask<bool> CloseViewPanelAsync(
+        string viewId,
+        AppPackageGenerationPublication publication,
+        CancellationToken cancellationToken)
+        => InvokeAsync(
+            viewModel => ValueTask.FromResult(viewModel.ClosePackageViewPanel(viewId)),
+            cancellationToken,
+            publication);
+
     private async ValueTask<bool> InvokeAsync(
         Func<MainWindowViewModel, ValueTask<bool>> action,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AppPackageGenerationPublication? publication = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var viewModel = _viewModel;
-        if (viewModel is null)
+        return await _uiDispatcher.InvokeAsync(async () =>
         {
-            return false;
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (publication is not null && !publication.IsPublished)
+            {
+                return false;
+            }
 
-        return await _uiDispatcher.InvokeAsync(async () => await action(viewModel));
+            var viewModel = _viewModel;
+            return viewModel is not null && await action(viewModel);
+        });
     }
 
     private void OnShellViewStateChanged()

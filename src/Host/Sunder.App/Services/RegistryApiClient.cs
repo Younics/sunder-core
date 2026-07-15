@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
 using Sunder.Registry.Contracts;
+using Sunder.Runtime.Client;
 
 namespace Sunder.App.Services;
 
@@ -17,7 +17,11 @@ public sealed class RegistryApiClient : IRegistryApiClient
     public RegistryApiClient(Uri registryUrl, HttpClient? httpClient = null)
     {
         RegistryUrl = RegistryUrlHelper.Normalize(registryUrl);
-        _httpClient = httpClient ?? new HttpClient { BaseAddress = RegistryUrl, Timeout = TimeSpan.FromSeconds(30) };
+        _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        {
+            BaseAddress = RegistryUrl,
+            Timeout = TimeSpan.FromSeconds(30),
+        };
         _disposeHttpClient = httpClient is null;
     }
 
@@ -51,37 +55,35 @@ public sealed class RegistryApiClient : IRegistryApiClient
 
     private async Task DownloadAsync(string url, long? size, string hash, string label, string destinationPath, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        using var response = await _httpClient.GetAsync(CreateUri(url), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
         if (size < 0 || size > MaxStackDownloadBytes)
         {
             throw new InvalidDataException($"Downloaded {label} exceeds the Stack download limit.");
         }
 
-        try
+        var downloadUri = CreateDownloadUri(url);
+        using var response = await _httpClient.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (!HttpMediaUriValidator.HasSameOrigin(downloadUri, response.RequestMessage?.RequestUri))
         {
-            await using var destination = File.Create(destinationPath);
-            await BoundedHttpContentReader.CopyToAsync(
-                response.Content,
-                destination,
-                size ?? MaxStackDownloadBytes,
-                cancellationToken);
+            throw new InvalidDataException($"Downloaded {label} redirected to an untrusted origin.");
         }
-        catch
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength is > MaxStackDownloadBytes
+            || size is { } expectedSize
+            && response.Content.Headers.ContentLength is { } contentLength
+            && contentLength != expectedSize)
         {
-            File.Delete(destinationPath);
-            throw;
+            throw new InvalidDataException($"Downloaded {label} has an invalid content length.");
         }
 
-        var actualSize = new FileInfo(destinationPath).Length;
-        if (size is { } expectedSize && actualSize != expectedSize) throw new InvalidDataException($"Downloaded {label} size mismatch.");
-        if (!string.IsNullOrWhiteSpace(hash))
-        {
-            await using var stream = File.OpenRead(destinationPath);
-            var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
-            if (!string.Equals(actualHash, hash, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Downloaded {label} SHA-256 mismatch.");
-        }
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await VerifiedFileTransfer.PublishAsync(
+            source,
+            destinationPath,
+            MaxStackDownloadBytes,
+            size,
+            hash,
+            $"Downloaded {label}",
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<T?> GetOrNullAsync<T>(string path, CancellationToken cancellationToken)
@@ -100,6 +102,18 @@ public sealed class RegistryApiClient : IRegistryApiClient
     }
 
     private Uri CreateUri(string path) => Uri.TryCreate(path, UriKind.Absolute, out var absolute) ? absolute : new Uri(RegistryUrl, path);
+
+    private Uri CreateDownloadUri(string path)
+    {
+        var uri = CreateUri(path);
+        if (!HttpMediaUriValidator.IsValid(uri)
+            || !HttpMediaUriValidator.HasSameOrigin(RegistryUrl, uri))
+        {
+            throw new InvalidDataException("Registry download URL must remain on the trusted Registry origin.");
+        }
+
+        return uri;
+    }
     private static string FormatSort(RegistrySearchSort sort) => sort switch { RegistrySearchSort.Downloads => "downloads", RegistrySearchSort.Stars => "stars", _ => "updated" };
 
     public void Dispose()

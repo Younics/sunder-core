@@ -14,7 +14,7 @@ public sealed partial class UseStackWizardViewModel(
     LocalStackLibraryItem stack,
     IRuntimeStacksClient runtimeApiClient,
     RegistryPackageInstallService registryInstallService,
-    Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
+    Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
     Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> notifyStackImportAppliedAsync,
     Func<Uri, IRegistryApiClient> registryClientFactory,
     string registryUrlText) : ViewModelBase, IDisposable
@@ -212,9 +212,9 @@ public sealed partial class UseStackWizardViewModel(
                     return;
                 }
 
-                if (installResult.ImpactedPackageIds.Count > 0)
+                if (installResult.ImpactedPackageIds.Count > 0 && installResult.CommittedStamp is not null)
                 {
-                    await applyPackageLifecycleChangesAsync(installResult.ImpactedPackageIds, cancellationToken);
+                    await waitUntilPresentationAppliedAsync(installResult.CommittedStamp, cancellationToken);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -258,6 +258,7 @@ public sealed partial class UseStackWizardViewModel(
         }
 
         var selectedActionIds = ImportActions
+            .Where(action => action.IsSelected)
             .Select(action => action.ActionId)
             .ToArray();
 

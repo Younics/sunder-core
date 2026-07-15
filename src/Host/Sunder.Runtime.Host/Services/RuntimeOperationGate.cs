@@ -7,6 +7,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     private readonly object _syncRoot = new();
     private bool _stopping;
     private bool _stopped;
+    private readonly TaskCompletionSource _shutdownCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly RuntimeEventStreamService? _eventStream;
 
     public RuntimeOperationGate(RuntimeEventStreamService? eventStream = null)
@@ -35,14 +36,19 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
             throw;
         }
 
+        var stopping = false;
         lock (_syncRoot)
         {
             if (_stopping)
             {
-                _gate.Release();
-                linkedCancellation.Dispose();
-                throw new InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
+                stopping = true;
             }
+        }
+        if (stopping)
+        {
+            _gate.Release();
+            linkedCancellation.Dispose();
+            throw new InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
         }
 
         _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.PackageOperation);
@@ -51,29 +57,43 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
 
     public async Task ShutdownAsync(Func<Task> cleanup)
     {
+        Task? existingShutdown = null;
         lock (_syncRoot)
         {
             if (_stopped)
             {
                 return;
             }
-
-            _stopping = true;
-            _shutdown.Cancel();
-            _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
+            if (_stopping)
+            {
+                existingShutdown = _shutdownCompletion.Task;
+            }
+            else
+            {
+                _stopping = true;
+            }
         }
 
+        if (existingShutdown is not null)
+        {
+            await existingShutdown;
+            return;
+        }
+
+        _shutdown.Cancel();
+        _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
         await _gate.WaitAsync(CancellationToken.None);
         try
         {
             await cleanup();
+        }
+        finally
+        {
             lock (_syncRoot)
             {
                 _stopped = true;
             }
-        }
-        finally
-        {
+            _shutdownCompletion.TrySetResult();
             _gate.Release();
         }
     }
@@ -87,9 +107,17 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
 
     private void ReleaseLease(CancellationTokenSource cancellation)
     {
-        _gate.Release();
+        bool stopping;
+        lock (_syncRoot)
+        {
+            stopping = _stopping;
+        }
+        if (!stopping)
+        {
+            _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.Idle);
+        }
         cancellation.Dispose();
-        _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.Idle);
+        _gate.Release();
     }
 
     internal sealed class Lease : IAsyncDisposable

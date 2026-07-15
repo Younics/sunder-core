@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>2.3.4</Version>
+    <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
+    <SunderPackageBuildProject>$(MSBuildThisFileDirectory)SourceReferencePackage.no-auto-project-reference</SunderPackageBuildProject>
+    <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\sunder-package.json'))</SunderGeneratedPackageManifest>
+    <_SourceReferenceSdkOutputDirectory>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\SourceReferenceSdk\bin\$(Configuration)\$(TargetFramework)'))</_SourceReferenceSdkOutputDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SourceReferenceSdk\SourceReferenceSdk.csproj" />
+    <ProjectReference Include="..\..\..\src\Sdk\Sunder.Package.Build\Sunder.Package.Build.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <Import Project="..\..\..\src\Sdk\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
+
+  <Target Name="_InjectSourceReferenceSdkCompanionOutputs"
+          BeforeTargets="GenerateSunderPackageManifest">
+    <ItemGroup>
+      <ReferencePath Include="$(_SourceReferenceSdkOutputDirectory)\Sunder.Sdk.pdb" />
+      <ReferencePath Include="$(_SourceReferenceSdkOutputDirectory)\Sunder.Sdk.xml" />
+      <ReferenceCopyLocalPaths Include="$(_SourceReferenceSdkOutputDirectory)\Sunder.Sdk.pdb"
+                               ReferenceSourceTarget="ProjectReference" />
+      <ReferenceCopyLocalPaths Include="$(_SourceReferenceSdkOutputDirectory)\Sunder.Sdk.xml"
+                               ReferenceSourceTarget="ProjectReference" />
+    </ItemGroup>
+  </Target>
+</Project>

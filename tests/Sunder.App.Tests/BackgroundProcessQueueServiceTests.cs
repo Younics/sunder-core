@@ -487,6 +487,82 @@ public sealed class BackgroundProcessQueueServiceTests
         Assert.Throws<ObjectDisposedException>(() => packageQueue.Start());
     }
 
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_TwoGenerationsIsolateListsEventsAndCancellation()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var firstOwner = Guid.NewGuid();
+        var secondOwner = Guid.NewGuid();
+        await using var first = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, firstOwner);
+        await using var second = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, secondOwner);
+        first.Start();
+        second.Start();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstChanges = new ConcurrentQueue<Guid>();
+        var secondChanges = new ConcurrentQueue<Guid>();
+        first.ProcessChanged += (_, e) => firstChanges.Enqueue(e.Snapshot.ProcessId);
+        second.ProcessChanged += (_, e) => secondChanges.Enqueue(e.Snapshot.ProcessId);
+
+        var firstProcess = first.Enqueue(CreateRequest("first generation", "work", async _ => await release.Task));
+        var secondProcess = second.Enqueue(CreateRequest("second generation", "work", async _ => await release.Task));
+
+        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
+        Assert.Collection(first.ListProcesses(), process => Assert.Equal(firstProcess.ProcessId, process.ProcessId));
+        Assert.Collection(second.ListProcesses(), process => Assert.Equal(secondProcess.ProcessId, process.ProcessId));
+        Assert.All(firstChanges, processId => Assert.Equal(firstProcess.ProcessId, processId));
+        Assert.All(secondChanges, processId => Assert.Equal(secondProcess.ProcessId, processId));
+        Assert.False(first.Cancel(secondProcess.ProcessId));
+
+        release.SetResult();
+        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+    }
+
+    [Fact]
+    public async Task PackageScopedBackgroundProcessQueue_OwnerStopDoesNotCancelOtherGenerationButPackageAllDoes()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        await using var first = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, Guid.NewGuid());
+        await using var second = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, Guid.NewGuid());
+        var firstCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var firstProcess = first.Enqueue(CreateRequest("first generation", "first", async context =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+            }
+            finally
+            {
+                firstCancelled.TrySetResult();
+            }
+        }));
+        var secondProcess = second.Enqueue(CreateRequest("second generation", "second", async context =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+            }
+            finally
+            {
+                secondCancelled.TrySetResult();
+            }
+        }));
+
+        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
+        await first.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(firstCancelled.Task.IsCompletedSuccessfully);
+        Assert.False(secondCancelled.Task.IsCompleted);
+        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(firstProcess.ProcessId)?.State);
+        Assert.Equal(BackgroundProcessState.Running, queue.GetProcess(secondProcess.ProcessId)?.State);
+
+        await queue.CancelAllPackageProcessesAsync("test.package").WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(secondCancelled.Task.IsCompletedSuccessfully);
+        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(secondProcess.ProcessId)?.State);
+    }
+
     private static BackgroundProcessRequest CreateRequest(
         string title,
         string groupKey,

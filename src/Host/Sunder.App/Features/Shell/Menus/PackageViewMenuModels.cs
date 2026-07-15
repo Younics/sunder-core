@@ -1,18 +1,12 @@
-using Sunder.App.Models;
+using Avalonia.Media;
 
 namespace Sunder.App.Features.Shell.Menus;
 
-public sealed record PackageViewMenuItem(
-    string ViewId,
+public sealed record ShellMenuItem(
+    string Id,
     string Title,
-    string Glyph,
-    Uri? IconUri,
-    RailPlacement Placement,
-    bool IsInHotbar);
-
-public sealed record PackageViewMenuGroup(
-    string PackageId,
-    string PackageDisplayName,
-    string PackageGlyph,
-    Uri? PackageIconUri,
-    IReadOnlyList<PackageViewMenuItem> Views);
+    string? Glyph,
+    IImage? IconImage,
+    bool IsEnabled,
+    IReadOnlyList<ShellMenuItem> Children,
+    Func<CancellationToken, Task>? ExecuteAsync = null);

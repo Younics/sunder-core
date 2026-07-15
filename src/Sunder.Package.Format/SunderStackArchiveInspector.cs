@@ -1,11 +1,16 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Sunder.Package.Format;
 
 public static class SunderStackArchiveInspector
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    };
     private static readonly SunderPackageJsonContext JsonContext = new(JsonOptions);
     private static readonly ArchiveRelativePath ManifestPath = ArchiveRelativePath.Parse(SunderStackFormat.ManifestPath);
     private static readonly ArchiveRelativePath ContentIndexPath = ArchiveRelativePath.Parse(SunderStackFormat.ContentIndexPath);
@@ -82,7 +87,7 @@ public static class SunderStackArchiveInspector
             return new SunderStackArchiveValidationResult(null, warnings, errors);
         }
 
-        StackManifestSchemaValidator.Validate(manifest, stagingPath, errors);
+        StackManifestSchemaValidator.Validate(manifest, stagingPath, warnings, errors);
         if (manifest is not null)
         {
             StackMediaValidator.Validate(manifest.Media, stagingPath, errors);

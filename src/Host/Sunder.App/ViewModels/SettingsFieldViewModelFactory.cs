@@ -5,13 +5,13 @@ namespace Sunder.App.ViewModels;
 internal static class SettingsFieldViewModelFactory
 {
     public static SettingsFieldViewModel Create(
-        PackageConfigurationFieldDescriptor field,
+        PackageSettingsFieldDescriptor field,
         string? value,
         bool hasStoredSecretValue)
     {
         return field.Kind switch
         {
-            PackageConfigurationFieldKind.Secret => new SecretSettingsFieldViewModel(
+            PackageSettingsFieldKind.Secret => new SecretSettingsFieldViewModel(
                 field.Key,
                 field.Label,
                 field.Description,
@@ -19,13 +19,13 @@ internal static class SettingsFieldViewModelFactory
                 field.Placeholder,
                 hasStoredSecretValue,
                 null),
-            PackageConfigurationFieldKind.Boolean => new BooleanSettingsFieldViewModel(
+            PackageSettingsFieldKind.Boolean => new BooleanSettingsFieldViewModel(
                 field.Key,
                 field.Label,
                 field.Description,
                 field.IsRequired,
                 bool.TryParse(value, out var parsedBoolean) && parsedBoolean),
-            PackageConfigurationFieldKind.Select => new SelectSettingsFieldViewModel(
+            PackageSettingsFieldKind.Select => new SelectSettingsFieldViewModel(
                 field.Key,
                 field.Label,
                 field.Description,

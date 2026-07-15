@@ -11,30 +11,6 @@ namespace Sunder.App.ViewModels;
 public sealed partial class StacksWindowViewModel
 {
 
-    private void RebuildStackList(string? preferredStackId = null)
-    {
-        var items = _stackLibrary.Project(SearchText);
-
-        Stacks.Clear();
-        foreach (var item in items)
-        {
-            Stacks.Add(item);
-        }
-
-        OnPropertyChanged(nameof(HasStacks));
-        OnPropertyChanged(nameof(ShowNoStacks));
-
-        var selected = !string.IsNullOrWhiteSpace(preferredStackId)
-            ? Stacks.FirstOrDefault(item => string.Equals(item.StackId, preferredStackId, StringComparison.OrdinalIgnoreCase))
-            : Stacks.FirstOrDefault();
-        SelectedStack = selected;
-        if (selected is null)
-        {
-            ApplySelectedStackSummary(null);
-            NotifySelectionChanged();
-        }
-    }
-
     private async Task LoadSelectedStackManifestAsync(
         LocalStackLibraryItem item,
         StackSelectionRequest selectionRequest)
@@ -74,8 +50,8 @@ public sealed partial class StacksWindowViewModel
 
         try
         {
-            var stats = await _detailLoader.LoadPublishedStatsAsync(stack, _registryClientFactory, selectionRequest.Token);
-            if (_disposed || !_selection.IsCurrent(selectionRequest) || SelectedStack?.StackId != stack.StackId)
+            var stats = await _detailLoader.LoadPublishedStatsAsync(stack, Registry.CreateClient, selectionRequest.Token);
+            if (_disposed || !_selection.IsCurrent(selectionRequest) || Local.SelectedStack?.StackId != stack.StackId)
             {
                 return;
             }
@@ -192,7 +168,7 @@ public sealed partial class StacksWindowViewModel
         try
         {
             var packageIcons = await _detailLoader.LoadLocalPackageIconsAsync(selectionRequest.Token);
-            if (!_selection.IsCurrent(selectionRequest) || _disposed || SelectedStack?.StackId != item.StackId)
+            if (!_selection.IsCurrent(selectionRequest) || _disposed || Local.SelectedStack?.StackId != item.StackId)
             {
                 return;
             }

@@ -63,18 +63,38 @@ public sealed class DeveloperLogService : IDisposable
         }
     }
 
-    public void Enable()
+    public void Enable(bool startPackageLogStreaming = true)
     {
         if (IsEnabled)
         {
+            if (startPackageLogStreaming)
+            {
+                StartPackageLogStreaming();
+            }
             return;
         }
 
         IsEnabled = true;
         AppSessionLog.EntryWritten += AppSessionLog_OnEntryWritten;
         AddEntries(AppSessionLog.Snapshot().Select(CreateMirroredLogEntry).ToArray(), forceReset: true);
-        if (_runtimeApiClientFactory is not null)
+        if (startPackageLogStreaming)
         {
+            StartPackageLogStreaming();
+        }
+    }
+
+    public void StartPackageLogStreaming()
+    {
+        lock (_syncRoot)
+        {
+            if (!IsEnabled
+                || _disposed
+                || _runtimeApiClientFactory is null
+                || _packageLogCancellation is not null)
+            {
+                return;
+            }
+
             _packageLogCancellation = new CancellationTokenSource();
             _packageLogTask = ConsumePackageLogsAsync(_packageLogCancellation.Token);
         }
@@ -167,7 +187,11 @@ public sealed class DeveloperLogService : IDisposable
     }
 
     private void AddPackageLog(PackageLogEntryDescriptor entry)
-        => WritePackageLog(ToPackageLogLevel(entry.Level), entry.PackageId, entry.Message);
+        => WritePackageLog(
+            ToPackageLogLevel(entry.Level),
+            entry.PackageId,
+            entry.Message,
+            entry.Timestamp);
 
     private static PackageLogLevel ToPackageLogLevel(RuntimePackageLogLevel level)
         => level switch
@@ -180,7 +204,11 @@ public sealed class DeveloperLogService : IDisposable
             _ => PackageLogLevel.Information,
         };
 
-    internal void WritePackageLog(PackageLogLevel level, string packageId, string message)
+    internal void WritePackageLog(
+        PackageLogLevel level,
+        string packageId,
+        string message,
+        DateTimeOffset? timestamp = null)
     {
         if (!IsEnabled)
         {
@@ -188,7 +216,7 @@ public sealed class DeveloperLogService : IDisposable
         }
 
         var entry = new DeveloperLogEntry(
-            DateTimeOffset.Now,
+            timestamp ?? DateTimeOffset.Now,
             level,
             DeveloperLogEntryScope.Package,
             Normalize(packageId, "package.log"),

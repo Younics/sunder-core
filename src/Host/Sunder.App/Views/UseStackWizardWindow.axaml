@@ -280,11 +280,14 @@
                 <controls:StackImportPreview.ActionTemplate>
                   <DataTemplate x:DataType="vm:UseStackImportActionViewModel">
                     <Border Classes="marketplace-profile-row" Margin="0,0,0,6">
-                      <StackPanel Spacing="4">
-                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                        <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
-                        <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
-                      </StackPanel>
+                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                        <CheckBox IsChecked="{Binding IsSelected}" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Spacing="4">
+                          <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                          <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
+                          <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Grid>
                     </Border>
                   </DataTemplate>
                 </controls:StackImportPreview.ActionTemplate>

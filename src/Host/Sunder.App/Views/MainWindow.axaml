@@ -36,6 +36,14 @@
       <Border IsHitTestVisible="False"
               Classes="shell-glass-tint" />
 
+      <Grid x:Name="PackageViewStagingSurface"
+            Opacity="0"
+            IsEnabled="False"
+            IsHitTestVisible="False"
+            Focusable="False"
+            ClipToBounds="True"
+            ZIndex="-1" />
+
       <Grid RowDefinitions="52,*,22">
         <controls:ShellToolbar x:Name="ShellToolbar"
                                Grid.Row="0" />

@@ -5,7 +5,7 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
-public sealed class RuntimeHostProcessManager
+public sealed class RuntimeHostProcessManager : IDisposable
 {
     private const string RuntimeHostName = "Sunder.Runtime.Host";
     private readonly AppStartupOptions _startupOptions;
@@ -14,10 +14,11 @@ public sealed class RuntimeHostProcessManager
     private readonly Func<Uri, CancellationToken, Task<RuntimeHandshakeResponse?>> _tryGetRuntimeHandshakeAsync;
     private readonly Func<Uri, CancellationToken, Task<bool>> _isRuntimeHealthyAsync;
     private readonly Func<Uri, CancellationToken, Task> _shutdownRuntimeAsync;
-    private readonly Action<ProcessStartInfo> _startProcess;
+    private readonly Func<ProcessStartInfo, CancellationToken, Task> _launchRuntimeAsync;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly string _connectionInfoPath;
     private readonly SemaphoreSlim _startupSemaphore = new(1, 1);
+    private readonly RuntimeHealthProbe? _healthProbe;
 
     public RuntimeHostProcessManager(AppStartupOptions startupOptions)
         : this(startupOptions, null, null, null, null, null, null, null, null)
@@ -27,7 +28,15 @@ public sealed class RuntimeHostProcessManager
     public RuntimeHostProcessManager(
         AppStartupOptions startupOptions,
         RuntimeConnectionState runtimeConnectionState)
-        : this(startupOptions, runtimeConnectionState, null, null, null, null, null, null, null)
+        : this(startupOptions, runtimeConnectionState, null, null, null, null, null, null, null, null)
+    {
+    }
+
+    public RuntimeHostProcessManager(
+        AppStartupOptions startupOptions,
+        RuntimeConnectionState runtimeConnectionState,
+        RuntimeClientTransport runtimeTransport)
+        : this(startupOptions, runtimeConnectionState, null, null, null, null, null, null, null, runtimeTransport)
     {
     }
 
@@ -40,18 +49,38 @@ public sealed class RuntimeHostProcessManager
         Func<Uri, CancellationToken, Task>? shutdownRuntimeAsync = null,
         Action<ProcessStartInfo>? startProcess = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
-        string? connectionInfoPath = null)
+        string? connectionInfoPath = null,
+        RuntimeClientTransport? runtimeTransport = null)
     {
         _startupOptions = startupOptions;
         _runtimeConnectionState = runtimeConnectionState ?? new RuntimeConnectionState(startupOptions.RuntimeUrl);
-        var healthProbe = new RuntimeHealthProbe(_runtimeConnectionState);
+        var healthProbe = tryGetRuntimeHandshakeAsync is null
+                          || isRuntimeHealthyAsync is null
+                          || shutdownRuntimeAsync is null
+            ? new RuntimeHealthProbe(_runtimeConnectionState, runtimeTransport)
+            : null;
+        _healthProbe = healthProbe;
         _resolveRuntimeHostPath = resolveRuntimeHostPath ?? ResolveRuntimeHostPath;
-        _tryGetRuntimeHandshakeAsync = tryGetRuntimeHandshakeAsync ?? healthProbe.TryGetRuntimeHandshakeAsync;
-        _isRuntimeHealthyAsync = isRuntimeHealthyAsync ?? healthProbe.IsRuntimeHealthyAsync;
-        _shutdownRuntimeAsync = shutdownRuntimeAsync ?? healthProbe.ShutdownRuntimeAsync;
-        _startProcess = startProcess ?? StartProcess;
+        _tryGetRuntimeHandshakeAsync = tryGetRuntimeHandshakeAsync ?? healthProbe!.TryGetRuntimeHandshakeAsync;
+        _isRuntimeHealthyAsync = isRuntimeHealthyAsync ?? healthProbe!.IsRuntimeHealthyAsync;
+        _shutdownRuntimeAsync = shutdownRuntimeAsync ?? healthProbe!.ShutdownRuntimeAsync;
+        var persistentLauncher = RuntimePersistentLauncher.Create();
+        _launchRuntimeAsync = startProcess is null
+            ? persistentLauncher.LaunchAsync
+            : (startInfo, _) =>
+            {
+                startProcess(startInfo);
+                return Task.CompletedTask;
+            };
         _delayAsync = delayAsync ?? Task.Delay;
         _connectionInfoPath = connectionInfoPath ?? RuntimeConnectionInfoStore.GetDefaultPath();
+    }
+
+    public void Dispose()
+    {
+        _healthProbe?.Dispose();
+        _startupSemaphore.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     public async Task EnsureStartedAsync(CancellationToken cancellationToken = default)
@@ -75,6 +104,7 @@ public sealed class RuntimeHostProcessManager
     private async Task EnsureStartedCoreAsync(Uri runtimeUrl, CancellationToken cancellationToken)
     {
         var runtimeHostPath = _resolveRuntimeHostPath();
+        RefreshPublishedConnection(runtimeUrl);
         var runningHandshake = await _tryGetRuntimeHandshakeAsync(runtimeUrl, cancellationToken);
         if (CanReuseRunningRuntime(runningHandshake))
         {
@@ -84,8 +114,8 @@ public sealed class RuntimeHostProcessManager
         if (ShouldReplaceRunningRuntime(runningHandshake))
         {
             var runningVersion = runningHandshake!.Product?.ProductVersion ?? "unknown";
-            AppSessionLog.WriteInfo(
-                $"Replacing incompatible Sunder.Runtime.Host {runningVersion}: {RuntimeProtocolCompatibility.GetIncompatibility(runningHandshake)}");
+            var reason = RuntimeProtocolCompatibility.GetIncompatibility(runningHandshake);
+            AppSessionLog.WriteInfo($"Replacing Sunder.Runtime.Host {runningVersion}: {reason}");
             await _shutdownRuntimeAsync(runtimeUrl, cancellationToken);
             var stopped = await WaitForStoppedRuntimeAsync(runtimeUrl, cancellationToken);
             if (!stopped)
@@ -116,38 +146,37 @@ public sealed class RuntimeHostProcessManager
                 $"The managed Runtime cannot be launched at non-loopback URL '{runtimeUrl}'. Connect only with matching authenticated connection information, or launch the Runtime manually with the explicit development-only non-loopback override.");
         }
 
-        var connectionInfo = new RuntimeConnectionInfo(runtimeUrl, RuntimeBearerToken.Create());
-        RuntimeConnectionInfoStore.Save(connectionInfo, _connectionInfoPath);
-        _runtimeConnectionState.SetConnection(connectionInfo);
+        var staleConnection = RuntimeConnectionInfoStore.Load(_connectionInfoPath);
+        if (staleConnection is not null)
+        {
+            RuntimeConnectionInfoStore.DeleteIfMatches(staleConnection, _connectionInfoPath);
+        }
+        _runtimeConnectionState.RuntimeUrl = runtimeUrl;
         try
         {
-            StartRuntimeHostProcess(RuntimeHostStartInfoFactory.Create(
+            await StartRuntimeHostProcessAsync(RuntimeHostStartInfoFactory.Create(
                 runtimeHostPath,
                 runtimeUrl,
-                connectionInfo.BearerToken,
-                _connectionInfoPath,
-                _startupOptions.DevPackageFolders));
+                _connectionInfoPath), cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            RuntimeConnectionInfoStore.DeleteIfMatches(connectionInfo, _connectionInfoPath);
             throw;
         }
 
         var started = await WaitForAcceptableRuntimeAsync(runtimeUrl, cancellationToken);
         if (!started)
         {
-            RuntimeConnectionInfoStore.DeleteIfMatches(connectionInfo, _connectionInfoPath);
             _runtimeConnectionState.RuntimeUrl = runtimeUrl;
             throw new InvalidOperationException($"Sunder.Runtime.Host did not become healthy at '{runtimeUrl}' in time.");
         }
     }
 
-    private void StartRuntimeHostProcess(ProcessStartInfo startInfo)
+    private async Task StartRuntimeHostProcessAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
     {
         try
         {
-            _startProcess(startInfo);
+            await _launchRuntimeAsync(startInfo, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -163,6 +192,7 @@ public sealed class RuntimeHostProcessManager
     {
         for (var attempt = 0; attempt < 40; attempt++)
         {
+            RefreshPublishedConnection(runtimeUrl);
             var handshake = await _tryGetRuntimeHandshakeAsync(runtimeUrl, cancellationToken);
             if (CanReuseRunningRuntime(handshake))
             {
@@ -223,6 +253,18 @@ public sealed class RuntimeHostProcessManager
            && string.Equals(handshake.ProtocolIdentity, RuntimeProtocol.Identity, StringComparison.Ordinal)
            && !RuntimeProtocolCompatibility.IsCompatible(handshake);
 
+    private void RefreshPublishedConnection(Uri runtimeUrl)
+    {
+        var published = RuntimeConnectionInfoStore.Load(_connectionInfoPath);
+        if (published is null
+            || !published.Matches(runtimeUrl))
+        {
+            return;
+        }
+
+        _runtimeConnectionState.SetConnection(published);
+    }
+
     private static InvalidOperationException CreateRuntimeUrlOccupiedException(Uri runtimeUrl, string? serviceName)
     {
         var serviceDescription = string.IsNullOrWhiteSpace(serviceName)
@@ -231,13 +273,6 @@ public sealed class RuntimeHostProcessManager
 
         return new InvalidOperationException(
             $"Runtime URL '{runtimeUrl}' is already occupied by {serviceDescription}. Stop that service or choose a different runtime URL.");
-    }
-
-    private static void StartProcess(ProcessStartInfo startInfo)
-    {
-        var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Process.Start returned null.");
-        process.Dispose();
     }
 
     private static string? ResolveFromPath(string? path)

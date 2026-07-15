@@ -10,11 +10,30 @@ public interface IPackageFileStore
     /// <summary>Reads a file, returning <see langword="null"/> when it does not exist.</summary>
     Task<byte[]?> ReadAsync(string relativePath, CancellationToken cancellationToken = default);
 
+    /// <summary>Opens a read-only content stream, returning <see langword="null"/> when the file does not exist.</summary>
+    async ValueTask<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default)
+    {
+        var contents = await ReadAsync(relativePath, cancellationToken).ConfigureAwait(false);
+        return contents is null ? null : new MemoryStream(contents, writable: false);
+    }
+
     /// <summary>Atomically writes a file, creating parent directories as needed.</summary>
     Task WriteAsync(
         string relativePath,
         ReadOnlyMemory<byte> contents,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Atomically writes the remaining content from a readable stream.</summary>
+    async Task WriteAsync(
+        string relativePath,
+        Stream contents,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+        await using var buffer = new MemoryStream();
+        await contents.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+        await WriteAsync(relativePath, buffer.ToArray(), cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Deletes a file when present.</summary>
     Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default);

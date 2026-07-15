@@ -14,7 +14,12 @@ public sealed partial class UseStackWizardViewModel
     private async Task RefreshImportPreviewCoreAsync(CancellationToken cancellationToken)
     {
         using var request = _previewRequest.Start(cancellationToken);
-        var existingInputValues = GetInputValues(includeEmptyValues: true);
+        var existingInputs = RequiredInputs.ToArray();
+        var existingInputValues = GetInputValues(existingInputs, includeEmptyValues: true);
+        var existingActionSelections = ImportActions.ToDictionary(
+            action => action.ActionId,
+            action => action.IsSelected,
+            StringComparer.OrdinalIgnoreCase);
         ImportActions.Clear();
         RequiredInputs.Clear();
         ImportWarnings.Clear();
@@ -48,14 +53,20 @@ public sealed partial class UseStackWizardViewModel
 
             foreach (var action in preview.Actions)
             {
-                ImportActions.Add(new UseStackImportActionViewModel(action));
+                var actionViewModel = new UseStackImportActionViewModel(action, OnImportActionSelectionChanged);
+                if (existingActionSelections.TryGetValue(action.ActionId, out var isSelected))
+                {
+                    actionViewModel.IsSelected = isSelected;
+                }
+
+                ImportActions.Add(actionViewModel);
             }
 
             foreach (var input in preview.RequiredInputs)
             {
                 RequiredInputs.Add(new UseStackRequiredInputValueViewModel(
                     input,
-                    existingInputValues.TryGetValue(input.InputId, out var value) ? value : null,
+                    existingInputs.FirstOrDefault(existing => existing.Matches(input))?.Value,
                     OnRequiredInputChanged));
             }
 
@@ -118,7 +129,7 @@ public sealed partial class UseStackWizardViewModel
             : result.Message;
     }
 
-    private void ApplyPackageInstallPlan(RegistryResolveInstallPlanResponse plan)
+    private void ApplyPackageInstallPlan(RuntimeRegistryResolveInstallPlanResponse plan)
     {
         foreach (var row in PackageRows)
         {
@@ -140,6 +151,9 @@ public sealed partial class UseStackWizardViewModel
     }
 
     private void OnRequiredInputChanged()
+        => NotifyWizardStateChanged();
+
+    private void OnImportActionSelectionChanged()
         => NotifyWizardStateChanged();
 
     private bool TryResolveRegistryUrl(out Uri registryUrl)
@@ -165,12 +179,14 @@ public sealed partial class UseStackWizardViewModel
             .Select(item => item.FragmentId)
             .ToArray();
 
-    private Dictionary<string, string> GetInputValues(bool includeEmptyValues = false)
+    private static Dictionary<string, string> GetInputValues(
+        IEnumerable<UseStackRequiredInputValueViewModel> inputs,
+        bool includeEmptyValues = false)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var input in RequiredInputs)
+        foreach (var input in inputs)
         {
-            if (includeEmptyValues || !string.IsNullOrWhiteSpace(input.Value))
+            if (input.IsHostScoped && (includeEmptyValues || !string.IsNullOrWhiteSpace(input.Value)))
             {
                 values[input.InputId] = input.Value;
             }

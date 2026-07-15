@@ -48,6 +48,10 @@ public sealed class MainWindowFactory(
             externalBrowserService: externalBrowserService,
             uiDispatcher: uiDispatcher);
 
-        return (new MainWindow { DataContext = viewModel }, viewModel);
+        var window = new MainWindow { DataContext = viewModel };
+        viewModel.ConfigurePackageViewStagingSurface(
+            window.StagePackageView,
+            window.DetachStagedPackageViews);
+        return (window, viewModel);
     }
 }

@@ -37,6 +37,8 @@ internal sealed record RuntimeStackPolicyOptions
 {
     public TimeSpan ImportPlanLifetime { get; init; } = TimeSpan.FromMinutes(15);
     public TimeSpan ImportPlanSweepInterval { get; init; } = TimeSpan.FromMinutes(1);
+    public long MaxExportPayloadFileBytes { get; init; } = 64L * 1024 * 1024;
+    public long MaxExportPayloadTotalBytes { get; init; } = 256L * 1024 * 1024;
 }
 
 internal sealed record RuntimePackageOperationPolicyOptions
@@ -47,4 +49,15 @@ internal sealed record RuntimePackageOperationPolicyOptions
     public int MaxStreamRecordBytes { get; init; } = 1024 * 1024 + 16 * 1024;
     public int MaxStreamErrorMessageCharacters { get; init; } = 4096;
     public TimeSpan SessionDrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
+}
+
+internal sealed record RuntimeLifecyclePolicyOptions
+{
+    public TimeSpan PendingStageLifetime { get; init; } = TimeSpan.FromMinutes(15);
+    public TimeSpan StageSweepInterval { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan TerminalStageRetention { get; init; } = TimeSpan.FromMinutes(15);
+    public int MaximumTerminalStageStatuses { get; init; } = 256;
+    public TimeSpan ShutdownCleanupStepTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan DevPackageOwnerLeaseLifetime { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan DevPackageOwnerSweepInterval { get; init; } = TimeSpan.FromSeconds(5);
 }

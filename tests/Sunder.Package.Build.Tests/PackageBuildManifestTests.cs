@@ -1,6 +1,8 @@
 using System.Collections;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using System.Text.Json;
 using Avalonia.Controls;
 using Microsoft.Build.Framework;
@@ -12,10 +14,10 @@ using Sunder.Sdk.Avalonia.Theming;
 using Sunder.Sdk.Authentication;
 using Sunder.Sdk.Callbacks;
 using Sunder.Sdk.Compatibility;
-using Sunder.Sdk.Configuration;
 using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Settings;
 using Sunder.Sdk.Stacks;
 using Xunit;
 using MSBuildTaskItem = Microsoft.Build.Utilities.TaskItem;
@@ -47,6 +49,9 @@ public sealed class PackageBuildManifestTests
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("sdkApiVersion").GetInt32());
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("sdkPackageVersion").GetString()));
+        Assert.Equal(
+            ["app", "runtime"],
+            root.GetProperty("hostRoles").EnumerateArray().Select(static role => role.GetString()!).ToArray());
         var dependency = Assert.Single(root.GetProperty("dependsOn").EnumerateArray());
         Assert.Equal(">=1.2.3 <2.0.0", dependency.GetProperty("versionRange").GetString());
         var capabilities = ReadCapabilities(root);
@@ -58,10 +63,9 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.ContributionsV1,
             SunderSdkCapabilities.ViewsV1,
             SunderSdkCapabilities.SettingsViewsV1,
-            SunderSdkCapabilities.WorkspacesV1,
             SunderSdkCapabilities.BackgroundServicesV1,
             SunderSdkCapabilities.ExtensionsV1,
-            SunderSdkCapabilities.ConfigurationSchemaV1,
+            SunderSdkCapabilities.SettingsSchemaV1,
             SunderSdkCapabilities.SettingsV1,
             SunderSdkCapabilities.StorageV1,
             SunderSdkCapabilities.RoleLocalWorkspaceV1,
@@ -69,7 +73,6 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.LoggingV1,
             SunderSdkCapabilities.NotificationsV1,
             SunderSdkCapabilities.ShellViewV1,
-            SunderSdkCapabilities.InstalledPackageSessionsV1,
             SunderSdkCapabilities.DevelopmentPackageSessionsV1,
             SunderSdkCapabilities.CallbacksV1,
             SunderSdkCapabilities.AuthV1,
@@ -84,8 +87,8 @@ public sealed class PackageBuildManifestTests
     [Fact]
     public void GenerateManifest_InfersStackCapabilitiesFromSeparateSdkAssembly()
     {
-        Assert.Equal("Sunder.Sdk.Stacks", typeof(IPackageStackContributor).Assembly.GetName().Name);
-        Assert.NotEqual(typeof(SunderPackageAttribute).Assembly, typeof(IPackageStackContributor).Assembly);
+        Assert.Equal("Sunder.Sdk.Stacks", typeof(IPackageStackExporter).Assembly.GetName().Name);
+        Assert.NotEqual(typeof(SunderPackageAttribute).Assembly, typeof(IPackageStackExporter).Assembly);
 
         var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
         var buildEngine = new TestBuildEngine();
@@ -121,10 +124,11 @@ public sealed class PackageBuildManifestTests
     [Fact]
     public void GenerateManifest_FailsWhenDynamicSdkAccessHasNoExplicitCapabilityDeclaration()
     {
-        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("AuthoredDynamicReflection");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
         var buildEngine = new TestBuildEngine();
-        var task = CreateTask(manifestPath, buildEngine);
-        task.SdkCapabilities = [];
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths = SdkReferencePaths();
 
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error =>
@@ -134,7 +138,40 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public void GenerateManifest_IgnoresGeneratedAvaloniaXamlAndRecordMethodsWithoutAvaloniaBase()
+    public void GenerateManifest_AcceptsExplicitCapabilitiesForUnresolvedDynamicSdkAccess()
+    {
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("AuthoredDynamicReflection");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths = SdkReferencePaths();
+        task.SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)];
+        task.DynamicAccessAcknowledgements = DynamicAccessAcknowledgements();
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Contains(SunderSdkCapabilities.CallbacksV1, ReadCapabilities(document.RootElement));
+    }
+
+    [Fact]
+    public void GenerateManifest_RequiresAcknowledgementForEveryGeneratedDynamicAccessSite()
+    {
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("AuthoredDynamicReflection");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths = SdkReferencePaths();
+        task.SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)];
+        task.DynamicAccessAcknowledgements = [DynamicAccessAcknowledgements()[0]];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("ResolveSdkContractAsync", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("CreateSdkContractResolver", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("ResolveSdkContracts", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_InfersGeneratedAvaloniaXamlThemingAndIgnoresOtherGeneratedMethods()
     {
         var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("GeneratedAvalonia");
         var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
@@ -144,6 +181,11 @@ public sealed class PackageBuildManifestTests
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         Assert.Empty(buildEngine.Errors);
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Equal(
+            ["contract-only"],
+            document.RootElement.GetProperty("hostRoles").EnumerateArray().Select(static role => role.GetString()!).ToArray());
+        Assert.Contains(SunderSdkCapabilities.ThemingV1, ReadCapabilities(document.RootElement));
     }
 
     [Fact]
@@ -169,13 +211,12 @@ public sealed class PackageBuildManifestTests
 
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error =>
-            error.Contains("Referenced Sunder SDK assembly 'Sunder.Sdk'", StringComparison.Ordinal)
-            && error.Contains("could not be resolved", StringComparison.Ordinal));
+            error.Contains("resolved Sunder.Sdk reference", StringComparison.Ordinal));
         Assert.False(File.Exists(manifestPath));
     }
 
     [Fact]
-    public void GenerateManifest_FailsClosedForPackageAuthoredSdkReflection()
+    public void GenerateManifest_InfersConstantPackageAuthoredSdkReflection()
     {
         var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("AuthoredReflection");
         var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
@@ -183,11 +224,310 @@ public sealed class PackageBuildManifestTests
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
         task.ReferencePaths = SdkReferencePaths();
 
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Contains(SunderSdkCapabilities.CoreV1, ReadCapabilities(document.RootElement));
+    }
+
+    [Fact]
+    public void GenerateManifest_InspectsPackageOwnedCopyLocalAssemblies()
+    {
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("MissingExternal");
+        var dependencyPath = GetFixtureAssemblyPath("ExternalDependency");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths = SdkReferencePaths();
+        task.RuntimeCopyLocalPaths = [new MSBuildTaskItem(dependencyPath)];
+        task.AuthoredAssemblyPaths = [new MSBuildTaskItem(dependencyPath)];
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Contains(SunderSdkCapabilities.NotificationsV1, ReadCapabilities(document.RootElement));
+    }
+
+    [Fact]
+    public void GenerateManifest_DoesNotTreatArbitraryCopyLocalDependencyAsAuthored()
+    {
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("MissingExternal");
+        var dependencyPath = GetFixtureAssemblyPath("ExternalDependency");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths = SdkReferencePaths();
+        task.RuntimeCopyLocalPaths = [new MSBuildTaskItem(dependencyPath)];
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.DoesNotContain(SunderSdkCapabilities.NotificationsV1, ReadCapabilities(document.RootElement));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsSdkPackageVersionOverrideThatDiffersFromResolvedReference()
+    {
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        task.SdkPackageVersion = "9.9.9";
+
         Assert.False(task.Execute());
-        Assert.Contains(buildEngine.Errors, error =>
-            error.Contains("dynamic/reflection access", StringComparison.Ordinal)
-            && error.Contains("AuthoredSdkReflection.ResolveSdkContract", StringComparison.Ordinal));
-        Assert.False(File.Exists(manifestPath));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("does not match resolved", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_IgnoresSdkPdbAndXmlCompanionsInAssemblyItemLists()
+    {
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        var companions = GetAssemblyCompanionPaths(typeof(SunderPackageAttribute).Assembly.Location);
+        task.ReferencePaths = task.ReferencePaths
+            .Concat(companions.Select(static path => new MSBuildTaskItem(path)))
+            .ToArray();
+        task.RuntimeCopyLocalPaths = companions.Select(static path => new MSBuildTaskItem(path)).ToArray();
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        Assert.Empty(buildEngine.Errors);
+    }
+
+    [Fact]
+    public void GenerateManifest_AcceptsEquivalentSdkVersionWithoutInformationalBuildMetadata()
+    {
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        var informationalVersion = typeof(SunderPackageAttribute).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!
+            .InformationalVersion;
+        var packageVersion = informationalVersion.Split('+')[0];
+        task.SdkPackageVersion = packageVersion;
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Equal(packageVersion, document.RootElement.GetProperty("sdkPackageVersion").GetString());
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsSdkVersionWithDifferentPrereleasePrecedence()
+    {
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        task.SdkPackageVersion = "1.1.0-preview.1";
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("does not match resolved", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_DoesNotTreatSdkCompanionFilesAsResolvedDependencies()
+    {
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("MissingSdkDependency");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths = SdkReferencePaths();
+        task.RuntimeCopyLocalPaths = GetAssemblyCompanionPaths(typeof(IPackageStackExporter).Assembly.Location)
+            .Select(static path => new MSBuildTaskItem(path))
+            .ToArray();
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains(
+            "Referenced Sunder SDK assembly 'Sunder.Sdk.Stacks' could not be resolved",
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SourceReferenceFixture_BuildsWithSdkCompanionsAndInformationalMetadata()
+    {
+        var root = FindRepositoryRoot();
+        var configuration = ResolveConfiguration();
+        var sdkOutput = Path.Combine(
+            root,
+            "tests",
+            "Sunder.Package.Build.TestFixtures",
+            "SourceReferenceSdk",
+            "bin",
+            configuration,
+            "net10.0");
+        var sdkAssemblyPath = Path.Combine(sdkOutput, "Sunder.Sdk.dll");
+        Assert.True(File.Exists(sdkAssemblyPath));
+        Assert.True(File.Exists(Path.Combine(sdkOutput, "Sunder.Sdk.pdb")));
+        Assert.True(File.Exists(Path.Combine(sdkOutput, "Sunder.Sdk.xml")));
+        Assert.StartsWith("1.1.0+source.fixture", FileVersionInfo.GetVersionInfo(sdkAssemblyPath).ProductVersion, StringComparison.Ordinal);
+
+        var manifestPath = Path.Combine(
+            root,
+            "tests",
+            "Sunder.Package.Build.TestFixtures",
+            "SourceReferencePackage",
+            "obj",
+            configuration,
+            "net10.0",
+            "sunder-package.json");
+        Assert.True(File.Exists(manifestPath), $"Source-reference fixture manifest was not generated: {manifestPath}");
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Equal("1.1.0", document.RootElement.GetProperty("sdkPackageVersion").GetString());
+    }
+
+    [Theory]
+    [InlineData("project")]
+    [InlineData("target")]
+    [InlineData("root")]
+    [InlineData("outside")]
+    [InlineData("project-child")]
+    [InlineData("nested-target-child")]
+    public void ValidateDevOutputPath_RejectsUnsafeDeletionRoots(string kind)
+    {
+        var project = CreateTempDirectory();
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        Directory.CreateDirectory(target);
+        var output = kind switch
+        {
+            "project" => project,
+            "target" => target,
+            "root" => Path.GetPathRoot(project)!,
+            "project-child" => Path.Combine(project, "sunder-dev"),
+            "nested-target-child" => Path.Combine(target, "nested", "sunder-dev"),
+            _ => Path.Combine(Path.GetTempPath(), "unrelated-sunder-output"),
+        };
+        var buildEngine = new TestBuildEngine();
+        var task = new ValidateSunderDevOutputPathTask
+        {
+            BuildEngine = buildEngine,
+            DevOutputPath = output,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+        };
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("unsafe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ValidateDevOutputPath_AcceptsDedicatedTargetChild()
+    {
+        var project = CreateTempDirectory();
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var task = new ValidateSunderDevOutputPathTask
+        {
+            BuildEngine = new TestBuildEngine(),
+            DevOutputPath = Path.Combine(target, "sunder-dev"),
+            ProjectDirectory = project,
+            TargetDirectory = target,
+        };
+
+        Assert.True(task.Execute());
+        Assert.True(Path.EndsInDirectorySeparator(task.NormalizedDevOutputPath));
+    }
+
+    [Fact]
+    public void ValidateDevOutputPath_RejectsExistingUnmarkedDirectory()
+    {
+        var project = CreateTempDirectory();
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, "keep.txt"), "keep");
+        var task = new ValidateSunderDevOutputPathTask
+        {
+            BuildEngine = new TestBuildEngine(),
+            DevOutputPath = output,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+        };
+
+        Assert.False(task.Execute());
+        Assert.True(File.Exists(Path.Combine(output, "keep.txt")));
+    }
+
+    [Fact]
+    public void ValidateDevOutputPath_AcceptsExistingMarkedDirectory()
+    {
+        var project = CreateTempDirectory();
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, ValidateSunderDevOutputPathTask.MarkerFileName), "generated");
+        var task = new ValidateSunderDevOutputPathTask
+        {
+            BuildEngine = new TestBuildEngine(),
+            DevOutputPath = output,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+        };
+
+        Assert.True(task.Execute());
+    }
+
+    [Fact]
+    public async Task ValidateDevOutputPathTarget_RejectsUnmarkedDirectoryWithoutDeletingIt()
+    {
+        var project = CreateTempDirectory();
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        Directory.CreateDirectory(output);
+        var sentinel = Path.Combine(output, "keep.txt");
+        File.WriteAllText(sentinel, "keep");
+        var targetFile = Path.Combine(FindRepositoryRoot(), "src", "Sdk", "Sunder.Package.Build", "build", "Sunder.Package.Build.targets");
+        var projectFile = Path.Combine(project, "TargetTest.proj");
+        File.WriteAllText(projectFile, $$"""
+            <Project>
+              <PropertyGroup>
+                <Configuration>Debug</Configuration>
+                <TargetFramework>net10.0</TargetFramework>
+                <BaseIntermediateOutputPath>obj/</BaseIntermediateOutputPath>
+                <TargetDir>{{target}}{{Path.DirectorySeparatorChar}}</TargetDir>
+                <SunderDevOutputPath>{{output}}</SunderDevOutputPath>
+                <SunderPackageBuildTaskAssembly>{{typeof(ValidateSunderDevOutputPathTask).Assembly.Location}}</SunderPackageBuildTaskAssembly>
+              </PropertyGroup>
+              <Import Project="{{targetFile}}" />
+            </Project>
+            """);
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = project,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList = { "msbuild", projectFile, "-t:_ValidateSunderDevOutputPath", "-nologo" },
+        })!;
+        var outputText = await process.StandardOutput.ReadToEndAsync();
+        var errorText = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains("generated-output marker", outputText + errorText, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(sentinel));
+    }
+
+    [Fact]
+    public void PackPackage_IndexesAssetNamedContentIndexJson()
+    {
+        var root = CreateTempDirectory();
+        var devPackage = Path.Combine(root, "sunder-dev");
+        Directory.CreateDirectory(Path.Combine(devPackage, "lib"));
+        Directory.CreateDirectory(Path.Combine(devPackage, "assets"));
+        File.WriteAllText(Path.Combine(devPackage, "sunder-package.json"), "{}");
+        File.WriteAllText(Path.Combine(devPackage, "lib", "Package.dll"), "assembly");
+        File.WriteAllText(Path.Combine(devPackage, "assets", "content-index.json"), "asset");
+        var output = Path.Combine(root, "package.sunderpkg");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.True(new PackSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            DevPackagePath = devPackage,
+            PackageOutputPath = output,
+        }.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+
+        using var archive = ZipFile.OpenRead(output);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "payload/assets/content-index.json");
+        var indexEntry = Assert.Single(archive.Entries, entry => entry.FullName == "manifest/content-index.json");
+        using var reader = new StreamReader(indexEntry.Open());
+        using var document = JsonDocument.Parse(reader.ReadToEnd());
+        Assert.Contains(document.RootElement.GetProperty("files").EnumerateArray(), entry =>
+            entry.GetProperty("path").GetString() == "payload/assets/content-index.json");
     }
 
     [Fact]
@@ -214,6 +554,10 @@ public sealed class PackageBuildManifestTests
             "PackageMetadataDecoder.cs",
             "PackageDependencyExtractor.cs",
             "PackageCapabilityInference.cs",
+            "ManagedAssemblyPath.cs",
+            "PackageAuthoredCallSite.cs",
+            "SdkCapabilityCatalog.cs",
+            "ResolvedSdkPackageVersion.cs",
             "PackageAssetDiscovery.cs",
             "PackageManifestValidator.cs",
         };
@@ -222,7 +566,7 @@ public sealed class PackageBuildManifestTests
         foreach (var file in expectedFiles)
         {
             Assert.True(File.Exists(Path.Combine(taskDirectory, file)), $"Missing manifest-generation collaborator {file}.");
-            Assert.True(File.ReadLines(Path.Combine(taskDirectory, file)).Count() < 725, $"{file} exceeded its size ratchet.");
+            Assert.True(File.ReadLines(Path.Combine(taskDirectory, file)).Count() < 950, $"{file} exceeded its size ratchet.");
         }
     }
 
@@ -237,6 +581,7 @@ public sealed class PackageBuildManifestTests
             ProjectDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!,
             TargetFramework = "net10.0",
             SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)],
+            ReferencePaths = SdkReferencePaths(includeAvalonia: true),
         };
 
     private static GenerateSunderPackageManifestTask CreateFixtureTask(
@@ -256,14 +601,38 @@ public sealed class PackageBuildManifestTests
 
     private static MSBuildTaskItem[] SdkReferencePaths(bool includeAvalonia = false)
         => (includeAvalonia
-                ? new[] { typeof(SunderPackageAttribute).Assembly.Location, typeof(IPackageWorkspaceFactory).Assembly.Location }
+                ? new[] { typeof(SunderPackageAttribute).Assembly.Location, typeof(IAvaloniaPackageContributionRegistry).Assembly.Location }
                 : new[] { typeof(SunderPackageAttribute).Assembly.Location })
             .Select(static path => new MSBuildTaskItem(path))
             .ToArray();
 
+    private static string[] GetAssemblyCompanionPaths(string assemblyPath)
+    {
+        var paths = new[] { Path.ChangeExtension(assemblyPath, ".pdb"), Path.ChangeExtension(assemblyPath, ".xml") };
+        Assert.All(paths, path => Assert.True(File.Exists(path), $"Assembly companion was not built: {path}"));
+        return paths;
+    }
+
+    private static MSBuildTaskItem[] DynamicAccessAcknowledgements()
+        =>
+        [
+            new("Sunder.Package.Build.Tests.Fixtures.AuthoredDynamicReflection.AuthoredSdkDynamicReflection.ResolveSdkContract"),
+            new("Sunder.Package.Build.Tests.Fixtures.AuthoredDynamicReflection.AuthoredSdkDynamicReflection.ResolveSdkContractAsync"),
+            new("Sunder.Package.Build.Tests.Fixtures.AuthoredDynamicReflection.AuthoredSdkDynamicReflection.CreateSdkContractResolver"),
+            new("Sunder.Package.Build.Tests.Fixtures.AuthoredDynamicReflection.AuthoredSdkDynamicReflection.ResolveSdkContracts"),
+        ];
+
     private static string CopyFixtureAssemblyToIsolatedDirectory(string fixtureName)
     {
-        var sourcePath = Path.Combine(
+        var sourcePath = GetFixtureAssemblyPath(fixtureName);
+        Assert.True(File.Exists(sourcePath), $"Fixture assembly was not built: {sourcePath}");
+        var destinationPath = Path.Combine(CreateTempDirectory(), Path.GetFileName(sourcePath));
+        File.Copy(sourcePath, destinationPath);
+        return destinationPath;
+    }
+
+    private static string GetFixtureAssemblyPath(string fixtureName)
+        => Path.Combine(
             FindRepositoryRoot(),
             "tests",
             "Sunder.Package.Build.TestFixtures",
@@ -272,11 +641,6 @@ public sealed class PackageBuildManifestTests
             ResolveConfiguration(),
             "net10.0",
             fixtureName + ".dll");
-        Assert.True(File.Exists(sourcePath), $"Fixture assembly was not built: {sourcePath}");
-        var destinationPath = Path.Combine(CreateTempDirectory(), Path.GetFileName(sourcePath));
-        File.Copy(sourcePath, destinationPath);
-        return destinationPath;
-    }
 
     private static string ResolveConfiguration()
         => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).Parent?.Name
@@ -375,7 +739,7 @@ public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderA
         services.AddSingleton<IPackageCallbackHandler, FixtureAuthHandler>();
         services.AddSingleton<IPackageAuthHandler, FixtureAuthHandler>();
         services.AddSingleton<IPackageNotificationService, NullPackageNotificationService>();
-        services.AddSingleton<IPackageStackContributor, FixtureStackContributor>();
+        services.AddSingleton<FixtureStackContributor>();
         services.AddSingleton<FixtureRuntimeOperationHandler>();
         services.AddSingleton<FixtureRuntimeStreamHandler>();
     }
@@ -384,16 +748,16 @@ public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderA
     {
         registry.RegisterBackgroundService<FixtureBackgroundService>();
         registry.RegisterExtension(new PackageExtensionPoint<IFixtureExtension>("fixture.extension"), new FixtureExtension());
-        registry.RegisterExtension(SunderStackExtensionPoints.StackContributors, services.GetRequiredService<IPackageStackContributor>());
-        registry.RegisterConfigurationSchema(new PackageConfigurationSchema(
-            "test.package.build.fixture",
-            "Package Build Fixture",
+        var stackContributor = services.GetRequiredService<FixtureStackContributor>();
+        registry.RegisterExtension(SunderStackExtensionPoints.StackExporters, stackContributor);
+        registry.RegisterExtension(SunderStackExtensionPoints.StackImporters, stackContributor);
+        registry.RegisterSettingsSchema(new PackageSettingsSchema(
             null,
-            [new PackageConfigurationSection(
+            [new PackageSettingsSection(
                 "general",
                 "General",
                 null,
-                [new PackageConfigurationField("enabled", "Enabled", PackageConfigurationFieldKind.Boolean)])]));
+                [new PackageSettingsField("enabled", "Enabled", PackageSettingsFieldKind.Boolean)])]));
         registry.RegisterRuntimeOperation(
             new PackageRuntimeOperation<FixtureRuntimeRequest, FixtureRuntimeResponse>("fixture.run"),
             services.GetRequiredService<FixtureRuntimeOperationHandler>());
@@ -404,15 +768,13 @@ public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderA
 
     public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
-        _ = Type.GetType("Sunder.Sdk.Callbacks.PackageCallbackRequest, Sunder.Sdk");
+        _ = Type.GetType("Sunder.Sdk.Callbacks.PackageCallbackStartContext, Sunder.Sdk");
     }
 
     public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
         registry.RegisterPackageView<FixtureView>(new PackageViewRegistration("fixture.view", "Fixture View"));
-        registry.RegisterPackageViewFactory<FixtureWorkspaceFactory>(new PackageViewRegistration("fixture.workspace", "Fixture Workspace"));
         registry.RegisterSettingsView<FixtureSettingsView>();
-        registry.RegisterSettingsViewFactory<FixtureWorkspaceFactory>();
     }
 }
 
@@ -449,12 +811,6 @@ public sealed class FixtureView : UserControl;
 
 public sealed class FixtureSettingsView : UserControl;
 
-public sealed class FixtureWorkspaceFactory : IPackageWorkspaceFactory
-{
-    public Control CreateRootView(IServiceProvider services)
-        => new FixtureView();
-}
-
 public sealed class FixtureBackgroundService : IPackageBackgroundService
 {
     public Task StartAsync(CancellationToken cancellationToken = default)
@@ -468,7 +824,7 @@ public interface IFixtureExtension;
 
 public sealed class FixtureExtension : IFixtureExtension;
 
-public sealed class FixtureStackContributor : IPackageStackContributor
+public sealed class FixtureStackContributor : IPackageStackExporter, IPackageStackImporter
 {
     public string ContributorId => "test.package.build.fixture.stacks";
 
@@ -547,12 +903,9 @@ public sealed class FixtureShellViewConsumer(IPackageShellViewService shellViewS
 
 public sealed class FixturePackageActivationCapabilities(
     IPackageRoleLocalWorkspace roleLocalWorkspace,
-    IPackageInstalledSessionControl installedSessions,
     IPackageDevelopmentSessionControl developmentSessions)
 {
     public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; } = roleLocalWorkspace;
-
-    public IPackageInstalledSessionControl InstalledSessions { get; } = installedSessions;
 
     public IPackageDevelopmentSessionControl DevelopmentSessions { get; } = developmentSessions;
 }

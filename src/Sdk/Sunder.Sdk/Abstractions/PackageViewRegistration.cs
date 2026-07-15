@@ -7,39 +7,39 @@ namespace Sunder.Sdk.Abstractions;
 public sealed record PackageViewRegistration
 {
     /// <summary>Creates view registration metadata.</summary>
-    /// <param name="id">Stable package-scoped id used for persistence and navigation.</param>
+    /// <param name="id">Stable globally unique id used for persistence and navigation; conventionally prefixed with the package id.</param>
     /// <param name="name">User-facing view title.</param>
-    /// <param name="icon">Optional forward-slash package asset path or host glyph.</param>
+    /// <param name="iconAssetPath">Optional forward-slash package asset path.</param>
     /// <param name="defaultPlacement">Initial hotbar region; defaults to the middle region.</param>
     /// <param name="showInHotbarByDefault">Whether first activation creates a hotbar entry; defaults to true.</param>
     public PackageViewRegistration(
         string id,
         string name,
-        string? icon = null,
+        string? iconAssetPath = null,
         PackageViewPlacement defaultPlacement = PackageViewPlacement.Middle,
         bool showInHotbarByDefault = true)
     {
         Id = id;
         Name = name;
-        Icon = icon;
+        IconAssetPath = iconAssetPath;
         DefaultPlacement = defaultPlacement;
         ShowInHotbarByDefault = showInHotbarByDefault;
     }
 
-    /// <summary>Gets the stable package-scoped view id.</summary>
-    public string Id { get; init; }
+    /// <summary>Gets the stable globally unique view id.</summary>
+    public string Id { get; }
 
     /// <summary>Gets the user-facing view title.</summary>
-    public string Name { get; init; }
+    public string Name { get; }
 
-    /// <summary>Gets the optional asset path or glyph; <see langword="null"/> requests host fallback.</summary>
-    public string? Icon { get; init; }
+    /// <summary>Gets the optional package asset path; <see langword="null"/> requests host fallback.</summary>
+    public string? IconAssetPath { get; }
 
     /// <summary>Gets the placement used before the user customizes the shell.</summary>
-    public PackageViewPlacement DefaultPlacement { get; init; }
+    public PackageViewPlacement DefaultPlacement { get; }
 
     /// <summary>Gets whether first activation creates a hotbar entry.</summary>
-    public bool ShowInHotbarByDefault { get; init; }
+    public bool ShowInHotbarByDefault { get; }
 }
 
 /// <summary>Specifies the default shell region for a package view.</summary>

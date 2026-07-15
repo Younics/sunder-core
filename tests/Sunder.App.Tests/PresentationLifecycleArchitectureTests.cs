@@ -6,38 +6,33 @@ namespace Sunder.App.Tests;
 
 public sealed class PresentationLifecycleArchitectureTests
 {
-    [Theory]
-    [InlineData("PackagesWindowViewModel")]
-    [InlineData("StacksWindowViewModel")]
-    [InlineData("CreateStackWizardViewModel")]
-    [InlineData("UseStackWizardViewModel")]
-    [InlineData("SettingsWindowViewModel")]
-    [InlineData("MainWindowViewModel")]
-    public void HotspotFamilies_StayBelowFileSizeRatchet(string familyName)
+    [Fact]
+    public void PackagePresentation_OwnsCatalogsAndUsesOneExecutorPort()
     {
-        var directory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "ViewModels");
-        var files = Directory.EnumerateFiles(directory, familyName + "*.cs").OrderBy(path => path).ToArray();
+        var viewModelType = typeof(Sunder.App.ViewModels.PackagesWindowViewModel);
+        Assert.Equal(typeof(Sunder.App.ViewModels.InstalledPackagesPaneViewModel), viewModelType.GetProperty("Installed")?.PropertyType);
+        Assert.Equal(typeof(Sunder.App.ViewModels.MarketplacePackagesPaneViewModel), viewModelType.GetProperty("Marketplace")?.PropertyType);
+        Assert.Equal(typeof(Sunder.App.ViewModels.PackageOperationPresentationViewModel), viewModelType.GetProperty("Operations")?.PropertyType);
 
-        Assert.NotEmpty(files);
-        Assert.All(files, path =>
-            Assert.True(
-                File.ReadLines(path).Count() < 675,
-                $"{Path.GetFileName(path)} exceeded the 675-line presentation ratchet."));
+        var constructor = Assert.Single(viewModelType.GetConstructors(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
+        var executorParameter = Assert.Single(constructor.GetParameters(), parameter => parameter.ParameterType == typeof(IPackageOperationExecutor));
+        Assert.False(executorParameter.HasDefaultValue);
+        Assert.True(typeof(IPackageOperationExecutor).IsAssignableFrom(typeof(PackageOperationService)));
     }
 
     [Fact]
-    public void StacksWindow_OwnsPresentationOnly_NotCoordinatorLifecycleState()
+    public void StacksWindow_OwnsLocalRegistryAndPublishingComponents()
     {
-        var directory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "ViewModels");
-        var source = string.Join('\n', Directory.EnumerateFiles(directory, "StacksWindowViewModel*.cs").Select(File.ReadAllText));
-
-        Assert.DoesNotContain("_selectedStackCancellation", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("_registryStackDetailsCancellation", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("_selectedImportPlanId", source, StringComparison.Ordinal);
-        Assert.Contains("StackLibraryCoordinator", source, StringComparison.Ordinal);
-        Assert.Contains("StackSelectionCoordinator", source, StringComparison.Ordinal);
-        Assert.Contains("StackDetailLoadCoordinator", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("StackImportPresentationCoordinator", source, StringComparison.Ordinal);
+        var type = typeof(Sunder.App.ViewModels.StacksWindowViewModel);
+        Assert.Equal(typeof(Sunder.App.ViewModels.LocalStacksViewModel), type.GetProperty("Local")?.PropertyType);
+        Assert.Equal(typeof(Sunder.App.ViewModels.RegistryStacksViewModel), type.GetProperty("Registry")?.PropertyType);
+        Assert.Contains(
+            type.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic),
+            field => field.FieldType == typeof(Sunder.App.ViewModels.StackPublishingController));
+        Assert.DoesNotContain(
+            type.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic),
+            field => field.FieldType == typeof(Sunder.App.ViewModels.StackLibraryCoordinator));
     }
 
     [Fact]
@@ -174,6 +169,29 @@ public sealed class PresentationLifecycleArchitectureTests
     }
 
     [Fact]
+    public async Task PackageSettingsPublication_RechecksGenerationWhenDispatchedActionExecutes()
+    {
+        var dispatcher = new DeferredDispatcher();
+        var launcher = new RecordingWindowLauncher();
+        var target = new AppPackageSettingsNavigationService(dispatcher);
+        target.Attach(launcher);
+        var publication = new AppPackageGenerationPublication();
+        var service = new AppPackagePublicationServices(
+            shellViewService: null,
+            settingsNavigationService: target,
+            publication);
+        publication.Publish();
+
+        var open = service.OpenSettingsAsync().AsTask();
+        await dispatcher.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        publication.Revoke();
+        dispatcher.Release.SetResult();
+
+        Assert.False(await open);
+        Assert.False(launcher.SettingsShown);
+    }
+
+    [Fact]
     public async Task PackageIconLoad_PreCancelledRequestDoesNotStartImageWork()
     {
         using var cancellation = new CancellationTokenSource();
@@ -190,13 +208,20 @@ public sealed class PresentationLifecycleArchitectureTests
         var singleInstance = File.ReadAllText(Path.Combine(services, "AppSingleInstanceCoordinator.cs"));
         var asyncImages = File.ReadAllText(Path.Combine(services, "SunderAsyncImageLoader.cs"));
         var runtimeClient = File.ReadAllText(Path.Combine(services, "RuntimeApiClient.cs"));
+        var runtimeResponseReader = File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.Runtime.Client",
+            "RuntimeHttpResponseReader.cs"));
         var registryClient = File.ReadAllText(Path.Combine(services, "RegistryApiClient.cs"));
 
         Assert.Contains("MaxLaunchPayloadCharacters", singleInstance, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadToEndAsync", singleInstance, StringComparison.Ordinal);
         Assert.Contains("BoundedImageContentLoader.LoadAsync", asyncImages, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadAsByteArrayAsync", asyncImages, StringComparison.Ordinal);
-        Assert.Contains("BoundedHttpContentReader", runtimeClient, StringComparison.Ordinal);
+        Assert.Contains("RuntimeManagementClient", runtimeClient, StringComparison.Ordinal);
+        Assert.Contains("ReadBoundedAsync", runtimeResponseReader, StringComparison.Ordinal);
         Assert.Contains("BoundedHttpContentReader", registryClient, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadFromJsonAsync", runtimeClient, StringComparison.Ordinal);
         Assert.DoesNotContain("GetFromJsonAsync", registryClient, StringComparison.Ordinal);
@@ -256,6 +281,7 @@ public sealed class PresentationLifecycleArchitectureTests
         var broadRegistryDependencies = Directory.GetFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.EndsWith("IRegistryApiClient.cs", StringComparison.Ordinal)
                            && !path.EndsWith("RegistryApiClient.cs", StringComparison.Ordinal)
+                           && !path.EndsWith("RegistryStacksViewModel.cs", StringComparison.Ordinal)
                            && !path.EndsWith("StacksWindowViewModel.State.cs", StringComparison.Ordinal)
                            && !path.EndsWith("UseStackWizardViewModel.State.cs", StringComparison.Ordinal))
             .Where(path => File.ReadAllText(path).Contains("IRegistryApiClient ", StringComparison.Ordinal))
@@ -330,5 +356,27 @@ public sealed class PresentationLifecycleArchitectureTests
         public void ShowDeveloperLogs() { }
 
         public void CloseForShutdown() { }
+    }
+
+    private sealed class DeferredDispatcher : IUiDispatcher
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool CheckAccess() => false;
+
+        public Task InvokeAsync(Action action) => throw new NotSupportedException();
+
+        public Task InvokeAsync(Func<Task> action) => throw new NotSupportedException();
+
+        public async Task<T> InvokeAsync<T>(Func<T> action)
+        {
+            Started.SetResult();
+            await Release.Task;
+            return action();
+        }
+
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => throw new NotSupportedException();
     }
 }

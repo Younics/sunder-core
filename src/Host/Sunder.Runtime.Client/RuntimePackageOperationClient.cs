@@ -9,6 +9,8 @@ namespace Sunder.Runtime.Client;
 
 public sealed class RuntimePackageOperationClient : IDisposable
 {
+    private readonly RuntimeClientTransport _transport;
+    private readonly bool _ownsTransport;
     private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
     private readonly HttpClient _httpClient;
     private readonly RuntimeHttpResponseReader _responses;
@@ -18,21 +20,34 @@ public sealed class RuntimePackageOperationClient : IDisposable
         Func<RuntimeConnectionInfo?> getConnectionInfo,
         HttpMessageHandler? innerHandler = null,
         RuntimePackageOperationPolicyOptions? policy = null)
+        : this(
+            new RuntimeClientTransport(
+                getConnectionInfo,
+                innerHandler,
+                CreateClientPolicy(policy ?? new RuntimePackageOperationPolicyOptions())),
+            policy ?? new RuntimePackageOperationPolicyOptions(),
+            ownsTransport: true)
     {
-        _policy = policy ?? new RuntimePackageOperationPolicyOptions();
-        var clientPolicy = new RuntimeClientPolicyOptions
-        {
-            RequestTimeout = _policy.RequestTimeout,
-            StreamLifetimeTimeout = _policy.StreamLifetimeTimeout,
-            MaxBinaryResponseBytes = _policy.MaxResponseBytes,
-            MaxStreamEventBytes = _policy.MaxStreamRecordBytes,
-        };
-        _getConnectionInfo = getConnectionInfo ?? throw new ArgumentNullException(nameof(getConnectionInfo));
-        _httpClient = new HttpClient(new RuntimeAuthenticatedHttpMessageHandler(getConnectionInfo, innerHandler, clientPolicy))
-        {
-            Timeout = Timeout.InfiniteTimeSpan,
-        };
-        _responses = new RuntimeHttpResponseReader(clientPolicy);
+    }
+
+    public RuntimePackageOperationClient(
+        RuntimeClientTransport transport,
+        RuntimePackageOperationPolicyOptions? policy = null)
+        : this(transport, policy ?? new RuntimePackageOperationPolicyOptions(), ownsTransport: false)
+    {
+    }
+
+    private RuntimePackageOperationClient(
+        RuntimeClientTransport transport,
+        RuntimePackageOperationPolicyOptions policy,
+        bool ownsTransport)
+    {
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _ownsTransport = ownsTransport;
+        _policy = policy;
+        _getConnectionInfo = transport.GetConnectionInfo;
+        _httpClient = transport.HttpClient;
+        _responses = transport.Responses;
     }
 
     public async Task<byte[]> InvokeAsync(
@@ -199,5 +214,20 @@ public sealed class RuntimePackageOperationClient : IDisposable
             $"api/v1/packages/{Uri.EscapeDataString(packageId)}/{route}/{Uri.EscapeDataString(contractId)}");
     }
 
-    public void Dispose() => _httpClient.Dispose();
+    private static RuntimeClientPolicyOptions CreateClientPolicy(RuntimePackageOperationPolicyOptions policy)
+        => new()
+        {
+            RequestTimeout = policy.RequestTimeout,
+            StreamLifetimeTimeout = policy.StreamLifetimeTimeout,
+            MaxBinaryResponseBytes = policy.MaxResponseBytes,
+            MaxStreamEventBytes = policy.MaxStreamRecordBytes,
+        };
+
+    public void Dispose()
+    {
+        if (_ownsTransport)
+        {
+            _transport.Dispose();
+        }
+    }
 }

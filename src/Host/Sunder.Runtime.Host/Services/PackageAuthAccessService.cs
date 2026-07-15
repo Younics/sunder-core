@@ -25,15 +25,6 @@ internal sealed class PackageAuthAccessService(RuntimeSessionOwner sessions)
         return sessions.Auth.GetPackageAuthSessionStatus(lease, packageId, authSessionId);
     }
 
-    public async Task<bool> CompleteAsync(
-        string authSessionId,
-        IReadOnlyDictionary<string, string?> queryValues,
-        CancellationToken cancellationToken = default)
-    {
-        using var lease = sessions.State.AcquireLease();
-        return await sessions.Auth.CompletePackageAuthSessionAsync(lease, authSessionId, queryValues, cancellationToken);
-    }
-
     public async Task<PackageAuthStatusResponse?> DisconnectAsync(string packageId, CancellationToken cancellationToken = default)
     {
         using var lease = sessions.State.AcquireLease();

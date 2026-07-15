@@ -6,6 +6,8 @@ public enum RuntimeEventKind
     SessionGenerationChanged = 1,
     OperationPhaseChanged = 2,
     DevReloadCompleted = 3,
+    BootstrapStateChanged = 4,
+    SnapshotDiagnosticsChanged = 5,
 }
 
 public enum RuntimeOperationPhase
@@ -19,26 +21,33 @@ public enum RuntimeOperationPhase
 }
 
 public sealed record RuntimeEventDescriptor(
+    Guid RuntimeInstanceId,
     long SequenceId,
     DateTimeOffset Timestamp,
     RuntimeEventKind Kind,
     long SessionGeneration,
     RuntimeOperationPhase OperationPhase,
+    RuntimeBootstrapState BootstrapState,
     IReadOnlyList<string> PackageIds,
     bool? Success = null,
-    string? Message = null);
+    string? Message = null)
+{
+    public IReadOnlyList<string> PackageIds { get; } = RuntimeContractCollections.Freeze(PackageIds);
+}
 
 public sealed record RuntimeEventSnapshot(
+    Guid RuntimeInstanceId,
     long SequenceId,
     long SessionGeneration,
     RuntimeOperationPhase OperationPhase,
+    RuntimeBootstrapState BootstrapState,
     IReadOnlyList<string> ActivePackageIds,
     IReadOnlyList<RuntimeEventDescriptor> Events,
-    bool HistoryGap);
+    bool HistoryGap)
+{
+    public IReadOnlyList<string> ActivePackageIds { get; }
+        = RuntimeContractCollections.Freeze(ActivePackageIds);
 
-public sealed record DevPackageWatchIntentRequest(bool Enabled);
-
-public sealed record DevPackageWatchStatus(
-    bool Enabled,
-    long SessionGeneration,
-    IReadOnlyList<string> PackageIds);
+    public IReadOnlyList<RuntimeEventDescriptor> Events { get; }
+        = RuntimeContractCollections.Freeze(Events);
+}

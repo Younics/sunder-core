@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -11,30 +12,20 @@ namespace Sunder.App.Views;
 internal sealed class MacNativeMenuController : IDisposable
 {
     private static readonly Uri DefaultIconUri = new("avares://Sunder.App/Assets/Images/icon.png");
-
     private readonly Window _window;
     private readonly Func<MainWindowViewModel?> _viewModelAccessor;
-    private readonly Dictionary<string, Bitmap> _iconCache = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _loadingIconKeys = new(StringComparer.Ordinal);
     private readonly OwnedTaskObserver _tasks = new("macOS native menu");
-    private readonly Dictionary<string, PackageMenuEntry> _packageEntries = new(StringComparer.OrdinalIgnoreCase);
     private NativeMenu? _rootMenu;
-    private NativeMenu? _viewSubmenu;
-    private NativeMenu? _packagesSubmenu;
-    private NativeMenu? _developerSubmenu;
-    private NativeMenuItem? _packagesMenu;
-    private NativeMenuItem? _developerLogsItem;
     private Bitmap? _defaultIcon;
     private MainWindowViewModel? _subscribedViewModel;
-    private bool _packagesMenuDirty = true;
-    private bool _packagesMenuRefreshScheduled;
+    private bool _menuDirty = true;
+    private bool _menuRefreshScheduled;
     private bool _disposed;
 
     public MacNativeMenuController(Window window, Func<MainWindowViewModel?> viewModelAccessor)
     {
         _window = window;
         _viewModelAccessor = viewModelAccessor;
-
         if (!OperatingSystem.IsMacOS())
         {
             return;
@@ -58,52 +49,26 @@ internal sealed class MacNativeMenuController : IDisposable
         _window.Opened -= Window_OnOpened;
         _window.Activated -= Window_OnActivated;
         UnsubscribeFromViewModel();
-
         if (_rootMenu is not null)
         {
             _rootMenu.NeedsUpdate -= Menu_OnNeedsUpdate;
+            _rootMenu.Items.Clear();
             _rootMenu = null;
         }
 
-        if (_viewSubmenu is not null)
-        {
-            _viewSubmenu.NeedsUpdate -= Menu_OnNeedsUpdate;
-            _viewSubmenu = null;
-        }
-
-        if (_packagesSubmenu is not null)
-        {
-            _packagesSubmenu.NeedsUpdate -= Menu_OnNeedsUpdate;
-            _packagesSubmenu = null;
-        }
-
-        if (_developerLogsItem is not null)
-        {
-            _developerLogsItem.Click -= DeveloperLogsItem_OnClick;
-            _developerLogsItem = null;
-        }
-
-        _developerSubmenu = null;
-
-        _packagesMenu = null;
-        _packageEntries.Clear();
-        DisposeCachedIcons();
+        _defaultIcon?.Dispose();
+        _defaultIcon = null;
     }
 
-    private void Window_OnOpened(object? sender, EventArgs e)
-        => AttachMenu();
+    private void Window_OnOpened(object? sender, EventArgs e) => AttachMenu();
 
-    private void Window_OnActivated(object? sender, EventArgs e)
-        => AttachMenu();
+    private void Window_OnActivated(object? sender, EventArgs e) => AttachMenu();
 
     private void Window_OnDataContextChanged(object? sender, EventArgs e)
     {
         SubscribeToCurrentViewModel();
-        SchedulePackagesMenuRefresh();
-        if (_rootMenu is null)
-        {
-            AttachMenu();
-        }
+        ScheduleMenuRefresh();
+        AttachMenu();
     }
 
     private void AttachMenu()
@@ -114,166 +79,53 @@ internal sealed class MacNativeMenuController : IDisposable
         }
 
         SubscribeToCurrentViewModel();
-
         _rootMenu = new NativeMenu();
         _rootMenu.NeedsUpdate += Menu_OnNeedsUpdate;
-
-        _viewSubmenu = new NativeMenu();
-        _viewSubmenu.NeedsUpdate += Menu_OnNeedsUpdate;
-        var viewMenu = new NativeMenuItem { Header = "View", Menu = _viewSubmenu };
-
-        _packagesSubmenu = new NativeMenu();
-        _packagesSubmenu.NeedsUpdate += Menu_OnNeedsUpdate;
-        _packagesMenu = new NativeMenuItem { Header = "Packages", Menu = _packagesSubmenu };
-
-        _viewSubmenu.Add(_packagesMenu);
-        _rootMenu.Add(viewMenu);
-        if (_viewModelAccessor()?.IsDeveloperMode == true)
-        {
-            _developerSubmenu = new NativeMenu();
-            _developerLogsItem = new NativeMenuItem { Header = "Logs" };
-            _developerLogsItem.Click += DeveloperLogsItem_OnClick;
-            _developerSubmenu.Add(_developerLogsItem);
-            _rootMenu.Add(new NativeMenuItem { Header = "Developer", Menu = _developerSubmenu });
-        }
-
-        UpdatePackagesMenu();
+        UpdateMenu();
         NativeMenu.SetMenu(_window, _rootMenu);
     }
 
-    private void DeveloperLogsItem_OnClick(object? sender, EventArgs e)
-        => _viewModelAccessor()?.OpenDeveloperLogsCommand.Execute(null);
+    private void Menu_OnNeedsUpdate(object? sender, EventArgs e) => UpdateMenuIfDirty();
 
-    private void Menu_OnNeedsUpdate(object? sender, EventArgs e)
+    private void UpdateMenu()
     {
-        UpdatePackagesMenuIfDirty();
-    }
-
-    private void UpdatePackagesMenu()
-    {
-        if (_disposed || _packagesSubmenu is null)
+        if (_disposed || _rootMenu is null)
         {
             return;
         }
 
-        _packagesMenuDirty = false;
-        var viewModel = _viewModelAccessor();
-        if (viewModel is null)
+        _menuDirty = false;
+        _rootMenu.Items.Clear();
+        foreach (var item in _viewModelAccessor()?.GetMainMenuItems() ?? [])
         {
-            HideAllPackageEntries();
-            EnsureNoPackageViewsItem(isVisible: true);
-            return;
-        }
-
-        var packageGroups = viewModel.GetPackageViewGroups();
-        if (packageGroups.Count == 0)
-        {
-            HideAllPackageEntries();
-            EnsureNoPackageViewsItem(isVisible: true);
-            return;
-        }
-
-        EnsureNoPackageViewsItem(isVisible: false);
-        var visiblePackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in packageGroups)
-        {
-            visiblePackageIds.Add(group.PackageId);
-            var entry = GetOrCreatePackageEntry(group.PackageId);
-            entry.Item.Header = group.PackageDisplayName;
-            entry.Item.Icon = ResolveMenuIcon(group.PackageIconUri);
-            entry.Item.IsVisible = true;
-            UpdatePackageViewEntries(entry, viewModel, group.Views);
-        }
-
-        foreach (var entry in _packageEntries.Values)
-        {
-            if (!visiblePackageIds.Contains(entry.PackageId))
-            {
-                entry.Item.IsVisible = false;
-            }
+            _rootMenu.Add(BuildNativeItem(item));
         }
     }
 
-    private void UpdatePackageViewEntries(
-        PackageMenuEntry packageEntry,
-        MainWindowViewModel viewModel,
-        IReadOnlyList<PackageViewMenuItem> packageViews)
+    private NativeMenuItem BuildNativeItem(ShellMenuItem item)
     {
-        var visibleViewIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var packageView in packageViews)
+        var nativeItem = new NativeMenuItem
         {
-            visibleViewIds.Add(packageView.ViewId);
-            var viewItem = GetOrCreatePackageViewItem(packageEntry, packageView.ViewId);
-            viewItem.Header = packageView.Title;
-            viewItem.Icon = ResolveMenuIcon(packageView.IconUri);
-            viewItem.IsEnabled = !viewModel.IsViewInHotbar(packageView.ViewId);
-            viewItem.IsVisible = true;
-        }
-
-        foreach (var viewEntry in packageEntry.ViewItems)
-        {
-            if (!visibleViewIds.Contains(viewEntry.Key))
-            {
-                viewEntry.Value.IsVisible = false;
-            }
-        }
-    }
-
-    private PackageMenuEntry GetOrCreatePackageEntry(string packageId)
-    {
-        if (_packageEntries.TryGetValue(packageId, out var entry))
-        {
-            return entry;
-        }
-
-        var packageMenu = new NativeMenu();
-        var packageItem = new NativeMenuItem
-        {
-            Menu = packageMenu,
-            IsVisible = false,
+            Header = item.Title,
+            Icon = ResolveMenuIcon(item.IconImage),
+            IsEnabled = item.IsEnabled,
         };
-        entry = new PackageMenuEntry(packageId, packageItem, packageMenu);
-        _packageEntries.Add(packageId, entry);
-        _packagesSubmenu?.Add(packageItem);
-        return entry;
-    }
-
-    private NativeMenuItem GetOrCreatePackageViewItem(PackageMenuEntry packageEntry, string viewId)
-    {
-        if (packageEntry.ViewItems.TryGetValue(viewId, out var viewItem))
+        if (item.Children.Count > 0)
         {
-            return viewItem;
-        }
-
-        viewItem = new NativeMenuItem { IsVisible = false };
-        viewItem.Click += async (_, _) =>
-        {
-            var viewModel = _viewModelAccessor();
-            if (viewModel is not null && await viewModel.OpenPackageViewPanelAsync(viewId))
+            var submenu = new NativeMenu();
+            foreach (var child in item.Children)
             {
-                SchedulePackagesMenuRefresh();
+                submenu.Add(BuildNativeItem(child));
             }
-        };
-        packageEntry.ViewItems.Add(viewId, viewItem);
-        packageEntry.Menu.Add(viewItem);
-        return viewItem;
-    }
-
-    private void EnsureNoPackageViewsItem(bool isVisible)
-    {
-        var entry = GetOrCreatePackageEntry("__empty__");
-        entry.Item.Header = "No package views";
-        entry.Item.Icon = DefaultIcon;
-        entry.Item.IsEnabled = false;
-        entry.Item.IsVisible = isVisible;
-    }
-
-    private void HideAllPackageEntries()
-    {
-        foreach (var entry in _packageEntries.Values)
-        {
-            entry.Item.IsVisible = false;
+            nativeItem.Menu = submenu;
         }
+        else if (item.ExecuteAsync is not null)
+        {
+            nativeItem.Click += (_, _) =>
+                _tasks.Run(item.ExecuteAsync, $"executing menu command '{item.Id}'");
+        }
+
+        return nativeItem;
     }
 
     private void SubscribeToCurrentViewModel()
@@ -303,54 +155,33 @@ internal sealed class MacNativeMenuController : IDisposable
         _subscribedViewModel = null;
     }
 
-    private void ViewModel_OnShellViewStateChanged()
-        => SchedulePackagesMenuRefresh();
+    private void ViewModel_OnShellViewStateChanged() => ScheduleMenuRefresh();
 
-    private void MarkPackagesMenuDirty()
+    private void ScheduleMenuRefresh()
     {
-        _packagesMenuDirty = true;
-    }
-
-    private void SchedulePackagesMenuRefresh()
-    {
-        MarkPackagesMenuDirty();
-        if (_disposed || _rootMenu is null || _packagesMenuRefreshScheduled)
+        _menuDirty = true;
+        if (_disposed || _rootMenu is null || _menuRefreshScheduled)
         {
             return;
         }
 
-        _packagesMenuRefreshScheduled = true;
+        _menuRefreshScheduled = true;
         Dispatcher.UIThread.Post(() =>
         {
-            _packagesMenuRefreshScheduled = false;
-            UpdatePackagesMenuIfDirty();
+            _menuRefreshScheduled = false;
+            UpdateMenuIfDirty();
         }, DispatcherPriority.Background);
     }
 
-    private void UpdatePackagesMenuIfDirty()
+    private void UpdateMenuIfDirty()
     {
-        if (_packagesMenuDirty)
+        if (_menuDirty)
         {
-            UpdatePackagesMenu();
+            UpdateMenu();
         }
     }
 
-    private Bitmap ResolveMenuIcon(Uri? iconUri)
-    {
-        if (iconUri is null)
-        {
-            return DefaultIcon;
-        }
-
-        var key = iconUri.AbsoluteUri;
-        if (_iconCache.TryGetValue(key, out var cachedIcon))
-        {
-            return cachedIcon;
-        }
-
-        StartIconLoad(iconUri, key);
-        return DefaultIcon;
-    }
+    private Bitmap ResolveMenuIcon(IImage? iconImage) => iconImage as Bitmap ?? DefaultIcon;
 
     private Bitmap DefaultIcon
     {
@@ -362,80 +193,7 @@ internal sealed class MacNativeMenuController : IDisposable
             }
 
             using var stream = AssetLoader.Open(DefaultIconUri);
-            _defaultIcon = new Bitmap(stream);
-            return _defaultIcon;
+            return _defaultIcon = new Bitmap(stream);
         }
-    }
-
-    private void StartIconLoad(Uri iconUri, string key)
-    {
-        if (_iconCache.ContainsKey(key) || !_loadingIconKeys.Add(key))
-        {
-            return;
-        }
-
-        _tasks.Run(_ => LoadIconAsync(iconUri, key), "loading a package icon");
-    }
-
-    private async Task LoadIconAsync(Uri iconUri, string key)
-    {
-        Bitmap? bitmap = null;
-        try
-        {
-            var result = await PackageIconImageLoader.LoadAsync(iconUri).ConfigureAwait(false);
-            if (result.Image is Bitmap loadedBitmap)
-            {
-                bitmap = loadedBitmap;
-            }
-            else
-            {
-                PackageIconImageViewModelLoader.DisposeImage(result.Image);
-            }
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError($"Failed to load native menu icon '{iconUri}': {ex.Message}", ex);
-        }
-
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            _loadingIconKeys.Remove(key);
-            if (_disposed)
-            {
-                bitmap?.Dispose();
-                return;
-            }
-
-            _iconCache[key] = bitmap ?? DefaultIcon;
-            SchedulePackagesMenuRefresh();
-        });
-    }
-
-    private void DisposeCachedIcons()
-    {
-        var defaultIcon = _defaultIcon;
-        foreach (var icon in _iconCache.Values.Distinct())
-        {
-            if (!ReferenceEquals(icon, defaultIcon))
-            {
-                icon.Dispose();
-            }
-        }
-
-        _iconCache.Clear();
-        _loadingIconKeys.Clear();
-        defaultIcon?.Dispose();
-        _defaultIcon = null;
-    }
-
-    private sealed class PackageMenuEntry(string packageId, NativeMenuItem item, NativeMenu menu)
-    {
-        public string PackageId { get; } = packageId;
-
-        public NativeMenuItem Item { get; } = item;
-
-        public NativeMenu Menu { get; } = menu;
-
-        public Dictionary<string, NativeMenuItem> ViewItems { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
@@ -144,6 +145,54 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
+    public async Task PackageSessionPublisher_StartsBackgroundServicesOnlyAfterGenerationCommit()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var paths = new RuntimePackagePaths(rootPath);
+        var events = new RuntimeEventStreamService();
+        using var snapshots = new PackageUiSnapshotStore(paths);
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            events,
+            uiSnapshots: snapshots);
+        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
+        var publisher = new PackageSessionPublisher(owner, ui, NullLogger<PackageSessionPublisher>.Instance);
+        var backgroundService = new TestBackgroundService(() => owner.Generation);
+        var loadedPackage = CreateLoadedPackage("test.package", backgroundService);
+        var session = new ActivePackageSession(
+            sessionFolder: null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["test.package"] = loadedPackage,
+            },
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["test.package"] = CreateSessionPackage("test.package", isEnabled: true),
+            },
+            backgroundServicesStarted: false);
+
+        try
+        {
+            var candidate = publisher.Prepare(session, owner.Sources.Snapshot(), [], [], baseGeneration: 0);
+            var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
+
+            Assert.Equal(0, backgroundService.StartCount);
+            Assert.Equal(0, owner.Generation);
+
+            var committed = await publisher.CommitAsync(pending);
+
+            Assert.Equal(1, committed.Stamp.SessionGeneration);
+            Assert.Equal(1, backgroundService.StartCount);
+            Assert.Equal(1, backgroundService.GenerationObservedAtStart);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
     public void CleanupStaleSessions_RemovesFoldersWithoutRunningOwner()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
@@ -167,17 +216,20 @@ public sealed class ActivePackageSessionTests
         }
     }
 
-    private static ActiveLoadedPackage CreateLoadedPackage(string packageId)
+    private static ActiveLoadedPackage CreateLoadedPackage(
+        string packageId,
+        TestBackgroundService? backgroundService = null)
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDirectory);
+        File.WriteAllText(Path.Combine(tempDirectory, "sunder-package.json"), "{}");
         var assemblyPath = typeof(PackageLoadPlanner).Assembly.Location;
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
 
         return new ActiveLoadedPackage(
             CreateActivePackage(packageId, isEnabled: true, PackageReadinessState.Ready),
             new RuntimePackageSource(packageId, PackageSourceKind.Dev, tempDirectory),
-            ConfigurationSchema: null,
+            SettingsSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(
                 Path.Combine(tempDirectory, "secrets.json"),
@@ -186,7 +238,7 @@ public sealed class ActivePackageSessionTests
                 new RestrictedFileMasterKeyProtection()),
             AuthHandler: null,
             CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
-            BackgroundServices: [new TestBackgroundService()],
+            BackgroundServices: [backgroundService ?? new TestBackgroundService()],
             serviceProvider,
             new RuntimePackageLoadContext(
                 packageId,
@@ -199,7 +251,7 @@ public sealed class ActivePackageSessionTests
         string packageId,
         bool isEnabled,
         PackageReadinessState readiness)
-        => new(packageId, packageId, "1.0.0", Icon: null, isEnabled, readiness, Views: []);
+        => new(packageId, packageId, "1.0.0", PackageHostRoles.Runtime, Icon: null, isEnabled, readiness, Views: []);
 
     private static void TryDeleteDirectory(string path)
     {
@@ -214,6 +266,7 @@ public sealed class ActivePackageSessionTests
             packageId,
             packageId,
             "1.0.0",
+            PackageHostRoles.Runtime,
             Icon: null,
             isEnabled,
             isEnabled ? PackageReadinessState.Ready : PackageReadinessState.Failed,
@@ -223,9 +276,19 @@ public sealed class ActivePackageSessionTests
             LastFailureAtUtc: null,
             FailureCount: 0);
 
-    private sealed class TestBackgroundService : IPackageBackgroundService
+    private sealed class TestBackgroundService(Func<long>? getGeneration = null) : IPackageBackgroundService
     {
-        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public int StartCount { get; private set; }
+
+        public long? GenerationObservedAtStart { get; private set; }
+
+        public Task StartAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StartCount++;
+            GenerationObservedAtStart = getGeneration?.Invoke();
+            return Task.CompletedTask;
+        }
 
         public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }

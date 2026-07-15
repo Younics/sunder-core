@@ -4,7 +4,7 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Abstractions;
 
 /// <summary>Defines the desktop App-hosted role of a package module.</summary>
-/// <remarks>The App creates one module per activation, configures services first, builds the provider, then registers contributions. App and Runtime roles have separate providers and lifecycles.</remarks>
+/// <remarks>The App constructs the module through its public parameterless constructor, calls <see cref="ConfigureAppServices"/>, builds the role-specific provider, then calls <see cref="RegisterAppContributions"/>. The module is not resolved from that provider. App and Runtime roles have separate module instances, providers, and lifecycles even when one type implements both roles.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.CoreV1)]
 public interface ISunderAppPackageModule
 {

@@ -4,6 +4,7 @@ namespace Sunder.Runtime.Host.Services;
 
 internal static class RuntimePackageSessionDirectories
 {
+    private static int _cleanupScheduled;
     private static readonly string SessionRootPath = Path.Combine(
         Path.GetTempPath(),
         "Sunder.Runtime.Host",
@@ -16,6 +17,12 @@ internal static class RuntimePackageSessionDirectories
     {
         CleanupStaleSessions(Path.Combine(SessionRootPath, "dev-sessions"));
         CleanupStaleSessions(Path.Combine(SessionRootPath, "installed-sessions"));
+    }
+
+    public static void ScheduleStaleSessionCleanup()
+    {
+        if (Interlocked.Exchange(ref _cleanupScheduled, 1) != 0) return;
+        _ = Task.Run(CleanupStaleSessions);
     }
 
     internal static void CleanupStaleSessions(string sessionKindRootPath)

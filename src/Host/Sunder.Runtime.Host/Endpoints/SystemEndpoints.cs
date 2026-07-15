@@ -1,5 +1,5 @@
 using Sunder.Runtime.Contracts;
-using Sunder.Runtime.Client;
+using Sunder.Runtime.LocalState;
 using Sunder.Runtime.Host.Services;
 
 namespace Sunder.Runtime.Host.Endpoints;
@@ -13,7 +13,18 @@ internal static class SystemEndpoints
         var group = endpoints.MapGroup("/system");
         group.MapGet(
             "",
-            () => Results.Ok(new SystemStatusResponse("Sunder.Runtime.Host", RuntimeHostVersion.Current, true, startedAtUtc)));
+            (RuntimeSnapshotService snapshots) =>
+            {
+                var state = snapshots.GetSnapshot().BootstrapState;
+                return Results.Ok(new SystemStatusResponse(
+                    "Sunder.Runtime.Host",
+                    RuntimeHostVersion.Current,
+                    state == RuntimeBootstrapState.Ready,
+                    startedAtUtc)
+                {
+                    State = state,
+                });
+            });
 
         group.MapPost(
             "shutdown",
@@ -41,7 +52,8 @@ internal static class SystemEndpoints
             {
                 if (!challenges.TryConsume(request.Challenge))
                 {
-                    return Results.Conflict(new { error = "The Runtime reset confirmation challenge is missing, expired, or already used." });
+                    throw new RuntimeConflictException(
+                        "The Runtime reset confirmation challenge is missing, expired, or already used.");
                 }
 
                 response.OnCompleted(() =>

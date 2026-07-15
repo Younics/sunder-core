@@ -1,5 +1,5 @@
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Configuration;
+using Sunder.Sdk.Settings;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
@@ -50,9 +50,16 @@ internal sealed class LocalPackageStorageContext : IPackageStorageContext
     }
 }
 
-internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackageSettings
+internal interface IPackageSettingsDocument : IPackageSettings
 {
-    internal PackageConfigurationSchema? Schema { private get; set; }
+    Task ReplaceValuesAsync(
+        IReadOnlyDictionary<string, string> values,
+        CancellationToken cancellationToken = default);
+}
+
+internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackageSettingsDocument
+{
+    internal PackageSettingsSchema? Schema { private get; set; }
 
     public async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -85,7 +92,12 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
         return store.DeleteValueAsync(key, cancellationToken);
     }
 
-    private PackageConfigurationField GetField(string key)
+    public Task ReplaceValuesAsync(
+        IReadOnlyDictionary<string, string> values,
+        CancellationToken cancellationToken = default)
+        => store.ReplaceValuesAsync(values, cancellationToken);
+
+    private PackageSettingsField GetField(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         var field = Schema?.Sections
@@ -93,10 +105,10 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
             .FirstOrDefault(candidate => string.Equals(candidate.Key, key, StringComparison.Ordinal));
         if (field is null)
         {
-            throw new ArgumentException($"Setting '{key}' is not declared by the package configuration schema.", nameof(key));
+            throw new ArgumentException($"Setting '{key}' is not declared by the package settings schema.", nameof(key));
         }
 
-        if (field.Kind == PackageConfigurationFieldKind.Secret)
+        if (field.Kind == PackageSettingsFieldKind.Secret)
         {
             throw new ArgumentException($"Setting '{key}' is secret and must be accessed through package secrets.", nameof(key));
         }
@@ -104,20 +116,26 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
         return field;
     }
 
-    private static void ValidateValue(PackageConfigurationField field, string value)
+    internal static void ValidateValue(PackageSettingsField field, string? value)
     {
-        if (field.IsRequired && string.IsNullOrWhiteSpace(value))
+        var effectiveValue = value ?? field.DefaultValue;
+        if (field.IsRequired && string.IsNullOrWhiteSpace(effectiveValue))
         {
             throw new ArgumentException($"Setting '{field.Key}' requires a value.", nameof(value));
         }
 
-        if (field.Kind == PackageConfigurationFieldKind.Boolean && !bool.TryParse(value, out _))
+        if (effectiveValue is null)
+        {
+            return;
+        }
+
+        if (field.Kind == PackageSettingsFieldKind.Boolean && !bool.TryParse(effectiveValue, out _))
         {
             throw new ArgumentException($"Setting '{field.Key}' must be 'true' or 'false'.", nameof(value));
         }
 
-        if (field.Kind == PackageConfigurationFieldKind.Select
-            && !(field.Options ?? []).Any(option => string.Equals(option.Value, value, StringComparison.Ordinal)))
+        if (field.Kind == PackageSettingsFieldKind.Select
+            && !field.Options.Any(option => string.Equals(option.Value, effectiveValue, StringComparison.Ordinal)))
         {
             throw new ArgumentException($"Setting '{field.Key}' is not one of its declared options.", nameof(value));
         }
@@ -139,14 +157,50 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
         return await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
     }
 
+    public ValueTask<Stream?> OpenReadAsync(
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
+        Stream? stream = File.Exists(path)
+            ? new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan)
+            : null;
+        return ValueTask.FromResult(stream);
+    }
+
     public async Task WriteAsync(
         string relativePath,
         ReadOnlyMemory<byte> contents,
         CancellationToken cancellationToken = default)
     {
-        var path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllBytesAsync(path, contents.ToArray(), cancellationToken).ConfigureAwait(false);
+        await ReplaceAsync(
+            relativePath,
+            (stream, token) => stream.WriteAsync(contents, token).AsTask(),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task WriteAsync(
+        string relativePath,
+        Stream contents,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+        if (!contents.CanRead)
+        {
+            throw new ArgumentException("Package file content stream must be readable.", nameof(contents));
+        }
+
+        await ReplaceAsync(
+            relativePath,
+            (stream, token) => contents.CopyToAsync(stream, token),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default)
@@ -157,6 +211,52 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
     }
 
     internal string ResolvePath(string relativePath) => PackageWorkspacePath.Resolve(_rootPath, relativePath);
+
+    private async Task ReplaceAsync(
+        string relativePath,
+        Func<FileStream, CancellationToken, Task> writeAsync,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await writeAsync(stream, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                stream.Flush(flushToDisk: true);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
 }
 
 internal sealed class LocalPackageRoleLocalWorkspace(string rootPath) : IPackageRoleLocalWorkspace

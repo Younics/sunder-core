@@ -27,20 +27,62 @@ public sealed class RuntimeApiBoundaryTests
     }
 
     [Fact]
+    public void RuntimePackageSnapshotContract_JsonMatchesGoldenFixture()
+    {
+        var active = new ActivePackageDescriptor(
+            "test.package",
+            "Test Package",
+            "1.2.3",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
+            Icon: null,
+            IsEnabled: true,
+            PackageReadinessState.Ready,
+            Views: []);
+        var session = new SessionPackageDescriptor(
+            active.PackageId,
+            active.DisplayName,
+            active.Version,
+            active.HostRoles,
+            active.Icon,
+            active.IsEnabled,
+            active.Readiness,
+            active.Views,
+            FailureOrigin: null,
+            LastError: null,
+            LastFailureAtUtc: null,
+            FailureCount: 0);
+        var snapshot = new RuntimePackageSnapshot(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            SessionGeneration: 7,
+            EventSequence: 12,
+            RuntimeBootstrapState.Ready,
+            [active],
+            [session],
+            [new PackageUiSnapshotDescriptor(
+                active.PackageId,
+                PackageSourceKind.Dev,
+                SessionGeneration: 7,
+                new string('a', 64),
+                "snapshot-1",
+                "packages/ui-snapshots/snapshot-1")],
+            ["warning"],
+            []);
+        var actual = JsonSerializer.SerializeToNode(snapshot, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "RuntimePackageSnapshot.golden.json");
+        var expected = JsonNode.Parse(File.ReadAllText(fixturePath));
+
+        Assert.Equal(expected?.ToJsonString(), actual?.ToJsonString());
+    }
+
+    [Fact]
     public void StackImportContracts_JsonMatchesGoldenFixture()
     {
-        var importedItem = new RuntimeStackImportedItemDescriptor("profile-1", "profiles", "Profile", "profile")
-        {
-            OwnerPackageId = "test.package",
-        };
+        var importedItem = new RuntimeStackImportedItemDescriptor("profile-1", "test.package", "profiles", "Profile", "profile");
         var preview = new RuntimeStackImportPreviewResponse(
             true,
             "opaque-plan",
             new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),
-            [new RuntimeStackImportActionDescriptor("profile.create", "profiles", "Create profile", "Create", true)
-            {
-                OwnerPackageId = "test.package",
-            }],
+            [new RuntimeStackImportActionDescriptor("action-key", "test.package", "profiles", "profile.create", "Create profile", "Create", true)],
             [],
             [],
             [],
@@ -48,7 +90,7 @@ public sealed class RuntimeApiBoundaryTests
         var import = new RuntimeStackImportResponse(
             RuntimeStackImportOutcome.Partial,
             [importedItem],
-            new Dictionary<string, string> { ["source-profile"] = "profile-1" },
+            new Dictionary<string, string> { ["remap-key"] = "profile-1" },
             [
                 new RuntimeStackImportContributorResultDescriptor(
                     "test.package",
@@ -56,7 +98,7 @@ public sealed class RuntimeApiBoundaryTests
                     ["profile-fragment"],
                     RuntimeStackImportOutcome.Completed,
                     [importedItem],
-                    new Dictionary<string, string> { ["source-profile"] = "profile-1" },
+                    new Dictionary<string, string> { ["remap-key"] = "profile-1" },
                     [],
                     []),
                 new RuntimeStackImportContributorResultDescriptor(
@@ -107,6 +149,129 @@ public sealed class RuntimeApiBoundaryTests
         ], generation: 3));
 
         Assert.Null(store.Acquire(descriptor.SnapshotId, generation: 4, stageId: null));
+    }
+
+    [Fact]
+    public void PackageUiSnapshotStore_CandidateCleanupDoesNotRemovePeerGenerationSnapshot()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(root);
+        var source = CreateSnapshotSource(root);
+        using var store = new PackageUiSnapshotStore(paths);
+        var runtimeSource = new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source);
+        var first = Assert.Single(store.CreateSnapshots([runtimeSource], generation: 5));
+        var second = Assert.Single(store.CreateSnapshots([runtimeSource], generation: 5));
+
+        store.RemoveSnapshots([first]);
+
+        Assert.NotEqual(first.SnapshotId, second.SnapshotId);
+        Assert.Null(store.Acquire(first.SnapshotId, generation: 5, stageId: null));
+        using var peerLease = store.Acquire(second.SnapshotId, generation: 5, stageId: null);
+        Assert.NotNull(peerLease);
+        Assert.Single(Directory.EnumerateFiles(paths.CacheRootPath, "*.snapshot", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void PackageUiSnapshotStore_ReusesPersistentObjectAcrossStoreInstancesAndInvalidatesChangedDevBytes()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(root);
+        var source = CreateSnapshotSource(root);
+        var runtimeSource = new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source);
+        PackageUiSnapshotDescriptor first;
+        using (var firstStore = new PackageUiSnapshotStore(paths))
+        {
+            first = Assert.Single(firstStore.CreateSnapshots([runtimeSource], generation: 1));
+        }
+        using (var secondStore = new PackageUiSnapshotStore(paths))
+        {
+            var reused = Assert.Single(secondStore.CreateSnapshots([runtimeSource], generation: 2));
+            Assert.Equal(first.ContentHash, reused.ContentHash);
+            Assert.Single(Directory.EnumerateFiles(paths.CacheRootPath, "*.snapshot", SearchOption.AllDirectories));
+
+            File.WriteAllBytes(Path.Combine(source, "lib", "test.dll"), [3, 2, 1]);
+            var changed = Assert.Single(secondStore.CreateSnapshots([runtimeSource], generation: 3));
+            Assert.NotEqual(first.ContentHash, changed.ContentHash);
+            Assert.Equal(2, Directory.EnumerateFiles(paths.CacheRootPath, "*.snapshot", SearchOption.AllDirectories).Count());
+        }
+    }
+
+    [Fact]
+    public void PackageUiSnapshotStore_QuarantinesCorruptPersistentObjectAndRebuildsIt()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(root);
+        var source = CreateSnapshotSource(root);
+        var runtimeSource = new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source);
+        PackageUiSnapshotDescriptor first;
+        using (var store = new PackageUiSnapshotStore(paths))
+        {
+            first = Assert.Single(store.CreateSnapshots([runtimeSource], generation: 1));
+        }
+        var objectPath = Assert.Single(Directory.EnumerateFiles(paths.CacheRootPath, "*.snapshot", SearchOption.AllDirectories));
+        File.WriteAllText(objectPath, "corrupt");
+
+        using var replacementStore = new PackageUiSnapshotStore(paths);
+        var rebuilt = Assert.Single(replacementStore.CreateSnapshots([runtimeSource], generation: 2));
+
+        Assert.Equal(first.ContentHash, rebuilt.ContentHash);
+        Assert.Contains(Directory.EnumerateFiles(paths.CacheRootPath, "*", SearchOption.AllDirectories),
+            path => path.Contains("quarantine", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ActivePackageSession_AppSourcesContainOnlyAppDependencyClosureInLoadOrder()
+    {
+        var sources = new[]
+        {
+            new RuntimePackageSource("contracts", PackageSourceKind.Installed, SourceFolder: "/contracts", HostRoles: PackageHostRoles.ContractOnly),
+            new RuntimePackageSource("runtime.dependency", PackageSourceKind.Installed, SourceFolder: "/runtime-dependency", HostRoles: PackageHostRoles.Runtime, Dependencies: ["contracts"]),
+            new RuntimePackageSource("app", PackageSourceKind.Installed, SourceFolder: "/app", HostRoles: PackageHostRoles.App, Dependencies: ["runtime.dependency"]),
+            new RuntimePackageSource("runtime.independent", PackageSourceKind.Installed, SourceFolder: "/runtime-independent", HostRoles: PackageHostRoles.Runtime),
+        };
+        var descriptors = sources.ToDictionary(
+            static source => source.PackageId,
+            static source => new SessionPackageDescriptor(
+                source.PackageId,
+                source.PackageId,
+                "1.0.0",
+                source.HostRoles,
+                null,
+                true,
+                PackageReadinessState.Ready,
+                [],
+                null,
+                null,
+                null,
+                0),
+            StringComparer.OrdinalIgnoreCase);
+        var session = new ActivePackageSession(
+            null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
+            descriptors,
+            readySources: sources);
+
+        Assert.Equal(["contracts", "runtime.dependency", "app"], session.GetAppPackageSources().Select(static source => source.PackageId));
+    }
+
+    [Fact]
+    public async Task PackageUiSnapshotLease_OwnsAlreadyOpenStreamAcrossStoreRemoval()
+    {
+        var root = CreateTempDirectory();
+        var source = CreateSnapshotSource(root);
+        using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(root));
+        var descriptor = Assert.Single(store.CreateSnapshots([
+            new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source),
+        ], generation: 6));
+        await using var lease = store.Acquire(descriptor.SnapshotId, generation: 6, stageId: null);
+        Assert.NotNull(lease);
+
+        store.RemoveSnapshots([descriptor]);
+        using var copied = new MemoryStream();
+        await lease.Stream.CopyToAsync(copied);
+
+        Assert.True(copied.Length > 0);
+        Assert.Empty(Directory.EnumerateFiles(new RuntimePackagePaths(root).TransferRootPath));
     }
 
     [Fact]
@@ -261,7 +426,9 @@ public sealed class RuntimeApiBoundaryTests
             "ArchivePath",
         };
         var offenders = typeof(PackageUiSnapshotDescriptor).Assembly.ExportedTypes
-            .SelectMany(type => type.GetProperties().Select(property => $"{type.Name}.{property.Name}"))
+            .SelectMany(type => type.GetProperties().Select(property => new { Type = type, Property = property }))
+            .Where(member => member.Type != typeof(DevPackageOwnerFolder))
+            .Select(member => $"{member.Type.Name}.{member.Property.Name}")
             .Where(member => forbiddenNames.Contains(member[(member.LastIndexOf('.') + 1)..]))
             .ToArray();
 
@@ -277,6 +444,30 @@ public sealed class RuntimeApiBoundaryTests
         Assert.Equal(
             typeof(Sunder.Sdk.Stacks.StackImportOutcome),
             typeof(Sunder.Sdk.Stacks.StackImportResult).GetProperty(nameof(Sunder.Sdk.Stacks.StackImportResult.Outcome))?.PropertyType);
+    }
+
+    [Fact]
+    public void RuntimeCollectionDtos_DefensivelyFreezeCallerOwnedCollections()
+    {
+        var selectedFragments = new[] { "fragment" };
+        var inputValues = new Dictionary<string, string> { ["input"] = "original" };
+        var preview = new RuntimeStackImportPreviewRequest(
+            "upload",
+            selectedFragments,
+            inputValues,
+            new Dictionary<string, string>());
+        var settingValues = new Dictionary<string, string?> { ["setting"] = "original" };
+        var settings = new UpdatePackageSettingsRequest(settingValues);
+
+        selectedFragments[0] = "mutated";
+        inputValues["input"] = "mutated";
+        settingValues["setting"] = "mutated";
+
+        Assert.Equal("fragment", preview.SelectedFragmentIds[0]);
+        Assert.Equal("original", preview.InputValues["input"]);
+        Assert.Equal("original", settings.Values["setting"]);
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, string>)preview.InputValues).Add("new", "value"));
     }
 
     private static string CreateSnapshotSource(string root)

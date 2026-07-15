@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
@@ -13,18 +14,41 @@ internal sealed class AppPackageServiceProviderFactory(
     IPackageSettingsNavigationService? settingsNavigationService,
     AppPackageSessionService? packageSessionService,
     NotificationCenterService? notificationCenter,
-    BackgroundProcessQueueService backgroundProcessQueue)
+    BackgroundProcessQueueService backgroundProcessQueue,
+    AppPackageGenerationPublication publication,
+    Guid? ownerId = null)
 {
+    private static readonly Type[] ReservedServiceTypes =
+    [
+        typeof(IPackageContext),
+        typeof(IPackageRuntimeClient),
+        typeof(IPackageCallbackClient),
+        typeof(ILoggerFactory),
+        typeof(ILogger<>),
+        typeof(IPackageExtensionCatalog),
+        typeof(IPackageShellViewService),
+        typeof(IPackageSettingsNavigationService),
+        typeof(IPackageDevelopmentSessionControl),
+        typeof(IBackgroundProcessQueue),
+        typeof(IPackageNotificationService),
+    ];
+
+    internal AppPackageGenerationPublication Publication => publication;
+
     public ServiceProvider Create(
         ActivePackageDescriptor package,
         AppPackageContext packageContext,
         ISunderAppPackageModule? module)
     {
+        var packageServices = new ConstrainedPackageServiceCollection(ReservedServiceTypes);
+        module?.ConfigureAppServices(packageServices, packageContext);
+
         var services = new ServiceCollection();
+        packageServices.CopyTo(services);
         services.AddSingleton<IPackageContext>(_ => packageContext);
         services.AddSingleton<IPackageRuntimeClient>(packageContext.Runtime);
         services.AddSingleton<IPackageCallbackClient>(packageContext.Callbacks);
-        services.AddSingleton<ILoggerFactory>(packageContext.LoggerFactory);
+        services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
@@ -33,20 +57,21 @@ internal sealed class AppPackageServiceProviderFactory(
             packageSessionService is null
                 ? UnavailablePackageDevelopmentSessionControl.Instance
                 : packageSessionService);
-        if (packageSessionService is not null)
-        {
-            services.AddSingleton<IPackageInstalledSessionControl>(packageSessionService);
-        }
         services.AddSingleton<IBackgroundProcessQueue>(_ =>
         {
-            var packageBackgroundProcessQueue = new PackageScopedBackgroundProcessQueue(package.PackageId, package.DisplayName, backgroundProcessQueue);
+            var packageBackgroundProcessQueue = new AppPackageBackgroundProcessQueue(
+                new PackageScopedBackgroundProcessQueue(
+                    package.PackageId,
+                    package.DisplayName,
+                    backgroundProcessQueue,
+                    ownerId),
+                publication);
             packageBackgroundProcessQueue.Start();
             return packageBackgroundProcessQueue;
         });
         services.AddSingleton<IPackageNotificationService>(notificationCenter is null
             ? NullPackageNotificationService.Instance
-            : new AppPackageNotificationService(notificationCenter, package.PackageId, package.DisplayName));
-        module?.ConfigureAppServices(services, packageContext);
+            : new AppPackageNotificationService(notificationCenter, package.PackageId, package.DisplayName, publication));
         return services.BuildServiceProvider();
     }
 }

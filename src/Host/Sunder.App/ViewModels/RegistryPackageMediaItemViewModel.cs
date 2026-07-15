@@ -103,24 +103,10 @@ public sealed partial class RegistryPackageMediaItemViewModel : ViewModelBase, I
         await SetImageLoadingAsync(true);
         try
         {
-            if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri))
+            if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri)
+                || !HttpMediaUriValidator.IsValid(uri))
             {
                 await ClearImageAsync(cancellationToken);
-                return;
-            }
-
-            if (uri.IsFile)
-            {
-                await using var fileStream = File.OpenRead(uri.LocalPath);
-                if (fileStream.Length > MaxMediaImageBytes)
-                {
-                    await ClearImageAsync(cancellationToken);
-                    return;
-                }
-
-                bitmap = new Bitmap(fileStream);
-                await ApplyLoadedBitmapAsync(bitmap, cancellationToken);
-                bitmap = null;
                 return;
             }
 

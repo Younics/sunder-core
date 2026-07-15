@@ -18,23 +18,28 @@ public sealed class LatestAsyncRequest : IDisposable
     public Lease Start(CancellationToken cancellationToken = default)
     {
         CancellationTokenSource cancellation;
+        CancellationTokenSource? previousCancellation;
+        long generation;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _currentCancellation?.Cancel();
+            previousCancellation = _currentCancellation;
             cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _currentCancellation = cancellation;
-            Generation = ++_generation;
+            generation = ++_generation;
+            Generation = generation;
             IsBusy = true;
             Error = null;
         }
 
+        TryCancel(previousCancellation);
         StateChanged?.Invoke();
-        return new Lease(this, Generation, cancellation);
+        return new Lease(this, generation, cancellation);
     }
 
     public void Invalidate()
     {
+        CancellationTokenSource? cancellation;
         lock (_gate)
         {
             if (_disposed)
@@ -46,10 +51,11 @@ public sealed class LatestAsyncRequest : IDisposable
             Generation = _generation;
             IsBusy = false;
             Error = null;
-            _currentCancellation?.Cancel();
+            cancellation = _currentCancellation;
             _currentCancellation = null;
         }
 
+        TryCancel(cancellation);
         StateChanged?.Invoke();
     }
 
@@ -63,6 +69,7 @@ public sealed class LatestAsyncRequest : IDisposable
 
     public void Dispose()
     {
+        CancellationTokenSource? cancellation;
         lock (_gate)
         {
             if (_disposed)
@@ -73,11 +80,24 @@ public sealed class LatestAsyncRequest : IDisposable
             _disposed = true;
             _generation++;
             IsBusy = false;
-            _currentCancellation?.Cancel();
+            cancellation = _currentCancellation;
             _currentCancellation = null;
         }
 
+        TryCancel(cancellation);
         StateChanged?.Invoke();
+    }
+
+    private static void TryCancel(CancellationTokenSource? cancellation)
+    {
+        try
+        {
+            cancellation?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // A completed lease may dispose the replaced source concurrently.
+        }
     }
 
     private void Finish(long generation, CancellationTokenSource cancellation, string? error)

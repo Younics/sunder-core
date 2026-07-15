@@ -99,6 +99,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 
     public InstalledPackageDescriptor ToDescriptor(InstalledPackageRecord package)
     {
+        var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(package.ManifestPath), JsonOptions)
+            ?? throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid manifest.");
         var icon = string.IsNullOrWhiteSpace(package.Icon)
             ? null
             : new PackageIconDescriptor(null, package.Icon);
@@ -109,6 +111,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             package.PackageId,
             package.Name,
             package.Version,
+            PackageSessionPreparer.ResolveInstalledHostRoles(package, manifest),
             package.Summary,
             icon,
             package.IsEnabled,

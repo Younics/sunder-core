@@ -1,8 +1,9 @@
 using Sunder.Runtime.Client;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Cli;
 
-internal sealed class RuntimeResetCommandHandler(ICliRuntimeClient runtime, CliOutput output)
+internal sealed class RuntimeResetCommandHandler(ICliRuntimeResetClient runtime, CliOutput output)
 {
     public async Task<int> ExecuteAsync(RuntimeResetCommand command, CancellationToken token)
     {
@@ -22,7 +23,9 @@ internal sealed class RuntimeResetCommandHandler(ICliRuntimeClient runtime, CliO
             await runtime.DrainForResetAsync(challenge.Challenge, token).ConfigureAwait(false);
             output.Info("Runtime accepted the one-time reset challenge and is draining.");
         }
-        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+        catch (Exception exception) when (
+            (exception is HttpRequestException or InvalidOperationException)
+            && !CliErrorMapper.IsTimeout(exception))
         {
             output.Warning("Runtime is not reachable; attempting the same validated reset under the offline Runtime lease.");
         }

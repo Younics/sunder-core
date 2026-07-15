@@ -1,162 +1,188 @@
 using System.Collections.Concurrent;
-using System.IO.Compression;
-using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed record PackageUiSnapshotLease(string FilePath, string ContentHash, long Length);
+internal sealed class PackageUiSnapshotLease(
+    FileStream stream,
+    string contentHash,
+    long length) : IDisposable, IAsyncDisposable
+{
+    private FileStream? _stream = stream;
 
-internal sealed class PackageUiSnapshotStore(RuntimePackagePaths paths) : IDisposable
+    public Stream Stream => _stream ?? throw new ObjectDisposedException(nameof(PackageUiSnapshotLease));
+
+    public string ContentHash { get; } = contentHash;
+
+    public long Length { get; } = length;
+
+    public void Dispose() => Interlocked.Exchange(ref _stream, null)?.Dispose();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _stream, null) is { } owned) await owned.DisposeAsync();
+    }
+}
+
+internal sealed class PackageUiSnapshotStore : IDisposable
 {
     internal const long MaxUncompressedBytes = 256L * 1024 * 1024;
     internal const int MaxFileCount = 20_000;
-    private readonly ConcurrentDictionary<string, SnapshotEntry> _entries = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SnapshotAlias> _aliases = new(StringComparer.Ordinal);
+    private readonly PackageUiSnapshotObjectCache _objects;
+    private readonly object _promotionGate = new();
+    private int _garbageCollectionScheduled;
+
+    public PackageUiSnapshotStore(
+        RuntimePackagePaths paths,
+        ILogger<PackageUiSnapshotStore>? logger = null)
+    {
+        Directory.CreateDirectory(paths.TransferRootPath);
+        _objects = new PackageUiSnapshotObjectCache(paths.CacheRootPath, logger);
+    }
 
     public IReadOnlyList<PackageUiSnapshotDescriptor> CreateSnapshots(
         IReadOnlyList<RuntimePackageSource> sources,
         long generation,
         string? stageId = null)
-        => sources.Select(source => CreateSnapshot(source, generation, stageId)).ToArray();
+    {
+        if (sources.Count == 0)
+        {
+            return [];
+        }
+
+        var created = new PackageUiSnapshotDescriptor?[sources.Count];
+        try
+        {
+            Parallel.For(
+                0,
+                sources.Count,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Math.Min(Environment.ProcessorCount, 4),
+                },
+                index => created[index] = CreateSnapshot(sources[index], generation, stageId));
+            return created.Select(static snapshot => snapshot!).ToArray();
+        }
+        catch
+        {
+            RemoveSnapshots(created.OfType<PackageUiSnapshotDescriptor>());
+            throw;
+        }
+    }
 
     public PackageUiSnapshotLease? Acquire(string snapshotId, long generation, string? stageId)
     {
-        if (!_entries.TryGetValue(snapshotId, out var entry)
-            || entry.Generation != generation
-            || !string.Equals(entry.StageId, stageId, StringComparison.Ordinal)
-            || !File.Exists(entry.FilePath))
+        if (!_aliases.TryGetValue(snapshotId, out var alias)
+            || alias.Generation != generation
+            || !string.Equals(alias.StageId, stageId, StringComparison.Ordinal))
         {
-            Remove(snapshotId);
             return null;
         }
-
-        return new PackageUiSnapshotLease(entry.FilePath, entry.ContentHash, entry.Length);
+        try
+        {
+            var stream = new FileStream(
+                alias.ObjectPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete,
+                128 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return new PackageUiSnapshotLease(stream, alias.ContentHash, alias.Length);
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            _aliases.TryRemove(new KeyValuePair<string, SnapshotAlias>(snapshotId, alias));
+            return null;
+        }
     }
 
     public void RemoveStage(string stageId)
     {
-        foreach (var (id, entry) in _entries)
+        foreach (var (id, alias) in _aliases)
         {
-            if (string.Equals(entry.StageId, stageId, StringComparison.Ordinal))
+            if (string.Equals(alias.StageId, stageId, StringComparison.Ordinal)) Remove(id);
+        }
+    }
+
+    public IReadOnlyList<PackageUiSnapshotDescriptor> PromoteStage(
+        string stageId,
+        IReadOnlyList<PackageUiSnapshotDescriptor> descriptors)
+    {
+        lock (_promotionGate)
+        {
+            var aliases = descriptors.Select(descriptor =>
             {
-                Remove(id);
-            }
+                if (!_aliases.TryGetValue(descriptor.SnapshotId, out var alias)
+                    || !string.Equals(alias.StageId, stageId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException($"Package UI snapshot '{descriptor.SnapshotId}' does not belong to stage '{stageId}'.");
+                }
+                return (Descriptor: descriptor, Alias: alias);
+            }).ToArray();
+
+            foreach (var item in aliases) _aliases[item.Descriptor.SnapshotId] = item.Alias with { StageId = null };
+            return descriptors.Select(descriptor => descriptor with
+            {
+                SnapshotUri = $"packages/ui-snapshots/{descriptor.SnapshotId}",
+            }).ToArray();
         }
     }
 
     public void RemoveOlderGenerations(long generation)
     {
-        foreach (var (id, entry) in _entries)
+        foreach (var (id, alias) in _aliases)
         {
-            if (entry.StageId is null && entry.Generation != generation)
-            {
-                Remove(id);
-            }
+            if (alias.StageId is null && alias.Generation != generation) Remove(id);
         }
     }
 
-    public void Dispose()
+    public void RemoveSnapshots(IEnumerable<PackageUiSnapshotDescriptor> snapshots)
     {
-        foreach (var id in _entries.Keys)
-        {
-            Remove(id);
-        }
+        foreach (var snapshot in snapshots) Remove(snapshot.SnapshotId);
     }
 
-    private PackageUiSnapshotDescriptor CreateSnapshot(RuntimePackageSource source, long generation, string? stageId)
+    public void ScheduleGarbageCollection()
     {
-        foreach (var (existingId, existing) in _entries)
-        {
-            if (existing.Generation == generation
-                && string.Equals(existing.StageId, stageId, StringComparison.Ordinal)
-                && string.Equals(existing.PackageId, source.PackageId, StringComparison.OrdinalIgnoreCase)
-                && existing.SourceKind == source.Kind
-                && File.Exists(existing.FilePath))
-            {
-                var existingUri = stageId is null
-                    ? $"packages/ui-snapshots/{existingId}"
-                    : $"packages/session/stage/{stageId}/ui-snapshots/{existingId}";
-                return new PackageUiSnapshotDescriptor(source.PackageId, source.Kind, generation, existing.ContentHash, existingId, existingUri);
-            }
-        }
-
-        var files = Directory.EnumerateFiles(source.EffectiveSnapshotFolder, "*", SearchOption.AllDirectories)
-            .Select(file => (File: file, Relative: Path.GetRelativePath(source.EffectiveSnapshotFolder, file).Replace('\\', '/')))
-            .Where(item => item.Relative == "sunder-package.json"
-                           || item.Relative.StartsWith("lib/", StringComparison.Ordinal)
-                           || item.Relative.StartsWith("assets/", StringComparison.Ordinal))
-            .OrderBy(item => item.Relative, StringComparer.Ordinal)
-            .ToArray();
-        if (files.Length == 0 || files.Length > MaxFileCount)
-        {
-            throw new InvalidDataException($"Package UI snapshot contains an invalid number of files ({files.Length}).");
-        }
-
-        var totalLength = files.Sum(item => new FileInfo(item.File).Length);
-        if (totalLength > MaxUncompressedBytes)
-        {
-            throw new InvalidDataException($"Package UI snapshot exceeds the {MaxUncompressedBytes} byte limit.");
-        }
-
-        Directory.CreateDirectory(paths.TransferRootPath);
-        var snapshotId = Guid.NewGuid().ToString("N");
-        var snapshotPath = Path.Combine(paths.TransferRootPath, snapshotId + ".snapshot");
-        try
-        {
-            using (var output = new FileStream(snapshotPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
-            using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: false))
-            {
-                foreach (var item in files)
-                {
-                    var entry = archive.CreateEntry(item.Relative, CompressionLevel.Optimal);
-                    entry.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
-                    using var input = new FileStream(item.File, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                    using var destination = entry.Open();
-                    input.CopyTo(destination);
-                }
-            }
-
-            var info = new FileInfo(snapshotPath);
-            if (info.Length > MaxUncompressedBytes)
-            {
-                throw new InvalidDataException($"Package UI snapshot exceeds the {MaxUncompressedBytes} byte archive limit.");
-            }
-
-            using var snapshotStream = File.OpenRead(snapshotPath);
-            var hash = Convert.ToHexString(SHA256.HashData(snapshotStream)).ToLowerInvariant();
-            _entries[snapshotId] = new SnapshotEntry(snapshotPath, hash, info.Length, generation, stageId, source.PackageId, source.Kind);
-            var uri = stageId is null
-                ? $"packages/ui-snapshots/{snapshotId}"
-                : $"packages/session/stage/{stageId}/ui-snapshots/{snapshotId}";
-            return new PackageUiSnapshotDescriptor(source.PackageId, source.Kind, generation, hash, snapshotId, uri);
-        }
-        catch
-        {
-            File.Delete(snapshotPath);
-            throw;
-        }
-    }
-
-    private void Remove(string id)
-    {
-        if (_entries.TryRemove(id, out var entry))
+        if (Interlocked.Exchange(ref _garbageCollectionScheduled, 1) != 0) return;
+        _ = Task.Run(() =>
         {
             try
             {
-                File.Delete(entry.FilePath);
+                _objects.CollectGarbage(_aliases.Values.Select(static alias => alias.ContentHash).ToHashSet(StringComparer.Ordinal));
             }
-            catch
+            finally
             {
+                Volatile.Write(ref _garbageCollectionScheduled, 0);
             }
-        }
+        });
     }
 
-    private sealed record SnapshotEntry(
-        string FilePath,
+    public void Dispose() => _aliases.Clear();
+
+    private PackageUiSnapshotDescriptor CreateSnapshot(RuntimePackageSource source, long generation, string? stageId)
+    {
+        var snapshotObject = _objects.GetOrCreate(source);
+        var snapshotId = Guid.NewGuid().ToString("N");
+        _aliases[snapshotId] = new SnapshotAlias(
+            snapshotObject.Path,
+            snapshotObject.ContentHash,
+            snapshotObject.Length,
+            generation,
+            stageId);
+        var uri = stageId is null
+            ? $"packages/ui-snapshots/{snapshotId}"
+            : $"packages/session/stage/{stageId}/ui-snapshots/{snapshotId}";
+        return new PackageUiSnapshotDescriptor(source.PackageId, source.Kind, generation, snapshotObject.ContentHash, snapshotId, uri);
+    }
+
+    private void Remove(string id) => _aliases.TryRemove(id, out _);
+
+    private sealed record SnapshotAlias(
+        string ObjectPath,
         string ContentHash,
         long Length,
         long Generation,
-        string? StageId,
-        string PackageId,
-        PackageSourceKind SourceKind);
+        string? StageId);
 }

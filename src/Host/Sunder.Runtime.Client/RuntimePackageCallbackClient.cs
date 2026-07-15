@@ -5,6 +5,8 @@ namespace Sunder.Runtime.Client;
 
 public sealed class RuntimePackageCallbackClient : IDisposable
 {
+    private readonly RuntimeClientTransport _transport;
+    private readonly bool _ownsTransport;
     private readonly Func<RuntimeConnectionInfo?> _getConnectionInfo;
     private readonly HttpClient _httpClient;
     private readonly RuntimeHttpResponseReader _responses;
@@ -13,14 +15,22 @@ public sealed class RuntimePackageCallbackClient : IDisposable
         Func<RuntimeConnectionInfo?> getConnectionInfo,
         HttpMessageHandler? innerHandler = null,
         RuntimeClientPolicyOptions? policy = null)
+        : this(new RuntimeClientTransport(getConnectionInfo, innerHandler, policy), ownsTransport: true)
     {
-        var clientPolicy = policy ?? new RuntimeClientPolicyOptions();
-        _getConnectionInfo = getConnectionInfo ?? throw new ArgumentNullException(nameof(getConnectionInfo));
-        _httpClient = new HttpClient(new RuntimeAuthenticatedHttpMessageHandler(getConnectionInfo, innerHandler, clientPolicy))
-        {
-            Timeout = Timeout.InfiniteTimeSpan,
-        };
-        _responses = new RuntimeHttpResponseReader(clientPolicy);
+    }
+
+    public RuntimePackageCallbackClient(RuntimeClientTransport transport)
+        : this(transport, ownsTransport: false)
+    {
+    }
+
+    private RuntimePackageCallbackClient(RuntimeClientTransport transport, bool ownsTransport)
+    {
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _ownsTransport = ownsTransport;
+        _getConnectionInfo = transport.GetConnectionInfo;
+        _httpClient = transport.HttpClient;
+        _responses = transport.Responses;
     }
 
     public async Task<PackageCallbackSessionResponse> StartAsync(
@@ -56,5 +66,11 @@ public sealed class RuntimePackageCallbackClient : IDisposable
             $"api/v1/packages/{Uri.EscapeDataString(packageId)}/{route}");
     }
 
-    public void Dispose() => _httpClient.Dispose();
+    public void Dispose()
+    {
+        if (_ownsTransport)
+        {
+            _transport.Dispose();
+        }
+    }
 }

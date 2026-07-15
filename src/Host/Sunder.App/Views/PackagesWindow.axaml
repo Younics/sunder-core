@@ -157,7 +157,7 @@
 
             <Grid Grid.Row="2">
               <ListBox Classes="package-list"
-                       ItemsSource="{Binding MarketplacePackages}"
+                       ItemsSource="{Binding Marketplace.Packages}"
                        SelectedItem="{Binding SelectedMarketplacePackage, Mode=TwoWay}"
                        IsVisible="{Binding IsMarketplaceMode}">
                 <ListBox.ItemTemplate>
@@ -183,7 +183,7 @@
               </ListBox>
 
               <ListBox Classes="package-list"
-                       ItemsSource="{Binding InstalledPackages}"
+                       ItemsSource="{Binding Installed.Packages}"
                        SelectedItem="{Binding SelectedInstalledPackage, Mode=TwoWay}"
                        IsVisible="{Binding IsInstalledMode}">
                 <ListBox.ItemTemplate>
@@ -239,7 +239,7 @@
 
               <controls:InstalledPackageDetails IsVisible="{Binding ShowInstalledDetails}" />
 
-              <controls:PackageWarningsPanel IsVisible="{Binding HasWarnings}" />
+              <controls:PackageWarningsPanel IsVisible="{Binding Operations.HasWarnings}" />
 
               <TextBlock Classes="muted"
                          IsVisible="{Binding ShowNoSelection}"
@@ -303,7 +303,7 @@
         <Button Classes="secondary-action"
                 Command="{Binding CancelSelectedPackageOperationCommand}"
                 Content="Cancel"
-                IsVisible="{Binding ShowCancelSelectedPackageOperation}" />
+                IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
       </StackPanel>
       <controls:BackgroundProcessMonitor Grid.Column="3"
                                           HorizontalAlignment="Right"

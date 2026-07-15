@@ -7,9 +7,4 @@
     <AssemblyName>Sunder.Runtime.Contracts</AssemblyName>
     <RootNamespace>Sunder.Runtime.Contracts</RootNamespace>
   </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
-  </ItemGroup>
-
 </Project>

@@ -39,6 +39,16 @@ internal sealed class AppPackageAssemblyTracker
         }
     }
 
+    public IReadOnlyList<(string PackageId, Assembly Assembly)> SnapshotPackageAssemblies()
+    {
+        lock (_syncRoot)
+        {
+            return _assemblyPackageMap
+                .Select(entry => (entry.Value, entry.Key))
+                .ToArray();
+        }
+    }
+
     public string? ResolvePackageId(Exception exception)
     {
         foreach (var current in EnumerateExceptions(exception))

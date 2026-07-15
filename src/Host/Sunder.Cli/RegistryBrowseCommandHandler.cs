@@ -5,7 +5,6 @@ internal sealed class RegistryBrowseCommandHandler(IRegistryBrowseClient registr
     public async Task<int> ExecuteAsync(SearchPackagesCommand command, CancellationToken token)
     {
         var packages = (await registry.SearchAsync(command.Query, command.Skip, command.Take, token).ConfigureAwait(false))
-            .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         output.Data(packages);
         if (packages.Length == 0)

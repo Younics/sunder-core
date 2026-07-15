@@ -33,6 +33,37 @@ public sealed class RuntimeApiClientTests
     }
 
     [Fact]
+    public async Task GetRuntimePackageSnapshotAsync_ReturnsGenerationFenceAndRuntimeIdentity()
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        var snapshot = new RuntimePackageSnapshot(
+            runtimeInstanceId,
+            SessionGeneration: 4,
+            EventSequence: 9,
+            RuntimeBootstrapState.Ready,
+            [],
+            [],
+            [],
+            [],
+            []);
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(snapshot),
+        })
+        {
+            Handshake = CreateHandshake() with { RuntimeInstanceId = runtimeInstanceId },
+        };
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");
+        using var runtimeApiClient = new RuntimeApiClient(() => connection, handler);
+
+        var received = await runtimeApiClient.GetRuntimePackageSnapshotAsync();
+
+        Assert.Equal(runtimeInstanceId, received.RuntimeInstanceId);
+        Assert.Equal(4, received.SessionGeneration);
+        Assert.Equal("/api/v1/packages/snapshot", handler.Requests[1].RequestUri?.AbsolutePath);
+    }
+
+    [Fact]
     public async Task Request_WhenConnectionIsMissing_FailsBeforeSending()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
@@ -50,9 +81,9 @@ public sealed class RuntimeApiClientTests
         {
             Handshake = CreateHandshake() with
             {
-                ProtocolRevision = 2,
-                MinimumSupportedRevision = 2,
-                MaximumSupportedRevision = 2,
+                ProtocolRevision = 1,
+                MinimumSupportedRevision = 1,
+                MaximumSupportedRevision = 1,
             },
         };
         var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");
@@ -68,11 +99,13 @@ public sealed class RuntimeApiClientTests
     public async Task StreamRuntimeEventsAsync_ParsesSseAndSendsReconnectSequence()
     {
         var runtimeEvent = new RuntimeEventDescriptor(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
             43,
             DateTimeOffset.UtcNow,
             RuntimeEventKind.SessionGenerationChanged,
             8,
             RuntimeOperationPhase.Idle,
+            RuntimeBootstrapState.Ready,
             ["test.package"]);
         var content = $"id: 43\nevent: runtime\ndata: {JsonSerializer.Serialize(runtimeEvent, new JsonSerializerOptions(JsonSerializerDefaults.Web))}\n\n";
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -126,7 +159,7 @@ public sealed class RuntimeApiClientTests
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             Guid.NewGuid(),
-            [RuntimeProtocolFeatures.VersionedApiV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 
     private sealed record RecordedRequest(

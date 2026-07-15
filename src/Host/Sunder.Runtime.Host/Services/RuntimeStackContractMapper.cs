@@ -1,11 +1,28 @@
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal static class RuntimeStackContractMapper
 {
+    public static StackOwnedFragment OwnExportFragment(
+        string ownerPackageId,
+        string contributorId,
+        StackFragmentExport fragment)
+        => new(ownerPackageId, contributorId, fragment);
+
+    public static StackFragmentImport OwnImportFragment(
+        string ownerPackageId,
+        string contributorId,
+        StackFragmentImport fragment)
+        => fragment with
+        {
+            OwnerPackageId = ownerPackageId,
+            ContributorId = contributorId,
+        };
+
     public static RuntimeStackExportItemDescriptor ToExportItem(
         string ownerPackageId,
         string contributorId,
@@ -31,28 +48,66 @@ internal static class RuntimeStackContractMapper
                 detail.SupportsAskOnImport)).ToArray() ?? []);
 
     public static RuntimeStackImportActionDescriptor ToAction(string ownerPackageId, string contributorId, StackImportAction action)
-        => new(action.ActionId, contributorId, action.DisplayName, action.Kind.ToString(), action.DefaultSelected, action.Description)
-        {
-            OwnerPackageId = ownerPackageId,
-        };
+        => new(
+            RuntimeStackScopedKey.Create(RuntimeStackScopedKey.ActionKind, ownerPackageId, contributorId, action.ActionId),
+            ownerPackageId,
+            contributorId,
+            action.ActionId,
+            action.DisplayName,
+            action.Kind.ToString(),
+            action.DefaultSelected,
+            action.Description);
 
     public static RuntimeStackRequiredInputDescriptor ToRequiredInput(string ownerPackageId, string contributorId, StackRequiredInputDescriptor input)
-        => new(input.InputId, contributorId, input.Label, input.Required, input.Description, input.DefaultValue)
-        {
-            OwnerPackageId = ownerPackageId,
-        };
+        => new(
+            RuntimeStackScopedKey.Create(RuntimeStackScopedKey.InputKind, ownerPackageId, contributorId, input.InputId),
+            ownerPackageId,
+            contributorId,
+            input.InputId,
+            input.Label,
+            input.Required,
+            input.Description,
+            input.DefaultValue);
 
     public static RuntimeStackImportConflictDescriptor ToConflict(string ownerPackageId, string contributorId, StackImportConflict conflict)
-        => new(conflict.ConflictId, contributorId, conflict.Message, conflict.Severity.ToString(), conflict.FragmentId)
-        {
-            OwnerPackageId = ownerPackageId,
-        };
+        => new(
+            RuntimeStackScopedKey.Create("conflict", ownerPackageId, contributorId, conflict.ConflictId),
+            ownerPackageId,
+            contributorId,
+            conflict.Message,
+            conflict.Severity.ToString(),
+            conflict.FragmentId);
 
     public static RuntimeStackImportedItemDescriptor ToImportedItem(string ownerPackageId, string contributorId, StackImportedItem item)
-        => new(item.ItemId, contributorId, item.DisplayName, item.Kind)
+        => new(item.ItemId, ownerPackageId, contributorId, item.DisplayName, item.Kind);
+
+    public static IReadOnlyDictionary<string, string> ToContributorValues(
+        IReadOnlyDictionary<string, string> values,
+        string kind,
+        string ownerPackageId,
+        string contributorId)
+    {
+        var scoped = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in values)
         {
-            OwnerPackageId = ownerPackageId,
-        };
+            if (RuntimeStackScopedKey.TryParse(kind, pair.Key, out var owner, out var contributor, out var localId)
+                && string.Equals(owner, ownerPackageId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(contributor, contributorId, StringComparison.OrdinalIgnoreCase))
+            {
+                scoped[localId] = pair.Value;
+            }
+        }
+        return scoped;
+    }
+
+    public static IReadOnlyDictionary<string, string> ToHostRemaps(
+        IReadOnlyDictionary<string, string> values,
+        string ownerPackageId,
+        string contributorId)
+        => values.ToDictionary(
+            pair => RuntimeStackScopedKey.Create(RuntimeStackScopedKey.RemapKind, ownerPackageId, contributorId, pair.Key),
+            pair => pair.Value,
+            StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlyList<SunderStackPackageRequirement> ToPackageRequirements(IEnumerable<StackPackageRequirement> requirements)
         => requirements
@@ -61,17 +116,64 @@ internal static class RuntimeStackContractMapper
             .Select(group =>
             {
                 var first = group.First();
+                var installTags = group
+                    .Select(requirement => string.IsNullOrWhiteSpace(requirement.InstallTag) ? "latest" : requirement.InstallTag.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (installTags.Length != 1)
+                {
+                    throw new InvalidDataException(
+                        $"Stack package '{first.PackageId}' declares conflicting install tags: {string.Join(", ", installTags)}.");
+                }
+
+                string? minimumVersion = null;
+                SemanticVersion? strongestMinimum = null;
+                foreach (var candidate in group.Select(requirement => requirement.MinimumVersion)
+                             .Where(value => !string.IsNullOrWhiteSpace(value)))
+                {
+                    if (!SemanticVersion.TryParse(candidate, out var parsed))
+                    {
+                        throw new InvalidDataException(
+                            $"Stack package '{first.PackageId}' declares invalid minimum version '{candidate}'.");
+                    }
+                    if (strongestMinimum is null || parsed > strongestMinimum.Value)
+                    {
+                        strongestMinimum = parsed;
+                        minimumVersion = candidate;
+                    }
+                }
+
                 return new SunderStackPackageRequirement
                 {
                     PackageId = first.PackageId,
-                    InstallTag = string.IsNullOrWhiteSpace(first.InstallTag) ? "latest" : first.InstallTag,
+                    InstallTag = installTags[0],
                     CreatedWithVersion = first.CreatedWithVersion,
-                    MinimumVersion = group.Select(requirement => requirement.MinimumVersion).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+                    MinimumVersion = minimumVersion,
                     Required = group.Any(requirement => requirement.Required),
                 };
             })
             .OrderBy(requirement => requirement.PackageId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    public static SunderStackFragmentPreview ToPreview(
+        string sourceItemId,
+        StackExportItemDescriptor item,
+        StackExportItemSelection selection)
+    {
+        var selected = (selection.Details ?? []).ToDictionary(value => value.DetailId, StringComparer.OrdinalIgnoreCase);
+        var details = new List<SunderStackFragmentDisplayDetail>();
+        foreach (var detail in item.Details ?? [])
+        {
+            var id = string.IsNullOrWhiteSpace(detail.DetailId) ? BuildDetailId(detail.Label) : detail.DetailId;
+            if (selection.Details is not null && (!selected.TryGetValue(id!, out var choice) || !choice.IsSelected)) continue;
+            selected.TryGetValue(id!, out var selectedDetail);
+            var sensitivity = selectedDetail?.SensitivityOverride ?? detail.Sensitivity;
+            var asksOnImport = sensitivity == StackValueSensitivity.Secret;
+            var value = asksOnImport ? "Importer will provide this value." : selectedDetail?.ValueOverride ?? detail.Value;
+            if (!string.IsNullOrWhiteSpace(detail.Label) && !string.IsNullOrWhiteSpace(value)) details.Add(new SunderStackFragmentDisplayDetail { Label = detail.Label, Value = value, Behavior = asksOnImport ? "Ask on import" : "Include value" });
+        }
+        return new SunderStackFragmentPreview { SourceItemId = sourceItemId, Kind = item.Kind, DisplayDetails = details };
+    }
 
     public static string BuildDetailId(string label)
     {

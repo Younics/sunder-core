@@ -22,6 +22,9 @@ public sealed class SunderPackageManifest
     [JsonPropertyName("entryAssembly")]
     public string? EntryAssembly { get; init; }
 
+    [JsonPropertyName("hostRoles")]
+    public IReadOnlyList<string>? HostRoles { get; init; }
+
     [JsonPropertyName("icon")]
     public string? Icon { get; init; }
 

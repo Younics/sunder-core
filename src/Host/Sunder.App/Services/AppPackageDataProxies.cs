@@ -6,30 +6,38 @@ namespace Sunder.App.Services;
 internal sealed class AppRuntimePackageStorageContext(
     string packageId,
     RuntimePackageDataClient client,
-    IPackageRoleLocalWorkspace roleLocalWorkspace) : IPackageStorageContext
+    IPackageRoleLocalWorkspace roleLocalWorkspace,
+    AppPackageGenerationPublication publication) : IPackageStorageContext
 {
-    public IPackageFileStore Files { get; } = new AppRuntimePackageFileStore(packageId, client);
+    public IPackageFileStore Files { get; } = new AppRuntimePackageFileStore(packageId, client, publication);
 
-    public IPackageKeyValueStore State { get; } = new AppRuntimePackageStateStore(packageId, client);
+    public IPackageKeyValueStore State { get; } = new AppRuntimePackageStateStore(packageId, client, publication);
 
     public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; } = roleLocalWorkspace;
 }
 
 internal sealed class AppRuntimePackageStateStore(
     string packageId,
-    RuntimePackageDataClient client) : IPackageKeyValueStore
+    RuntimePackageDataClient client,
+    AppPackageGenerationPublication publication) : IPackageKeyValueStore
 {
     public async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
         => (await client.GetStateAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.Value;
 
     public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
-        => client.SetStateAsync(packageId, key, value, cancellationToken);
+    {
+        publication.RequirePublished("package state mutation");
+        return client.SetStateAsync(packageId, key, value, cancellationToken);
+    }
 
     public async Task<bool> ContainsKeyAsync(string key, CancellationToken cancellationToken = default)
         => (await client.GetStateAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.Found == true;
 
     public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
-        => client.DeleteStateAsync(packageId, key, cancellationToken);
+    {
+        publication.RequirePublished("package state mutation");
+        return client.DeleteStateAsync(packageId, key, cancellationToken);
+    }
 
     public Task<IReadOnlyList<string>> ListKeysAsync(
         string? prefix = null,
@@ -39,7 +47,8 @@ internal sealed class AppRuntimePackageStateStore(
 
 internal sealed class AppRuntimePackageSettings(
     string packageId,
-    RuntimePackageDataClient client) : IPackageSettings
+    RuntimePackageDataClient client,
+    AppPackageGenerationPublication publication) : IPackageSettings
 {
     public async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
         => (await client.GetSettingAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.EffectiveValue;
@@ -48,29 +57,43 @@ internal sealed class AppRuntimePackageSettings(
         => (await client.GetSettingAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.StoredValue;
 
     public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
-        => client.SetSettingAsync(packageId, key, value, cancellationToken);
+    {
+        publication.RequirePublished("package settings mutation");
+        return client.SetSettingAsync(packageId, key, value, cancellationToken);
+    }
 
     public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
-        => client.DeleteSettingAsync(packageId, key, cancellationToken);
+    {
+        publication.RequirePublished("package settings mutation");
+        return client.DeleteSettingAsync(packageId, key, cancellationToken);
+    }
 }
 
 internal sealed class AppRuntimePackageSecrets(
     string packageId,
-    RuntimePackageDataClient client) : IPackageSecrets
+    RuntimePackageDataClient client,
+    AppPackageGenerationPublication publication) : IPackageSecrets
 {
     public async Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
         => (await client.GetSecretAsync(packageId, key, cancellationToken).ConfigureAwait(false))?.Value;
 
     public Task SetSecretAsync(string key, string value, CancellationToken cancellationToken = default)
-        => client.SetSecretAsync(packageId, key, value, cancellationToken);
+    {
+        publication.RequirePublished("package secret mutation");
+        return client.SetSecretAsync(packageId, key, value, cancellationToken);
+    }
 
     public Task DeleteSecretAsync(string key, CancellationToken cancellationToken = default)
-        => client.DeleteSecretAsync(packageId, key, cancellationToken);
+    {
+        publication.RequirePublished("package secret mutation");
+        return client.DeleteSecretAsync(packageId, key, cancellationToken);
+    }
 }
 
 internal sealed class AppRuntimePackageFileStore(
     string packageId,
-    RuntimePackageDataClient client) : IPackageFileStore
+    RuntimePackageDataClient client,
+    AppPackageGenerationPublication publication) : IPackageFileStore
 {
     public Task<byte[]?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
         => client.ReadFileAsync(packageId, relativePath, cancellationToken);
@@ -79,10 +102,16 @@ internal sealed class AppRuntimePackageFileStore(
         string relativePath,
         ReadOnlyMemory<byte> contents,
         CancellationToken cancellationToken = default)
-        => client.WriteFileAsync(packageId, relativePath, contents, cancellationToken);
+    {
+        publication.RequirePublished("package file mutation");
+        return client.WriteFileAsync(packageId, relativePath, contents, cancellationToken);
+    }
 
     public Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default)
-        => client.DeleteFileAsync(packageId, relativePath, cancellationToken);
+    {
+        publication.RequirePublished("package file mutation");
+        return client.DeleteFileAsync(packageId, relativePath, cancellationToken);
+    }
 }
 
 internal sealed class AppPackageRoleLocalWorkspace(string packageId) : IPackageRoleLocalWorkspace
@@ -137,62 +166,4 @@ internal sealed class AppUnavailablePackageRoleLocalWorkspace : IPackageRoleLoca
 
     private static InvalidOperationException Unavailable()
         => new("The package local workspace is unavailable because the local Runtime is not connected.");
-}
-
-internal sealed class AppPreflightPackageStorageContext : IPackageStorageContext
-{
-    internal static AppPreflightPackageStorageContext Instance { get; } = new();
-
-    public IPackageFileStore Files { get; } = new AppPreflightPackageFileStore();
-    public IPackageKeyValueStore State { get; } = new AppPreflightPackageStateStore();
-    public IPackageRoleLocalWorkspace RoleLocalWorkspace => throw PersistenceUnavailable();
-
-    internal static InvalidOperationException PersistenceUnavailable()
-        => new("Package persistence and local workspaces are unavailable during App package preflight.");
-}
-
-internal sealed class AppPreflightPackageStateStore : IPackageKeyValueStore
-{
-    public Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default) => throw Reject();
-    public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default) => throw Reject();
-    public Task<bool> ContainsKeyAsync(string key, CancellationToken cancellationToken = default) => throw Reject();
-    public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default) => throw Reject();
-    public Task<IReadOnlyList<string>> ListKeysAsync(string? prefix = null, CancellationToken cancellationToken = default)
-        => throw Reject();
-
-    private static InvalidOperationException Reject() => AppPreflightPackageStorageContext.PersistenceUnavailable();
-}
-
-internal sealed class AppPreflightPackageSettings : IPackageSettings
-{
-    internal static AppPreflightPackageSettings Instance { get; } = new();
-    public Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task<string?> GetStoredValueAsync(string key, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-}
-
-internal sealed class AppPreflightPackageSecrets : IPackageSecrets
-{
-    internal static AppPreflightPackageSecrets Instance { get; } = new();
-    public Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task SetSecretAsync(string key, string value, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task DeleteSecretAsync(string key, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-}
-
-internal sealed class AppPreflightPackageFileStore : IPackageFileStore
-{
-    public Task<byte[]?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task WriteAsync(string relativePath, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
-    public Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default)
-        => throw AppPreflightPackageStorageContext.PersistenceUnavailable();
 }

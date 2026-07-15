@@ -20,19 +20,6 @@ internal sealed record AppPreparedPackageActivation(
     public string LibraryFolder => Path.Combine(PreparedSource.Folder, "lib");
 }
 
-internal sealed record AppPackagePrepareResult(
-    AppPreparedPackageActivation? Activation,
-    string? FailureMessage)
-{
-    public bool IsSuccess => Activation is not null && FailureMessage is null;
-
-    public static AppPackagePrepareResult Success(AppPreparedPackageActivation activation)
-        => new(activation, FailureMessage: null);
-
-    public static AppPackagePrepareResult Failure(string failureMessage)
-        => new(Activation: null, failureMessage);
-}
-
 internal sealed record AppLoadedPackageHandle(
     ActivePackageDescriptor Package,
     PackageUiSnapshotDescriptor Source,

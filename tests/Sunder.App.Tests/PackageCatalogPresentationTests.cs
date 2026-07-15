@@ -72,6 +72,7 @@ public sealed class PackageCatalogPresentationTests
                 "agent",
                 "Agent",
                 "1.0.0",
+                PackageHostRoles.App | PackageHostRoles.Runtime,
                 Summary: null,
                 Icon: null,
                 IsEnabled: true,

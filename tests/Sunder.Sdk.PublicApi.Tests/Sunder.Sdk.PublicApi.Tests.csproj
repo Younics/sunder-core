@@ -10,6 +10,7 @@
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
+    <ProjectReference Include="..\..\src\Sunder.Package.Format\Sunder.Package.Format.csproj" />
   </ItemGroup>
 
   <ItemGroup>

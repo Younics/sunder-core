@@ -38,6 +38,8 @@ public sealed class RuntimeConnectionState(Uri runtimeUrl)
         }
     }
 
+    public RuntimeConnectionInfo? GetConnectionInfo() => ConnectionInfo;
+
     public void SetConnection(RuntimeConnectionInfo connectionInfo)
     {
         ArgumentNullException.ThrowIfNull(connectionInfo);

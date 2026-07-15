@@ -19,7 +19,6 @@
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.8" />
-    <PackageVersion Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.7" />
     <PackageVersion Include="Velopack" Version="0.0.1298" />
     <!-- Package build tooling -->
     <PackageVersion Include="Microsoft.Build.Framework" Version="18.4.0" />

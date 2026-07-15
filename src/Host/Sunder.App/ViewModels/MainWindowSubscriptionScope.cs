@@ -99,7 +99,6 @@ internal sealed class MainWindowSubscriptionScope : IDisposable
         }
 
         _shellViewService?.Detach(_shell);
-        _windowLauncher.CloseForShutdown();
         _shellStatePersistence.Dispose();
     }
 }

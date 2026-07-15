@@ -38,7 +38,7 @@ Package authors do not maintain `sunder-package.json` by hand.
 
 ## Expected Project Shape
 
-A package project should declare package metadata in C# and expose a Runtime role, an App role, or both. Each role permits at most one public implementation.
+A package project should declare package metadata in C# and expose a Runtime role, an App role, both, or neither for a contract-only dependency. Each active role permits at most one public implementation. Build inspects compiled metadata and emits the exact `hostRoles` list; it is not an author-maintained property.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -162,20 +162,21 @@ Common MSBuild properties used by the package targets:
 | Property | Purpose |
 | --- | --- |
 | `Version` | Package version used in generated metadata and default archive name |
-| `SunderDevOutputPath` | Overrides the generated `sunder-dev` output directory |
+| `SunderDevOutputPath` | Overrides the generated path only when it normalizes to the direct `TargetDir/sunder-dev` child; existing output must carry the generated marker |
 | `SunderPackageFileName` | Overrides the default archive file name |
 | `SunderPackageOutputPath` | Overrides output path for the explicit `PackSunderPackage` target |
 | `SunderPublishPackageOutputPath` | Overrides archive output path during `dotnet publish` |
 
-Compatibility metadata is inferred automatically. For unusual reflection or dynamic scenarios where inference cannot see an SDK feature, add an explicit capability item:
+Compatibility metadata is inferred automatically from authored assemblies, including async/iterator/lambda bodies. Arbitrary copy-local dependencies are not treated as authored. For unusual reflection or dynamic scenarios, declare the reachable capabilities and acknowledge every unresolved call site reported by the build:
 
 ```xml
 <ItemGroup>
   <SunderSdkCapability Include="callbacks.v1" />
+  <SunderSdkDynamicAccess Include="MyCompany.Package.DynamicFactory.CreateHandler" />
 </ItemGroup>
 ```
 
-Advanced compatibility metadata properties are also supported: `SunderSdkApiVersion`, `SunderSdkPackageVersion`, and `SunderSdkVersion`.
+Advanced compatibility metadata properties are also supported: `SunderSdkApiVersion`, `SunderSdkPackageVersion`, and `SunderSdkVersion`. `SunderSdkPackageVersion` is verification-only: it must match the informational/package version on the resolved `Sunder.Sdk` reference.
 
 ## Validate Before Publishing
 

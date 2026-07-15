@@ -4,6 +4,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>Sunder.Package.Template.Contracts</PackageId>
+    <Version>1.0.0</Version>
+    <Description>Public extension contracts for Sunder Package Template.</Description>
   </PropertyGroup>
 
   <ItemGroup>

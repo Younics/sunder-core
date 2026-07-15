@@ -1,272 +1,115 @@
 using Sunder.App.Services;
-using Sunder.Runtime.Contracts;
 using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesOperationCommandCoordinator(
-    IRuntimePackagesClient runtimeApiClient,
+    IPackageOperationExecutor operationExecutor,
     IPackageArchivePicker packageArchivePicker,
     PackageRegistryClientProvider registryClientProvider,
-    RegistryPackageInstallService registryInstallService,
-    PackageOperationService? packageOperationService,
-    Func<IReadOnlyList<string>, CancellationToken, Task> applyPackageLifecycleChangesAsync,
-    Func<IReadOnlyList<ActivePackageDescriptor>, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyList<string>, CancellationToken, Task> preflightPackageLifecycleChangesAsync,
-    NotificationCenterService? notificationCenter,
-    Func<bool> getIsBusy,
-    Action<bool> setIsBusy,
     Action<string> setStatusText,
-    Action clearWarnings,
-    Action<IReadOnlyList<string>> replaceWarnings,
-    Func<int> getWarningCount,
-    Func<string?, PackageOperationResult?, bool, Task> refreshInstalledAsync,
-    Action refreshMarketplaceInstalledBadges,
     Action refreshPackageOperationState,
     Action markInstalledCatalogDirty)
 {
-    public bool HasActivePackageStoreOperation => packageOperationService?.GetActivePackageStoreOperation()?.IsActive == true;
+    public bool HasActivePackageStoreOperation
+        => operationExecutor.GetActivePackageStoreOperation()?.IsActive == true;
 
     public async Task<bool> InstallFromDiskAsync()
     {
-        if (getIsBusy())
-        {
-            return false;
-        }
-
         var packagePath = await packageArchivePicker.PickPackagePathAsync();
         if (string.IsNullOrWhiteSpace(packagePath))
         {
             return false;
         }
 
-        if (packageOperationService is not null)
-        {
-            packageOperationService.EnqueueLocalInstall(packagePath);
-            MarkQueued($"Queued install for {Path.GetFileName(packagePath)}.");
-            return true;
-        }
-
-        var upload = await runtimeApiClient.UploadPackageAsync(packagePath);
-        await ExecuteLocalPackageOperationAsync(
-            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
-                new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId),
-            ])),
-            selectedPackageId: null,
-            "Package installed",
-            "Package installed from disk.");
+        operationExecutor.EnqueueLocalInstall(packagePath);
+        MarkQueued($"Queued install for {Path.GetFileName(packagePath)}.");
         return true;
     }
 
-    public async Task EnableInstalledPackageAsync(string packageId, string displayName)
+    public Task EnableInstalledPackageAsync(string packageId, string displayName)
     {
-        if (packageOperationService is not null)
+        if (!HasActivePackageStoreOperation)
         {
-            if (HasActivePackageStoreOperation)
-            {
-                return;
-            }
-
-            packageOperationService.EnqueueEnable(packageId, displayName);
+            operationExecutor.EnqueueEnable(packageId, displayName);
             MarkQueued($"Queued enable for {packageId}.");
-            return;
         }
 
-        if (getIsBusy())
-        {
-            return;
-        }
-
-        await ExecuteLocalPackageOperationAsync(
-            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
-                new PackageStoreMutationRequest(PackageStoreMutationKind.Enable, packageId),
-            ])),
-            packageId,
-            "Package enabled",
-            $"{packageId} was enabled.");
+        return Task.CompletedTask;
     }
 
-    public async Task DisableInstalledPackageAsync(string packageId, string displayName)
+    public Task DisableInstalledPackageAsync(string packageId, string displayName)
     {
-        if (packageOperationService is not null)
+        if (!HasActivePackageStoreOperation)
         {
-            if (HasActivePackageStoreOperation)
-            {
-                return;
-            }
-
-            packageOperationService.EnqueueDisable(packageId, displayName);
+            operationExecutor.EnqueueDisable(packageId, displayName);
             MarkQueued($"Queued disable for {packageId}.");
-            return;
         }
 
-        if (getIsBusy())
-        {
-            return;
-        }
-
-        await ExecuteLocalPackageOperationAsync(
-            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
-                new PackageStoreMutationRequest(PackageStoreMutationKind.Disable, packageId),
-            ])),
-            packageId,
-            "Package disabled",
-            $"{packageId} was disabled.");
+        return Task.CompletedTask;
     }
 
-    public async Task UninstallPackageAsync(string packageId, string displayName)
+    public Task UninstallPackageAsync(string packageId, string displayName)
     {
-        if (packageOperationService is not null)
-        {
-            packageOperationService.EnqueueUninstall(packageId, displayName);
-            MarkQueued($"Queued uninstall for {packageId}.");
-            return;
-        }
-
-        if (getIsBusy())
-        {
-            return;
-        }
-
-        await ExecuteLocalPackageOperationAsync(
-            () => StagePreflightCommitPackageStoreAsync(new PackageStoreStageRequest([
-                new PackageStoreMutationRequest(PackageStoreMutationKind.Uninstall, packageId),
-            ])),
-            packageId,
-            "Package uninstalled",
-            $"{packageId} was uninstalled.");
+        operationExecutor.EnqueueUninstall(packageId, displayName);
+        MarkQueued($"Queued uninstall for {packageId}.");
+        return Task.CompletedTask;
     }
 
-    public async Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)
+    public Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)
     {
-        if (packageOperationService is not null)
+        if (TryResolveRegistryUrl(out var registryUrl))
         {
-            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
-            {
-                return;
-            }
-
-            packageOperationService.EnqueueMarketplaceInstall(packageId, displayName, registryUrl, selectedVersion, tag: null);
+            operationExecutor.EnqueueMarketplaceInstall(packageId, displayName, registryUrl, selectedVersion, tag: null);
             MarkQueued($"Queued install for {packageId} {selectedVersion}.");
-            return;
         }
 
-        if (getIsBusy())
-        {
-            return;
-        }
-
-        await ExecuteRegistryInstallAsync(
-            registryClient => registryInstallService.InstallPackageAsync(
-                packageId,
-                selectedVersion,
-                tag: null,
-                allowDowngrade: false,
-                reinstall: false,
-                registryClient,
-                runtimeApiClient,
-                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
-            selectedPackageIdForRefresh: null,
-            "Package installed",
-            $"{packageId} was installed from the marketplace.");
+        return Task.CompletedTask;
     }
 
-    public async Task UpdateInstalledPackageAsync(RegistryPackageUpdate update, string displayName)
+    public Task UpdateInstalledPackageAsync(RegistryPackageUpdate update, string displayName)
+        => EnqueueMarketplaceUpdateAsync(update, displayName);
+
+    public Task UpdateMarketplacePackageAsync(
+        RegistryPackageUpdate update,
+        string displayName)
+        => EnqueueMarketplaceUpdateAsync(update, displayName);
+
+    public Task UpdateAllPackagesAsync()
     {
-        if (packageOperationService is not null)
+        if (TryResolveRegistryUrl(out var registryUrl))
         {
-            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
-            {
-                return;
-            }
-
-            packageOperationService.EnqueueMarketplaceUpdate(update.PackageId, displayName, update.AvailableVersion, registryUrl);
-            MarkQueued($"Queued update for {update.PackageId}.");
-            return;
-        }
-
-        if (getIsBusy())
-        {
-            return;
-        }
-
-        await ExecuteRegistryInstallAsync(
-            registryClient => registryInstallService.InstallPackageAsync(
-                update.PackageId,
-                update.AvailableVersion,
-                tag: null,
-                allowDowngrade: false,
-                reinstall: false,
-                registryClient,
-                runtimeApiClient,
-                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
-            update.PackageId,
-            "Package updated",
-            $"{update.PackageId} was updated to {update.AvailableVersion}.");
-    }
-
-    public async Task UpdateMarketplacePackageAsync(RegistryPackageUpdate update, string displayName, string? selectedInstalledPackageId)
-    {
-        if (packageOperationService is not null)
-        {
-            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
-            {
-                return;
-            }
-
-            packageOperationService.EnqueueMarketplaceUpdate(update.PackageId, displayName, update.AvailableVersion, registryUrl);
-            MarkQueued($"Queued update for {update.PackageId}.");
-            return;
-        }
-
-        if (getIsBusy())
-        {
-            return;
-        }
-
-        await ExecuteRegistryInstallAsync(
-            registryClient => registryInstallService.InstallPackageAsync(
-                update.PackageId,
-                update.AvailableVersion,
-                tag: null,
-                allowDowngrade: false,
-                reinstall: false,
-                registryClient,
-                runtimeApiClient,
-                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
-            selectedInstalledPackageId,
-            "Package updated",
-            $"{update.PackageId} was updated to {update.AvailableVersion}.");
-    }
-
-    public async Task UpdateAllPackagesAsync(string? selectedInstalledPackageId)
-    {
-        if (packageOperationService is not null)
-        {
-            if (!TryResolveRegistryUrl(out var registryUrl) || registryUrl is null)
-            {
-                return;
-            }
-
-            packageOperationService.EnqueueUpdateAll(registryUrl);
+            operationExecutor.EnqueueUpdateAll(registryUrl);
             MarkQueued("Queued updates for installed packages.");
-            return;
         }
 
-        if (getIsBusy())
+        return Task.CompletedTask;
+    }
+
+    private Task EnqueueMarketplaceUpdateAsync(RegistryPackageUpdate update, string displayName)
+    {
+        if (TryResolveRegistryUrl(out var registryUrl))
         {
-            return;
+            operationExecutor.EnqueueMarketplaceUpdate(update.PackageId, displayName, update.AvailableVersion, registryUrl);
+            MarkQueued($"Queued update for {update.PackageId}.");
         }
 
-        await ExecuteRegistryInstallAsync(
-            registryClient => registryInstallService.UpdateAllAsync(
-                registryClient,
-                runtimeApiClient,
-                preflightPackageStoreStageAsync: PreflightPackageStoreStageAsync),
-            selectedInstalledPackageId,
-            "Packages updated",
-            "Installed packages were updated.");
+        return Task.CompletedTask;
+    }
+
+    private bool TryResolveRegistryUrl(out Uri registryUrl)
+    {
+        if (registryClientProvider.TryResolve(out var resolvedRegistryUrl, out var errorMessage)
+            && resolvedRegistryUrl is not null)
+        {
+            registryUrl = resolvedRegistryUrl;
+            return true;
+        }
+
+        registryUrl = null!;
+        setStatusText(errorMessage ?? "Enter a valid HTTP or HTTPS registry URL.");
+        return false;
     }
 
     private void MarkQueued(string statusText)
@@ -274,208 +117,5 @@ internal sealed class PackagesOperationCommandCoordinator(
         markInstalledCatalogDirty();
         refreshPackageOperationState();
         setStatusText(statusText);
-    }
-
-    private async Task<PackageOperationResult> StagePreflightCommitPackageStoreAsync(PackageStoreStageRequest request)
-    {
-        var stage = await runtimeApiClient.StagePackageStoreChangesAsync(request);
-        if (!stage.Success || stage.StageId is null)
-        {
-            return stage.OperationResult;
-        }
-
-        var committed = false;
-        try
-        {
-            await PreflightPackageStoreStageAsync(stage, CancellationToken.None);
-            var commit = await runtimeApiClient.CommitPackageStoreStageAsync(stage.StageId);
-            committed = true;
-            return commit;
-        }
-        catch (Exception ex)
-        {
-            if (!committed)
-            {
-                await runtimeApiClient.DiscardPackageStoreStageAsync(stage.StageId, CancellationToken.None);
-            }
-
-            return new PackageOperationResult(false, ex.Message, RuntimeSessionApplied: false, RequiresAppRestart: false, stage.Warnings, [ex.Message])
-            {
-                ImpactedPackageIds = stage.ImpactedPackageIds,
-            };
-        }
-    }
-
-    private async Task PreflightPackageStoreStageAsync(PackageStoreStageResult stage, CancellationToken cancellationToken)
-    {
-        if (stage.ImpactedPackageIds.Count == 0)
-        {
-            return;
-        }
-
-        await preflightPackageLifecycleChangesAsync(
-            stage.ActivePackages,
-            stage.PackageUiSnapshots,
-            stage.ImpactedPackageIds,
-            cancellationToken);
-    }
-
-    private async Task ExecuteLocalPackageOperationAsync(
-        Func<Task<PackageOperationResult>> operation,
-        string? selectedPackageId,
-        string successTitle,
-        string successFallbackMessage)
-    {
-        setIsBusy(true);
-        PackageOperationResult? operationResult = null;
-        try
-        {
-            operationResult = await operation();
-            if (operationResult.Success && operationResult.RuntimeSessionApplied && operationResult.ImpactedPackageIds.Count > 0)
-            {
-                setStatusText("Applying package changes to the running shell...");
-                operationResult = await ApplyShellPackageChangesAsync(operationResult);
-            }
-        }
-        catch (Exception ex)
-        {
-            operationResult = new PackageOperationResult(false, ex.Message, RuntimeSessionApplied: false, RequiresAppRestart: false, [], [ex.Message]);
-        }
-        finally
-        {
-            setIsBusy(false);
-        }
-
-        await refreshInstalledAsync(selectedPackageId, operationResult, true);
-        if (operationResult is { Success: true, RuntimeSessionApplied: true, RequiresAppRestart: false }
-            && operationResult.ImpactedPackageIds.Count > 0)
-        {
-            await PublishPackageOperationSuccessToastAsync(
-                successTitle,
-                PackageOperationMessageFormatter.BuildLocalPackageOperationToastMessage(operationResult, successFallbackMessage));
-        }
-    }
-
-    private async Task<PackageOperationResult> ApplyShellPackageChangesAsync(PackageOperationResult operationResult)
-    {
-        try
-        {
-            await applyPackageLifecycleChangesAsync(operationResult.ImpactedPackageIds, CancellationToken.None);
-            return operationResult with { AppShellApplied = true, RequiresAppRestart = false };
-        }
-        catch (Exception ex)
-        {
-            return operationResult with
-            {
-                Success = false,
-                RequiresAppRestart = false,
-                Errors = operationResult.Errors.Concat([$"Package store updated, but the running shell rejected the live change: {ex.Message}"]).ToArray(),
-            };
-        }
-    }
-
-    private async Task ExecuteRegistryInstallAsync(
-        Func<IRegistryPackageBrowseClient, Task<RegistryPackageInstallExecutionResult>> executeAsync,
-        string? selectedPackageIdForRefresh,
-        string successTitle,
-        string successFallbackMessage)
-    {
-        if (!TryCreateRegistryClient(out var registryClient))
-        {
-            return;
-        }
-
-        using (registryClient)
-        {
-            setIsBusy(true);
-            RegistryPackageInstallExecutionResult? result = null;
-            try
-            {
-                clearWarnings();
-                setStatusText("Resolving registry install plan...");
-                result = await executeAsync(registryClient);
-                ApplyRegistryInstallResult(result);
-                if (result.Success && result.ImpactedPackageIds.Count > 0)
-                {
-                    setStatusText("Applying package changes to the running shell...");
-                    try
-                    {
-                        await applyPackageLifecycleChangesAsync(result.ImpactedPackageIds, CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        result = result with
-                        {
-                            Success = false,
-                            RequiresAppRestart = false,
-                            Errors = result.Errors.Concat([$"Package store updated, but the running shell rejected the live change: {ex.Message}"]).ToArray(),
-                        };
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                result = RegistryPackageInstallExecutionResult.Failed(ex.Message);
-                ApplyRegistryInstallResult(result);
-            }
-            finally
-            {
-                setIsBusy(false);
-            }
-
-            await refreshInstalledAsync(selectedPackageIdForRefresh, null, true);
-            refreshMarketplaceInstalledBadges();
-            setStatusText(result is null
-                ? "Registry operation completed."
-                : PackageOperationMessageFormatter.BuildRegistryResultStatusText(result, getWarningCount() > 0));
-            if (result is { Success: true } && result.ImpactedPackageIds.Count > 0)
-            {
-                await PublishPackageOperationSuccessToastAsync(
-                    successTitle,
-                    PackageOperationMessageFormatter.BuildRegistryPackageOperationToastMessage(result, successFallbackMessage));
-            }
-        }
-    }
-
-    private bool TryCreateRegistryClient(out IRegistryPackageBrowseClient registryClient)
-    {
-        if (!registryClientProvider.TryCreate(out registryClient, out var errorMessage))
-        {
-            setStatusText(errorMessage ?? "Enter a valid HTTP or HTTPS registry URL.");
-            return false;
-        }
-
-        return true;
-    }
-
-    private bool TryResolveRegistryUrl(out Uri? registryUrl)
-    {
-        if (!registryClientProvider.TryResolve(out registryUrl, out var errorMessage))
-        {
-            setStatusText(errorMessage ?? "Enter a valid HTTP or HTTPS registry URL.");
-            return false;
-        }
-
-        return true;
-    }
-
-    private void ApplyRegistryInstallResult(RegistryPackageInstallExecutionResult result)
-        => replaceWarnings(result.Warnings.Concat(result.Errors).ToArray());
-
-    private async ValueTask PublishPackageOperationSuccessToastAsync(string title, string message)
-    {
-        if (notificationCenter is null)
-        {
-            return;
-        }
-
-        await notificationCenter.PublishAsync(
-            "sunder.app",
-            "Sunder",
-            new PackageNotificationRequest(
-                title,
-                message,
-                PackageNotificationDisplayMode.ToastOnly,
-                PackageNotificationSeverity.Success));
     }
 }

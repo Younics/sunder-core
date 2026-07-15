@@ -80,6 +80,7 @@ public sealed partial class UseStackWizardViewModel
             var iconUri = info?.IconUri ?? (!string.IsNullOrWhiteSpace(detailPackage?.IconAssetPath)
                 ? runtimeApiClient.CreatePackageAssetUri(packageId, detailPackage!.IconAssetPath!)
                 : null);
+            var iconTransport = info?.IconTransport ?? PackageIconTransport.RuntimeAsset;
             var items = group
                 .Select(fragment => new UseStackSetupItemViewModel(
                     fragment,
@@ -87,7 +88,7 @@ public sealed partial class UseStackWizardViewModel
                     OnSetupItemSelectionChanged))
                 .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            SetupPackageGroups.Add(new UseStackSetupPackageGroupViewModel(packageId, displayName, glyph, iconUri, items));
+            SetupPackageGroups.Add(new UseStackSetupPackageGroupViewModel(packageId, displayName, glyph, iconUri, iconTransport, items));
         }
     }
 
@@ -119,15 +120,14 @@ public sealed partial class UseStackWizardViewModel
 
             RequiredInputs.Add(new UseStackRequiredInputValueViewModel(
                 new RuntimeStackRequiredInputDescriptor(
-                    inputId,
+                    string.Empty,
+                    input.OwnerPackageId ?? "unknown.package",
                     input.ContributorId,
+                    inputId,
                     input.Input.Label ?? inputId,
                     input.Input.Required != false,
                     input.Input.Description,
-                    input.Input.DefaultValue)
-                {
-                    OwnerPackageId = input.OwnerPackageId,
-                },
+                    input.Input.DefaultValue),
                 null,
                 OnRequiredInputChanged));
         }

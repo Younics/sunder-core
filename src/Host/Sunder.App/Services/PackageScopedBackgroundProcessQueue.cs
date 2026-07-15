@@ -5,12 +5,14 @@ namespace Sunder.App.Services;
 internal sealed class PackageScopedBackgroundProcessQueue(
     string packageId,
     string packageDisplayName,
-    BackgroundProcessQueueService backgroundProcesses)
+    BackgroundProcessQueueService backgroundProcesses,
+    Guid? ownerId = null)
     : IBackgroundProcessQueue, IDisposable, IAsyncDisposable
 {
     private readonly string _packageId = packageId;
     private readonly string _packageDisplayName = packageDisplayName;
     private readonly BackgroundProcessQueueService _backgroundProcesses = backgroundProcesses;
+    private readonly Guid? _ownerId = ownerId;
     private readonly object _lifecycleGate = new();
     private bool _disposed;
     private bool _started;
@@ -18,6 +20,9 @@ internal sealed class PackageScopedBackgroundProcessQueue(
     public event EventHandler<BackgroundProcessChangedEventArgs>? ProcessChanged;
 
     public BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request)
+        => Enqueue(request, Guid.NewGuid());
+
+    internal BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request, Guid processId)
     {
         if (string.IsNullOrWhiteSpace(request.Title))
         {
@@ -33,7 +38,8 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             _packageId,
             _packageDisplayName,
             request.GroupKey,
-            request.Metadata);
+            request.Metadata,
+            _ownerId);
 
         BackgroundProcessSnapshot snapshot;
         lock (_lifecycleGate)
@@ -41,12 +47,12 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             ThrowIfDisposed();
             snapshot = _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
                 request.Title,
-                BuildHostGroupKey(_packageId, request.GroupKey),
+                BuildHostGroupKey(_packageId, request.GroupKey, _ownerId),
                 request.Indicator,
                 request.ConcurrencyMode,
                 request.CanCancel,
                 async context => await request.ExecuteAsync(context).ConfigureAwait(false),
-                metadata.ToHostMetadata()));
+                metadata.ToHostMetadata()), processId);
         }
 
         return ToPackageSnapshot(snapshot, metadata);
@@ -83,7 +89,14 @@ internal sealed class PackageScopedBackgroundProcessQueue(
     {
         if (StopCore())
         {
-            _backgroundProcesses.CancelPackageProcesses(_packageId);
+            if (_ownerId is { } ownerId)
+            {
+                _backgroundProcesses.CancelPackageOwnerProcesses(_packageId, ownerId);
+            }
+            else
+            {
+                _backgroundProcesses.CancelOwnerlessPackageProcesses(_packageId);
+            }
         }
 
         GC.SuppressFinalize(this);
@@ -99,7 +112,14 @@ internal sealed class PackageScopedBackgroundProcessQueue(
     {
         if (StopCore())
         {
-            await _backgroundProcesses.CancelPackageProcessesAsync(_packageId, cancellationToken).ConfigureAwait(false);
+            if (_ownerId is { } ownerId)
+            {
+                await _backgroundProcesses.CancelPackageOwnerProcessesAsync(_packageId, ownerId, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _backgroundProcesses.CancelOwnerlessPackageProcessesAsync(_packageId, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -184,7 +204,8 @@ internal sealed class PackageScopedBackgroundProcessQueue(
     private bool TryMap(BackgroundProcessSnapshot snapshot, out BackgroundProcessSnapshot packageSnapshot)
     {
         if (PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
-            && string.Equals(metadata.PackageId, _packageId, StringComparison.OrdinalIgnoreCase))
+            && string.Equals(metadata.PackageId, _packageId, StringComparison.OrdinalIgnoreCase)
+            && metadata.OwnerId == _ownerId)
         {
             packageSnapshot = ToPackageSnapshot(snapshot, metadata);
             return true;
@@ -213,33 +234,39 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             snapshot.StartedAtUtc,
             snapshot.CompletedAtUtc);
 
-    private static string BuildHostGroupKey(string packageId, string groupKey)
-        => $"package:{packageId}:{groupKey}";
+    private static string BuildHostGroupKey(string packageId, string groupKey, Guid? ownerId)
+        => ownerId is null
+            ? $"package:{packageId}:{groupKey}"
+            : $"package:{packageId}:{ownerId:N}:{groupKey}";
 }
 
 internal sealed record PackageScopedBackgroundProcessMetadata(
     string PackageId,
     string PackageDisplayName,
     string PackageGroupKey,
-    IReadOnlyDictionary<string, string> PackageMetadata)
+    IReadOnlyDictionary<string, string> PackageMetadata,
+    Guid? OwnerId = null)
 {
     private const string PackageIdMetadataKey = "sunder.package.id";
     private const string PackageDisplayNameMetadataKey = "sunder.package.displayName";
     private const string PackageGroupKeyMetadataKey = "sunder.package.groupKey";
     private const string PackageMetadataKeyPrefix = "sunder.package.metadata.";
+    private const string OwnerIdMetadataKey = "sunder.package.ownerId";
 
     public static PackageScopedBackgroundProcessMetadata Create(
         string packageId,
         string packageDisplayName,
         string packageGroupKey,
-        IReadOnlyDictionary<string, string>? packageMetadata)
+        IReadOnlyDictionary<string, string>? packageMetadata,
+        Guid? ownerId = null)
         => new(
             packageId,
             packageDisplayName,
             packageGroupKey,
             packageMetadata is null
                 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                : new Dictionary<string, string>(packageMetadata, StringComparer.OrdinalIgnoreCase));
+                : new Dictionary<string, string>(packageMetadata, StringComparer.OrdinalIgnoreCase),
+            ownerId);
 
     public static bool TryCreate(IReadOnlyDictionary<string, string> hostMetadata, out PackageScopedBackgroundProcessMetadata metadata)
     {
@@ -247,6 +274,10 @@ internal sealed record PackageScopedBackgroundProcessMetadata(
             && hostMetadata.TryGetValue(PackageDisplayNameMetadataKey, out var packageDisplayName)
             && hostMetadata.TryGetValue(PackageGroupKeyMetadataKey, out var packageGroupKey))
         {
+            Guid? ownerId = hostMetadata.TryGetValue(OwnerIdMetadataKey, out var ownerIdText)
+                            && Guid.TryParse(ownerIdText, out var parsedOwnerId)
+                ? parsedOwnerId
+                : null;
             metadata = new PackageScopedBackgroundProcessMetadata(
                 packageId,
                 packageDisplayName,
@@ -256,7 +287,8 @@ internal sealed record PackageScopedBackgroundProcessMetadata(
                     .ToDictionary(
                         pair => pair.Key[PackageMetadataKeyPrefix.Length..],
                         pair => pair.Value,
-                        StringComparer.OrdinalIgnoreCase));
+                        StringComparer.OrdinalIgnoreCase),
+                ownerId);
             return true;
         }
 
@@ -276,6 +308,11 @@ internal sealed record PackageScopedBackgroundProcessMetadata(
         foreach (var pair in PackageMetadata)
         {
             metadata[$"{PackageMetadataKeyPrefix}{pair.Key}"] = pair.Value;
+        }
+
+        if (OwnerId is { } ownerId)
+        {
+            metadata[OwnerIdMetadataKey] = ownerId.ToString("D");
         }
 
         return metadata;

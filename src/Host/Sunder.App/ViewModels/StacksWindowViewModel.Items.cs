@@ -224,7 +224,7 @@ public sealed class StackPackageRequirementViewModel(SunderStackPackageRequireme
     public string InstallText { get; } = StackDisplayFormatters.PackageRequirementText(package);
 }
 
-public sealed class StackPackageInstallPlanItemViewModel(RegistryPackageInstallPlanItem item)
+public sealed class StackPackageInstallPlanItemViewModel(RuntimeRegistryPackageInstallPlanItem item)
 {
     public string PackageId { get; } = item.PackageId;
 

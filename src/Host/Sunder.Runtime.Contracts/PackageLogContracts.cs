@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Sunder.Runtime.Contracts;
 
 public enum RuntimePackageLogLevel
@@ -22,4 +24,14 @@ public sealed record PackageLogEntryDescriptor(
 public sealed record PackageLogSnapshot(
     long SequenceId,
     IReadOnlyList<PackageLogEntryDescriptor> Entries,
-    bool HistoryGap);
+    [property: JsonPropertyOrder(2)] bool HistoryGap)
+{
+    private IReadOnlyList<PackageLogEntryDescriptor> _entries = RuntimeContractCollections.Freeze(Entries);
+
+    [JsonPropertyOrder(1)]
+    public IReadOnlyList<PackageLogEntryDescriptor> Entries
+    {
+        get => _entries;
+        init => _entries = RuntimeContractCollections.Freeze(value);
+    }
+}

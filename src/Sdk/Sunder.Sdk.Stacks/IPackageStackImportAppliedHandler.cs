@@ -8,6 +8,9 @@ namespace Sunder.Sdk.Stacks;
 [SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
 public interface IPackageStackImportAppliedHandler
 {
+    /// <summary>Gets the package-scoped importer id whose committed imports this handler observes.</summary>
+    string ContributorId { get; }
+
     /// <summary>Performs post-import synchronization for the committed result.</summary>
     ValueTask OnStackImportAppliedAsync(
         StackImportAppliedContext context,

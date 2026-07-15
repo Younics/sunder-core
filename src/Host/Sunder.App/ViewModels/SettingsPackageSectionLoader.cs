@@ -9,11 +9,11 @@ internal sealed class SettingsPackageSectionLoader(
 {
     public async Task<SettingsPackageSectionsLoadResult> LoadAsync(CancellationToken cancellationToken)
     {
-        var schemas = await runtimeApiClient.GetConfigurationSchemasAsync(cancellationToken);
+        var schemas = await runtimeApiClient.GetPackageSettingsSchemasAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var sections = new List<SettingsSectionItemViewModel>();
-        var schemasByPackageId = new Dictionary<string, PackageConfigurationSchemaDescriptor>(StringComparer.OrdinalIgnoreCase);
+        var schemasByPackageId = new Dictionary<string, PackageSettingsSchemaDescriptor>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var schema in schemas)
         {
@@ -51,4 +51,4 @@ internal sealed class SettingsPackageSectionLoader(
 
 internal sealed record SettingsPackageSectionsLoadResult(
     IReadOnlyList<SettingsSectionItemViewModel> Sections,
-    IReadOnlyDictionary<string, PackageConfigurationSchemaDescriptor> SchemasByPackageId);
+    IReadOnlyDictionary<string, PackageSettingsSchemaDescriptor> SchemasByPackageId);

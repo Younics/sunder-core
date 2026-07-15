@@ -16,7 +16,7 @@ internal static class CliUsage
           sunder list
           sunder install <package-id> [--version <version>|--tag <tag>] [--allow-downgrade] [--reinstall]
           sunder install --file <package.sunderpkg> [--allow-downgrade] [--reinstall]
-          sunder update [package-id|--all] [--include-prerelease]
+          sunder update <package-id|--all> [--include-prerelease]
           sunder publish --file <package.sunderpkg> [--no-latest] [--dev-local]
           sunder yank <package-id> <version>
           sunder unyank <package-id> <version>
@@ -29,7 +29,7 @@ internal static class CliUsage
           sunder validate <package.sunderpkg>
           sunder stack search [query] [--skip <count>] [--take <count>]
           sunder stack info <stack-id>
-          sunder stack download <stack-id> [--output <path>]
+          sunder stack download <stack-id> [--output <file>] [--force]
           sunder stack publish --file <stack.sunderstack> [--dev-local]
           sunder stack update <stack-id> --file <stack.sunderstack>
           sunder stack delete <stack-id>
@@ -47,5 +47,9 @@ internal static class CliUsage
 
         Destructive commands:
           runtime reset --yes       Drain Runtime and delete validated local Runtime V1 state only
+
+        Stack downloads:
+          --output, -o <file>       Exact destination file; defaults to <stack-id>.sunderstack
+          --force                   Replace an existing destination file
         """;
 }

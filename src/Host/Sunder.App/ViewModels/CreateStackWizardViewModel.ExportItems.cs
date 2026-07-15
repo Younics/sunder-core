@@ -90,7 +90,7 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
     public bool IsVisible => true;
 
     [ObservableProperty]
-    private bool _isSelected;
+    private bool _isSelected = item.DefaultSelected;
 
     [ObservableProperty]
     private bool _isExpanded;
@@ -181,7 +181,7 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
         return [new CreateStackExportDetailViewModel(new RuntimeStackExportItemDetail(
             "Setup item",
             string.IsNullOrWhiteSpace(item.Description) ? $"{StackContentKindLabels.HumanizeToken(item.Kind)} configuration" : item.Description,
-            item.Sensitivities.FirstOrDefault()), changed)] ;
+            item.Sensitivities.FirstOrDefault()), changed)];
     }
 
     private static IReadOnlyList<string> BuildSecretChips(IReadOnlyList<string> sensitivities)
@@ -215,4 +215,3 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
         return value[..Math.Max(4, maxLength - 3)] + "...";
     }
 }
-

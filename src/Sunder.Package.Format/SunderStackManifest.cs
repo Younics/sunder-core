@@ -13,6 +13,9 @@ public sealed class SunderStackManifest
     [JsonPropertyName("features")]
     public IReadOnlyList<string>? Features { get; init; }
 
+    [JsonPropertyName("requiredFeatures")]
+    public IReadOnlyList<string>? RequiredFeatures { get; init; }
+
     [JsonPropertyName("stackId")]
     public string? StackId { get; init; }
 

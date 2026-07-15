@@ -13,6 +13,7 @@ internal static class CreateStackExportSelectionProjector
                 .SelectMany(group => group.Items)
                 .Where(item => item.IsSelected && item.HasSelectedDetails)
                 .Select(item => new RuntimeStackExportSelection(
+                    item.OwnerPackageId,
                     item.ContributorId,
                     item.ItemId,
                     item.Details
@@ -22,10 +23,7 @@ internal static class CreateStackExportSelectionProjector
                             IsSelected: true,
                             detail.ValueOverride,
                             detail.SensitivityOverride))
-                        .ToArray())
-                {
-                    OwnerPackageId = item.OwnerPackageId,
-                })
+                        .ToArray()))
                 .ToArray());
     }
 }

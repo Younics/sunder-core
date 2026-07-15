@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia;
 using Sunder.App.Models;
 using Sunder.App.Services;
@@ -7,6 +8,8 @@ namespace Sunder.App;
 
 sealed class Program
 {
+    internal static long StartupTimestamp { get; private set; } = Stopwatch.GetTimestamp();
+
     public static AppStartupOptions StartupOptions { get; private set; } = new();
 
     internal static AppSingleInstanceCoordinator? SingleInstanceCoordinator { get; private set; }
@@ -17,14 +20,20 @@ sealed class Program
     [STAThread]
     public static async Task Main(string[] args)
     {
-        var velopackApp = VelopackApp.Build()
+        StartupTimestamp = Stopwatch.GetTimestamp();
+        var velopackApp = VelopackApp
+            .Build()
             .OnFirstRun(_ => RegisterShellAssociationsForCurrentUser());
 
         if (OperatingSystem.IsWindows())
         {
             velopackApp
-                .OnAfterInstallFastCallback(_ => WindowsShellAssociationService.RegisterForCurrentUser())
-                .OnBeforeUninstallFastCallback(_ => WindowsShellAssociationService.UnregisterForCurrentUser());
+                .OnAfterInstallFastCallback(_ =>
+                    WindowsShellAssociationService.RegisterForCurrentUser()
+                )
+                .OnBeforeUninstallFastCallback(_ =>
+                    WindowsShellAssociationService.UnregisterForCurrentUser()
+                );
         }
 
         velopackApp.Run();
@@ -52,7 +61,9 @@ sealed class Program
             var forwarded = await SingleInstanceCoordinator.TryForwardLaunchArgumentsAsync(args);
             if (!forwarded)
             {
-                AppSessionLog.WriteInfo("Another Sunder instance is running, but the launch request could not be forwarded.");
+                AppSessionLog.WriteInfo(
+                    "Another Sunder instance is running, but the launch request could not be forwarded."
+                );
             }
 
             SingleInstanceCoordinator.Dispose();
@@ -61,7 +72,10 @@ sealed class Program
         }
         catch (Exception ex)
         {
-            AppSessionLog.WriteError("Failed to initialize Sunder single-instance launch handoff.", ex);
+            AppSessionLog.WriteError(
+                "Failed to initialize Sunder single-instance launch handoff.",
+                ex
+            );
             SingleInstanceCoordinator?.Dispose();
             SingleInstanceCoordinator = null;
             return false;

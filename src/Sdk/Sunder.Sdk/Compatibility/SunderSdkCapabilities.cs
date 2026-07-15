@@ -17,8 +17,6 @@ public static class SunderSdkCapabilities
     public const string SettingsViewsV1 = "settings-views.v1";
     /// <summary>Settings navigation contracts.</summary>
     public const string SettingsNavigationV1 = "settings-navigation.v1";
-    /// <summary>Workspace factory contracts.</summary>
-    public const string WorkspacesV1 = "workspaces.v1";
     /// <summary>Background service contracts.</summary>
     public const string BackgroundServicesV1 = "background-services.v1";
     /// <summary>Background process contracts.</summary>
@@ -27,8 +25,8 @@ public static class SunderSdkCapabilities
     public const string ExtensionsV1 = "extensions.v1";
     /// <summary>Extension change contracts.</summary>
     public const string ExtensionChangesV1 = "extensions.changes.v1";
-    /// <summary>Configuration schema contracts.</summary>
-    public const string ConfigurationSchemaV1 = "configuration.schema.v1";
+    /// <summary>Host-rendered settings schema contracts.</summary>
+    public const string SettingsSchemaV1 = "settings.schema.v1";
     /// <summary>Writable package settings contracts.</summary>
     public const string SettingsV1 = "settings.v1";
     /// <summary>Package storage contracts.</summary>
@@ -43,8 +41,6 @@ public static class SunderSdkCapabilities
     public const string NotificationsV1 = "notifications.v1";
     /// <summary>Shell view contracts.</summary>
     public const string ShellViewV1 = "shell-view.v1";
-    /// <summary>Installed package session contracts.</summary>
-    public const string InstalledPackageSessionsV1 = "installed-package-sessions.v1";
     /// <summary>Optional development package session contracts.</summary>
     public const string DevelopmentPackageSessionsV1 = "development-package-sessions.v1";
     /// <summary>Package-scoped App-to-Runtime operation contracts.</summary>

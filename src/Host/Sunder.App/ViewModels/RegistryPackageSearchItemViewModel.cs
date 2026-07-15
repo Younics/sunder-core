@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Sunder.App.Services;
 using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
@@ -14,7 +15,10 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
         RegistryPackageUpdate? update,
         Func<RegistryPackageSearchItemViewModel, Task> onSelectAsync,
         bool loadIcon = true)
-        : base(TryCreateIconUri(package.IconUrl), loadIcon: loadIcon)
+        : base(
+            TryCreateIconUri(package.IconUrl),
+            loadIcon: loadIcon,
+            iconTransport: PackageIconTransport.AnonymousMedia)
     {
         PackageId = package.PackageId;
         Name = package.Name;
@@ -109,10 +113,7 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
             return null;
         }
 
-        return string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            ? uri
-            : null;
+        return HttpMediaUriValidator.IsValid(uri) ? uri : null;
     }
 
     private static string ToGlyph(string name)

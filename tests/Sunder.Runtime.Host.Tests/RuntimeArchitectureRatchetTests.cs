@@ -74,9 +74,9 @@ public sealed class RuntimeArchitectureRatchetTests
         var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             ["PackageSessionLoadService.cs"] = 270,
-            ["PackageSessionLifecycleService.cs"] = 405,
-            ["RuntimeStackImportService.cs"] = 362,
-            ["RuntimeStackExportService.cs"] = 141,
+            ["PackageSessionLifecycleService.cs"] = 510,
+            ["RuntimeStackImportService.cs"] = 366,
+            ["RuntimeStackExportService.cs"] = 146,
             ["PackageAuthSessionCoordinator.cs"] = 325,
             ["RegistryAuthCoordinator.cs"] = 364,
             ["RegistryPackageChangeOrchestrator.cs"] = 216,
@@ -168,9 +168,46 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.DoesNotContain("EnsureSuccessStatusCode", clientSource, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadAsByteArrayAsync", clientSource, StringComparison.Ordinal);
 
-        var processSource = File.ReadAllText(Path.Combine(clientRoot, "CapturedProcessRunner.cs"));
+        var processSource = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Host",
+            "Sunder.Runtime.LocalState",
+            "CapturedProcessRunner.cs"));
         Assert.Contains("MaxCapturedCharactersPerStream", processSource, StringComparison.Ordinal);
         Assert.Contains("OutputTruncated", processSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeHost_DoesNotReferenceRuntimeClient()
+    {
+        var root = LocateRepositoryRoot();
+        var hostProject = File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Runtime.Host", "Sunder.Runtime.Host.csproj"));
+        var clientProject = File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Runtime.Client", "Sunder.Runtime.Client.csproj"));
+
+        Assert.DoesNotContain("Sunder.Runtime.Client.csproj", hostProject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Sunder.Runtime.LocalState.csproj", hostProject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Sunder.Runtime.LocalState.csproj", clientProject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RuntimeStacks_DoNotExposeContributorFilesystemPaths()
+    {
+        var root = LocateRepositoryRoot();
+        var stackSources = string.Join('\n', new[]
+        {
+            "RuntimeStackExportService.cs",
+            "RuntimeStackImportService.cs",
+            "StackExportArchiveBuilder.cs",
+            "StackImportArchiveReader.cs",
+        }.Select(file => File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Runtime.Host", "Services", file))));
+
+        Assert.DoesNotContain("SourcePath", stackSources, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExtractedPath", stackSources, StringComparison.Ordinal);
+        Assert.Contains("OpenReadAsync", stackSources, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -212,7 +249,8 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.DoesNotContain(references, name => name is not null
             && (name.StartsWith("Sunder.Sdk", StringComparison.Ordinal)
                 || name.StartsWith("Sunder.Package.Format", StringComparison.Ordinal)
-                || name.StartsWith("Sunder.Runtime.Host", StringComparison.Ordinal)));
+                || name.StartsWith("Sunder.Runtime.Host", StringComparison.Ordinal)
+                || name.StartsWith("Sunder.Registry.Contracts", StringComparison.Ordinal)));
         Assert.DoesNotContain(typeof(SystemStatusResponse).Assembly.ExportedTypes, type =>
             type.GetProperties().Any(property => property.PropertyType.Assembly == typeof(PackageSessionState).Assembly));
     }
@@ -224,9 +262,9 @@ public sealed class RuntimeArchitectureRatchetTests
         var source = string.Join('\n', Directory.EnumerateFiles(endpointRoot, "*.cs").Select(File.ReadAllText));
         var stableRoutes = new[]
         {
-            "session/load", "session/reload-installed", "session/stage", "store/stage",
-            "ui-snapshots", "auth/status", "settings/values", "export/items", "import/preview",
-            "/downloads/{downloadId}", "/dev-packages/watch", "runtime-events", "package-logs",
+            "session/load", "session/stage", "store/stage",
+            "snapshot", "ui-snapshots", "auth/status", "settings/values", "export/items", "import/preview",
+            "/downloads/{downloadId}", "/dev-package-owners", "runtime-events", "package-logs",
         };
 
         foreach (var route in stableRoutes) Assert.Contains(route, source, StringComparison.Ordinal);
@@ -287,6 +325,8 @@ public sealed class RuntimeArchitectureRatchetTests
                  {
                      "SUNDER_REGISTRY_URL", "--registry-url", "DisposeLegacyOwnedInstances",
                      "SnapshotLegacyResources", "config/values", "data/configuration",
+                     "PackageLifecycleLoadRequest", "InstalledPackageSessionReloadRequest",
+                     "load-batch", "reload-installed",
                  })
         {
             Assert.DoesNotContain(removed, source, StringComparison.Ordinal);

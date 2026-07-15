@@ -12,164 +12,90 @@ internal sealed class ShellPackageLifecyclePresenter(
     IReadOnlyList<string> startupWarnings,
     IReadOnlyList<string> startupErrors,
     Action<string> setSyncStatusText,
-    Action<bool> rebuildRailCollections,
-    Action<IReadOnlySet<RailPlacement>, IReadOnlySet<string>, bool> updateRailCollections,
+    Action<bool, IReadOnlySet<string>?> rebuildRailCollections,
     Action persistShellState,
     Action<IReadOnlySet<string>>? removeRetainedPackageViews = null)
 {
-    public void ApplyLifecycleChanges(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyCollection<string>? impactedPackageIds,
-        bool deferHostedViewCreation)
+    public ShellPackageLifecyclePresentation PrepareLifecycleChanges(
+        IReadOnlyList<ActivePackageDescriptor> activePackages)
     {
-        if (impactedPackageIds is not null)
-        {
-            ApplyTargetedLifecycleChanges(activePackages, impactedPackageIds, deferHostedViewCreation);
-            return;
-        }
-
-        var activePackageIds = activePackages
-            .Select(package => package.PackageId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var removedPackageIds = viewsById.Values
-            .Select(view => view.PackageId)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(packageId => !activePackageIds.Contains(packageId))
-            .ToArray();
-        foreach (var packageId in removedPackageIds)
-        {
-            removeRetainedPackageViews?.Invoke(new HashSet<string>([packageId], StringComparer.OrdinalIgnoreCase));
-            RemovePackageViewsFromShell(packageId);
-        }
-
-        ApplyActivePackages(activePackages, deferHostedViewCreation);
+        var projectedState = CloneProjectionState(shellState);
+        var shellSnapshot = shellCompositionService.Compose(
+            activePackages,
+            projectedState,
+            systemStatus: null,
+            startupWarnings,
+            startupErrors,
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+        return new ShellPackageLifecyclePresentation(shellSnapshot, GetSelectedViewIds(shellSnapshot));
     }
 
-    public void ApplyLifecycleChanges(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        bool deferHostedViewCreation)
-        => ApplyLifecycleChanges(activePackages, impactedPackageIds: null, deferHostedViewCreation);
+    public void CommitPreparedLifecycleChanges(
+        ShellPackageLifecyclePresentation presentation,
+        IReadOnlySet<string> stabilizedViewIds)
+    {
+        ApplyProjectionState(presentation.Snapshot.State, shellState);
+        DetachRetainedPackageViews();
+        viewsById.Clear();
+        foreach (var view in presentation.Snapshot.PackageViews)
+        {
+            viewsById[view.ViewId] = view;
+        }
+
+        setSyncStatusText(presentation.Snapshot.SyncStatusText);
+        rebuildRailCollections(true, stabilizedViewIds);
+        persistShellState();
+    }
 
     public bool RemovePackageViewsFromShell(string packageId)
         => ShellPackageRemovalPruner.RemovePackageViews(packageId, viewsById, shellState);
 
-    private void ApplyActivePackages(IReadOnlyList<ActivePackageDescriptor> activePackages, bool deferHostedViewCreation)
+    public void DetachRetainedPackageViews()
+        => removeRetainedPackageViews?.Invoke(
+            viewsById.Values
+                .Select(view => view.PackageId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase));
+
+    private static ShellState CloneProjectionState(ShellState source)
+        => new()
+        {
+            HasInitializedLayout = source.HasInitializedLayout,
+            ViewPlacements = new Dictionary<string, RailPlacement>(source.ViewPlacements, StringComparer.OrdinalIgnoreCase),
+            ViewOrder = new Dictionary<string, int>(source.ViewOrder, StringComparer.OrdinalIgnoreCase),
+            HiddenHotbarViewIds = new HashSet<string>(source.HiddenHotbarViewIds, StringComparer.OrdinalIgnoreCase),
+            SelectedLeftTopViewId = source.SelectedLeftTopViewId,
+            SelectedMiddleViewId = source.SelectedMiddleViewId,
+            SelectedRightTopViewId = source.SelectedRightTopViewId,
+            SelectedLeftBottomViewId = source.SelectedLeftBottomViewId,
+            SelectedRightBottomViewId = source.SelectedRightBottomViewId,
+        };
+
+    private static IReadOnlySet<string> GetSelectedViewIds(ShellSnapshot snapshot)
     {
-        var shellSnapshot = shellCompositionService.Compose(
-            activePackages,
-            shellState,
-            systemStatus: null,
-            startupWarnings,
-            startupErrors);
-
-        removeRetainedPackageViews?.Invoke(FindChangedPackageIds(shellSnapshot.PackageViews));
-
-        viewsById.Clear();
-        foreach (var view in shellSnapshot.PackageViews)
-        {
-            viewsById[view.ViewId] = view;
-        }
-
-        setSyncStatusText(shellSnapshot.SyncStatusText);
-        rebuildRailCollections(!deferHostedViewCreation);
-        persistShellState();
-    }
-
-    private void ApplyTargetedLifecycleChanges(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyCollection<string> impactedPackageIds,
-        bool deferHostedViewCreation)
-    {
-        var shellSnapshot = shellCompositionService.Compose(
-            activePackages,
-            shellState,
-            systemStatus: null,
-            startupWarnings,
-            startupErrors);
-        var impactedPackages = BuildEffectiveImpactedPackageIds(activePackages, impactedPackageIds);
-
-        setSyncStatusText(shellSnapshot.SyncStatusText);
-        if (impactedPackages.Count == 0)
-        {
-            persistShellState();
-            return;
-        }
-
-        removeRetainedPackageViews?.Invoke(impactedPackages);
-
-        var oldViews = viewsById.Values
-            .Where(view => impactedPackages.Contains(view.PackageId))
-            .ToArray();
-        var newViews = shellSnapshot.PackageViews
-            .Where(view => impactedPackages.Contains(view.PackageId))
-            .ToArray();
-        var affectedPlacements = oldViews
-            .Select(view => view.Placement)
-            .Concat(newViews.Select(view => view.Placement))
-            .ToHashSet();
-
-        foreach (var viewId in viewsById
-                     .Where(entry => impactedPackages.Contains(entry.Value.PackageId))
-                     .Select(entry => entry.Key)
-                     .ToArray())
-        {
-            viewsById.Remove(viewId);
-        }
-
-        foreach (var view in newViews)
-        {
-            viewsById[view.ViewId] = view;
-        }
-
-        updateRailCollections(affectedPlacements, impactedPackages, !deferHostedViewCreation);
-        persistShellState();
-    }
-
-    private HashSet<string> BuildEffectiveImpactedPackageIds(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyCollection<string> impactedPackageIds)
-    {
-        var impactedPackages = new HashSet<string>(impactedPackageIds, StringComparer.OrdinalIgnoreCase);
-        var activePackageIds = activePackages
-            .Select(package => package.PackageId)
+        var activeViewIds = snapshot.PackageViews
+            .Select(view => view.ViewId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var existingPackageIds = viewsById.Values
-            .Select(view => view.PackageId)
+        return ShellSelectionState.GetDeferredActivationSelections(snapshot.State)
+            .Select(selection => selection.ViewId)
+            .Where(viewId => !string.IsNullOrWhiteSpace(viewId) && activeViewIds.Contains(viewId))
+            .Select(viewId => viewId!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var removedPackageId in existingPackageIds.Where(packageId => !activePackageIds.Contains(packageId)))
-        {
-            impactedPackages.Add(removedPackageId);
-        }
-
-        foreach (var addedPackageId in activePackageIds.Where(packageId => !existingPackageIds.Contains(packageId)))
-        {
-            impactedPackages.Add(addedPackageId);
-        }
-
-        return impactedPackages;
     }
 
-    private HashSet<string> FindChangedPackageIds(IReadOnlyList<ShellPackageView> updatedViews)
+    private static void ApplyProjectionState(ShellState projection, ShellState target)
     {
-        var updatedViewsById = updatedViews.ToDictionary(view => view.ViewId, StringComparer.OrdinalIgnoreCase);
-        var changedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var existingView in viewsById.Values)
-        {
-            if (!updatedViewsById.TryGetValue(existingView.ViewId, out var updatedView))
-            {
-                changedPackageIds.Add(existingView.PackageId);
-                continue;
-            }
-
-            if (!string.Equals(existingView.PackageId, updatedView.PackageId, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(existingView.PackageVersion, updatedView.PackageVersion, StringComparison.OrdinalIgnoreCase)
-                || existingView.Readiness != updatedView.Readiness)
-            {
-                changedPackageIds.Add(existingView.PackageId);
-            }
-        }
-
-        return changedPackageIds;
+        target.ViewPlacements = projection.ViewPlacements;
+        target.ViewOrder = projection.ViewOrder;
+        target.HiddenHotbarViewIds = projection.HiddenHotbarViewIds;
+        target.SelectedLeftTopViewId = projection.SelectedLeftTopViewId;
+        target.SelectedMiddleViewId = projection.SelectedMiddleViewId;
+        target.SelectedRightTopViewId = projection.SelectedRightTopViewId;
+        target.SelectedLeftBottomViewId = projection.SelectedLeftBottomViewId;
+        target.SelectedRightBottomViewId = projection.SelectedRightBottomViewId;
     }
+
 }
+
+internal sealed record ShellPackageLifecyclePresentation(
+    ShellSnapshot Snapshot,
+    IReadOnlySet<string> SelectedViewIds);

@@ -10,7 +10,17 @@ public enum PackageCallbackSessionState
 }
 
 public sealed record PackageCallbackSessionStartRequest(
-    IReadOnlyDictionary<string, string>? Parameters = null);
+    IReadOnlyDictionary<string, string>? Parameters = null)
+{
+    private IReadOnlyDictionary<string, string>? _parameters
+        = RuntimeContractCollections.FreezeDictionaryNullable(Parameters);
+
+    public IReadOnlyDictionary<string, string>? Parameters
+    {
+        get => _parameters;
+        init => _parameters = RuntimeContractCollections.FreezeDictionaryNullable(value);
+    }
+}
 
 public sealed record PackageCallbackSessionResponse(
     string PackageId,

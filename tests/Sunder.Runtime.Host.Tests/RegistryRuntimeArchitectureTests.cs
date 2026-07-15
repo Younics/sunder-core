@@ -366,7 +366,7 @@ public sealed class RegistryRuntimeArchitectureTests
             var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
             var request = new RuntimeRegistryPackageBatchRequest(
                 "http://localhost:5288/",
-                [new RegistryPackageChangeRequest("agent", null, "latest")]);
+                [new RuntimeRegistryPackageChangeRequest("agent", null, "latest")]);
             var plan = await orchestrator.ResolveAsync(request, CancellationToken.None);
 
             Assert.False(plan.Success);

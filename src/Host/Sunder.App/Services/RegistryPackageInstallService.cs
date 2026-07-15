@@ -1,5 +1,4 @@
 using Sunder.Package.Format;
-using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -12,9 +11,11 @@ public sealed record RegistryPackageInstallExecutionResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds,
-    IReadOnlyList<RegistryPackageInstallPlanItem> PlanItems)
+    IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems)
 {
     public bool AppShellApplied { get; init; }
+
+    public RuntimePackageStamp? CommittedStamp { get; init; }
 
     public static RegistryPackageInstallExecutionResult Empty(string message)
         => new(true, message, true, false, [], [], [], []);
@@ -23,7 +24,7 @@ public sealed record RegistryPackageInstallExecutionResult(
         string message,
         IReadOnlyList<string>? errors = null,
         IReadOnlyList<string>? warnings = null,
-        IReadOnlyList<RegistryPackageInstallPlanItem>? planItems = null)
+        IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? planItems = null)
         => new(false, message, false, false, warnings ?? [], errors ?? [message], [], planItems ?? []);
 }
 
@@ -40,8 +41,7 @@ public sealed class RegistryPackageInstallService
         IRegistryClient registryClient,
         IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync = null)
+        CancellationToken cancellationToken = default)
     {
         progress?.Invoke(new("Runtime is resolving and applying the package transaction...", 10));
         var result = await runtimeApiClient.InstallRegistryPackageAsync(
@@ -57,7 +57,7 @@ public sealed class RegistryPackageInstallService
         return ToAppResult(result);
     }
 
-    public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
+    public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveInstallPlanForPackagesAsync(
         IReadOnlyList<SunderStackPackageRequirement> packages,
         IRegistryClient registryClient,
         IRuntimeRegistryPackageClient runtimeApiClient,
@@ -85,8 +85,7 @@ public sealed class RegistryPackageInstallService
         IRegistryClient registryClient,
         IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        Func<PackageStoreStageResult, CancellationToken, Task>? preflightPackageStoreStageAsync = null)
+        CancellationToken cancellationToken = default)
     {
         progress?.Invoke(new("Runtime is resolving and applying updates...", 10));
         var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
@@ -99,18 +98,18 @@ public sealed class RegistryPackageInstallService
     private static RuntimeRegistryPackageBatchRequest ToBatchRequest(
         IReadOnlyList<SunderStackPackageRequirement> packages,
         Uri registryUrl)
-        => new(
+        => new RuntimeRegistryPackageBatchRequest(
             registryUrl.AbsoluteUri,
             packages
                 .Where(package => !string.IsNullOrWhiteSpace(package.PackageId))
-                .Select(package => new RegistryPackageChangeRequest(
+                .Select(package => new RuntimeRegistryPackageChangeRequest(
                     package.PackageId!,
                     null,
                     string.IsNullOrWhiteSpace(package.InstallTag) ? "latest" : package.InstallTag))
                 .ToArray());
 
     private static RegistryPackageInstallExecutionResult ToAppResult(RuntimeRegistryPackageChangeResult result)
-        => new(
+        => new RegistryPackageInstallExecutionResult(
             result.Success,
             result.Message,
             result.RuntimeSessionApplied,
@@ -118,5 +117,8 @@ public sealed class RegistryPackageInstallService
             result.Warnings,
             result.Errors,
             result.ImpactedPackageIds,
-            result.PlanItems);
+            result.PlanItems)
+        {
+            CommittedStamp = result.CommittedStamp,
+        };
 }

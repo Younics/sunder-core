@@ -27,10 +27,13 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
     }
 
     public BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request)
+        => Enqueue(request, Guid.NewGuid());
+
+    internal BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request, Guid processId)
     {
         BackgroundProcessRequestValidator.Validate(request);
         var normalizedRequest = request with { Metadata = NormalizeMetadata(request.Metadata) };
-        var item = new BackgroundProcessWorkItem(Guid.NewGuid(), normalizedRequest, DateTimeOffset.UtcNow);
+        var item = new BackgroundProcessWorkItem(processId, normalizedRequest, DateTimeOffset.UtcNow);
 
         BackgroundProcessSnapshot snapshot;
         lock (_syncRoot)
@@ -139,16 +142,49 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
         return runningTasks;
     }
 
-    internal Task CancelPackageProcessesAsync(string packageId, CancellationToken cancellationToken = default)
+    internal Task CancelAllPackageProcessesAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
         => CancelMatchingAsync(
             snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
                         && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase),
             cancellationToken);
 
-    internal void CancelPackageProcesses(string packageId)
+    internal void CancelAllPackageProcesses(string packageId)
         => CancelMatching(
             snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
                         && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+
+    internal Task CancelPackageOwnerProcessesAsync(
+        string packageId,
+        Guid ownerId,
+        CancellationToken cancellationToken = default)
+        => CancelMatchingAsync(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                        && metadata.OwnerId == ownerId,
+            cancellationToken);
+
+    internal void CancelPackageOwnerProcesses(string packageId, Guid ownerId)
+        => CancelMatching(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                        && metadata.OwnerId == ownerId);
+
+    internal Task CancelOwnerlessPackageProcessesAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+        => CancelMatchingAsync(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                        && metadata.OwnerId is null,
+            cancellationToken);
+
+    internal void CancelOwnerlessPackageProcesses(string packageId)
+        => CancelMatching(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && string.Equals(metadata.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                        && metadata.OwnerId is null);
 
     internal void UpdateProcess(
         Guid processId,

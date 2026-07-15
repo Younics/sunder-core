@@ -35,6 +35,16 @@ internal sealed class RuntimeProblemDetailsMiddleware(
                 await RuntimeProblemDetailsWriter.WriteAsync(context, new RuntimeCancellationException(), correlationId);
             }
         }
+        catch (BadHttpRequestException exception)
+        {
+            if (!context.Response.HasStarted)
+            {
+                await RuntimeProblemDetailsWriter.WriteAsync(
+                    context,
+                    new RuntimeValidationException(exception.Message),
+                    correlationId);
+            }
+        }
         catch (RuntimeException exception)
         {
             if (!context.Response.HasStarted)
@@ -112,7 +122,17 @@ internal static class RuntimeProblemDetailsWriter
 
     private static async Task WriteAsync(HttpContext context, ProblemDetails problem)
     {
+        var authenticate = context.Response.Headers[HeaderNames.WWWAuthenticate].ToString();
         context.Response.Clear();
+        if (!string.IsNullOrWhiteSpace(authenticate))
+        {
+            context.Response.Headers[HeaderNames.WWWAuthenticate] = authenticate;
+        }
+        if (problem.Extensions.TryGetValue("correlationId", out var correlationId)
+            && correlationId is not null)
+        {
+            context.Response.Headers[RuntimeProblemDetailsMiddleware.CorrelationHeader] = correlationId.ToString();
+        }
         context.Response.StatusCode = problem.Status ?? StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/problem+json";
         await context.Response.WriteAsync(JsonSerializer.Serialize(problem), CancellationToken.None);

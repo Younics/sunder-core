@@ -4,6 +4,7 @@ using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
 using Xunit;
+using SdkSettingsFieldKind = Sunder.Sdk.Settings.PackageSettingsFieldKind;
 
 namespace Sunder.Runtime.Host.Tests;
 
@@ -45,6 +46,26 @@ public sealed class PackageSettingsServiceTests
         Assert.Equal("preserved", await package.StateStore.GetValueAsync("operational"));
     }
 
+    [Fact]
+    public async Task PerKeyOperations_RouteSecretSchemaFieldsToSecretStorage()
+    {
+        var settings = new TestPackageSettings();
+        var package = CreateLoadedPackage(CreateSchema(), settings);
+        var service = new PackageSettingsService();
+
+        await service.SetValueAsync(package, "apiKey", "secret-value");
+
+        Assert.Equal("secret-value", await package.SecretsStore.GetSecretAsync("apiKey"));
+        Assert.Null(await settings.GetStoredValueAsync("apiKey"));
+        var response = await service.GetValueAsync(package, "apiKey");
+        Assert.True(response.IsStored);
+        Assert.Null(response.StoredValue);
+        Assert.Null(response.EffectiveValue);
+
+        await service.DeleteValueAsync(package, "apiKey");
+        Assert.Null(await package.SecretsStore.GetSecretAsync("apiKey"));
+    }
+
     [Theory]
     [InlineData("unknown", "value")]
     [InlineData("enabled", "sometimes")]
@@ -82,18 +103,172 @@ public sealed class PackageSettingsServiceTests
         await Assert.ThrowsAsync<ArgumentException>(() => settings.SetValueAsync("apiKey", "secret"));
     }
 
+    [Fact]
+    public void SettingsSchemaProjection_UsesHostOwnedPackageMetadata()
+    {
+        var projected = PackageProtocolMapper.ToProtocolSettingsSchema(
+            "host.package",
+            "Host Package",
+            CreateSdkSchema());
+
+        Assert.NotNull(projected);
+        Assert.Equal("host.package", projected.PackageId);
+        Assert.Equal("Host Package", projected.PackageDisplayName);
+    }
+
+    [Fact]
+    public void RuntimeContributionRegistry_RejectsMultipleSettingsSchemas()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var registry = new RuntimePackageContributionRegistry(
+            services,
+            new RuntimePackageExtensionCatalog(),
+            "test.package");
+        registry.RegisterSettingsSchema(CreateSdkSchema());
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => registry.RegisterSettingsSchema(CreateSdkSchema()));
+
+        Assert.Contains("more than one settings schema", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CanonicalSettingsField_RejectsInvalidKindAtConstruction()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Sunder.Sdk.Settings.PackageSettingsField(
+            "invalid",
+            "Invalid",
+            (SdkSettingsFieldKind)int.MaxValue));
+    }
+
+    [Fact]
+    public void CanonicalSettingsSchema_RejectsDuplicateIdsSecretDefaultsAndInvalidFields()
+    {
+        var text = new Sunder.Sdk.Settings.PackageSettingsField(
+            "duplicate",
+            "Text",
+            SdkSettingsFieldKind.Text);
+        Assert.Throws<ArgumentException>(() => new Sunder.Sdk.Settings.PackageSettingsSchema(
+            null,
+            [
+                new Sunder.Sdk.Settings.PackageSettingsSection("first", "First", null, [text]),
+                new Sunder.Sdk.Settings.PackageSettingsSection("second", "Second", null, [text]),
+            ]));
+        Assert.Throws<ArgumentException>(() => new Sunder.Sdk.Settings.PackageSettingsField(
+            "secret",
+            "Secret",
+            SdkSettingsFieldKind.Secret,
+            defaultValue: "must-not-persist"));
+        Assert.Throws<ArgumentException>(() => new Sunder.Sdk.Settings.PackageSettingsField(
+            "boolean",
+            "Boolean",
+            SdkSettingsFieldKind.Boolean,
+            defaultValue: "sometimes"));
+        Assert.Throws<ArgumentException>(() => new Sunder.Sdk.Settings.PackageSettingsField(
+            "select",
+            "Select",
+            SdkSettingsFieldKind.Select,
+            options: []));
+    }
+
+    [Fact]
+    public async Task BulkSettings_PatchPreservesOmittedValuesWhileReplaceRemovesThem()
+    {
+        var settings = new TestPackageSettings(new Dictionary<string, string>
+        {
+            ["endpoint"] = "existing",
+            ["model"] = "small",
+        });
+        var package = CreateLoadedPackage(CreateSchema(), settings);
+        var service = new PackageSettingsService();
+
+        await service.SaveValuesAsync(
+            package,
+            new UpdatePackageSettingsRequest(
+                new Dictionary<string, string?> { ["enabled"] = "true" },
+                PackageSettingsUpdateMode.Patch));
+
+        Assert.Equal("existing", await settings.GetStoredValueAsync("endpoint"));
+        Assert.Equal("small", await settings.GetStoredValueAsync("model"));
+
+        await service.SaveValuesAsync(
+            package,
+            new UpdatePackageSettingsRequest(
+                new Dictionary<string, string?> { ["enabled"] = "false" },
+                PackageSettingsUpdateMode.Replace));
+
+        Assert.Null(await settings.GetStoredValueAsync("endpoint"));
+        Assert.Null(await settings.GetStoredValueAsync("model"));
+        Assert.Equal("false", await settings.GetStoredValueAsync("enabled"));
+    }
+
+    [Fact]
+    public async Task RequiredSecret_MustExistForReplaceAndCannotBeExplicitlyDeleted()
+    {
+        var package = CreateLoadedPackage(
+            CreateSchema(requiredSecret: true),
+            new TestPackageSettings(),
+            requiredSecret: true);
+        var service = new PackageSettingsService();
+
+        await Assert.ThrowsAsync<RuntimeValidationException>(() => service.SaveValuesAsync(
+            package,
+            new UpdatePackageSettingsRequest(new Dictionary<string, string?>())));
+
+        await package.SecretsStore.SetSecretAsync("apiKey", "existing-secret");
+        await service.SaveValuesAsync(
+            package,
+            new UpdatePackageSettingsRequest(new Dictionary<string, string?>()));
+        Assert.Equal("existing-secret", await package.SecretsStore.GetSecretAsync("apiKey"));
+
+        await Assert.ThrowsAsync<RuntimeValidationException>(() => service.SaveValuesAsync(
+            package,
+            new UpdatePackageSettingsRequest(
+                new Dictionary<string, string?> { ["apiKey"] = null },
+                PackageSettingsUpdateMode.Patch)));
+        await Assert.ThrowsAsync<RuntimeValidationException>(() =>
+            service.DeleteValueAsync(package, "apiKey"));
+        Assert.Equal("existing-secret", await package.SecretsStore.GetSecretAsync("apiKey"));
+    }
+
+    [Fact]
+    public async Task BulkSettings_SecretCommitFailureRestoresPreviousSettingsDocument()
+    {
+        var root = CreateTempDirectory();
+        var settings = new TestPackageSettings(new Dictionary<string, string> { ["endpoint"] = "old" });
+        var secrets = new JsonPackageSecretsStore(
+            Path.Combine(root, "secrets.json"),
+            new SecretCommitFaultFileSystem(),
+            null,
+            new RestrictedFileMasterKeyProtection());
+        var package = CreateLoadedPackage(CreateSchema(), settings, secretsStore: secrets);
+
+        await Assert.ThrowsAsync<IOException>(() => new PackageSettingsService().SaveValuesAsync(
+            package,
+            new UpdatePackageSettingsRequest(new Dictionary<string, string?>
+            {
+                ["endpoint"] = "new",
+                ["apiKey"] = "secret",
+            })));
+
+        Assert.Equal("old", await settings.GetStoredValueAsync("endpoint"));
+        Assert.Null(await secrets.GetSecretAsync("apiKey"));
+    }
+
     private static ActiveLoadedPackage CreateLoadedPackage(
-        PackageConfigurationSchemaDescriptor? schema,
-        IPackageSettings settings)
+        PackageSettingsSchemaDescriptor? schema,
+        IPackageSettings settings,
+        bool requiredSecret = false,
+        JsonPackageSecretsStore? secretsStore = null)
     {
         var root = CreateTempDirectory();
         var assemblyPath = typeof(PackageSettingsService).Assembly.Location;
         return new ActiveLoadedPackage(
-            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", null, true, PackageReadinessState.Ready, []),
+            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
             new RuntimePackageSource("test.package", PackageSourceKind.Dev, root),
             schema,
             new JsonPackageKeyValueStore(Path.Combine(root, "state.json")),
-            new JsonPackageSecretsStore(Path.Combine(root, "secrets.json")),
+            secretsStore ?? new JsonPackageSecretsStore(Path.Combine(root, "secrets.json")),
             null,
             new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             [],
@@ -102,44 +277,64 @@ public sealed class PackageSettingsServiceTests
                 "test.package",
                 assemblyPath,
                 new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
-            settings);
+            settings)
+        {
+            CanonicalSettingsSchema = CreateCanonicalSchema(requiredSecret),
+        };
     }
 
-    private static PackageConfigurationSchemaDescriptor CreateSchema()
+    private static PackageSettingsSchemaDescriptor CreateSchema(bool requiredSecret = false)
         => new(
             "test.package",
             "Test Package",
             null,
-            [new PackageConfigurationSectionDescriptor(
+            [new PackageSettingsSectionDescriptor(
                 "general",
                 "General",
                 null,
                 [
-                    Field("endpoint", PackageConfigurationFieldKind.Text, defaultValue: "https://default.test"),
-                    Field("enabled", PackageConfigurationFieldKind.Boolean),
-                    Field("model", PackageConfigurationFieldKind.Select, options: [new("small", "Small")]),
-                    Field("apiKey", PackageConfigurationFieldKind.Secret),
+                    Field("endpoint", PackageSettingsFieldKind.Text, defaultValue: "https://default.test"),
+                    Field("enabled", PackageSettingsFieldKind.Boolean),
+                    Field("model", PackageSettingsFieldKind.Select, options: [new("small", "Small")]),
+                    Field("apiKey", PackageSettingsFieldKind.Secret, isRequired: requiredSecret),
                 ])]);
 
-    private static PackageConfigurationFieldDescriptor Field(
+    private static PackageSettingsFieldDescriptor Field(
         string key,
-        PackageConfigurationFieldKind kind,
+        PackageSettingsFieldKind kind,
         string? defaultValue = null,
-        IReadOnlyList<PackageConfigurationOptionDescriptor>? options = null)
-        => new(key, key, kind, null, false, null, defaultValue, options ?? []);
+        bool isRequired = false,
+        IReadOnlyList<PackageSettingsOptionDescriptor>? options = null)
+        => new(key, key, kind, null, isRequired, null, defaultValue, options ?? []);
 
-    private static Sunder.Sdk.Configuration.PackageConfigurationSchema CreateSdkSchema()
+    private static Sunder.Sdk.Settings.PackageSettingsSchema CreateCanonicalSchema(bool requiredSecret = false)
         => new(
-            "test.package",
-            "Test Package",
             null,
-            [new Sunder.Sdk.Configuration.PackageConfigurationSection(
+            [new Sunder.Sdk.Settings.PackageSettingsSection(
                 "general",
                 "General",
                 null,
                 [
-                    new Sunder.Sdk.Configuration.PackageConfigurationField("endpoint", "Endpoint", Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Text, DefaultValue: "https://default.test"),
-                    new Sunder.Sdk.Configuration.PackageConfigurationField("apiKey", "API key", Sunder.Sdk.Configuration.PackageConfigurationFieldKind.Secret),
+                    new Sunder.Sdk.Settings.PackageSettingsField("endpoint", "Endpoint", SdkSettingsFieldKind.Text, defaultValue: "https://default.test"),
+                    new Sunder.Sdk.Settings.PackageSettingsField("enabled", "Enabled", SdkSettingsFieldKind.Boolean),
+                    new Sunder.Sdk.Settings.PackageSettingsField(
+                        "model",
+                        "Model",
+                        SdkSettingsFieldKind.Select,
+                        options: [new Sunder.Sdk.Settings.PackageSettingsOption("small", "Small")]),
+                    new Sunder.Sdk.Settings.PackageSettingsField("apiKey", "API key", SdkSettingsFieldKind.Secret, isRequired: requiredSecret),
+                ])]);
+
+    private static Sunder.Sdk.Settings.PackageSettingsSchema CreateSdkSchema()
+        => new(
+            null,
+            [new Sunder.Sdk.Settings.PackageSettingsSection(
+                "general",
+                "General",
+                null,
+                [
+                    new Sunder.Sdk.Settings.PackageSettingsField("endpoint", "Endpoint", SdkSettingsFieldKind.Text, defaultValue: "https://default.test"),
+                    new Sunder.Sdk.Settings.PackageSettingsField("apiKey", "API key", SdkSettingsFieldKind.Secret),
                 ])]);
 
     private static string CreateTempDirectory()
@@ -149,7 +344,7 @@ public sealed class PackageSettingsServiceTests
         return path;
     }
 
-    private sealed class TestPackageSettings(IReadOnlyDictionary<string, string>? initial = null) : IPackageSettings
+    private sealed class TestPackageSettings(IReadOnlyDictionary<string, string>? initial = null) : IPackageSettingsDocument
     {
         private readonly Dictionary<string, string> _values = new(initial ?? new Dictionary<string, string>(), StringComparer.Ordinal);
 
@@ -169,6 +364,30 @@ public sealed class PackageSettingsServiceTests
         {
             _values.Remove(key);
             return Task.CompletedTask;
+        }
+
+        public Task ReplaceValuesAsync(
+            IReadOnlyDictionary<string, string> values,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _values.Clear();
+            foreach (var pair in values)
+            {
+                _values[pair.Key] = pair.Value;
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class SecretCommitFaultFileSystem : AtomicFileSystem
+    {
+        internal override void BeforeCommit(StorageCommitPhase phase, string destinationPath)
+        {
+            if (phase == StorageCommitPhase.SecretDocument)
+            {
+                throw new IOException("Injected secret document commit failure.");
+            }
         }
     }
 }

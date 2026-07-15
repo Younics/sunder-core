@@ -4,7 +4,7 @@ namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesSelectedOperationCommands(
     PackagesOperationCommandCoordinator operationCommands,
-    PackageOperationStatePresenter operationState,
+    PackageOperationPresentationViewModel operationState,
     Func<PackageWindowMode> getMode,
     Action<PackageWindowMode> setMode,
     Func<PackageCatalogItemViewModel?> getSelectedInstalledPackage,
@@ -101,8 +101,7 @@ internal sealed class PackagesSelectedOperationCommands(
 
         await operationCommands.UpdateMarketplacePackageAsync(
             update,
-            selectedPackage?.Name ?? update.PackageId,
-            getSelectedInstalledPackage()?.PackageId);
+            selectedPackage?.Name ?? update.PackageId);
     }
 
     public async Task UninstallSelectedMarketplacePackageAsync()
@@ -124,7 +123,7 @@ internal sealed class PackagesSelectedOperationCommands(
             return;
         }
 
-        await operationCommands.UpdateAllPackagesAsync(getSelectedInstalledPackage()?.PackageId);
+        await operationCommands.UpdateAllPackagesAsync();
     }
 
     public void CancelSelectedPackageOperation()

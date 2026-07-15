@@ -22,7 +22,7 @@ internal static class PackageHotbarProjector
                     view.PackageDisplayName,
                     view.Title,
                     view.Glyph,
-                    ShellPlacementCatalog.ToPackageHotbarPlacement(view.Placement),
+                    ShellPlacementCatalog.ToPackageViewPlacement(view.Placement),
                     order++,
                     string.Equals(getSelectedViewId(placement), view.ViewId, StringComparison.OrdinalIgnoreCase)));
             }

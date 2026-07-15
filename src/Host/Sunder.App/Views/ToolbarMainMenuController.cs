@@ -19,15 +19,16 @@ internal sealed class ToolbarMainMenuController(
     Func<MainWindowViewModel?> viewModelAccessor) : IDisposable
 {
     private readonly OwnedTaskObserver _tasks = new("toolbar main menu");
+
     public bool Show()
     {
-        var viewModel = viewModelAccessor();
-        if (viewModel is null)
+        var items = viewModelAccessor()?.GetMainMenuItems();
+        if (items is null)
         {
             return false;
         }
 
-        toolbarMainMenu.ItemsSource = BuildToolbarMainMenuItems(viewModel);
+        toolbarMainMenu.ItemsSource = items.Select(BuildMenuItem).ToArray();
         toolbarDefaultActions.IsVisible = false;
         middlePackageIconBar.IsVisible = false;
         toolbarMainMenu.IsVisible = true;
@@ -50,12 +51,7 @@ internal sealed class ToolbarMainMenuController(
 
     public void HideIfPointerOutside(PointerPressedEventArgs e)
     {
-        if (!toolbarMainMenu.IsVisible)
-        {
-            return;
-        }
-
-        if (e.Source is not Visual visual)
+        if (!toolbarMainMenu.IsVisible || e.Source is not Visual visual)
         {
             return;
         }
@@ -66,7 +62,7 @@ internal sealed class ToolbarMainMenuController(
         }
 
         var ancestors = visual.GetSelfAndVisualAncestors().OfType<StyledElement>().ToArray();
-        if (ancestors.Contains(toolbarLeftMenuHost) || ancestors.Any(x => x is Menu or MenuItem))
+        if (ancestors.Contains(toolbarLeftMenuHost) || ancestors.Any(element => element is Menu or MenuItem))
         {
             return;
         }
@@ -85,115 +81,73 @@ internal sealed class ToolbarMainMenuController(
         return true;
     }
 
-    private object[] BuildToolbarMainMenuItems(MainWindowViewModel viewModel)
+    public void Dispose() => _tasks.Dispose();
+
+    private MenuItem BuildMenuItem(ShellMenuItem item)
     {
-        var packageMenuGroups = viewModel.GetPackageViewGroups();
-        var packagesMenu = CreateToolbarMenuItem("Packages");
-        packagesMenu.ItemsSource = packageMenuGroups.Select(BuildPackageGroupMenuItem).ToArray();
-
-        var viewMenu = new MenuItem { Header = "View", Classes = { "toolbar-menu-root-item" } };
-        viewMenu.ItemsSource = new object[] { packagesMenu };
-        viewMenu.PointerEntered += (_, _) => viewMenu.IsSubMenuOpen = true;
-
-        return new object[] { viewMenu };
-    }
-
-    private MenuItem BuildPackageGroupMenuItem(PackageViewMenuGroup group)
-    {
-        var menuItem = CreateToolbarMenuItem(group.PackageDisplayName, group.PackageGlyph, group.PackageIconUri);
-        menuItem.ItemsSource = group.Views.Select(BuildPackageViewMenuItem).ToArray();
-        return menuItem;
-    }
-
-    private MenuItem BuildPackageViewMenuItem(PackageViewMenuItem item)
-    {
-        var menuItem = CreateToolbarMenuItem(item.Title, item.Glyph, item.IconUri);
-        menuItem.IsEnabled = !item.IsInHotbar;
-        if (!item.IsInHotbar)
+        var menuItem = new MenuItem
         {
-            menuItem.Click += async (_, _) =>
+            Header = CreateMenuHeader(item),
+            IsEnabled = item.IsEnabled,
+            Classes = { item.Id is "view" or "developer" ? "toolbar-menu-root-item" : "toolbar-menu-item" },
+        };
+        if (item.Children.Count > 0)
+        {
+            menuItem.ItemsSource = item.Children.Select(BuildMenuItem).ToArray();
+            if (item.Id is "view" or "developer")
+            {
+                menuItem.PointerEntered += (_, _) => menuItem.IsSubMenuOpen = true;
+            }
+        }
+        else if (item.ExecuteAsync is not null)
+        {
+            menuItem.Click += (_, _) =>
             {
                 Hide();
-                var viewModel = viewModelAccessor();
-                if (viewModel is not null)
-                {
-                    await viewModel.OpenPackageViewPanelAsync(item.ViewId);
-                }
+                _tasks.Run(item.ExecuteAsync, $"executing menu command '{item.Id}'");
             };
         }
 
         return menuItem;
     }
 
-    private MenuItem CreateToolbarMenuItem(string header, string? glyph = null, Uri? iconUri = null)
-        => new() { Header = CreateToolbarMenuHeader(header, glyph, iconUri), Classes = { "toolbar-menu-item" } };
-
-    private object CreateToolbarMenuHeader(string header, string? glyph, Uri? iconUri)
+    private static object CreateMenuHeader(ShellMenuItem item)
     {
-        if (string.IsNullOrWhiteSpace(glyph) && iconUri is null)
+        if (string.IsNullOrWhiteSpace(item.Glyph) && item.IconImage is null)
         {
-            return header;
+            return item.Title;
         }
 
-        var content = new StackPanel
+        var iconImage = new Image
+        {
+            Source = item.IconImage,
+            Width = 16,
+            Height = 16,
+            Stretch = Stretch.Uniform,
+            IsVisible = item.IconImage is not null,
+        };
+        var glyphText = new TextBlock
+        {
+            Text = item.Glyph,
+            Classes = { "toolbar-menu-icon-text" },
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = item.IconImage is null && !string.IsNullOrWhiteSpace(item.Glyph),
+        };
+        var iconContent = new Grid();
+        iconContent.Children.Add(iconImage);
+        iconContent.Children.Add(glyphText);
+
+        return new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                new Border { Classes = { "toolbar-menu-icon-badge" }, Child = iconContent },
+                new TextBlock { Text = item.Title, VerticalAlignment = VerticalAlignment.Center },
+            },
         };
-        var iconImage = new Image
-        {
-            Width = 16,
-            Height = 16,
-            Stretch = Stretch.Uniform,
-            IsVisible = false,
-        };
-        var glyphText = new TextBlock
-        {
-            Text = glyph,
-            Classes = { "toolbar-menu-icon-text" },
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsVisible = !string.IsNullOrWhiteSpace(glyph),
-        };
-
-        var iconContent = new Grid();
-        iconContent.Children.Add(iconImage);
-        iconContent.Children.Add(glyphText);
-        content.Children.Add(new Border
-        {
-            Classes = { "toolbar-menu-icon-badge" },
-            Child = iconContent,
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = header,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-
-        if (iconUri is not null)
-        {
-            _tasks.Run(_ => LoadToolbarMenuIconAsync(iconImage, glyphText, iconUri), "loading a package icon");
-        }
-
-        return content;
     }
-
-    private static async Task LoadToolbarMenuIconAsync(Image iconImage, TextBlock glyphText, Uri iconUri)
-    {
-        var result = await PackageIconImageLoader.LoadAsync(iconUri);
-        if (result.Image is null)
-        {
-            return;
-        }
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            iconImage.Source = result.Image;
-            iconImage.IsVisible = true;
-            glyphText.IsVisible = false;
-        });
-    }
-
-    public void Dispose() => _tasks.Dispose();
 }

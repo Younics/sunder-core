@@ -16,7 +16,7 @@ public sealed class PackageSessionOverlayTests
     public void RuntimeSharedAssemblyRegistry_ResolvesHostStackSdkAssembly()
     {
         using var registry = new RuntimeSharedAssemblyRegistry([]);
-        var stackSdkAssembly = typeof(IPackageStackContributor).Assembly;
+        var stackSdkAssembly = typeof(IPackageStackExporter).Assembly;
 
         Assert.Same(stackSdkAssembly, registry.ResolveSharedAssembly(stackSdkAssembly.GetName()));
     }
@@ -31,7 +31,7 @@ public sealed class PackageSessionOverlayTests
 
         try
         {
-            var result = await loadService.LoadInstalledWithDevOverlaysAsync([installedPackage], [devFolder], startBackgroundServices: false);
+            var result = await loadService.LoadInstalledWithDevOverlaysAsync([installedPackage], [devFolder]);
 
             Assert.Empty(result.Errors);
             Assert.NotNull(result.Session);
@@ -66,7 +66,7 @@ public sealed class PackageSessionOverlayTests
 
         try
         {
-            var result = await loadService.LoadInstalledAsync([extensionPackage, rootPackage], startBackgroundServices: false);
+            var result = await loadService.LoadInstalledAsync([extensionPackage, rootPackage]);
 
             Assert.Empty(result.Errors);
             Assert.NotNull(result.Session);
@@ -74,6 +74,36 @@ public sealed class PackageSessionOverlayTests
             Assert.Equal(["z.root", "a.extension"], session.GetActivePackages().Select(package => package.PackageId));
             Assert.Equal(["z.root", "a.extension"], session.GetActivePackageSources().Select(source => source.PackageId));
             await session.DisposeAsync();
+        }
+        finally
+        {
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task LoadInstalledAsync_WhenPackageRegistersReservedHostCapability_RejectsItClearly()
+    {
+        var rootPath = CreateTempDirectory();
+        var package = CreatePackageLayout(
+            rootPath,
+            "installed",
+            "reserved.package",
+            "1.0.0",
+            PackageSourceKind.Installed);
+        var loadService = new PackageSessionLoadService(NullLogger.Instance);
+
+        try
+        {
+            var result = await loadService.LoadInstalledAsync([package]);
+
+            Assert.Contains(result.Errors, error =>
+                error.Contains("reserved host capability", StringComparison.OrdinalIgnoreCase)
+                && error.Contains(typeof(IPackageContext).FullName!, StringComparison.Ordinal));
+            if (result.Session is not null)
+            {
+                await result.Session.DisposeAsync();
+            }
         }
         finally
         {
@@ -291,68 +321,43 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public async Task ReloadInstalledPackageSessionAsync_PreservesDevOverlays()
+    public async Task LoadStartupDevPackagesAsync_ActivatesEffectiveDevPackageExactlyOnce()
     {
+        const string packageId = "startup.counted.package";
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
         var installer = new SunderPackageArchiveInstaller(paths);
         var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
-        var installedPackage = CreatePackageLayout(paths.RootPath, "installed", "installed.package", "1.0.0", PackageSourceKind.Installed);
-        var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
+        var installedPackage = CreatePackageLayout(paths.RootPath, "installed", packageId, "1.0.0", PackageSourceKind.Installed);
+        var devFolder = CreatePackageLayout(paths.RootPath, "startup-dev", packageId, "2.0.0", PackageSourceKind.Dev).InstallPath;
+        var counterPath = Path.Combine(paths.RootPath, "activation-counters.txt");
+        var previousCounterPath = Environment.GetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable);
 
         try
         {
+            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, counterPath);
             await AddInstalledPackageAsync(store, installedPackage);
-            await service.LoadInstalledPackagesAsync();
-            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
-            Assert.Empty(startupResult.Errors);
 
-            var reloadResult = await service.ReloadInstalledPackageSessionAsync(new InstalledPackageSessionReloadRequest(["installed.package"]));
+            var result = await service.LoadStartupDevPackagesAsync([devFolder]);
 
-            Assert.True(reloadResult.Success, string.Join(Environment.NewLine, reloadResult.Errors));
-            Assert.True(reloadResult.RuntimeSessionApplied);
-            Assert.False(reloadResult.RequiresAppRestart);
-            Assert.Contains(service.GetActivePackages(), package => package.PackageId == "installed.package");
-            Assert.Contains(service.GetActivePackages(), package => package.PackageId == "startup.package");
-            var startupStatus = await service.GetPackageSessionStatusAsync("startup.package");
-            Assert.NotNull(startupStatus);
-            Assert.Equal(PackageSourceKind.Dev, startupStatus.ActiveSourceKind);
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+            var active = Assert.Single(service.GetActivePackages());
+            Assert.Equal(packageId, active.PackageId);
+            Assert.Equal("2.0.0", active.Version);
+            var source = Assert.Single(service.GetActiveRuntimePackageSources());
+            Assert.Equal(PackageSourceKind.Dev, source.Kind);
+            Assert.Equal(devFolder, source.Folder);
+
+            var counters = File.ReadAllLines(counterPath);
+            Assert.Equal(1, counters.Count(value => value == "2.0.0:configure"));
+            Assert.Equal(1, counters.Count(value => value == "2.0.0:register"));
+            Assert.Equal(1, counters.Count(value => value == "2.0.0:start"));
+            Assert.DoesNotContain(counters, value => value.StartsWith("1.0.0:", StringComparison.Ordinal));
         }
         finally
         {
-            TryDeleteDirectory(paths.RootPath);
-        }
-    }
-
-    [Fact]
-    public async Task ReloadInstalledPackageSessionAsync_WhenOnePackageCannotPrepare_AppliesPartialSession()
-    {
-        var paths = new RuntimePackagePaths(CreateTempDirectory());
-        var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
-        var goodPackage = CreatePackageLayout(paths.RootPath, "installed", "good.package", "1.0.0", PackageSourceKind.Installed);
-        var badPackage = CreatePackageLayout(paths.RootPath, "installed", "bad.package", "1.0.0", PackageSourceKind.Installed);
-
-        try
-        {
-            await AddInstalledPackageAsync(store, goodPackage);
-            await AddInstalledPackageAsync(store, badPackage);
-            File.Delete(badPackage.EntryAssemblyPath);
-
-            var reloadResult = await service.ReloadInstalledPackageSessionAsync(new InstalledPackageSessionReloadRequest(["good.package", "bad.package"]));
-
-            Assert.True(reloadResult.Success, string.Join(Environment.NewLine, reloadResult.Errors));
-            Assert.True(reloadResult.RuntimeSessionApplied);
-            Assert.False(reloadResult.RequiresAppRestart);
-            Assert.Contains(reloadResult.Warnings, warning => warning.Contains("bad.package", StringComparison.OrdinalIgnoreCase));
-            var activePackage = Assert.Single(service.GetActivePackages());
-            Assert.Equal("good.package", activePackage.PackageId);
-            var badSessionPackage = Assert.Single(service.GetSessionPackages(), package => package.PackageId == "bad.package");
-            Assert.Equal(PackageReadinessState.Failed, badSessionPackage.Readiness);
-        }
-        finally
-        {
+            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, previousCounterPath);
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -457,7 +462,7 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public async Task StagePackageLifecycleAsync_WhenAskedToAddUnknownSdkPackage_RejectsPathlessRequest()
+    public async Task StagePackageLifecycleAsync_WhenAskedToAddUnknownPackage_RejectsPathlessRequest()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
@@ -472,7 +477,7 @@ public sealed class PackageSessionOverlayTests
             Assert.Empty(startupResult.Errors);
 
             var stageResult = await service.StagePackageLifecycleAsync(
-                new PackageLifecycleStageRequest(["builder.package"], PackageLifecycleOverlayOwner.Sdk));
+                new PackageLifecycleStageRequest(["builder.package"]));
 
             Assert.False(stageResult.Success);
             Assert.Null(stageResult.StageId);
@@ -520,6 +525,189 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageLifecycleStageAsync_WhenStageIsStale_DoesNotStartRejectedBackgroundServices()
+    {
+        const string packageId = "startup.counted.package";
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
+        var startupDevFolder = CreatePackageLayout(
+            paths.RootPath,
+            "startup-dev",
+            packageId,
+            "1.0.0",
+            PackageSourceKind.Dev).InstallPath;
+        var counterPath = Path.Combine(paths.RootPath, "stale-stage-counters.txt");
+        var previousCounterPath = Environment.GetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, counterPath);
+            var initial = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
+            Assert.True(initial.Success, string.Join(Environment.NewLine, initial.Errors));
+            WritePackageManifest(startupDevFolder, packageId, "1.1.0");
+            var stage = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(startupDevFolder));
+            Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
+            Assert.DoesNotContain(File.ReadAllLines(counterPath), value => value == "1.1.0:start");
+
+            var superseding = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
+            Assert.True(superseding.Success, string.Join(Environment.NewLine, superseding.Errors));
+            var startsBeforeReject = File.ReadAllLines(counterPath).Count(value => value == "1.1.0:start");
+
+            var rejected = await service.CommitPackageLifecycleStageAsync(stage.StageId!);
+
+            Assert.False(rejected.Success);
+            Assert.Equal(
+                startsBeforeReject,
+                File.ReadAllLines(counterPath).Count(value => value == "1.1.0:start"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, previousCounterPath);
+            await service.ShutdownAsync();
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task CommitPackageLifecycleStageAsync_PublishesExactStagedSessionAndSnapshots()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
+        var startupDevFolder = CreatePackageLayout(paths.RootPath, "startup-dev", "startup.package", "1.0.0", PackageSourceKind.Dev).InstallPath;
+
+        try
+        {
+            var startupResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
+            Assert.True(startupResult.Success, string.Join(Environment.NewLine, startupResult.Errors));
+            WritePackageManifest(startupDevFolder, "startup.package", "1.1.0");
+            var stage = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(startupDevFolder));
+            var stagedSession = service.GetStagedLifecycleSession(stage.StageId!);
+            var stagedSnapshot = Assert.Single(stage.PackageUiSnapshots);
+
+            var commit = await service.CommitPackageLifecycleStageAsync(stage.StageId!);
+
+            Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
+            Assert.Same(stagedSession, service.ActiveSession);
+            Assert.Equal(service.SessionGeneration, commit.CommittedStamp?.SessionGeneration);
+            var committedSnapshot = Assert.Single(commit.PackageUiSnapshots);
+            Assert.Equal(stagedSnapshot.SnapshotId, committedSnapshot.SnapshotId);
+            Assert.Equal(stagedSnapshot.ContentHash, committedSnapshot.ContentHash);
+            Assert.DoesNotContain("/stage/", committedSnapshot.SnapshotUri, StringComparison.Ordinal);
+            Assert.Null(service.AcquireStageUiSnapshot(stage.StageId!, stagedSnapshot.SnapshotId));
+            using var committedLease = service.AcquireCurrentUiSnapshot(committedSnapshot.SnapshotId);
+            Assert.NotNull(committedLease);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task PendingLifecycleStage_ExpiresAndCleansCandidateAndUiSnapshot()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var policy = new RuntimeLifecyclePolicyOptions { PendingStageLifetime = TimeSpan.FromMinutes(1) };
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            lifecyclePolicy: policy,
+            timeProvider: clock);
+        var folder = CreatePackageLayout(
+            paths.RootPath,
+            "startup-dev",
+            "expiring.package",
+            "1.0.0",
+            PackageSourceKind.Dev).InstallPath;
+
+        try
+        {
+            Assert.True((await service.LoadStartupDevPackagesAsync([folder])).Success);
+            WritePackageManifest(folder, "expiring.package", "1.1.0");
+            var stage = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(folder));
+            var snapshot = Assert.Single(stage.PackageUiSnapshots);
+            var pending = service.GetPackageStageStatus(stage.StageId!);
+
+            Assert.NotNull(pending);
+            Assert.Equal(clock.GetUtcNow(), pending.CreatedAtUtc);
+            Assert.Equal(clock.GetUtcNow() + policy.PendingStageLifetime, pending.ExpiresAtUtc);
+
+            clock.Advance(TimeSpan.FromMinutes(2));
+            await service.SweepLifecycleStagesAsync(clock.GetUtcNow());
+
+            Assert.Null(service.GetStagedLifecycleSession(stage.StageId!));
+            Assert.Null(service.AcquireStageUiSnapshot(stage.StageId!, snapshot.SnapshotId));
+            var expired = service.GetPackageStageStatus(stage.StageId!);
+            Assert.Equal(RuntimePackageStageState.Failed, expired?.State);
+            Assert.Contains("expired", expired?.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False((await service.CommitPackageLifecycleStageAsync(stage.StageId!)).Success);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task PendingStoreStage_ExpiresAndCleansDurableCandidateAndUiSnapshot()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var policy = new RuntimeLifecyclePolicyOptions { PendingStageLifetime = TimeSpan.FromMinutes(1) };
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer,
+            lifecyclePolicy: policy,
+            timeProvider: clock);
+        var installed = CreatePackageLayout(
+            paths.RootPath,
+            "installed",
+            "expiring.store.package",
+            "1.0.0",
+            PackageSourceKind.Installed) with
+        { IsEnabled = false };
+
+        try
+        {
+            await AddInstalledPackageAsync(store, installed);
+            Assert.True((await service.LoadInstalledPackagesAsync()).Success);
+            var stage = await service.StagePackageStoreChangesAsync(new PackageStoreStageRequest([
+                new PackageStoreMutationRequest(PackageStoreMutationKind.Enable, installed.PackageId),
+            ]));
+            Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
+            var snapshot = Assert.Single(stage.PackageUiSnapshots);
+
+            clock.Advance(TimeSpan.FromMinutes(2));
+            await service.SweepStoreStagesAsync(clock.GetUtcNow());
+
+            Assert.Null(service.GetStagedStoreSession(stage.StageId!));
+            Assert.Null(service.AcquireStageUiSnapshot(stage.StageId!, snapshot.SnapshotId));
+            var expired = service.GetPackageStageStatus(stage.StageId!);
+            Assert.Equal(RuntimePackageStageState.Failed, expired?.State);
+            Assert.Contains("expired", expired?.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False((await service.CommitPackageStoreStageAsync(stage.StageId!)).Success);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -581,6 +769,7 @@ public sealed class PackageSessionOverlayTests
               "id": "{{packageId}}",
               "name": "{{packageId}}",
               "version": "{{version}}",
+              "hostRoles": ["app", "runtime"],
               "sdkApiVersion": 1,
               "sdkPackageVersion": "1.1.0",
               "requiredSdkCapabilities": ["sdk-baseline-1-1.v1", "core.v1"],
@@ -599,7 +788,7 @@ public sealed class PackageSessionOverlayTests
     {
         using var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "sunder-package.json")));
         var packageId = manifest.RootElement.GetProperty("id").GetString()!;
-        return new PackageLifecycleStageRequest([packageId], PackageLifecycleOverlayOwner.HotReload);
+        return new PackageLifecycleStageRequest([packageId]);
     }
 
     private static string CreateTempDirectory()
@@ -623,9 +812,18 @@ public sealed class PackageSessionOverlayTests
             // Package load contexts can keep shadows alive until process exit.
         }
     }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan value) => _now += value;
+    }
 }
 
-public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePackageModule
+public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePackageModule, ISunderAppPackageModule
 {
     public static bool RegisterStackContributor { get; set; }
 
@@ -633,26 +831,80 @@ public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePacka
 
     public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
+        if (string.Equals(context.PackageId, "reserved.package", StringComparison.Ordinal))
+        {
+            services.AddSingleton<IPackageContext>(context);
+        }
+        if (RuntimeActivationCounter.TryRecord(context, "configure"))
+        {
+            services.AddSingleton<RuntimeActivationCounterBackgroundService>();
+        }
     }
 
     public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
+        var context = services.GetRequiredService<IPackageContext>();
+        if (RuntimeActivationCounter.TryRecord(context, "register"))
+        {
+            registry.RegisterBackgroundService<RuntimeActivationCounterBackgroundService>();
+        }
         if (!RegisterStackContributor)
         {
             return;
         }
 
-        var context = services.GetRequiredService<IPackageContext>();
-        registry.RegisterExtension(
-            SunderStackExtensionPoints.StackContributors,
-            new PackageSessionOverlayTestStackContributor(context.PackageId, context.Version.ToString(), StackContributorContainsSecrets));
+        var stackContributor = new PackageSessionOverlayTestStackContributor(
+            context.PackageId,
+            context.Version.ToString(),
+            StackContributorContainsSecrets);
+        registry.RegisterExtension(SunderStackExtensionPoints.StackExporters, stackContributor);
+        registry.RegisterExtension(SunderStackExtensionPoints.StackImporters, stackContributor);
+    }
+
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
+    {
+    }
+
+    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
+    {
+    }
+}
+
+public sealed class RuntimeActivationCounterBackgroundService(IPackageContext context) : IPackageBackgroundService
+{
+    public Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RuntimeActivationCounter.TryRecord(context, "start");
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+}
+
+internal static class RuntimeActivationCounter
+{
+    public const string EnvironmentVariable = "SUNDER_RUNTIME_TEST_ACTIVATION_COUNTER_PATH";
+    private const string CountedPackageId = "startup.counted.package";
+
+    public static bool TryRecord(IPackageContext context, string stage)
+    {
+        var path = Environment.GetEnvironmentVariable(EnvironmentVariable);
+        if (!string.Equals(context.PackageId, CountedPackageId, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        File.AppendAllLines(path, [$"{context.Version}:{stage}"]);
+        return true;
     }
 }
 
 internal sealed class PackageSessionOverlayTestStackContributor(
     string packageId,
     string version,
-    bool containsSecrets) : IPackageStackContributor
+    bool containsSecrets) : IPackageStackExporter, IPackageStackImporter
 {
     public string ContributorId => "test.stack.contributor";
 
@@ -684,7 +936,6 @@ internal sealed class PackageSessionOverlayTestStackContributor(
             MinimumVersion: "1.0.0");
         var fragment = new StackFragmentExport(
             "test.profile",
-            ContributorId,
             "test/profile",
             1,
             "Test Profile",

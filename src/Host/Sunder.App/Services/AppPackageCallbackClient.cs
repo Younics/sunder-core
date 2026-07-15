@@ -8,9 +8,10 @@ namespace Sunder.App.Services;
 internal sealed class AppPackageCallbackClient(
     string packageId,
     RuntimePackageCallbackClient client,
-    ExternalBrowserService browser) : IPackageCallbackClient
+    ExternalBrowserService browser,
+    AppPackageGenerationPublication? publication = null) : IPackageCallbackClient
 {
-    public bool IsAvailable => true;
+    public bool IsAvailable => publication?.IsPublished ?? true;
 
     public async ValueTask<PackageCallbackSessionStatus> StartAsync(
         string callbackHandlerId,
@@ -18,6 +19,7 @@ internal sealed class AppPackageCallbackClient(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackHandlerId);
+        publication?.RequirePublished("callback sessions");
         var snapshot = PackageCallbackParameters.CopyAndValidate(parameters);
         return Map(await client.StartAsync(
             packageId,
@@ -31,6 +33,7 @@ internal sealed class AppPackageCallbackClient(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackSessionId);
+        publication?.RequirePublished("callback sessions");
         return Map(await client.GetStatusAsync(packageId, callbackSessionId, cancellationToken).ConfigureAwait(false));
     }
 
@@ -39,6 +42,7 @@ internal sealed class AppPackageCallbackClient(
         ArgumentNullException.ThrowIfNull(launchUri);
         if (!launchUri.IsAbsoluteUri) throw new ArgumentException("The launch URI must be absolute.", nameof(launchUri));
         cancellationToken.ThrowIfCancellationRequested();
+        publication?.RequirePublished("callback URI launching");
         browser.Open(launchUri);
         return ValueTask.CompletedTask;
     }

@@ -13,7 +13,7 @@ See [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) for Host/SDK/package
 - `dotnet publish` emits a `.sunderpkg` package archive into `$(PublishDir)`.
 - The runtime validates package metadata and archive content before install or update.
 - Runtime package dependencies and NuGet contracts dependencies are separate concepts.
-- Package view names, settings views, configuration schemas, background services, auth handlers, and extension contributions are registered in code, not in the generated manifest.
+- Package view names, settings views, settings schemas, background services, auth handlers, and extension contributions are registered in code, not in the generated manifest.
 
 ## Package Identity
 
@@ -105,6 +105,7 @@ Current manifest shape:
   "summary": "Adds an example Sunder workspace.",
   "version": "1.0.0",
   "entryAssembly": "Example.Package.dll",
+  "hostRoles": ["app", "runtime"],
   "icon": "assets/icon.png",
   "dependsOn": [
     {
@@ -113,8 +114,9 @@ Current manifest shape:
     }
   ],
   "sdkApiVersion": 1,
-  "sdkPackageVersion": "1.0.0",
+  "sdkPackageVersion": "1.1.0",
   "requiredSdkCapabilities": [
+    "sdk-baseline-1-1.v1",
     "core.v1",
     "packaging.v1",
     "contributions.v1",
@@ -131,8 +133,9 @@ Required fields:
 - `name`: user-facing package name.
 - `version`: strict SemVer 2.0 package version.
 - `entryAssembly`: package entry assembly file name.
+- `hostRoles`: exact compiled Host roles: `app`, `runtime`, both in canonical order, or the single value `contract-only`.
 - `sdkApiVersion`: SDK activation generation, exactly `1` for a V1 manifest.
-- `sdkPackageVersion`: strict SemVer 2.0 version of the referenced SDK package/build.
+- `sdkPackageVersion`: strict SemVer 2.0 version read from the actual resolved `Sunder.Sdk` reference. A conflicting `SunderSdkPackageVersion` override fails the build.
 - `requiredSdkCapabilities`: non-empty, distinct V1-form capability ids.
 
 Additional generated fields:
@@ -140,7 +143,8 @@ Additional generated fields:
 - `summary`: package description, omitted when not declared.
 - `icon`: package icon asset path, omitted when not declared.
 - `dependsOn`: runtime package dependency list, omitted when no dependencies are declared.
-- `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`. Current build tooling always seeds `core.v1`, `packaging.v1`, and `contributions.v1`.
+- `hostRoles`: inferred from public module interfaces in compiled entry-assembly metadata. Package authors do not declare it manually.
+- `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`. Current build tooling always seeds `sdk-baseline-1-1.v1`, `core.v1`, `packaging.v1`, and `contributions.v1`.
 - `sdkVersion`: SDK version metadata when supplied by build properties.
 - `targetFramework`: package target framework, emitted when available.
 
@@ -159,7 +163,9 @@ Fields not used by the current generated manifest:
 
 ## Module Discovery
 
-The generated manifest records the entry assembly, not the module type.
+The generated manifest records the entry assembly and its inferred Host roles, not the module type. Archive and activation validation read ECMA-335 metadata directly and reject a role declaration that does not match the entry assembly before any reflection load occurs.
+
+Contract-only packages declare no App or Runtime module. They can carry shared contracts used by dependent packages without creating a package module load context of their own.
 
 Host discovery rules:
 
@@ -168,6 +174,7 @@ Host discovery rules:
 - A single module class may implement both roles, but each host invokes only its own role.
 - The module type must have a public parameterless constructor.
 - A missing role is valid; multiple implementations of the same role fail activation in that host.
+- Each host constructs its role module directly, configures services, builds an isolated role-specific provider, and then registers contributions. The module itself is not composed from that provider.
 
 Current module API:
 
@@ -182,27 +189,29 @@ public interface ISunderRuntimePackageModule
 
 ## Contributions
 
-Runtime contributions are registered through `ISunderRuntimeContributionRegistry`; App extensions use `ISunderAppContributionRegistry`. `Sunder.Sdk.Avalonia` adds `IAvaloniaPackageContributionRegistry` and Control/workspace/view/settings registration extensions.
+Runtime contributions are registered through `ISunderRuntimeContributionRegistry`; App extensions use `ISunderAppContributionRegistry`. `Sunder.Sdk.Avalonia` adds `IAvaloniaPackageContributionRegistry` and control/view/settings registration extensions.
 
 Runtime registry capabilities:
 
 - `RegisterBackgroundService<TService>()`
 - `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
-- `RegisterConfigurationSchema(PackageConfigurationSchema schema)`
+- `RegisterSettingsSchema(PackageSettingsSchema schema)`
 
 App registry capabilities:
 
 - `RegisterPackageView<TView>(PackageViewRegistration registration)`
-- `RegisterPackageViewFactory<TFactory>(PackageViewRegistration registration)`
 - `RegisterSettingsView<TView>()`
-- `RegisterSettingsViewFactory<TFactory>()`
 - `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
 
 `IPackageExtensionCatalog` lets packages discover active extension contributions. Hosts that support live package activation also implement `IPackageExtensionCatalogMonitor`; its `Changed` event includes a revision, lifecycle reason, and per-extension-point additions/removals.
 
-Callback and auth flows are modeled separately. `IPackageCallbackHandler` is the generic callback-session contract. `IPackageAuthHandler` is the auth-specific status/disconnect contract.
+The activating package owns every registration it contributes. Extension-point ids and contract assemblies identify the contract but do not transfer ownership to the host package; `GetExtensionContributions` reports the canonical id of the contributing package.
 
-View registrations use stable view ids and user-facing view names:
+Callback and auth flows are modeled separately. `IPackageCallbackHandler` is the generic callback-session contract. `IPackageAuthHandler` is the auth-specific status/disconnect contract and requires both `auth.v1` and `callbacks.v1`.
+
+Settings schema identity is host-owned. `PackageSettingsSchema` contains only summary, sections, and fields; the activating manifest supplies package id and display name. Construction rejects duplicate ids/keys, invalid select/boolean defaults, duplicate select values, and all secret defaults before registration.
+
+View registrations use globally unique stable ids, conventionally prefixed with the package id, and user-facing view names. The App constructs registered controls from the package App service provider, so controls may use constructor injection:
 
 ```csharp
 registry.RegisterPackageView<DefaultPackageView>(new PackageViewRegistration(
@@ -218,9 +227,10 @@ Rules:
 
 - Icon paths must use the portable archive path grammar described below.
 - Icon files must exist at build time when `Icon` is declared.
+- Icon files must be 1 MiB or smaller, carry a recognized raster signature matching the file extension, and use dimensions no larger than 8192 by 8192 pixels.
 - The build maps source `Assets/**` into output `assets/**`.
 - The runtime serves active package assets through authenticated `/api/v1/packages/{packageId}/assets/{assetPath}` endpoints.
-- The app loads PNG/SVG/raster package icons directly and falls back to the first character of the package name.
+- The app loads validated raster package icons directly and falls back to the first character of the package name.
 - Icon load failures are written to `AppSessionLog`; they are not shown as package UI errors.
 
 Supported image content types in runtime/registry paths:
@@ -230,8 +240,9 @@ Supported image content types in runtime/registry paths:
 - ICO
 - JPG/JPEG
 - PNG
-- SVG/SVGZ
 - WebP
+
+SVG and SVGZ package icons are rejected. The current renderer does not provide a sanitizer that can reliably prohibit scripts, external resources, and unsafe compressed expansion, so accepting untrusted SVG is not part of the V1 format policy.
 
 ## Dev Package Output
 
@@ -253,7 +264,7 @@ bin/Debug/net10.0/sunder-dev/
 
 Build behavior:
 
-- `Sunder.Package.Build` removes the previous dev output before emitting a new one.
+- `Sunder.Package.Build` normalizes `SunderDevOutputPath` with a trailing separator and only permits the direct `TargetDir/sunder-dev` child. Existing directories are deleted only when they contain the `.sunder-generated-output` marker written by the target. Filesystem, project, target, output, `Assets`, `src`, unrelated, nested, symlink, and unmarked roots are never removed.
 - Package assemblies and private dependencies are copied to `lib`.
 - Package `.deps.json`, `.runtimeconfig.json`, and `.pdb` files are copied to `lib` when present.
 - Native runtime assets under build output `runtimes` are copied under `lib/runtimes`.
@@ -280,11 +291,12 @@ Current archive behavior:
 - The archive is a zip file with the `.sunderpkg` extension.
 - `manifest/sunder-package.json` is copied from generated package metadata.
 - `manifest/content-index.json` records every package file except itself.
-- Content index entries include path, SHA-256 hash, size, and role.
+- Content index entries include path, SHA-256 hash, size, and a canonical role: `manifest`, `assembly`, `native`, `asset`, or `file` according to path.
 - Writers emit files in ordinal path order with fixed ZIP timestamps so identical inputs produce identical archives.
 - Current archives do not contain signature files.
 - Relative archive paths use `/`, visible ASCII, non-empty segments, and no `.` or `..` segments. Rooted, drive, UNC, backslash, control/NUL, Windows-reserved, trailing-dot/space, and platform-dependent character forms are rejected.
-- Validation rejects duplicate normalized paths, case collisions, directory/file collisions, ZIP symbolic-link/reparse entries, links in extracted trees, missing manifest/index files, missing entry assemblies, missing icons, malformed or non-lowercase SHA-256 values, negative or mismatched sizes, and unindexed files.
+- Only the exact roots `manifest/`, `payload/lib/`, and `payload/assets/` are accepted. The content index excludes only the exact canonical `manifest/content-index.json`; a payload file also named `content-index.json` is indexed normally.
+- Metadata uses a closed, case-sensitive JSON schema; unknown or wrong-case members fail parsing. Validation rejects null collection entries, duplicate normalized paths, case collisions, directory/file collisions, ZIP symbolic-link/reparse entries, links in extracted trees, missing manifest/index files, missing entry assemblies, invalid icons, malformed or non-lowercase SHA-256 values, negative or mismatched sizes, incorrect index roles, files outside canonical roots, and unindexed files.
 - Package and Stack extraction is streamed to a temporary sibling directory and atomically published only after extraction completes. Owning validation/install/publish callers remove completed staging directories when validation or later work fails.
 
 Default package and Stack extraction limits:
@@ -300,6 +312,14 @@ Default package and Stack extraction limits:
 | Each manifest/content-index JSON document | 1 MiB |
 
 All extraction operations honor cancellation before and during streamed reads/writes.
+
+## Stack Archive Validation
+
+Stack archives use the same portable path and extraction limits. Files are restricted to `manifest/sunder-stack.json`, `manifest/content-index.json`, and `payload/fragments/`, `payload/files/`, or `payload/media/`. Fragment ids and payload-relative paths are validated before exporter streams are opened or any disk materialization occurs. Fragment payloads must be strict JSON objects no larger than 4 MiB. Export payload streams are bounded to 64 MiB per file and 256 MiB total. Media is limited to PNG, JPEG, WebP, or GIF, 10 MiB per file, and 8192 by 8192 pixels; declared content type and both path/file-name extensions must match the detected signature, and image inspection stops after a size failure.
+
+`features` are optional hints. Unknown optional feature ids produce warnings and may be ignored. `requiredFeatures` are reader requirements; malformed, duplicate, or unsupported required ids fail validation. Current reader features are `fragment-json.v1`, `media.v1`, and `required-inputs.v1`.
+
+Stack validation scans UTF-8 text files up to 8 MiB for known provider tokens, private keys, sensitive JSON values, and environment-style secret assignments. This is defense in depth, not proof that an archive contains no secret: binary files, unknown token formats, encoded/encrypted values, and larger non-fragment text may not be classified. Contributors must still omit secrets or replace them with required import inputs.
 
 ## Install And Update
 

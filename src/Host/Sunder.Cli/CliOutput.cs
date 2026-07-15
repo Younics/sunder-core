@@ -11,6 +11,7 @@ internal sealed partial class CliOutput
     private readonly TextWriter _stderr;
     private readonly bool _json;
     private readonly List<CliMessage> _messages = [];
+    private readonly HashSet<CliMessage> _uniqueMessages = [];
     private object? _data;
 
     public CliOutput(TextWriter stdout, TextWriter stderr, bool json)
@@ -31,6 +32,7 @@ internal sealed partial class CliOutput
     public void Success(string message) => WriteMessage("success", message, error: false);
     public void Warning(string message) => WriteMessage("warning", message, error: true);
     public void Error(string message) => WriteMessage("error", message, error: true);
+    public void Progress(string message) => _stderr.WriteLine(CliText.Sanitize(message));
 
     public void Data(object? data) => _data = data;
 
@@ -56,9 +58,11 @@ internal sealed partial class CliOutput
     private void WriteMessage(string level, string message, bool error)
     {
         var safe = CliText.Sanitize(message);
+        var cliMessage = new CliMessage(level, safe);
+        if (!_uniqueMessages.Add(cliMessage)) return;
         if (_json)
         {
-            _messages.Add(new(level, safe));
+            _messages.Add(cliMessage);
             return;
         }
         (error ? _stderr : _stdout).WriteLine(safe);
@@ -77,7 +81,7 @@ internal sealed partial class CliOutput
         }
         if (node is JsonArray array)
         {
-            foreach (var item in array) SanitizeNode(item);
+            foreach (var item in array.ToArray()) SanitizeNode(item);
             return;
         }
         if (node is JsonValue value && value.TryGetValue<string>(out var text))
@@ -124,5 +128,5 @@ internal interface ICliProgress
 
 internal sealed class CliProgress(CliOutput output) : ICliProgress
 {
-    public void Report(string message) => output.Info(message);
+    public void Report(string message) => output.Progress(message);
 }

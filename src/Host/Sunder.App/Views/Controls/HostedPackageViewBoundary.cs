@@ -36,6 +36,8 @@ internal sealed class HostedPackageViewBoundary : Panel, IPackageViewNavigationT
 
     public bool IsFaulted => _faulted;
 
+    public string? FaultMessage { get; private set; }
+
     public static void ReleaseHostedView(object? hostedView)
     {
         if (hostedView is HostedPackageViewBoundary boundary)
@@ -206,6 +208,7 @@ internal sealed class HostedPackageViewBoundary : Panel, IPackageViewNavigationT
         }
 
         _faulted = true;
+        FaultMessage = exception.Message;
         Children.Clear();
         try
         {

@@ -75,7 +75,8 @@ internal sealed class StackDetailLoadCoordinator(
                     packageInfo[packageId] = new StackPackageInfo(
                         string.IsNullOrWhiteSpace(package.Name) ? packageId : package.Name,
                         null,
-                        ResolveRegistryPackageIconUri(registryClient.RegistryUrl, package.IconUrl));
+                        ResolveRegistryPackageIconUri(registryClient.RegistryUrl, package.IconUrl),
+                        PackageIconTransport.AnonymousMedia);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -109,10 +110,13 @@ internal sealed class StackDetailLoadCoordinator(
         var trimmed = iconUrl.Trim();
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
         {
-            return absoluteUri;
+            return HttpMediaUriValidator.IsValid(absoluteUri) ? absoluteUri : null;
         }
 
-        return Uri.TryCreate(registryUrl, trimmed, out var relativeUri) ? relativeUri : null;
+        return Uri.TryCreate(registryUrl, trimmed, out var relativeUri)
+               && HttpMediaUriValidator.IsValid(relativeUri)
+            ? relativeUri
+            : null;
     }
 }
 

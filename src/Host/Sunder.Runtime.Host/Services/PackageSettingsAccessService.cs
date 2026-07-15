@@ -6,7 +6,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
 {
     private readonly PackageSettingsService _settings = new();
 
-    public IReadOnlyList<PackageConfigurationSchemaDescriptor> GetSchemas()
+    public IReadOnlyList<PackageSettingsSchemaDescriptor> GetSchemas()
     {
         using var lease = sessions.State.AcquireLease();
         return _settings.GetSchemas(sessions.State.ListEnabledLoadedPackages(lease));
@@ -17,10 +17,11 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
         CancellationToken cancellationToken = default)
     {
         using var lease = sessions.State.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessions.State.GetLoadedPackage(lease, packageId);
         return package is null
             ? null
-            : await _settings.GetValuesAsync(package, cancellationToken).ConfigureAwait(false);
+            : await _settings.GetValuesAsync(package, linked.Token).ConfigureAwait(false);
     }
 
     public async Task<bool> SaveValuesAsync(
@@ -29,13 +30,14 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
         CancellationToken cancellationToken = default)
     {
         using var lease = sessions.State.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessions.State.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
             return false;
         }
 
-        await _settings.SaveValuesAsync(package, request, cancellationToken).ConfigureAwait(false);
+        await _settings.SaveValuesAsync(package, request, linked.Token).ConfigureAwait(false);
         return true;
     }
 
@@ -45,6 +47,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
         CancellationToken cancellationToken = default)
     {
         using var lease = sessions.State.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessions.State.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
@@ -53,10 +56,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
 
         try
         {
-            var settings = package.Settings;
-            var stored = await settings.GetStoredValueAsync(key, cancellationToken).ConfigureAwait(false);
-            var effective = stored ?? await settings.GetValueAsync(key, cancellationToken).ConfigureAwait(false);
-            return new PackageSettingValueResponse(stored is not null, stored, effective);
+            return await _settings.GetValueAsync(package, key, linked.Token).ConfigureAwait(false);
         }
         catch (ArgumentException exception)
         {
@@ -71,6 +71,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
         CancellationToken cancellationToken = default)
     {
         using var lease = sessions.State.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessions.State.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
@@ -79,8 +80,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
 
         try
         {
-            var settings = package.Settings;
-            await settings.SetValueAsync(key, value, cancellationToken).ConfigureAwait(false);
+            await _settings.SetValueAsync(package, key, value, linked.Token).ConfigureAwait(false);
             return true;
         }
         catch (ArgumentException exception)
@@ -95,6 +95,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
         CancellationToken cancellationToken = default)
     {
         using var lease = sessions.State.AcquireLease();
+        using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var package = sessions.State.GetLoadedPackage(lease, packageId);
         if (package is null)
         {
@@ -103,8 +104,7 @@ internal sealed class PackageSettingsAccessService(RuntimeSessionOwner sessions)
 
         try
         {
-            var settings = package.Settings;
-            await settings.DeleteValueAsync(key, cancellationToken).ConfigureAwait(false);
+            await _settings.DeleteValueAsync(package, key, linked.Token).ConfigureAwait(false);
             return true;
         }
         catch (ArgumentException exception)

@@ -47,13 +47,13 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 Create an extension package that depends on a host package:
 
 ```powershell
-dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.host
+dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.host --hostPackageVersionRange ">=1.0.0 <2.0.0"
 ```
 
 Create an extension package that also references a host contracts NuGet package:
 
 ```powershell
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.host --hostContractsPackageId Sunder.Host.Package.Contracts --hostContractsVersion <host-contracts-version>
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.host --hostPackageVersionRange ">=1.0.0 <2.0.0" --hostContractsPackageId Sunder.Host.Package.Contracts --hostContractsVersion <host-contracts-version>
 ```
 
 ## Template Options
@@ -62,12 +62,14 @@ dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedex
 | --- | --- |
 | `--packageId <id>` | Required runtime package id written into generated metadata. |
 | `--packageName <name>` | Required display name written into generated metadata and starter view. |
-| `--withAvalonia` | Adds Avalonia, `Sunder.Sdk.Avalonia`, and a default App package view. |
-| `--withStacks` | Adds `Sunder.Sdk.Stacks` and a Runtime Stack contributor example. |
+| `--withAvalonia` | Adds Avalonia and `Sunder.Sdk.Avalonia`; includes a default App package view unless `--noDefaultView` is set. |
+| `--noDefaultView` | With `--withAvalonia`, omits the default view while retaining Avalonia references for settings or custom contributions. |
+| `--withStacks` | Adds `Sunder.Sdk.Stacks` and separate Runtime Stack exporter/importer registrations. |
 | `--withContracts` | Adds a `*.Contracts` project for public extension points. |
 | `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder. |
 | `--withHostDependency` | Adds runtime dependency metadata for another package. |
 | `--hostPackageId <id>` | Required with `--withHostDependency` or `--withHostContracts`; runtime package id that this package depends on. |
+| `--hostPackageVersionRange <range>` | Runtime SemVer range for the host dependency; defaults to `>=1.0.0 <2.0.0`. |
 | `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub. |
 | `--hostContractsPackageId <id>` | Required with `--withHostContracts`; NuGet package id for host contracts. |
 | `--hostContractsVersion <version>` | Required with `--withHostContracts`; NuGet package version for host contracts. |
@@ -97,9 +99,11 @@ Generated package projects reference:
 
 Generated projects use exact `1.1.0` versions for all Sunder SDK and build packages.
 
+With `--withContracts`, the sibling `*.Contracts` project is packable, carries a public `Sunder.Sdk` dependency because its API exposes `PackageExtensionPoint<T>`, and starts at contracts package version `1.0.0`. Version and publish that contracts package independently when other packages consume it.
+
 Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder.Package.Build` generates `sunder-package.json` during build.
 
-Generated code can use `Sunder.Sdk.Packaging.PackageId`, `SemanticVersion`, and `PackageVersionRange` as the canonical validators. Local-path integrations use `context.Storage.RoleLocalWorkspace`; the host activation owns its lifecycle and package code does not dispose it.
+Generated code can use `Sunder.Sdk.Packaging.PackageId`, `SemanticVersion`, and `PackageVersionRange` as the canonical validators. `context.ContentRootPath` is read-only package content. Writable local-path integrations use `context.Storage.RoleLocalWorkspace`; the host activation owns its lifecycle and package code does not dispose it.
 
 ## Build And Run
 

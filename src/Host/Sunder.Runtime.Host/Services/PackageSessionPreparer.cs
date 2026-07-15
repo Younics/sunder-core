@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
@@ -59,7 +60,8 @@ internal sealed class PackageSessionPreparer
 
         var shadowFolder = Path.Combine(sessionFolder, $"{index:D2}-{SanitizeFolderName(package.PackageId)}");
         Directory.CreateDirectory(shadowFolder);
-        File.Copy(package.ManifestPath, Path.Combine(shadowFolder, "sunder-package.json"), overwrite: true);
+        var shadowManifestPath = Path.Combine(shadowFolder, "sunder-package.json");
+        CopyInstalledManifestWithInferredRoles(package, shadowManifestPath);
         if (Directory.Exists(package.LibraryFolder))
         {
             fileMaterializer.MaterializeDirectory(package.LibraryFolder, Path.Combine(shadowFolder, "lib"));
@@ -79,7 +81,16 @@ internal sealed class PackageSessionPreparer
     }
 
     public static RuntimePackageActivationState ToActivationState(InstalledPackageRecord package)
-        => new(package.PackageId, package.Name, package.Version, package.Icon);
+    {
+        var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(package.ManifestPath), JsonOptions)
+            ?? throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid manifest.");
+        return new(
+            package.PackageId,
+            package.Name,
+            package.Version,
+            ResolveInstalledHostRoles(package, manifest),
+            package.Icon);
+    }
 
     private static PreparedRuntimePackage? PrepareMaterializedPackage(
         string sourceFolder,
@@ -118,16 +129,72 @@ internal sealed class PackageSessionPreparer
             .Select(packageId => packageId!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var hostRoles = ToHostRoles(manifest.HostRoles!);
+        var preparedSource = source with
+        {
+            PackageId = manifest.Id!,
+            HostRoles = hostRoles,
+            Dependencies = dependencies,
+        };
         return new PreparedRuntimePackage(
             sourceFolder,
-            source with { PackageId = manifest.Id! },
+            preparedSource,
             shadowFolder,
             libraryFolder,
             manifest.Id!,
             manifest.Version!,
-            new RuntimePackageActivationState(manifest.Id!, manifest.Name!, manifest.Version!, manifest.Icon),
+            hostRoles,
+            new RuntimePackageActivationState(manifest.Id!, manifest.Name!, manifest.Version!, hostRoles, manifest.Icon),
             Path.Combine(libraryFolder, manifest.EntryAssembly!),
             dependencies);
+    }
+
+    internal static PackageHostRoles ToHostRoles(IReadOnlyList<string> roles)
+    {
+        if (roles.Count == 1 && string.Equals(roles[0], SunderPackageFormat.ContractOnlyHostRole, StringComparison.Ordinal))
+        {
+            return PackageHostRoles.ContractOnly;
+        }
+        if (roles.Count == 0
+            || roles.Contains(SunderPackageFormat.ContractOnlyHostRole, StringComparer.Ordinal)
+            || roles.Any(role => role is not SunderPackageFormat.AppHostRole and not SunderPackageFormat.RuntimeHostRole))
+        {
+            throw new InvalidDataException("Package manifest declares invalid hostRoles metadata.");
+        }
+        var value = PackageHostRoles.ContractOnly;
+        if (roles.Contains(SunderPackageFormat.AppHostRole, StringComparer.Ordinal)) value |= PackageHostRoles.App;
+        if (roles.Contains(SunderPackageFormat.RuntimeHostRole, StringComparer.Ordinal)) value |= PackageHostRoles.Runtime;
+        return value;
+    }
+
+    internal static PackageHostRoles ResolveInstalledHostRoles(
+        InstalledPackageRecord package,
+        SunderPackageManifest manifest)
+        => ToHostRoles(
+            manifest.HostRoles is { Count: > 0 }
+                ? manifest.HostRoles
+                : SunderPackageHostRoleInspector.ReadManifestRoles(package.EntryAssemblyPath));
+
+    private static void CopyInstalledManifestWithInferredRoles(
+        InstalledPackageRecord package,
+        string destinationPath)
+    {
+        var manifestText = File.ReadAllText(package.ManifestPath);
+        var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(manifestText, JsonOptions)
+            ?? throw new InvalidDataException(
+                $"Installed package '{package.PackageId}' has an invalid manifest.");
+        if (manifest.HostRoles is { Count: > 0 })
+        {
+            File.WriteAllText(destinationPath, manifestText);
+            return;
+        }
+
+        var document = JsonNode.Parse(manifestText)?.AsObject()
+            ?? throw new InvalidDataException(
+                $"Installed package '{package.PackageId}' has an invalid manifest.");
+        document["hostRoles"] = JsonSerializer.SerializeToNode(
+            SunderPackageHostRoleInspector.ReadManifestRoles(package.EntryAssemblyPath));
+        File.WriteAllText(destinationPath, document.ToJsonString(JsonOptions));
     }
 
     private static string SanitizeFolderName(string? folderName)

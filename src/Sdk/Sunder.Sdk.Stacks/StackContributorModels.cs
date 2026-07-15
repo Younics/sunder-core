@@ -80,6 +80,10 @@ public sealed record StackExportDetailSelection(
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public static class StackExportSelectionExtensions
 {
+    /// <summary>Determines whether an item is selected for export.</summary>
+    public static bool IsItemSelected(this StackExportRequest request, string itemId)
+        => request.ItemIds.Any(selectedId => string.Equals(selectedId, itemId, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Gets an item's explicit selection using case-insensitive ids, or <see langword="null"/> when defaults apply.</summary>
     public static StackExportItemSelection? GetItemSelection(this StackExportRequest request, string itemId)
         => request.ItemSelections?.FirstOrDefault(selection => string.Equals(selection.ItemId, itemId, StringComparison.OrdinalIgnoreCase));
@@ -87,20 +91,26 @@ public static class StackExportSelectionExtensions
     /// <summary>Determines whether a detail is selected; absent detail choices default to selected.</summary>
     public static bool IsDetailSelected(this StackExportRequest request, string itemId, string detailId)
     {
+        if (!request.IsItemSelected(itemId))
+        {
+            return false;
+        }
+
         var itemSelection = request.GetItemSelection(itemId);
         if (itemSelection?.Details is null)
         {
             return true;
         }
 
-        return itemSelection.Details.Any(detail => detail.IsSelected && string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
+        var detail = itemSelection.Details.FirstOrDefault(detail => string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
+        return detail?.IsSelected ?? true;
     }
 
     /// <summary>Gets a nonblank value override or the supplied fallback.</summary>
     public static string GetDetailValue(this StackExportRequest request, string itemId, string detailId, string fallback)
     {
         var selected = request.GetItemSelection(itemId)?.Details?.FirstOrDefault(detail => string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
-        return selected is not null && !string.IsNullOrWhiteSpace(selected.ValueOverride)
+        return selected is { IsSelected: true } && !string.IsNullOrWhiteSpace(selected.ValueOverride)
             ? selected.ValueOverride!.Trim()
             : fallback;
     }
@@ -125,7 +135,6 @@ public sealed record StackExportContribution(
 
 /// <summary>Defines one contributor-owned versioned JSON fragment and optional payload files.</summary>
 /// <param name="FragmentId">Stable id unique within the Stack archive.</param>
-/// <param name="ContributorId">Contributor expected to import the fragment.</param>
 /// <param name="SchemaId">Stable payload schema id.</param>
 /// <param name="SchemaVersion">Positive contributor-defined schema version.</param>
 /// <param name="DisplayName">User-facing fragment name.</param>
@@ -138,7 +147,6 @@ public sealed record StackExportContribution(
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackFragmentExport(
     string FragmentId,
-    string ContributorId,
     string SchemaId,
     int SchemaVersion,
     string DisplayName,
@@ -146,7 +154,7 @@ public sealed record StackFragmentExport(
     string? Description = null,
     bool DefaultSelected = true,
     IReadOnlyList<StackRequiredInputDescriptor>? RequiredInputs = null,
-    IReadOnlyList<StackExportPayloadFile>? Files = null,
+    IReadOnlyList<StackExportPayloadHandle>? Files = null,
     string? SourceItemId = null);
 
 /// <summary>Provides a validated Stack fragment and extracted payload files to an importer.</summary>
@@ -169,23 +177,7 @@ public sealed record StackFragmentImport(
     string DisplayName,
     string JsonPayload,
     string? Description = null,
-    IReadOnlyList<StackImportPayloadFile>? Files = null);
-
-/// <summary>Maps an archive-relative payload path to a local source file during export.</summary>
-/// <param name="RelativePath">Safe forward-slash path within the fragment payload.</param>
-/// <param name="SourcePath">Absolute readable local file path; the exporter retains ownership.</param>
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-public sealed record StackExportPayloadFile(
-    string RelativePath,
-    string SourcePath);
-
-/// <summary>Maps a fragment-relative payload path to a temporary extracted file during import.</summary>
-/// <param name="RelativePath">Safe forward-slash path from the archive.</param>
-/// <param name="ExtractedPath">Absolute read-only temporary path owned by the host.</param>
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-public sealed record StackImportPayloadFile(
-    string RelativePath,
-    string ExtractedPath);
+    IReadOnlyList<StackImportPayloadHandle>? Files = null);
 
 /// <summary>Declares a package needed to apply exported Stack content.</summary>
 /// <param name="PackageId">Required runtime package id.</param>

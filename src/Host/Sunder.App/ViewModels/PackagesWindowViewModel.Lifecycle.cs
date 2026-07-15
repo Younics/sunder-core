@@ -41,17 +41,17 @@ public sealed partial class PackagesWindowViewModel
             var preferredPackageId = GetPreferredPackageIdForCompletedOperation(snapshot);
             await RefreshInstalledAsync(preferredPackageId, updateSelection: IsInstalledMode);
 
-            StatusText = snapshot.State switch
+            Operations.StatusText = snapshot.State switch
             {
                 BackgroundProcessState.Completed => snapshot.StatusText,
                 BackgroundProcessState.Cancelled => $"Cancelled {snapshot.Title}.",
                 BackgroundProcessState.Failed => snapshot.ErrorMessage ?? snapshot.StatusText,
-                _ => StatusText,
+                _ => Operations.StatusText,
             };
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            Operations.StatusText = ex.Message;
         }
     }
 
@@ -63,7 +63,7 @@ public sealed partial class PackagesWindowViewModel
             return packageId;
         }
 
-        return IsInstalledMode ? _selectedInstalledPackage?.PackageId : _selectedMarketplacePackage?.PackageId;
+        return IsInstalledMode ? Installed.SelectedPackage?.PackageId : Marketplace.SelectedPackage?.PackageId;
     }
 
     private void CancelQueuedMarketplaceSearch()
@@ -71,15 +71,15 @@ public sealed partial class PackagesWindowViewModel
 
     private void RefreshMarketplaceInstalledBadges()
     {
-        foreach (var package in MarketplacePackages)
+        foreach (var package in Marketplace.Packages)
         {
             package.InstalledVersion = GetInstalledPackage(package.PackageId)?.Version;
             package.Update = GetPackageUpdate(package.PackageId);
         }
 
-        if (_selectedMarketplacePackage is not null)
+        if (Marketplace.SelectedPackage is not null)
         {
-            MarketplaceInstalledVersion = GetInstalledPackage(_selectedMarketplacePackage.PackageId)?.Version ?? "Not installed";
+            MarketplaceInstalledVersion = GetInstalledPackage(Marketplace.SelectedPackage.PackageId)?.Version ?? "Not installed";
         }
 
         RefreshPackageOperationState();
@@ -97,22 +97,22 @@ public sealed partial class PackagesWindowViewModel
     private bool IsCurrentMarketplaceSelection(RegistryPackageSearchItemViewModel item, int selectionVersion)
         => !_disposed
            && _marketplace.SelectionLoader.IsCurrent(selectionVersion)
-           && ReferenceEquals(_selectedMarketplacePackage, item);
+           && ReferenceEquals(Marketplace.SelectedPackage, item);
 
     private void RefreshPackageOperationState()
     {
-        _operationState.RefreshPackageRows(MarketplacePackages, InstalledPackages);
+        Operations.RefreshRows(Marketplace.Packages, Installed.Packages);
         RefreshSelectedPackageOperationState();
         NotifyCommandStateChanged();
     }
 
     private void RefreshSelectedPackageOperationState()
     {
-        ApplySelectedPackageOperationState(_operationState.GetSelectedPackageState(GetSelectedPackageOperationPackageId()));
+        Operations.ApplySelectedPackage(GetSelectedPackageOperationPackageId());
     }
 
     private string? GetSelectedPackageOperationPackageId()
-        => IsMarketplaceMode ? _selectedMarketplacePackage?.PackageId : _selectedInstalledPackage?.PackageId;
+        => IsMarketplaceMode ? Marketplace.SelectedPackage?.PackageId : Installed.SelectedPackage?.PackageId;
 
     private void ApplySelectedPackageDetails(PackageSelectionDetails details)
     {
@@ -138,15 +138,6 @@ public sealed partial class PackagesWindowViewModel
         SelectedPackageIconLoadError = state.IconLoadError;
     }
 
-    private void ApplySelectedPackageOperationState(SelectedPackageOperationState state)
-    {
-        SelectedPackageHasActiveOperation = state.HasActiveOperation;
-        SelectedPackageOperationCanCancel = state.CanCancel;
-        SelectedPackageOperationIsIndeterminate = state.IsIndeterminate;
-        SelectedPackageOperationProgressPercent = state.ProgressPercent;
-        SelectedPackageOperationStatusText = state.StatusText;
-    }
-
     private InstalledPackageDescriptor? GetInstalledPackage(string packageId)
         => _installedPackages.GetInstalledPackage(packageId);
 
@@ -154,27 +145,19 @@ public sealed partial class PackagesWindowViewModel
         => PackageIconUriResolver.Resolve(packageId, icon, _runtimeApiClient.CreatePackageAssetUri);
 
     private RegistryPackageUpdate? GetSelectedInstalledPackageUpdate()
-        => _selectedInstalledPackage is null ? null : GetPackageUpdate(_selectedInstalledPackage.PackageId);
+        => Installed.SelectedPackage is null ? null : GetPackageUpdate(Installed.SelectedPackage.PackageId);
 
     private RegistryPackageUpdate? GetPackageUpdate(string packageId)
         => _installedPackages.GetPackageUpdate(packageId);
 
     private void ClearWarnings()
     {
-        _warnings.Clear();
-        OnPropertyChanged(nameof(HasWarnings));
+        Operations.ClearWarnings();
     }
 
     private void AddWarningLine(string warning)
     {
-        _warnings.Add(warning);
-        OnPropertyChanged(nameof(HasWarnings));
-    }
-
-    private void ReplaceWarningLines(IReadOnlyList<string> warnings)
-    {
-        _warnings.ReplaceWith(warnings);
-        OnPropertyChanged(nameof(HasWarnings));
+        Operations.AddWarning(warning);
     }
 
     private void NotifyListVisibilityChanged()
@@ -328,9 +311,9 @@ public sealed partial class PackagesWindowViewModel
             .Select(maintainer => new RegistryUserAttributionViewModel(maintainer))
             .ToArray();
 
-        MarketplaceCreators.ReplaceWith(creators);
-        MarketplaceMaintainers.ReplaceWith(maintainerAttributions);
-        MarketplaceAttributions.ReplaceWith(creators.Concat(maintainerAttributions));
+        Marketplace.Creators.ReplaceWith(creators);
+        Marketplace.Maintainers.ReplaceWith(maintainerAttributions);
+        Marketplace.Attributions.ReplaceWith(creators.Concat(maintainerAttributions));
         OnPropertyChanged(nameof(HasMarketplaceAttributions));
         OnPropertyChanged(nameof(HasMarketplaceCreators));
         OnPropertyChanged(nameof(HasMarketplaceMaintainers));
@@ -343,7 +326,7 @@ public sealed partial class PackagesWindowViewModel
             return true;
         }
 
-        StatusText = "Enter a valid HTTP Registry URL before using this action.";
+        Operations.StatusText = "Enter a valid HTTP Registry URL before using this action.";
         return false;
     }
 
@@ -355,10 +338,8 @@ public sealed partial class PackagesWindowViewModel
         }
 
         _disposed = true;
-        if (_packageOperationService is not null)
-        {
-            _packageOperationService.OperationChanged -= PackageOperationService_OnOperationChanged;
-        }
+        _packageOperationExecutor.OperationChanged -= PackageOperationService_OnOperationChanged;
+        Operations.PropertyChanged -= Operations_OnPropertyChanged;
 
         _marketplaceSearchScheduler.Dispose();
         _tasks.Dispose();

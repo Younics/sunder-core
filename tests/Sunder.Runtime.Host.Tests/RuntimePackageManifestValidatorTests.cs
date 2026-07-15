@@ -34,7 +34,7 @@ public sealed class RuntimePackageManifestValidatorTests
     {
         var shadowFolder = CreateTempDirectory();
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
-        File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
+        File.Copy(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, Path.Combine(shadowFolder, "lib", "Test.Package.dll"));
 
         var errors = Validate(CreateManifest(), shadowFolder);
 
@@ -46,7 +46,7 @@ public sealed class RuntimePackageManifestValidatorTests
     {
         var shadowFolder = CreateTempDirectory();
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
-        File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
+        File.Copy(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, Path.Combine(shadowFolder, "lib", "Test.Package.dll"));
 
         var errors = Validate(CreateManifest(sdkApiVersion: 2), shadowFolder);
 
@@ -58,7 +58,7 @@ public sealed class RuntimePackageManifestValidatorTests
     {
         var shadowFolder = CreateTempDirectory();
         Directory.CreateDirectory(Path.Combine(shadowFolder, "lib"));
-        File.WriteAllText(Path.Combine(shadowFolder, "lib", "Test.Package.dll"), string.Empty);
+        File.Copy(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, Path.Combine(shadowFolder, "lib", "Test.Package.dll"));
 
         var errors = Validate(
             CreateManifest(requiredSdkCapabilities: ["callbacks.v2"]),
@@ -78,6 +78,7 @@ public sealed class RuntimePackageManifestValidatorTests
             Name = "Test Package",
             Version = "1.0.0",
             EntryAssembly = entryAssembly,
+            HostRoles = [SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole],
             SdkApiVersion = sdkApiVersion,
             SdkPackageVersion = "1.1.0",
             RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", .. requiredSdkCapabilities ?? ["core.v1"]],

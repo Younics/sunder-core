@@ -1,3 +1,5 @@
+using Sunder.Runtime.Client;
+
 namespace Sunder.App.Services;
 
 internal static class BoundedImageContentLoader
@@ -8,15 +10,54 @@ internal static class BoundedImageContentLoader
         Uri uri,
         long maxBytes,
         CancellationToken cancellationToken)
+        => await LoadAsync(
+            (requestUri, token) => httpClient.GetAsync(
+                requestUri,
+                HttpCompletionOption.ResponseHeadersRead,
+                token),
+            loadSemaphore,
+            uri,
+            maxBytes,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async Task<BoundedImageContentLoadResult> LoadAsync(
+        RuntimeClientTransport transport,
+        SemaphoreSlim loadSemaphore,
+        Uri uri,
+        long maxBytes,
+        CancellationToken cancellationToken)
+        => await LoadAsync(
+            (requestUri, token) => transport.GetAsync(
+                requestUri,
+                HttpCompletionOption.ResponseHeadersRead,
+                token),
+            loadSemaphore,
+            uri,
+            maxBytes,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<BoundedImageContentLoadResult> LoadAsync(
+        Func<Uri, CancellationToken, Task<HttpResponseMessage>> sendAsync,
+        SemaphoreSlim loadSemaphore,
+        Uri uri,
+        long maxBytes,
+        CancellationToken cancellationToken)
     {
+        if (!HttpMediaUriValidator.IsValid(uri))
+        {
+            return BoundedImageContentLoadResult.Failed($"Image URL '{uri}' must use HTTP or HTTPS without user information.");
+        }
+
         var semaphoreAcquired = false;
         try
         {
             await loadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             semaphoreAcquired = true;
-            using var response = await httpClient
-                .GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                .ConfigureAwait(false);
+            using var response = await sendAsync(uri, cancellationToken).ConfigureAwait(false);
+            if (!HttpMediaUriValidator.HasSameOrigin(uri, response.RequestMessage?.RequestUri))
+            {
+                return BoundedImageContentLoadResult.Failed($"Image '{uri}' redirected to an untrusted origin.");
+            }
             response.EnsureSuccessStatusCode();
 
             if (response.Content.Headers.ContentLength > maxBytes)
@@ -27,7 +68,10 @@ internal static class BoundedImageContentLoader
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             var memory = await ReadBoundedContentAsync(source, maxBytes, cancellationToken).ConfigureAwait(false);
             memory.Position = 0;
-            return BoundedImageContentLoadResult.Success(memory, response.Content.Headers.ContentType?.MediaType);
+            return BoundedImageContentLoadResult.Success(
+                memory,
+                response.Content.Headers.ContentType?.MediaType,
+                response.Content.Headers.ContentEncoding.ToArray());
         }
         finally
         {
@@ -77,11 +121,15 @@ internal static class BoundedImageContentLoader
 internal sealed record BoundedImageContentLoadResult(
     MemoryStream? Content,
     string? ContentType,
+    IReadOnlyList<string> ContentEncodings,
     string? Error)
 {
-    public static BoundedImageContentLoadResult Success(MemoryStream content, string? contentType)
-        => new(content, contentType, null);
+    public static BoundedImageContentLoadResult Success(
+        MemoryStream content,
+        string? contentType,
+        IReadOnlyList<string> contentEncodings)
+        => new(content, contentType, contentEncodings, null);
 
     public static BoundedImageContentLoadResult Failed(string error)
-        => new(null, null, error);
+        => new(null, null, [], error);
 }

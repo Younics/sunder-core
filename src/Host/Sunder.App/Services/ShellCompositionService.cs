@@ -1,4 +1,5 @@
 using Sunder.App.Models;
+using Sunder.App.Features.Shell.State;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -10,7 +11,8 @@ public sealed class ShellCompositionService : IShellCompositionService
         ShellState state,
         SystemStatusResponse? systemStatus,
         IReadOnlyList<string> warnings,
-        IReadOnlyList<string> errors
+        IReadOnlyList<string> errors,
+        ShellNormalizationPolicy normalizationPolicy
     )
     {
         var packageViews = new List<ShellPackageView>();
@@ -45,8 +47,7 @@ public sealed class ShellCompositionService : IShellCompositionService
             .ThenBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        NormalizeState(state, orderedViews);
-        NormalizeSelections(state, orderedViews);
+        ShellStateNormalizer.Normalize(state, orderedViews, normalizationPolicy);
 
         var systemStatusText = errors.Count > 0
             ? "Runtime loaded with errors"
@@ -59,79 +60,6 @@ public sealed class ShellCompositionService : IShellCompositionService
             : $"{activePackages.Count} package(s) active";
 
         return new ShellSnapshot(orderedViews, state, warnings, errors, systemStatusText, syncStatusText);
-    }
-
-    private static void NormalizeState(ShellState state, IReadOnlyList<ShellPackageView> packageViews)
-    {
-        if (packageViews.Count == 0)
-        {
-            return;
-        }
-
-        var activeViewIds = packageViews.Select(view => view.ViewId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var staleViewId in state.ViewPlacements.Keys.Where(viewId => !activeViewIds.Contains(viewId)).ToArray())
-        {
-            state.ViewPlacements.Remove(staleViewId);
-        }
-
-        foreach (var staleViewId in state.ViewOrder.Keys.Where(viewId => !activeViewIds.Contains(viewId)).ToArray())
-        {
-            state.ViewOrder.Remove(staleViewId);
-        }
-
-        foreach (var staleViewId in state.HiddenHotbarViewIds.Where(viewId => !activeViewIds.Contains(viewId)).ToArray())
-        {
-            state.HiddenHotbarViewIds.Remove(staleViewId);
-        }
-
-        foreach (var view in packageViews)
-        {
-            var isNewView = !state.ViewPlacements.ContainsKey(view.ViewId);
-            if (isNewView && !view.ShowInHotbarByDefault)
-            {
-                state.HiddenHotbarViewIds.Add(view.ViewId);
-            }
-
-            state.ViewPlacements[view.ViewId] = view.Placement;
-        }
-    }
-
-    private static void NormalizeSelections(ShellState state, IReadOnlyList<ShellPackageView> packageViews)
-    {
-        if (packageViews.Count == 0)
-        {
-            return;
-        }
-
-        var visibleViews = packageViews
-            .Where(view => !state.HiddenHotbarViewIds.Contains(view.ViewId))
-            .ToArray();
-        var leftTopViews = visibleViews.Where(x => x.Placement == RailPlacement.LeftTop).ToArray();
-        var middleViews = visibleViews.Where(x => x.Placement == RailPlacement.Middle).ToArray();
-        var rightTopViews = visibleViews.Where(x => x.Placement == RailPlacement.RightTop).ToArray();
-        var leftBottomViews = visibleViews.Where(x => x.Placement == RailPlacement.LeftBottom).ToArray();
-        var rightBottomViews = visibleViews.Where(x => x.Placement == RailPlacement.RightBottom).ToArray();
-
-        state.SelectedLeftTopViewId = leftTopViews.Any(x => x.ViewId == state.SelectedLeftTopViewId)
-            ? state.SelectedLeftTopViewId
-            : null;
-
-        state.SelectedMiddleViewId = middleViews.Any(x => x.ViewId == state.SelectedMiddleViewId)
-            ? state.SelectedMiddleViewId
-            : state.HasInitializedLayout ? null : middleViews.FirstOrDefault()?.ViewId;
-
-        state.SelectedRightTopViewId = rightTopViews.Any(x => x.ViewId == state.SelectedRightTopViewId)
-            ? state.SelectedRightTopViewId
-            : null;
-
-        state.SelectedLeftBottomViewId = leftBottomViews.Any(x => x.ViewId == state.SelectedLeftBottomViewId)
-            ? state.SelectedLeftBottomViewId
-            : null;
-
-        state.SelectedRightBottomViewId = rightBottomViews.Any(x => x.ViewId == state.SelectedRightBottomViewId)
-            ? state.SelectedRightBottomViewId
-            : null;
     }
 
     private static RailPlacement ResolvePlacement(PackageViewDescriptor view, ShellState state)

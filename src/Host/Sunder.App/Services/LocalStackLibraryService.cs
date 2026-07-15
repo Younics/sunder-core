@@ -10,7 +10,7 @@ public sealed class LocalStackLibraryService
 
     public LocalStackLibraryService(string? stacksRoot = null)
     {
-        _stacksRoot = stacksRoot ?? GetDefaultStacksRoot();
+        _stacksRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stacksRoot ?? GetDefaultStacksRoot()));
     }
 
     public async Task<IReadOnlyList<LocalStackLibraryItem>> ListAsync(CancellationToken cancellationToken = default)
@@ -21,14 +21,18 @@ public sealed class LocalStackLibraryService
 
         foreach (var item in index.Items)
         {
-            var path = ResolveItemPath(item.LocalPath);
-            if (!File.Exists(path))
+            if (!TryResolveItemPath(item.LocalPath, out var path) || !File.Exists(path))
             {
                 changed = true;
                 continue;
             }
 
-            existing.Add(ResolveStoredItem(item, path));
+            var resolved = ResolveStoredItem(item, path);
+            if ((item.Media?.Count ?? 0) != (resolved.Media?.Count ?? 0))
+            {
+                changed = true;
+            }
+            existing.Add(resolved);
         }
 
         if (changed)
@@ -250,28 +254,82 @@ public sealed class LocalStackLibraryService
     }
 
     private LocalStackLibraryItem ToStoredPath(LocalStackLibraryItem item)
-        => item with
+    {
+        var localPath = ResolveItemPath(item.LocalPath);
+        return item with
         {
-            LocalPath = Path.GetRelativePath(_stacksRoot, item.LocalPath).Replace('\\', '/'),
+            LocalPath = Path.GetRelativePath(_stacksRoot, localPath).Replace('\\', '/'),
             Media = item.Media?
-                .Select(media => media with { LocalPath = Path.GetRelativePath(_stacksRoot, media.LocalPath).Replace('\\', '/') })
+                .Select(media => media with
+                {
+                    LocalPath = Path.GetRelativePath(_stacksRoot, ResolveItemPath(media.LocalPath)).Replace('\\', '/'),
+                })
                 .ToArray(),
         };
+    }
 
     private LocalStackLibraryItem ResolveStoredItem(LocalStackLibraryItem item, string localPath)
         => item with
         {
             LocalPath = localPath,
             Media = item.Media?
-                .Select(media => media with { LocalPath = ResolveItemPath(media.LocalPath) })
+                .Select(media => TryResolveItemPath(media.LocalPath, out var mediaPath)
+                    ? media with { LocalPath = mediaPath }
+                    : null)
+                .Where(media => media is not null)
+                .Select(media => media!)
                 .Where(media => File.Exists(media.LocalPath))
                 .ToArray(),
         };
 
     private string ResolveItemPath(string path)
-        => Path.IsPathRooted(path)
-            ? path
-            : Path.Combine(_stacksRoot, path.Replace('/', Path.DirectorySeparatorChar));
+        => TryResolveItemPath(path, out var resolved)
+            ? resolved
+            : throw new InvalidDataException("Local Stack index path must remain within the Stack library root.");
+
+    private bool TryResolveItemPath(string path, out string resolved)
+    {
+        resolved = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+        try
+        {
+            var candidate = Path.GetFullPath(Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(_stacksRoot, path.Replace('/', Path.DirectorySeparatorChar)));
+            var prefix = _stacksRoot + Path.DirectorySeparatorChar;
+            if (!candidate.StartsWith(prefix, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                || ContainsReparsePoint(candidate))
+            {
+                return false;
+            }
+            resolved = candidate;
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private bool ContainsReparsePoint(string path)
+    {
+        for (var current = path; !string.Equals(current, _stacksRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal); current = Path.GetDirectoryName(current)!)
+        {
+            if (string.IsNullOrWhiteSpace(current))
+            {
+                return true;
+            }
+            if ((File.Exists(current) || Directory.Exists(current))
+                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private string GetIndexPath()
         => Path.Combine(_stacksRoot, "local-stacks.json");

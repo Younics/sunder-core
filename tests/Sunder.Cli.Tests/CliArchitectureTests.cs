@@ -39,26 +39,41 @@ public sealed class CliArchitectureTests
         var cliDirectory = FindCliDirectory();
         var root = new DirectoryInfo(cliDirectory).Parent!.Parent!.Parent!.FullName;
         var runtimeClientDirectory = Path.Combine(root, "src", "Host", "Sunder.Runtime.Client");
-        var expectedFiles = new[]
+        var endpointFamilyFiles = new[]
         {
             Path.Combine(cliDirectory, "RegistryClient.Packages.cs"),
             Path.Combine(cliDirectory, "RegistryClient.Stacks.cs"),
             Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs"),
             Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Registry.cs"),
             Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.PackageCommit.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Snapshots.cs"),
+        };
+        var transportAndCompositionFiles = new[]
+        {
+            Path.Combine(cliDirectory, "RegistryClient.cs"),
+            Path.Combine(cliDirectory, "CliHttpContentReader.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.cs"),
+            Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Policy.cs"),
+            Path.Combine(runtimeClientDirectory, "VerifiedFileTransfer.cs"),
         };
 
-        Assert.All(expectedFiles, path => Assert.True(File.Exists(path), $"Missing client endpoint family {path}."));
+        Assert.All(endpointFamilyFiles, path => Assert.True(File.Exists(path), $"Missing client endpoint family {path}."));
+        Assert.All(transportAndCompositionFiles, path => Assert.True(File.Exists(path), $"Missing client transport or composition boundary {path}."));
         var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             [Path.Combine(cliDirectory, "RegistryClient.cs")] = 113,
             [Path.Combine(cliDirectory, "RegistryClient.Packages.cs")] = 25,
             [Path.Combine(cliDirectory, "RegistryClient.Stacks.cs")] = 59,
             [Path.Combine(cliDirectory, "CliHttpContentReader.cs")] = 46,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.cs")] = 51,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.cs")] = 61,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs")] = 16,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Registry.cs")] = 59,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs")] = 53,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.PackageCommit.cs")] = 53,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Snapshots.cs")] = 20,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Policy.cs")] = 9,
+            [Path.Combine(runtimeClientDirectory, "VerifiedFileTransfer.cs")] = 126,
         };
 
         Assert.All(baselines, pair => Assert.True(
@@ -70,6 +85,10 @@ public sealed class CliArchitectureTests
             path => Assert.True(
                 File.ReadLines(path).Count() < 500,
                 $"{path} exceeded the 500-line Runtime client ratchet."));
+
+        var stackClientSource = File.ReadAllText(Path.Combine(cliDirectory, "RegistryClient.Stacks.cs"));
+        Assert.Contains("VerifiedFileTransfer.PublishAsync", stackClientSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("SHA256.HashDataAsync", stackClientSource, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -89,6 +108,36 @@ public sealed class CliArchitectureTests
         Assert.Contains("IRegistryManageClient", File.ReadAllText(Path.Combine(directory, "DeveloperPublishCommandHandler.cs")), StringComparison.Ordinal);
         Assert.DoesNotContain("IRegistryClient", File.ReadAllText(Path.Combine(directory, "RegistryBrowseCommandHandler.cs")), StringComparison.Ordinal);
         Assert.DoesNotContain("IRegistryClient", File.ReadAllText(Path.Combine(directory, "DeveloperPublishCommandHandler.cs")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeCapabilityInterfaces_HaveNoDefaultsAndHandlersUseNarrowRoles()
+    {
+        Assert.All(
+            typeof(ICliRuntimeClientRole).Assembly.GetTypes()
+                .Where(type => type.IsInterface && typeof(ICliRuntimeClientRole).IsAssignableFrom(type))
+                .SelectMany(type => type.GetMethods(
+                    System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.DeclaredOnly)),
+            method => Assert.True(method.IsAbstract, $"{method.DeclaringType?.Name}.{method.Name} has a default implementation."));
+
+        var directory = FindCliDirectory();
+        var expectedRoles = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["SystemCommandHandler.cs"] = "ICliRuntimeSystemClient",
+            ["RuntimeResetCommandHandler.cs"] = "ICliRuntimeResetClient",
+            ["PackageCommandHandler.cs"] = "ICliRuntimePackageClient",
+            ["RegistryAuthCommandHandler.cs"] = "ICliRuntimeAuthClient",
+            ["RegistryManagementCommandHandler.cs"] = "ICliRuntimeManagementClient",
+            ["DeveloperPublishCommandHandler.cs"] = "ICliRuntimePublishClient",
+        };
+        Assert.All(expectedRoles, pair =>
+        {
+            var source = File.ReadAllText(Path.Combine(directory, pair.Key));
+            Assert.Contains(pair.Value, source, StringComparison.Ordinal);
+            Assert.DoesNotContain("ICliRuntimeClient runtime", source, StringComparison.Ordinal);
+        });
     }
 
     private static string FindCliDirectory()

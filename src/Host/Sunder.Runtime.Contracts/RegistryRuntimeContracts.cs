@@ -1,5 +1,3 @@
-using Sunder.Registry.Contracts;
-
 namespace Sunder.Runtime.Contracts;
 
 public enum RuntimeRegistryAuthSessionState
@@ -72,17 +70,83 @@ public sealed record RuntimeRegistryPackageRequest(
     bool AllowDowngrade = false,
     bool Reinstall = false);
 
+public sealed record RuntimeRegistryPackageChangeRequest(
+    string PackageId,
+    string? Version,
+    string? Tag = null);
+
 public sealed record RuntimeRegistryPackageBatchRequest(
     string RegistryOrigin,
-    IReadOnlyList<RegistryPackageChangeRequest> Packages,
+    IReadOnlyList<RuntimeRegistryPackageChangeRequest> Packages,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
-    bool Reinstall = false);
+    bool Reinstall = false)
+{
+    public IReadOnlyList<RuntimeRegistryPackageChangeRequest> Packages { get; }
+        = Array.AsReadOnly(Packages.ToArray());
+}
 
 public sealed record RuntimeRegistryUpdateRequest(
     string RegistryOrigin,
     string? PackageId = null,
     bool IncludePrerelease = false);
+
+public sealed record RuntimeRegistryPackageDependency(
+    string PackageId,
+    string VersionRange);
+
+public sealed record RuntimeRegistryPackageArtifact(
+    string Sha256,
+    long? Size,
+    string DownloadUrl);
+
+public sealed record RuntimeRegistryPackageCompatibility(
+    int SdkApiVersion,
+    string SdkPackageVersion,
+    IReadOnlyList<string> RequiredCapabilities,
+    string? TargetFramework,
+    int ManifestFormatVersion,
+    int ArchiveFormatVersion)
+{
+    public IReadOnlyList<string> RequiredCapabilities { get; }
+        = Array.AsReadOnly(RequiredCapabilities.ToArray());
+}
+
+public sealed record RuntimeRegistryPackageInstallPlanItem(
+    string PackageId,
+    string? CurrentVersion,
+    string Version,
+    bool IsUpdate,
+    string? DeprecatedMessage,
+    IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn,
+    RuntimeRegistryPackageArtifact Artifact,
+    RuntimeRegistryPackageCompatibility? Compatibility = null)
+{
+    public IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn { get; }
+        = Array.AsReadOnly(DependsOn.ToArray());
+}
+
+public sealed record RuntimeRegistryPackageInstallPlanConflict(
+    string PackageId,
+    string? CurrentVersion,
+    string? RequestedVersionRange,
+    string? RequiredByPackageId,
+    string Message);
+
+public sealed record RuntimeRegistryResolveInstallPlanResponse(
+    bool Success,
+    IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts)
+{
+    public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items { get; }
+        = Array.AsReadOnly(Items.ToArray());
+    public IReadOnlyList<string> Warnings { get; } = Array.AsReadOnly(Warnings.ToArray());
+    public IReadOnlyList<string> Errors { get; } = Array.AsReadOnly(Errors.ToArray());
+    public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get; }
+        = Array.AsReadOnly(Conflicts.ToArray());
+}
 
 public sealed record RuntimeRegistryPackageChangeResult(
     bool Success,
@@ -93,7 +157,16 @@ public sealed record RuntimeRegistryPackageChangeResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds,
-    IReadOnlyList<RegistryPackageInstallPlanItem> PlanItems);
+    IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems)
+{
+    public IReadOnlyList<string> Warnings { get; } = Array.AsReadOnly(Warnings.ToArray());
+    public IReadOnlyList<string> Errors { get; } = Array.AsReadOnly(Errors.ToArray());
+    public IReadOnlyList<string> ImpactedPackageIds { get; }
+        = Array.AsReadOnly(ImpactedPackageIds.ToArray());
+    public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems { get; }
+        = Array.AsReadOnly(PlanItems.ToArray());
+    public RuntimePackageStamp? CommittedStamp { get; init; }
+}
 
 public sealed record RuntimeRegistryStarRequest(string RegistryOrigin, string ResourceId, bool Starred);
 

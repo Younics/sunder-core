@@ -8,7 +8,7 @@ internal static class ShellHotbarStateMutator
 {
     public static bool AddViewToHotbar(
         string viewId,
-        PackageHotbarPlacement placement,
+        PackageViewPlacement placement,
         int? index,
         IDictionary<string, ShellPackageView> viewsById,
         ShellState shellState,

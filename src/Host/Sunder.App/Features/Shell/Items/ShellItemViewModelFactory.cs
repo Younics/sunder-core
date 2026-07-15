@@ -4,7 +4,7 @@ using Sunder.App.ViewModels;
 
 namespace Sunder.App.Features.Shell.Items;
 
-internal sealed class ShellItemViewModelFactory(IRuntimeApiClientFactory runtimeApiClientFactory)
+internal sealed class ShellItemViewModelFactory(PackageIconCache packageIconCache)
 {
     public ShellItemViewModel Create(ShellPackageView packageView, Action<ShellItemViewModel> onSelect)
     {
@@ -12,20 +12,16 @@ internal sealed class ShellItemViewModelFactory(IRuntimeApiClientFactory runtime
         return new ShellItemViewModel(
             packageView.ViewId,
             packageView.Glyph,
-            CreatePackageIconUri(packageView.PackageId, packageView.Icon),
+            iconUri: null,
             packageView.Title,
             packageView.PackageDisplayName,
             tooltip,
             packageView.Placement,
-            onSelect);
+            onSelect,
+            iconImage: GetPackageIcon(packageView.PackageId, packageView.Icon),
+            ownsIconImage: false);
     }
 
-    public Uri? CreatePackageIconUri(string packageId, Sunder.Runtime.Contracts.PackageIconDescriptor? icon)
-    {
-        return PackageIconUriResolver.Resolve(packageId, icon, (resolvedPackageId, assetPath) =>
-        {
-            using var runtimeApiClient = runtimeApiClientFactory.CreateClient<IRuntimePackageUiClient>();
-            return runtimeApiClient.CreatePackageAssetUri(resolvedPackageId, assetPath);
-        });
-    }
+    public Avalonia.Media.IImage? GetPackageIcon(string packageId, Sunder.Runtime.Contracts.PackageIconDescriptor? icon)
+        => packageIconCache.GetImage(packageId, icon);
 }

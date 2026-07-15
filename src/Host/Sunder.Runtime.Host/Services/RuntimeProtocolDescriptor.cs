@@ -11,6 +11,9 @@ internal sealed class RuntimeProtocolDescriptor
         RuntimeProtocolFeatures.PackageRuntimeOperationsV1,
         RuntimeProtocolFeatures.PackageRuntimeStreamEnvelopesV1,
         RuntimeProtocolFeatures.PackageSessionDrainingV1,
+        RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
+        RuntimeProtocolFeatures.PackageStageStatusV1,
+        RuntimeProtocolFeatures.DevPackageOwnerLeasesV1,
     });
 
     public RuntimeProtocolDescriptor()
@@ -35,4 +38,6 @@ internal sealed class RuntimeProtocolDescriptor
     }
 
     public RuntimeHandshakeResponse Handshake { get; }
+
+    public Guid RuntimeInstanceId => Handshake.RuntimeInstanceId;
 }

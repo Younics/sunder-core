@@ -8,19 +8,12 @@ public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
 
     public async Task<T> ReadRequiredJsonAsync<T>(
         HttpResponseMessage response,
-        CancellationToken cancellationToken,
-        bool acceptErrorPayload = false)
+        CancellationToken cancellationToken)
     {
-        if (response.IsSuccessStatusCode || acceptErrorPayload)
+        if (response.IsSuccessStatusCode)
         {
-            try
-            {
-                var payload = await ReadBoundedAsync(response.Content, policy.MaxJsonResponseBytes, cancellationToken);
-                if (payload.Length > 0 && JsonSerializer.Deserialize<T>(payload, JsonOptions) is { } value) return value;
-            }
-            catch (JsonException) when (!response.IsSuccessStatusCode)
-            {
-            }
+            var payload = await ReadBoundedAsync(response.Content, policy.MaxJsonResponseBytes, cancellationToken);
+            if (payload.Length > 0 && JsonSerializer.Deserialize<T>(payload, JsonOptions) is { } value) return value;
         }
         throw await CreateExceptionAsync(response, cancellationToken);
     }
@@ -58,7 +51,19 @@ public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
         {
         }
         var title = problem?.Title ?? $"Runtime request failed with HTTP {(int)response.StatusCode}";
-        return new RuntimeClientException(response.StatusCode, title, problem?.Detail, problem?.Code);
+        var correlationId = problem?.CorrelationId;
+        if (string.IsNullOrWhiteSpace(correlationId)
+            && response.Headers.TryGetValues("X-Correlation-ID", out var values))
+        {
+            correlationId = values.FirstOrDefault();
+        }
+        return new RuntimeClientException(
+            response.StatusCode,
+            title,
+            problem?.Detail,
+            problem?.Code,
+            correlationId,
+            innerException: null);
     }
 
     private static async Task<byte[]> ReadBoundedAsync(HttpContent content, long maxBytes, CancellationToken cancellationToken)
@@ -82,5 +87,9 @@ public sealed class RuntimeHttpResponseReader(RuntimeClientPolicyOptions policy)
         }
     }
 
-    private sealed record RuntimeProblemDetails(string? Title, string? Detail, string? Code);
+    private sealed record RuntimeProblemDetails(
+        string? Title,
+        string? Detail,
+        string? Code,
+        string? CorrelationId);
 }

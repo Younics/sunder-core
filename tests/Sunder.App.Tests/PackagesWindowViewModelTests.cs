@@ -14,86 +14,17 @@ namespace Sunder.App.Tests;
 public sealed class PackagesWindowViewModelTests
 {
     [Fact]
-    public async Task EnableSelectedPackageCommand_PublishesSuccessToastAfterRefresh()
+    public async Task EnableSelectedPackageCommand_UsesExplicitOperationExecutor()
     {
-        var runtimeClient = new FakeRuntimeApiClient(
-            [CreateInstalledPackage("agent", isEnabled: false)]
-        );
-        var notificationCenter = CreateNotificationCenter();
-        var toasts = new List<AppToastNotification>();
-        var installedCallsAtToast = 0;
-        notificationCenter.ToastQueued += toast =>
-        {
-            installedCallsAtToast = runtimeClient.GetInstalledPackagesCallCount;
-            toasts.Add(toast);
-        };
-        var viewModel = CreateViewModel(runtimeClient, notificationCenter);
+        var runtimeClient = new FakeRuntimeApiClient([CreateInstalledPackage("agent", isEnabled: false)]);
+        var executor = new FakePackageOperationExecutor();
+        using var viewModel = CreateViewModel(runtimeClient, operationExecutor: executor);
 
         await viewModel.InitializeAsync();
         await viewModel.EnableSelectedPackageCommand.ExecuteAsync(null);
 
-        var toast = Assert.Single(toasts);
-        Assert.Equal("Package enabled", toast.Title);
-        Assert.Equal("Enabled package 'Agent'.", toast.Message);
-        Assert.Equal(PackageNotificationSeverity.Success, toast.Severity);
-        Assert.True(installedCallsAtToast >= 2);
-        Assert.Empty(notificationCenter.ListNotifications());
-    }
-
-    [Fact]
-    public async Task EnableSelectedPackageCommand_DoesNotToastWhenOperationIsNoop()
-    {
-        var runtimeClient = new FakeRuntimeApiClient(
-            [CreateInstalledPackage("agent", isEnabled: false)]
-        )
-        {
-            EnableResult = new PackageOperationResult(
-                true,
-                "Package 'Agent' is already enabled.",
-                true,
-                false,
-                [],
-                []
-            ),
-        };
-        var notificationCenter = CreateNotificationCenter();
-        var toasts = new List<AppToastNotification>();
-        notificationCenter.ToastQueued += toasts.Add;
-        var viewModel = CreateViewModel(runtimeClient, notificationCenter);
-
-        await viewModel.InitializeAsync();
-        await viewModel.EnableSelectedPackageCommand.ExecuteAsync(null);
-
-        Assert.Empty(toasts);
-        Assert.Empty(notificationCenter.ListNotifications());
-    }
-
-    [Fact]
-    public async Task EnableSelectedPackageCommand_DoesNotToastWhenOperationFails()
-    {
-        var runtimeClient = new FakeRuntimeApiClient(
-            [CreateInstalledPackage("agent", isEnabled: false)]
-        )
-        {
-            EnableResult = new PackageOperationResult(
-                false,
-                "Package failed.",
-                false,
-                false,
-                [],
-                ["Package failed."]
-            ),
-        };
-        var notificationCenter = CreateNotificationCenter();
-        var toasts = new List<AppToastNotification>();
-        notificationCenter.ToastQueued += toasts.Add;
-        var viewModel = CreateViewModel(runtimeClient, notificationCenter);
-
-        await viewModel.InitializeAsync();
-        await viewModel.EnableSelectedPackageCommand.ExecuteAsync(null);
-
-        Assert.Empty(toasts);
-        Assert.Empty(notificationCenter.ListNotifications());
+        Assert.Equal(["agent"], executor.EnabledPackageIds);
+        Assert.Equal("Queued enable for agent.", viewModel.Operations.StatusText);
     }
 
     [Fact]
@@ -104,22 +35,22 @@ public sealed class PackagesWindowViewModelTests
         );
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
-        var lifecycleApplications = new List<IReadOnlyList<string>>();
+        var lifecycleApplications = new List<RuntimePackageStamp>();
         using var operationService = new PackageOperationService(
             queue,
             new FakeRuntimeApiClientFactory(runtimeClient),
-            (packageIds, _) =>
+            (stamp, _) =>
             {
-                lifecycleApplications.Add(packageIds.ToArray());
+                lifecycleApplications.Add(stamp);
                 return Task.CompletedTask;
             },
             notificationCenter);
         using var viewModel = new PackagesWindowViewModel(
             runtimeClient,
             new FakePackageArchivePicker(),
-            packageOperationService: operationService,
+            operationService,
             backgroundProcessQueue: queue,
-            notificationCenter: notificationCenter)
+            registryClientFactory: null)
         {
             Mode = PackageWindowMode.Installed,
             RegistryUrlText = string.Empty,
@@ -130,7 +61,7 @@ public sealed class PackagesWindowViewModelTests
         await WaitForConditionAsync(() => queue.ListProcesses().Any(IsCompletedEnableOperation));
 
         Assert.Equal(["agent"], runtimeClient.EnabledPackageIds);
-        Assert.Collection(lifecycleApplications, packageIds => Assert.Equal(["agent"], packageIds));
+        Assert.Single(lifecycleApplications);
     }
 
     [Fact]
@@ -139,7 +70,7 @@ public sealed class PackagesWindowViewModelTests
         var runtimeClient = new FakeRuntimeApiClient(
             [CreateInstalledPackage("agent", isEnabled: false)]
         );
-        using var viewModel = CreateViewModel(runtimeClient, CreateNotificationCenter());
+        using var viewModel = CreateViewModel(runtimeClient);
 
         await viewModel.InitializeAsync();
 
@@ -150,7 +81,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.True(viewModel.UninstallSelectedPackageCommand.CanExecute(null));
         Assert.False(viewModel.UpdateSelectedInstalledPackageCommand.CanExecute(null));
 
-        viewModel.IsBusy = true;
+        viewModel.Operations.IsBusy = true;
 
         Assert.False(viewModel.RefreshCommand.CanExecute(null));
         Assert.False(viewModel.InstallPackageCommand.CanExecute(null));
@@ -158,6 +89,22 @@ public sealed class PackagesWindowViewModelTests
         Assert.False(viewModel.DisableSelectedPackageCommand.CanExecute(null));
         Assert.False(viewModel.UninstallSelectedPackageCommand.CanExecute(null));
         Assert.False(viewModel.UpdateSelectedInstalledPackageCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void OperationPresentation_BusyLeaseDoesNotClearAnotherActiveOperation()
+    {
+        var presentation = new PackageOperationPresentationViewModel(new FakePackageOperationExecutor());
+        var first = presentation.EnterBusy();
+        var second = presentation.EnterBusy();
+
+        first.Dispose();
+
+        Assert.True(presentation.IsBusy);
+
+        second.Dispose();
+
+        Assert.False(presentation.IsBusy);
     }
 
     [Fact]
@@ -172,7 +119,6 @@ public sealed class PackagesWindowViewModelTests
             {
                 RegistryUpdates = registryClient.Updates,
             },
-            CreateNotificationCenter(),
             _ => registryClient);
         viewModel.RegistryUrlText = "https://registry.example/";
 
@@ -198,11 +144,11 @@ public sealed class PackagesWindowViewModelTests
                 ),
             ]
         );
-        var viewModel = CreateViewModel(runtimeClient, CreateNotificationCenter());
+        var viewModel = CreateViewModel(runtimeClient);
 
         await viewModel.InitializeAsync();
 
-        var package = Assert.Single(viewModel.InstalledPackages);
+        var package = Assert.Single(viewModel.Installed.Packages);
         Assert.Equal(
             new Uri("file:///packages/agent/assets/assets/icons/agent.svg"),
             package.IconUri
@@ -223,16 +169,16 @@ public sealed class PackagesWindowViewModelTests
                 CreateInstalledPackage("tools", isEnabled: true),
             ]
         );
-        using var viewModel = CreateViewModel(runtimeClient, CreateNotificationCenter());
+        using var viewModel = CreateViewModel(runtimeClient);
         await viewModel.InitializeAsync();
-        var originalAgent = Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "agent");
-        var originalTools = Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "tools");
+        var originalAgent = Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "agent");
+        var originalTools = Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "tools");
 
         runtimeClient.AddInstalledPackage(CreateInstalledPackage("agent", isEnabled: false));
         await viewModel.RefreshCommand.ExecuteAsync(null);
 
-        Assert.NotSame(originalAgent, Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "agent"));
-        Assert.Same(originalTools, Assert.Single(viewModel.InstalledPackages, package => package.PackageId == "tools"));
+        Assert.NotSame(originalAgent, Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "agent"));
+        Assert.Same(originalTools, Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "tools"));
     }
 
     [Fact]
@@ -273,7 +219,6 @@ public sealed class PackagesWindowViewModelTests
         var runtimeClient = new FakeRuntimeApiClient([]);
         using var viewModel = CreateViewModel(
             runtimeClient,
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40)
         );
@@ -289,7 +234,7 @@ public sealed class PackagesWindowViewModelTests
 
         Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("agent", query));
         Assert.Collection(
-            viewModel.MarketplacePackages,
+            viewModel.Marketplace.Packages,
             package => Assert.Equal("sunder.package.agent", package.PackageId)
         );
         Assert.True(viewModel.HasSearchText);
@@ -304,7 +249,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40));
         viewModel.Mode = PackageWindowMode.Marketplace;
@@ -332,7 +276,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40),
             marketplaceDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
@@ -345,9 +288,9 @@ public sealed class PackagesWindowViewModelTests
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
         Assert.Equal("sunder.package.agent", viewModel.SearchText);
         Assert.Equal("sunder.package.agent", viewModel.SelectedMarketplacePackage?.PackageId);
-        Assert.Collection(viewModel.MarketplacePackages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+        Assert.Collection(viewModel.Marketplace.Packages, package => Assert.Equal("sunder.package.agent", package.PackageId));
         Assert.True(viewModel.ShowMarketplaceInstallButton);
-        Assert.Contains("Loaded sunder.package.agent", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Loaded sunder.package.agent", viewModel.Operations.StatusText, StringComparison.OrdinalIgnoreCase);
         Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("sunder.package.agent", query));
     }
 
@@ -360,7 +303,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(50)
         );
@@ -368,7 +310,6 @@ public sealed class PackagesWindowViewModelTests
         viewModel.RegistryUrlText = "https://registry.example/";
 
         viewModel.SearchText = "a";
-        await Task.Delay(10);
         viewModel.SearchText = "agent";
 
         await WaitForConditionAsync(() => registryClient.SearchQueries.Count == 1);
@@ -388,7 +329,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40)
         );
@@ -409,7 +349,7 @@ public sealed class PackagesWindowViewModelTests
             Assert.Null
         );
         Assert.Collection(
-            viewModel.MarketplacePackages,
+            viewModel.Marketplace.Packages,
             package => Assert.Equal("sunder.package.tools", package.PackageId)
         );
     }
@@ -450,7 +390,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40)
         );
@@ -458,17 +397,17 @@ public sealed class PackagesWindowViewModelTests
 
         var searchTask = viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
         await agentDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await viewModel.MarketplacePackages[1].SelectCommand.ExecuteAsync(null);
+        await viewModel.Marketplace.Packages[1].SelectCommand.ExecuteAsync(null);
         await agentDetailsCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal("Sunder.package.tools", viewModel.SelectedPackageTitle);
-        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+        Assert.Collection(viewModel.Marketplace.Versions, version => Assert.Equal("2.0.0", version.Version));
 
         releaseAgentDetails.SetResult();
         await searchTask;
 
         Assert.Equal("Sunder.package.tools", viewModel.SelectedPackageTitle);
-        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+        Assert.Collection(viewModel.Marketplace.Versions, version => Assert.Equal("2.0.0", version.Version));
     }
 
     [Fact]
@@ -496,15 +435,14 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40));
         viewModel.RegistryUrlText = "https://registry.example/";
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
         Assert.True(viewModel.MarketplacePackageDetailsLoaded);
-        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("9.0.0", version.Version));
+        Assert.Collection(viewModel.Marketplace.Versions, version => Assert.Equal("9.0.0", version.Version));
 
-        var selectTask = viewModel.MarketplacePackages[1].SelectCommand.ExecuteAsync(null);
+        var selectTask = viewModel.Marketplace.Packages[1].SelectCommand.ExecuteAsync(null);
         await toolsDetailsStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(viewModel.IsMarketplacePackageDetailsLoading);
@@ -512,7 +450,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.False(viewModel.ShowMarketplacePackageDetailsLoading);
         Assert.False(viewModel.ShowMarketplacePackageDetailsContent);
         Assert.Equal(string.Empty, viewModel.SelectedPackageSummary);
-        Assert.Empty(viewModel.MarketplaceVersions);
+        Assert.Empty(viewModel.Marketplace.Versions);
         Assert.False(viewModel.ShowNoMarketplaceVersions);
         Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
 
@@ -524,7 +462,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.False(viewModel.IsMarketplacePackageDetailsLoading);
         Assert.True(viewModel.MarketplacePackageDetailsLoaded);
         Assert.True(viewModel.ShowMarketplacePackageDetailsContent);
-        Assert.Collection(viewModel.MarketplaceVersions, version => Assert.Equal("2.0.0", version.Version));
+        Assert.Collection(viewModel.Marketplace.Versions, version => Assert.Equal("2.0.0", version.Version));
     }
 
     [Fact]
@@ -536,7 +474,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40),
             marketplaceDetailSpinnerDelay: TimeSpan.FromMilliseconds(40));
@@ -572,7 +509,6 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40));
         viewModel.RegistryUrlText = "https://registry.example/";
@@ -584,7 +520,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.True(viewModel.HasMarketplaceProfile);
         Assert.False(viewModel.HasMarketplaceProfileMedia);
         Assert.Collection(
-            viewModel.MarketplaceProfileLinks,
+            viewModel.Marketplace.ProfileLinks,
             link =>
             {
                 Assert.Equal("Website", link.Label);
@@ -601,14 +537,14 @@ public sealed class PackagesWindowViewModelTests
                 Assert.Equal(new Uri("https://example.test/issues"), link.NavigateUri);
             });
         Assert.Collection(
-            viewModel.MarketplaceProfileMetadata,
+            viewModel.Marketplace.ProfileMetadata,
             item =>
             {
                 Assert.Equal("License", item.Label);
                 Assert.Equal("MIT", item.Value);
             });
         Assert.Collection(
-            viewModel.MarketplaceProfileTags,
+            viewModel.Marketplace.ProfileTags,
             tag => Assert.Equal("agent", tag),
             tag => Assert.Equal("local", tag));
     }
@@ -634,7 +570,6 @@ public sealed class PackagesWindowViewModelTests
         var runtimeClient = new FakeRuntimeApiClient([]);
         using var viewModel = CreateViewModel(
             runtimeClient,
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40),
             registryUrl => new object());
@@ -643,7 +578,7 @@ public sealed class PackagesWindowViewModelTests
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
         await viewModel.ToggleSelectedMarketplacePackageStarCommand.ExecuteAsync(null);
 
-        Assert.Equal("Starred package.", viewModel.StatusText);
+        Assert.Equal("Starred package.", viewModel.Operations.StatusText);
         Assert.Equal("4 downloads · 2 stars", viewModel.MarketplacePackageStatsText);
         Assert.Equal("Unstar", viewModel.MarketplacePackageStarActionText);
         Assert.True(viewModel.SelectedMarketplacePackageIsStarred);
@@ -677,21 +612,20 @@ public sealed class PackagesWindowViewModelTests
                 []),
         };
         var runtimeClient = new FakeRuntimeApiClient([]);
+        var operationExecutor = new FakePackageOperationExecutor();
         using var viewModel = CreateViewModel(
             runtimeClient,
-            CreateNotificationCenter(),
             _ => registryClient,
-            TimeSpan.FromMilliseconds(40));
+            TimeSpan.FromMilliseconds(40),
+            operationExecutor: operationExecutor);
         viewModel.RegistryUrlText = "https://registry.example/";
 
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
-        viewModel.MarketplaceVersions.Single(version => version.Version == "1.5.0").SelectCommand.Execute(null);
+        viewModel.Marketplace.Versions.Single(version => version.Version == "1.5.0").SelectCommand.Execute(null);
         await viewModel.InstallSelectedMarketplacePackageCommand.ExecuteAsync(null);
 
-        Assert.NotNull(runtimeClient.LastRegistryPackageRequest);
-        Assert.Equal("sunder.package.agent", runtimeClient.LastRegistryPackageRequest.PackageId);
-        Assert.Equal("1.5.0", runtimeClient.LastRegistryPackageRequest.Version);
-        Assert.Null(runtimeClient.LastRegistryPackageRequest.Tag);
+        Assert.Equal("sunder.package.agent", operationExecutor.MarketplaceInstallPackageId);
+        Assert.Equal("1.5.0", operationExecutor.MarketplaceInstallVersion);
     }
 
     [Fact]
@@ -707,14 +641,13 @@ public sealed class PackagesWindowViewModelTests
                 CreateInstalledPackage("sunder.package.agent", isEnabled: true),
                 CreateInstalledPackage("sunder.package.tools", isEnabled: true),
             ]),
-            CreateNotificationCenter(),
             _ => registryClient,
             TimeSpan.FromMilliseconds(40)
         );
         viewModel.RegistryUrlText = "https://registry.example/";
         await viewModel.InitializeAsync();
         viewModel.SearchText = "agent";
-        Assert.Collection(viewModel.InstalledPackages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+        Assert.Collection(viewModel.Installed.Packages, package => Assert.Equal("sunder.package.agent", package.PackageId));
 
         await viewModel.ShowMarketplaceCommand.ExecuteAsync(null);
 
@@ -725,7 +658,7 @@ public sealed class PackagesWindowViewModelTests
         await viewModel.ShowInstalledCommand.ExecuteAsync(null);
 
         Assert.Equal("agent", viewModel.SearchText);
-        Assert.Collection(viewModel.InstalledPackages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+        Assert.Collection(viewModel.Installed.Packages, package => Assert.Equal("sunder.package.agent", package.PackageId));
     }
 
     [Fact]
@@ -739,7 +672,7 @@ public sealed class PackagesWindowViewModelTests
         using var viewModel = new PackagesWindowViewModel(
             runtimeClient,
             new FakePackageArchivePicker(),
-            notificationCenter: CreateNotificationCenter(),
+            new FakePackageOperationExecutor(),
             registryClientFactory: _ => registryClient,
             marketplaceSearchThrottleDelay: TimeSpan.FromMilliseconds(40))
         {
@@ -748,7 +681,7 @@ public sealed class PackagesWindowViewModelTests
 
         await viewModel.InitializeAsync();
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
-        Assert.DoesNotContain(viewModel.InstalledPackages, package => package.PackageId == "sunder.package.agent");
+        Assert.DoesNotContain(viewModel.Installed.Packages, package => package.PackageId == "sunder.package.agent");
         runtimeClient.AddInstalledPackage(CreateInstalledPackage("sunder.package.agent", isEnabled: true));
 
         await InvokeRefreshAfterPackageOperationAsync(
@@ -756,7 +689,7 @@ public sealed class PackagesWindowViewModelTests
             new PackageOperationMetadata("sunder.package.agent", PackageOperationKind.InstallMarketplace, "Sunder Agent"));
 
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
-        Assert.Contains(viewModel.InstalledPackages, package => package.PackageId == "sunder.package.agent");
+        Assert.Contains(viewModel.Installed.Packages, package => package.PackageId == "sunder.package.agent");
     }
 
     private static async Task InvokeRefreshAfterPackageOperationAsync(
@@ -787,17 +720,17 @@ public sealed class PackagesWindowViewModelTests
 
     private static PackagesWindowViewModel CreateViewModel(
         FakeRuntimeApiClient runtimeClient,
-        NotificationCenterService notificationCenter,
         Func<Uri, IRegistryPackageBrowseClient>? registryClientFactory = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
         Func<Uri, object?>? tokenProvider = null,
-        TimeSpan? marketplaceDetailSpinnerDelay = null
+        TimeSpan? marketplaceDetailSpinnerDelay = null,
+        FakePackageOperationExecutor? operationExecutor = null
     )
     {
         var viewModel = new PackagesWindowViewModel(
             runtimeClient,
             new FakePackageArchivePicker(),
-            notificationCenter: notificationCenter,
+            operationExecutor ?? new FakePackageOperationExecutor(),
             registryClientFactory: registryClientFactory,
             marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay,
             marketplaceDetailSpinnerDelay: marketplaceDetailSpinnerDelay
@@ -822,6 +755,7 @@ public sealed class PackagesWindowViewModelTests
             packageId,
             ToDisplayName(packageId),
             "1.0.0",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
             Summary: null,
             Icon: icon,
             isEnabled,
@@ -889,6 +823,84 @@ public sealed class PackagesWindowViewModelTests
     {
         public Task<string?> PickPackagePathAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<string?>(null);
+    }
+
+    private sealed class FakePackageOperationExecutor : IPackageOperationExecutor
+    {
+        public event EventHandler<PackageOperationChangedEventArgs>? OperationChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public List<string> EnabledPackageIds { get; } = [];
+
+        public string? MarketplaceInstallPackageId { get; private set; }
+
+        public string? MarketplaceInstallVersion { get; private set; }
+
+        public BackgroundProcessSnapshot? GetActiveOperationForPackage(string packageId) => null;
+
+        public BackgroundProcessSnapshot? GetActivePackageStoreOperation() => null;
+
+        public bool CancelActiveOperationForPackage(string packageId) => false;
+
+        public BackgroundProcessSnapshot EnqueueMarketplaceInstall(
+            string packageId,
+            string displayName,
+            Uri registryUrl,
+            string? version = null,
+            string? tag = "latest")
+        {
+            MarketplaceInstallPackageId = packageId;
+            MarketplaceInstallVersion = version;
+            return CreateSnapshot(packageId, PackageOperationKind.InstallMarketplace, displayName);
+        }
+
+        public BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
+            string packageId,
+            string displayName,
+            string version,
+            Uri registryUrl)
+            => CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName);
+
+        public BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl)
+            => CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages");
+
+        public BackgroundProcessSnapshot EnqueueLocalInstall(string packagePath)
+            => CreateSnapshot(null, PackageOperationKind.InstallLocal, Path.GetFileName(packagePath));
+
+        public BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName)
+        {
+            EnabledPackageIds.Add(packageId);
+            return CreateSnapshot(packageId, PackageOperationKind.Enable, displayName);
+        }
+
+        public BackgroundProcessSnapshot EnqueueDisable(string packageId, string displayName)
+            => CreateSnapshot(packageId, PackageOperationKind.Disable, displayName);
+
+        public BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName)
+            => CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName);
+
+        private static BackgroundProcessSnapshot CreateSnapshot(
+            string? packageId,
+            PackageOperationKind kind,
+            string displayName)
+            => new(
+                Guid.NewGuid(),
+                displayName,
+                PackageOperationService.PackageStoreGroupKey,
+                BackgroundProcessIndicator.Packages,
+                BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+                BackgroundProcessState.Queued,
+                "Queued",
+                null,
+                true,
+                new PackageOperationMetadata(packageId, kind, displayName).ToMetadata(),
+                null,
+                DateTimeOffset.UtcNow,
+                null,
+                null);
     }
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
@@ -1063,10 +1075,17 @@ public sealed class PackagesWindowViewModelTests
 
         public IReadOnlyList<RegistryPackageUpdate> RegistryUpdates { get; init; } = [];
 
-        public Task<RegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RegistryResolveInstallPlanResponse(
+        public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
                 true,
-                RegistryUpdates.Select(update => new RegistryPackageInstallPlanItem(update.PackageId, update.CurrentVersion, update.AvailableVersion, true, update.DeprecatedMessage, [], update.Artifact)).ToArray(),
+                RegistryUpdates.Select(update => new RuntimeRegistryPackageInstallPlanItem(
+                    update.PackageId,
+                    update.CurrentVersion,
+                    update.AvailableVersion,
+                    true,
+                    update.DeprecatedMessage,
+                    [],
+                    new RuntimeRegistryPackageArtifact(update.Artifact.Sha256, update.Artifact.Size, update.Artifact.DownloadUrl))).ToArray(),
                 [],
                 [],
                 []));
@@ -1249,7 +1268,7 @@ public sealed class PackagesWindowViewModelTests
                 {
                     ImpactedPackageIds = impactedPackageIds,
                 },
-                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, ToDisplayName(packageId), "1.0.0", null, true, PackageReadinessState.Ready, [])).ToArray(),
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, ToDisplayName(packageId), "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray(),
                 impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
         }
 
@@ -1286,19 +1305,32 @@ public sealed class PackagesWindowViewModelTests
             return Task.FromResult(new PackageOperationResult(true, message, RuntimeSessionApplied: true, RequiresAppRestart: false, [], [])
             {
                 ImpactedPackageIds = impactedPackageIds,
+                CommittedStamp = new RuntimePackageStamp(Guid.Parse("00000000-0000-0000-0000-000000000001"), 1),
             });
         }
+
+        public Task<RuntimePackageStageStatus> GetPackageStoreStageStatusAsync(
+            string stageId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimePackageStageStatus(
+                stageId,
+                RuntimePackageStageKind.PackageStore,
+                _pendingStages.ContainsKey(stageId)
+                    ? RuntimePackageStageState.Pending
+                    : RuntimePackageStageState.Committed,
+                DateTimeOffset.UtcNow,
+                _pendingStages.ContainsKey(stageId)
+                    ? null
+                    : new RuntimePackageStamp(Guid.Parse("00000000-0000-0000-0000-000000000001"), 1),
+                RuntimeSessionApplied: true,
+                ReconciliationPending: false,
+                null));
 
         public Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)
         {
             _pendingStages.Remove(stageId);
             return Task.CompletedTask;
         }
-
-        public Task<PackageLifecycleOperationResult> LoadPackageLifecycleAsync(
-            PackageLifecycleLoadRequest request,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
 
         public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Applied package plan.", true, false, [], [], request.Packages.Select(package => package.PackageId).ToArray(), []));

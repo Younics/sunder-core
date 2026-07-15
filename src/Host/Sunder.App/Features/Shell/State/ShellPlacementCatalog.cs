@@ -36,25 +36,25 @@ internal static class ShellPlacementCatalog
             _ => placement.ToString(),
         };
 
-    public static PackageHotbarPlacement ToPackageHotbarPlacement(RailPlacement placement)
+    public static PackageViewPlacement ToPackageViewPlacement(RailPlacement placement)
         => placement switch
         {
-            RailPlacement.LeftTop => PackageHotbarPlacement.LeftTop,
-            RailPlacement.Middle => PackageHotbarPlacement.Middle,
-            RailPlacement.RightTop => PackageHotbarPlacement.RightTop,
-            RailPlacement.LeftBottom => PackageHotbarPlacement.LeftBottom,
-            RailPlacement.RightBottom => PackageHotbarPlacement.RightBottom,
-            _ => PackageHotbarPlacement.Middle,
+            RailPlacement.LeftTop => PackageViewPlacement.LeftTop,
+            RailPlacement.Middle => PackageViewPlacement.Middle,
+            RailPlacement.RightTop => PackageViewPlacement.RightTop,
+            RailPlacement.LeftBottom => PackageViewPlacement.LeftBottom,
+            RailPlacement.RightBottom => PackageViewPlacement.RightBottom,
+            _ => PackageViewPlacement.Middle,
         };
 
-    public static RailPlacement ToRailPlacement(PackageHotbarPlacement placement)
+    public static RailPlacement ToRailPlacement(PackageViewPlacement placement)
         => placement switch
         {
-            PackageHotbarPlacement.LeftTop => RailPlacement.LeftTop,
-            PackageHotbarPlacement.Middle => RailPlacement.Middle,
-            PackageHotbarPlacement.RightTop => RailPlacement.RightTop,
-            PackageHotbarPlacement.LeftBottom => RailPlacement.LeftBottom,
-            PackageHotbarPlacement.RightBottom => RailPlacement.RightBottom,
+            PackageViewPlacement.LeftTop => RailPlacement.LeftTop,
+            PackageViewPlacement.Middle => RailPlacement.Middle,
+            PackageViewPlacement.RightTop => RailPlacement.RightTop,
+            PackageViewPlacement.LeftBottom => RailPlacement.LeftBottom,
+            PackageViewPlacement.RightBottom => RailPlacement.RightBottom,
             _ => RailPlacement.Middle,
         };
 }

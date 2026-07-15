@@ -8,7 +8,7 @@ internal sealed class RuntimePackageUiService(
     InstalledPackageStore installedPackages)
 {
     public IReadOnlyList<PackageUiSnapshotDescriptor> GetActiveSnapshots()
-        => snapshots.CreateSnapshots(sessions.State.GetActivePackageSources(), sessions.Generation);
+        => sessions.GetSnapshot().PackageUiSnapshots;
 
     public IReadOnlyList<PackageUiSnapshotDescriptor> CreateSnapshots(
         IReadOnlyList<RuntimePackageSource> sources,
@@ -17,25 +17,36 @@ internal sealed class RuntimePackageUiService(
         => snapshots.CreateSnapshots(sources, generation, stageId);
 
     public PackageUiSnapshotLease? AcquireCurrent(string snapshotId)
-        => snapshots.Acquire(snapshotId, sessions.Generation, stageId: null);
+    {
+        var snapshot = sessions.GetSnapshot();
+        return snapshot.PackageUiSnapshots.Any(item => string.Equals(item.SnapshotId, snapshotId, StringComparison.Ordinal))
+            ? snapshots.Acquire(snapshotId, snapshot.SessionGeneration, stageId: null)
+            : null;
+    }
 
     public PackageUiSnapshotLease? AcquireStage(string stageId, string snapshotId)
         => sessions.TryGetStageGeneration(stageId, out var generation)
             ? snapshots.Acquire(snapshotId, generation, stageId)
             : null;
 
-    public void CommitStage(string stageId)
+    public IReadOnlyList<PackageUiSnapshotDescriptor> PromoteStage(
+        string stageId,
+        IReadOnlyList<PackageUiSnapshotDescriptor> descriptors)
     {
         sessions.RemoveStage(stageId);
-        snapshots.RemoveStage(stageId);
-        snapshots.RemoveOlderGenerations(sessions.Generation);
+        return snapshots.PromoteStage(stageId, descriptors);
     }
+
+    public void DiscardSnapshots(IEnumerable<PackageUiSnapshotDescriptor> descriptors)
+        => snapshots.RemoveSnapshots(descriptors);
 
     public void DiscardStage(string stageId)
     {
         sessions.RemoveStage(stageId);
         snapshots.RemoveStage(stageId);
     }
+
+    public void ScheduleCacheGarbageCollection() => snapshots.ScheduleGarbageCollection();
 
     public async Task<string?> TryResolveAssetPathAsync(
         string packageId,

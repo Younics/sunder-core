@@ -1,0 +1,48 @@
+{
+  "runtimeInstanceId": "11111111-1111-1111-1111-111111111111",
+  "sessionGeneration": 7,
+  "eventSequence": 12,
+  "bootstrapState": 1,
+  "activePackages": [
+    {
+      "packageId": "test.package",
+      "displayName": "Test Package",
+      "version": "1.2.3",
+      "hostRoles": 3,
+      "icon": null,
+      "isEnabled": true,
+      "readiness": 1,
+      "views": []
+    }
+  ],
+  "sessionPackages": [
+    {
+      "packageId": "test.package",
+      "displayName": "Test Package",
+      "version": "1.2.3",
+      "hostRoles": 3,
+      "icon": null,
+      "isEnabled": true,
+      "readiness": 1,
+      "views": [],
+      "failureOrigin": null,
+      "lastError": null,
+      "lastFailureAtUtc": null,
+      "failureCount": 0
+    }
+  ],
+  "packageUiSnapshots": [
+    {
+      "packageId": "test.package",
+      "sourceKind": 0,
+      "sessionGeneration": 7,
+      "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "snapshotId": "snapshot-1",
+      "snapshotUri": "packages/ui-snapshots/snapshot-1"
+    }
+  ],
+  "warnings": [
+    "warning"
+  ],
+  "errors": []
+}

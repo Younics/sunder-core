@@ -10,12 +10,21 @@ internal sealed class ShellRailCollectionPresenter(
     ShellState shellState,
     ShellSelectionPresenter selectionPresenter,
     ShellPanelContentPresenter panelContentPresenter,
-    Func<ShellPackageView, Action<ShellItemViewModel>, ShellItemViewModel> createShellItem)
+    Func<ShellPackageView, Action<ShellItemViewModel>, ShellItemViewModel> createShellItem,
+    Action<string> notifyViewNavigated,
+    Action<string> cancelViewNavigation)
 {
-    public void Rebuild(IReadOnlyList<ShellPlacementSlot> slots, bool createHostedViews)
+    public void Rebuild(
+        IReadOnlyList<ShellPlacementSlot> slots,
+        bool createHostedViews,
+        IReadOnlySet<string>? stabilizedViewIds = null)
     {
         foreach (var slot in slots)
         {
+            if (!string.IsNullOrWhiteSpace(slot.Panel.ActiveViewId))
+            {
+                cancelViewNavigation(slot.Panel.ActiveViewId);
+            }
             selectionPresenter.SetSelectedItem(slot.Placement, null);
             slot.Panel.ClearActiveView();
         }
@@ -33,6 +42,12 @@ internal sealed class ShellRailCollectionPresenter(
             RestoreSelection(slot, ShellSelectionState.GetSelectedViewId(shellState, slot.Placement));
             var selectedViewId = ShellSelectionState.GetSelectedViewId(shellState, slot.Placement);
             panelContentPresenter.Apply(slot.Panel, slot.Placement, selectedViewId, viewsById, middleBarItemCount, createHostedViews);
+            if (createHostedViews
+                && !string.IsNullOrWhiteSpace(selectedViewId)
+                && stabilizedViewIds?.Contains(selectedViewId) != true)
+            {
+                notifyViewNavigated(selectedViewId);
+            }
         }
     }
 
@@ -80,6 +95,10 @@ internal sealed class ShellRailCollectionPresenter(
                 selectedViewIdsAfterUpdate[slot.Placement],
                 impactedPackageIds))
             {
+                if (!string.IsNullOrWhiteSpace(activeViewIdsBeforeUpdate[slot.Placement]))
+                {
+                    cancelViewNavigation(activeViewIdsBeforeUpdate[slot.Placement]!);
+                }
                 slot.Panel.ClearActiveView();
             }
         }
@@ -102,6 +121,10 @@ internal sealed class ShellRailCollectionPresenter(
                 viewsById,
                 middleBarItemCount,
                 createHostedViews);
+            if (createHostedViews && !string.IsNullOrWhiteSpace(selectedViewIdAfterUpdate))
+            {
+                notifyViewNavigated(selectedViewIdAfterUpdate);
+            }
         }
     }
 

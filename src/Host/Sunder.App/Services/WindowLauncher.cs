@@ -21,6 +21,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly SunderUpdateService _updateService;
     private readonly BackgroundProcessQueueService _backgroundProcessQueue;
     private readonly PackageOperationService _packageOperationService;
+    private readonly Func<RuntimePackageStamp, CancellationToken, Task> _waitUntilPackagePresentationAppliedAsync;
+    private readonly Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>> _waitForPackagePresentationAsync;
     private readonly SettingsWindowFactory _settingsWindowFactory;
     private readonly PackagesWindowFactory _packagesWindowFactory;
     private readonly StacksWindowFactory _stacksWindowFactory;
@@ -32,7 +34,6 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private StacksWindow? _stacksWindow;
     private DeveloperLogWindow? _developerLogWindow;
     private MainWindowViewModel? _mainWindowViewModel;
-    private AppPackageSessionService? _packageSessionService;
     private bool _disposed;
 
     public WindowLauncher(
@@ -48,7 +49,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         IUiDispatcher? uiDispatcher = null,
         DeveloperLogService? developerLog = null,
         SunderUpdateService? updateService = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null)
+        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        RuntimeEventSubscriptionService? runtimeEventSubscription = null)
     {
         _packageViewHostService = packageViewHostService;
         _runtimeApiClientFactory = runtimeApiClientFactory;
@@ -64,22 +66,25 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         _ownsBackgroundProcessQueue = backgroundProcessQueue is null;
         _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
+        _waitUntilPackagePresentationAppliedAsync = runtimeEventSubscription is null
+            ? WaitForUnavailablePresentationAsync
+            : runtimeEventSubscription.WaitUntilAppliedAsync;
+        _waitForPackagePresentationAsync = runtimeEventSubscription is null
+            ? static (_, cancellationToken) => cancellationToken.IsCancellationRequested
+                ? Task.FromCanceled<PackagePresentationResult>(cancellationToken)
+                : Task.FromResult(PackagePresentationResult.Unavailable(
+                    "Sunder is running in the Core Shell without a live Runtime presentation."))
+            : runtimeEventSubscription.WaitForPresentationAsync;
         _packageOperationService = new PackageOperationService(
             _backgroundProcessQueue,
             _runtimeApiClientFactory,
-            ApplyPackageLifecycleChangesAsync,
+            _waitUntilPackagePresentationAppliedAsync,
             _notificationCenter,
-            preflightPackageLifecycleChangesAsync: PreflightPackageLifecycleChangesAsync);
+            waitForPresentationAsync: _waitForPackagePresentationAsync);
     }
 
     public void AttachShell(MainWindowViewModel viewModel)
         => _mainWindowViewModel = viewModel;
-
-    internal void AttachPackageSessionService(AppPackageSessionService packageSessionService)
-    {
-        _packageSessionService = packageSessionService;
-        packageSessionService.Attach(ApplyPackageLifecycleChangesAsync, PreflightPackageLifecycleChangesAsync);
-    }
 
     public BackgroundProcessQueueService BackgroundProcesses => _backgroundProcessQueue;
 
@@ -223,8 +228,6 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         }
 
         _disposed = true;
-        _packageSessionService?.Detach(ApplyPackageLifecycleChangesAsync);
-        _packageSessionService = null;
         _packageOperationService.Dispose();
         _tasks.Dispose();
         if (_ownsBackgroundProcessQueue)
@@ -256,8 +259,6 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private PackagesWindow CreatePackagesWindow()
     {
         var window = _packagesWindowFactory.Create(
-            ApplyPackageLifecycleChangesAsync,
-            PreflightPackageLifecycleChangesAsync,
             _packageOperationService,
             PersistBackgroundProcessPopoverSize);
 
@@ -274,7 +275,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private StacksWindow CreateStacksWindow()
     {
-        var window = _stacksWindowFactory.Create(ApplyPackageLifecycleChangesAsync, NotifyStackImportAppliedAsync);
+        var window = _stacksWindowFactory.Create(_waitUntilPackagePresentationAppliedAsync, NotifyStackImportAppliedAsync);
 
         window.Closed += (_, _) =>
         {
@@ -336,34 +337,22 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         });
     }
 
-    internal async Task ApplyPackageLifecycleChangesAsync(
-        IReadOnlyList<string> impactedPackageIds,
+    internal async Task ApplyPackageLifecycleSnapshotAsync(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyCollection<string>? retryDisabledPackageIds,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (_mainWindowViewModel is not null)
         {
-            await _mainWindowViewModel.ApplyPackageLifecycleChangesAsync(impactedPackageIds, cancellationToken, deferHostedViewCreation: true).ConfigureAwait(false);
+            await _mainWindowViewModel.ApplyPackageLifecycleSnapshotAsync(
+                snapshot,
+                retryDisabledPackageIds,
+                cancellationToken,
+                detachAuxiliaryPackageViews: DetachSettingsWindowPackageView).ConfigureAwait(false);
         }
 
         await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    internal async Task PreflightPackageLifecycleChangesAsync(
-        IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        IReadOnlyList<string> impactedPackageIds,
-        CancellationToken cancellationToken)
-    {
-        var preflight = await _packageViewHostService.PreflightPackageDeltaAsync(
-            activePackages,
-            packageSources,
-            impactedPackageIds,
-            cancellationToken).ConfigureAwait(false);
-        if (!preflight.Success)
-        {
-            throw new InvalidOperationException(preflight.Errors.FirstOrDefault() ?? "App-side package preflight failed.");
-        }
     }
 
     internal async Task<IReadOnlyList<string>> NotifyStackImportAppliedAsync(
@@ -383,5 +372,22 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         {
             await viewModel.RefreshPackageSectionsAsync(cancellationToken);
         }
+    }
+
+    private void DetachSettingsWindowPackageView()
+    {
+        if (_settingsWindow?.DataContext is SettingsWindowViewModel viewModel)
+        {
+            viewModel.DetachHostedPackageSettingsView();
+        }
+    }
+
+    private static Task WaitForUnavailablePresentationAsync(
+        RuntimePackageStamp stamp,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromException(new InvalidOperationException(
+            "Sunder is running in the Core Shell without a live Runtime presentation."));
     }
 }
