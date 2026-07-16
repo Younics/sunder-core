@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Sunder.App.Features.Shell.Layout;
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
@@ -24,16 +25,30 @@ internal sealed class ShellPackagePanelCoordinator(
     Action<string> notifyViewNavigated,
     Action<bool> rebuildRailCollections,
     Action notifyLayoutStateChanged,
-    Action persistShellState
+    Action persistShellState,
+    Func<string, IReadOnlyDictionary<string, string?>?, ValueTask<bool>>? presentViewAsync = null,
+    Action<string>? cancelViewNavigation = null,
+    Action<RailPlacement, string>? closePanel = null
 )
 {
-    public async ValueTask<bool> ReloadPackageViewAsync(string viewId)
+    private readonly Action<string> _cancelViewNavigation =
+        cancelViewNavigation ?? packageViewHostService.CancelViewNavigation;
+    private readonly Action<RailPlacement, string>? _closePanel = closePanel;
+
+    public async ValueTask<bool> ReloadPackageViewAsync(
+        string viewId,
+        Func<Func<CancellationToken, Task>, CancellationToken, Task>? runDeferredAsync = null,
+        Func<bool>? canContinue = null,
+        Func<ValueTask<bool>>? presentReloadedViewAsync = null,
+        CancellationToken cancellationToken = default)
     {
         if (!viewsById.TryGetValue(viewId, out var packageView))
         {
             return false;
         }
 
+        var generationId = packageViewHostService.CurrentGenerationId;
+        var packageId = packageView.PackageId;
         var placement = packageView.Placement;
         var panel = getPanel(placement);
         var isOpen = string.Equals(
@@ -44,26 +59,101 @@ internal sealed class ShellPackagePanelCoordinator(
         panel.RemoveHostedView(viewId);
         if (!isOpen)
         {
-            packageViewHostService.InvalidateView(viewId);
+            if (runDeferredAsync is null)
+            {
+                await packageViewHostService.InvalidateViewAsync(viewId, cancellationToken);
+            }
+            else
+            {
+                await runDeferredAsync(
+                    async operationCancellation =>
+                    {
+                        await packageViewHostService.InvalidateViewAsync(
+                            viewId,
+                            operationCancellation);
+                    },
+                    cancellationToken);
+            }
             return true;
         }
 
-        var reloadedView = packageViewHostService.CreateHostedViewBoundary(
-            packageView.PackageId,
-            viewId,
-            packageViewHostService.ReloadView(viewId)
-        );
-        if (isOpen)
+        Control? reloadedView = null;
+        try
         {
-            panel.SetActiveView(viewId, reloadedView);
+            if (runDeferredAsync is null)
+            {
+                reloadedView = await packageViewHostService.ReloadViewAsync(
+                    viewId,
+                    generationId,
+                    cancellationToken);
+            }
+            else
+            {
+                await runDeferredAsync(
+                    async operationCancellation =>
+                    {
+                        if (canContinue is not null && !canContinue())
+                        {
+                            return;
+                        }
+
+                        reloadedView = await packageViewHostService.ReloadViewAsync(
+                            viewId,
+                            generationId,
+                            operationCancellation);
+                    },
+                    cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (
+            canContinue is not null
+            && !canContinue()
+            && !string.Equals(
+                ShellSelectionState.GetSelectedViewId(shellState, placement),
+                viewId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            await packageViewHostService.InvalidateViewAsync(
+                viewId,
+                generationId,
+                CancellationToken.None);
+            return false;
         }
 
-        if (reloadedView is not null)
+        if (reloadedView is null)
         {
-            await packageViewHostService.NotifyViewNavigatedAsync(viewId, parameters: null);
+            if (canContinue is not null
+                && !canContinue()
+                && !string.Equals(
+                    ShellSelectionState.GetSelectedViewId(shellState, placement),
+                    viewId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await packageViewHostService.InvalidateViewAsync(
+                    viewId,
+                    generationId,
+                    CancellationToken.None);
+            }
+            return false;
         }
 
-        return reloadedView is not null;
+        if (packageViewHostService.CurrentGenerationId != generationId
+            || !viewsById.TryGetValue(viewId, out var currentView)
+            || !string.Equals(currentView.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+            || canContinue is not null && !canContinue()
+            || !string.Equals(
+                ShellSelectionState.GetSelectedViewId(shellState, placement),
+                viewId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return presentReloadedViewAsync is not null
+            ? await presentReloadedViewAsync()
+            : presentViewAsync is null
+            ? await NavigateViewAsync(viewId, parameters: null)
+            : await presentViewAsync(viewId, null);
     }
 
     public async ValueTask<bool> OpenPackageViewPanelAsync(
@@ -87,7 +177,7 @@ internal sealed class ShellPackagePanelCoordinator(
         var item = getBar(packageView.Placement).Items.FirstOrDefault(x => x.Id == viewId);
         if (item is null)
         {
-            rebuildRailCollections(true);
+            rebuildRailCollections(presentViewAsync is null);
             item = getBar(packageView.Placement).Items.FirstOrDefault(x => x.Id == viewId);
         }
 
@@ -107,8 +197,9 @@ internal sealed class ShellPackagePanelCoordinator(
             SelectItem(item, allowToggle: false, notifyNavigation: false);
         }
 
-        await packageViewHostService.NotifyViewNavigatedAsync(viewId, parameters);
-        return true;
+        return presentViewAsync is null
+            ? await NavigateViewAsync(viewId, parameters)
+            : await presentViewAsync(viewId, parameters);
     }
 
     public bool ClosePackageViewPanel(string viewId)
@@ -129,7 +220,6 @@ internal sealed class ShellPackagePanelCoordinator(
             return true;
         }
 
-        packageViewHostService.CancelViewNavigation(viewId);
         var bar = getBar(packageView.Placement);
         var fallback = ShellPanelCloseSelector.FindFallbackItem(
             packageView.Placement,
@@ -141,18 +231,30 @@ internal sealed class ShellPackagePanelCoordinator(
         {
             selectionPresenter.Select(bar, packageView.Placement, fallback);
             ShellSelectionState.SetSelectedViewId(shellState, packageView.Placement, fallback.Id);
-            applyPanelContent(packageView.Placement, fallback.Id, true);
+            if (presentViewAsync is null)
+            {
+                applyPanelContent(packageView.Placement, fallback.Id, true);
+            }
+            notifyLayoutStateChanged();
             notifyViewNavigated(fallback.Id);
         }
         else
         {
             selectionPresenter.Clear(bar, packageView.Placement);
             ShellSelectionState.SetSelectedViewId(shellState, packageView.Placement, null);
-            applyPanelContent(packageView.Placement, null, true);
+            if (_closePanel is not null)
+            {
+                _closePanel(packageView.Placement, viewId);
+            }
+            else
+            {
+                applyPanelContent(packageView.Placement, null, true);
+                notifyLayoutStateChanged();
+            }
         }
 
-        notifyLayoutStateChanged();
         persistShellState();
+        _cancelViewNavigation(viewId);
         return true;
     }
 
@@ -169,12 +271,19 @@ internal sealed class ShellPackagePanelCoordinator(
 
         if (allowToggle && ReferenceEquals(selectedItem, item))
         {
-            packageViewHostService.CancelViewNavigation(item.Id);
             selectionPresenter.Clear(bar, placement);
             ShellSelectionState.SetSelectedViewId(shellState, placement, null);
-            applyPanelContent(placement, null, true);
-            notifyLayoutStateChanged();
+            if (_closePanel is not null)
+            {
+                _closePanel(placement, item.Id);
+            }
+            else
+            {
+                applyPanelContent(placement, null, true);
+                notifyLayoutStateChanged();
+            }
             persistShellState();
+            _cancelViewNavigation(item.Id);
             return;
         }
 
@@ -189,18 +298,32 @@ internal sealed class ShellPackagePanelCoordinator(
             return;
         }
 
-        if (selectedItem is not null && !ReferenceEquals(selectedItem, item))
-        {
-            packageViewHostService.CancelViewNavigation(selectedItem.Id);
-        }
+        var replacedViewId = selectedItem is not null && !ReferenceEquals(selectedItem, item)
+            ? selectedItem.Id
+            : null;
         selectionPresenter.Select(bar, placement, item);
         ShellSelectionState.SetSelectedViewId(shellState, placement, item.Id);
-        applyPanelContent(placement, item.Id, true);
-        notifyLayoutStateChanged();
+        if (presentViewAsync is null)
+        {
+            applyPanelContent(placement, item.Id, true);
+            notifyLayoutStateChanged();
+        }
         persistShellState();
+        if (replacedViewId is not null)
+        {
+            _cancelViewNavigation(replacedViewId);
+        }
         if (notifyNavigation)
         {
             notifyViewNavigated(item.Id);
         }
+    }
+
+    private async ValueTask<bool> NavigateViewAsync(
+        string viewId,
+        IReadOnlyDictionary<string, string?>? parameters)
+    {
+        await packageViewHostService.NotifyViewNavigatedAsync(viewId, parameters);
+        return true;
     }
 }

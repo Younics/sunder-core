@@ -93,6 +93,110 @@ public sealed class PresentationLifecycleArchitectureTests
     }
 
     [Fact]
+    public void ShellPanels_KeepRetainedViewsHostedAndShowOnlyTheActiveView()
+    {
+        var controls = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Views",
+            "Controls");
+        var panelHost = File.ReadAllText(Path.Combine(controls, "ShellPanelHost.axaml"));
+        var workspace = File.ReadAllText(Path.Combine(controls, "ShellWorkspace.axaml"));
+
+        Assert.Contains("ItemsSource=\"{Binding HostedViews}\"", panelHost, StringComparison.Ordinal);
+        Assert.Contains("IsVisible=\"{Binding IsActive}\"", panelHost, StringComparison.Ordinal);
+        Assert.Contains(
+            "ItemsSource=\"{Binding MiddlePanel.HostedViews}\"",
+            workspace,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsVisible=\"{Binding IsActive}\"",
+            workspace,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShellPanels_DoNotAnimateRetainedContentLifecycle()
+    {
+        var controls = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Views",
+            "Controls");
+        var source = string.Join(
+            '\n',
+            File.ReadAllText(Path.Combine(controls, "ShellPanelHost.axaml")),
+            File.ReadAllText(Path.Combine(controls, "ShellWorkspace.axaml")));
+
+        Assert.DoesNotContain("DoubleTransition", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ContentOpacity", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ContentOffset", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Transition Property=\"Width\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Transition Property=\"Height\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Transition Property=\"Margin\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GridLengthTransition", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShellPostPresentationWork_RunsBelowInputPriority()
+    {
+        var path = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Services",
+            "ShellUiWorkScheduler.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.Contains("Func<CancellationToken, Task> work", source, StringComparison.Ordinal);
+        Assert.Contains("Dispatcher.UIThread.InvokeAsync", source, StringComparison.Ordinal);
+        Assert.Contains("DispatcherPriority.Background", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("DispatcherPriority.Render", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("InvalidateVisual", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MacNativeMenuRefresh_IsLazyAndUsesSmallIcons()
+    {
+        var path = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Views",
+            "MacNativeMenuController.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.Contains("ViewModel_OnShellViewStateChanged() => _menuDirty = true", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dispatcher.UIThread.Post", source, StringComparison.Ordinal);
+        Assert.Contains("Bitmap.DecodeToWidth(", source, StringComparison.Ordinal);
+        Assert.Contains("NativeMenuIconSize", source, StringComparison.Ordinal);
+        Assert.Contains("CreateScaledBitmap(", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InitialShellReveal_WaitsForNativeComposition()
+    {
+        var path = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Services",
+            "InitialShellRenderWaiter.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.Contains("RequestAnimationFrame", source, StringComparison.Ordinal);
+        Assert.Contains("RequestCompositionBatchCommitAsync", source, StringComparison.Ordinal);
+        Assert.Contains(".Rendered.WaitAsync", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ShellStateUpdates_FromConcurrentSnapshots_PreserveBothWrites()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));

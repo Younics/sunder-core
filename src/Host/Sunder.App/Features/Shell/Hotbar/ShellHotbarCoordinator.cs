@@ -60,7 +60,7 @@ internal sealed class ShellHotbarCoordinator(
 
         if (openPanel)
         {
-            UpdateRailCollectionsForView(viewId, new HashSet<RailPlacement> { sourcePlacement, targetPlacement }, createHostedViews: true);
+            UpdateRailCollectionsForView(viewId, new HashSet<RailPlacement> { sourcePlacement, targetPlacement }, createHostedViews: false);
             return await openPackageViewPanelAsync(viewId, parameters);
         }
 
@@ -79,7 +79,7 @@ internal sealed class ShellHotbarCoordinator(
             return false;
         }
 
-        UpdateRailCollectionsForView(viewId, new HashSet<RailPlacement> { placement }, createHostedViews: true);
+        UpdateRailCollectionsForView(viewId, new HashSet<RailPlacement> { placement }, createHostedViews: false);
         persistShellState();
         return true;
     }

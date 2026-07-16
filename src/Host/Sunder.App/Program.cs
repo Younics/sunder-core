@@ -98,9 +98,8 @@ sealed class Program
                 {
                     RenderingMode =
                     [
-                        // put OpenGL first, to have higher priority over Metal (remove later when Metal issue with resize flickering is fixed)
-                        AvaloniaNativeRenderingMode.OpenGl,
                         AvaloniaNativeRenderingMode.Metal,
+                        AvaloniaNativeRenderingMode.OpenGl,
                         AvaloniaNativeRenderingMode.Software,
                     ],
                 }

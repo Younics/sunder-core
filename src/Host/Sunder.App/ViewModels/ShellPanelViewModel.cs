@@ -31,6 +31,10 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
     [ObservableProperty]
     private string _summary = string.Empty;
 
+    private bool _isDockVisible;
+
+    public bool IsDockVisible => _isDockVisible;
+
     private object? _hostedView;
 
     public object? HostedView => _hostedView;
@@ -64,11 +68,33 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
         SetHostedView(retainedView.View);
     }
 
+    public object RetainHostedView(string viewId, object hostedView)
+    {
+        var retainedView = HostedViews.FirstOrDefault(view =>
+            string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase));
+        if (retainedView is null)
+        {
+            retainedView = new ShellHostedViewViewModel(viewId, hostedView);
+            HostedViews.Add(retainedView);
+            return hostedView;
+        }
+
+        if (!ReferenceEquals(retainedView.View, hostedView))
+        {
+            HostedPackageViewBoundary.ReleaseHostedView(hostedView);
+        }
+
+        return retainedView.View;
+    }
+
     public void ClearActiveView()
     {
         ActiveViewId = null;
         DeactivateHostedViews();
     }
+
+    public void SetDockVisible(bool isVisible)
+        => SetProperty(ref _isDockVisible, isVisible, nameof(IsDockVisible));
 
     public object? GetRetainedView(string viewId)
         => HostedViews.FirstOrDefault(view => string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase))?.View;

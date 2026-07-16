@@ -8,15 +8,11 @@ namespace Sunder.App.Features.Shell.Panels;
 internal sealed class ShellDeferredHostedViewActivator(
     ShellState shellState,
     Func<bool> isDisposed,
-    Func<RailPlacement, ShellPanelViewModel> getPanel,
-    Action<RailPlacement, string?, bool> applyPanelContent,
+    Func<RailPlacement, string, CancellationToken, Task<bool>> prepareHostedViewAsync,
     Func<string, CancellationToken, Task> notifyViewNavigatedAsync,
-    Action notifyLayoutStateChanged,
-    IUiDispatcher? uiDispatcher = null
+    Action notifyLayoutStateChanged
 )
 {
-    private readonly IUiDispatcher _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
-
     public async Task ActivateInitialHostedViewsAsync(
         Func<Task>? waitForAttachmentAsync = null,
         CancellationToken cancellationToken = default
@@ -35,13 +31,16 @@ internal sealed class ShellDeferredHostedViewActivator(
                 continue;
             }
 
-            if (
-                await _uiDispatcher
-                    .InvokeAsync(() => ActivateHostedView(placement, viewId), cancellationToken)
-                    .ConfigureAwait(false)
-            )
+            if (!isDisposed()
+                && string.Equals(
+                    ShellSelectionState.GetSelectedViewId(shellState, placement),
+                    viewId,
+                    StringComparison.OrdinalIgnoreCase)
+                && await prepareHostedViewAsync(placement, viewId, cancellationToken)
+                    .ConfigureAwait(false))
             {
                 activatedViewIds.Add(viewId);
+                notifyLayoutStateChanged();
             }
         }
 
@@ -59,32 +58,4 @@ internal sealed class ShellDeferredHostedViewActivator(
         }
     }
 
-    private bool ActivateHostedView(RailPlacement placement, string viewId)
-    {
-        if (
-            isDisposed()
-            || !string.Equals(
-                ShellSelectionState.GetSelectedViewId(shellState, placement),
-                viewId,
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
-        {
-            return false;
-        }
-
-        var panel = getPanel(placement);
-        if (panel.HostedView is not null)
-        {
-            return false;
-        }
-
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        applyPanelContent(placement, viewId, true);
-        AppSessionLog.WriteInfo(
-            $"Deferred package view '{viewId}' activated in {stopwatch.ElapsedMilliseconds} ms."
-        );
-        notifyLayoutStateChanged();
-        return panel.HostedView is not null;
-    }
 }

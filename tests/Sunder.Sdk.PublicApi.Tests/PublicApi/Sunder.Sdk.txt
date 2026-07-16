@@ -175,6 +175,9 @@ type interface Sunder.Sdk.Abstractions.IPackageStorageContext
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("shell-view.v1")
 type interface Sunder.Sdk.Abstractions.IPackageViewNavigationTarget
   method abstract System.Threading.Tasks.ValueTask OnNavigatedToAsync(Sunder.Sdk.Abstractions.PackageViewNavigationContext context, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("shell-view.v1")
+type interface Sunder.Sdk.Abstractions.IPackageViewWarmupTarget
+  method abstract System.Threading.Tasks.ValueTask WarmupAsync(System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("contributions.v1")
 type interface Sunder.Sdk.Abstractions.ISunderAppContributionRegistry
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("extensions.v1")

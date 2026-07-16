@@ -23,6 +23,10 @@ public partial class ShellWorkspace : UserControl
             RightColumnGridSplitter,
             BottomRowGridSplitter,
             BottomColumnGridSplitter,
+            LeftTopPanelBorder,
+            RightTopPanelBorder,
+            LeftBottomPanelBorder,
+            RightBottomPanelBorder,
             () => ViewModel);
         DataContextChanged += OnDataContextChanged;
         AttachedToVisualTree += (_, _) => ApplyAdaptiveLayout();
@@ -38,6 +42,7 @@ public partial class ShellWorkspace : UserControl
         if (_attachedViewModel is not null)
         {
             _attachedViewModel.PropertyChanged += OnViewModelPropertyChanged;
+            _attachedViewModel.ShellViewStateChanged += OnShellViewStateChanged;
         }
 
         ApplyAdaptiveLayout();
@@ -51,6 +56,7 @@ public partial class ShellWorkspace : UserControl
         }
 
         _attachedViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _attachedViewModel.ShellViewStateChanged -= OnShellViewStateChanged;
         _attachedViewModel = null;
     }
 
@@ -62,18 +68,24 @@ public partial class ShellWorkspace : UserControl
             return;
         }
 
-        if (e.PropertyName is nameof(MainWindowViewModel.HasLeftTopPanelContent)
-            or nameof(MainWindowViewModel.HasRightTopPanelContent)
-            or nameof(MainWindowViewModel.HasLeftBottomPanelContent)
-            or nameof(MainWindowViewModel.HasRightBottomPanelContent)
-            or nameof(MainWindowViewModel.HasAnyBottomPanelContent)
-            or nameof(MainWindowViewModel.LeftPanelWidth)
+        if (e.PropertyName is nameof(MainWindowViewModel.LeftPanelWidth)
             or nameof(MainWindowViewModel.RightPanelWidth)
             or nameof(MainWindowViewModel.TopRowHeightRatio)
             or nameof(MainWindowViewModel.BottomSplitRatio))
         {
             ApplyAdaptiveLayout();
         }
+    }
+
+    private void OnShellViewStateChanged()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(OnShellViewStateChanged);
+            return;
+        }
+
+        ApplyAdaptiveLayout();
     }
 
     private void ApplyAdaptiveLayout()

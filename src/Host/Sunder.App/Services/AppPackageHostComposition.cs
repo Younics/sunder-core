@@ -76,6 +76,7 @@ internal sealed class AppPackageHostComposition : IDisposable
             _state.RemoveLoadContext);
         _disableCoordinator = new AppPackageDisableCoordinator(
             viewRegistry,
+            ViewFacade,
             ExtensionCatalog,
             runtimeWorkStopper,
             FaultNotifier,

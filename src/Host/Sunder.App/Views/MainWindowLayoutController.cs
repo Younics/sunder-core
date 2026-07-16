@@ -16,7 +16,12 @@ internal sealed class MainWindowLayoutController
     private readonly GridSplitter _rightColumnGridSplitter;
     private readonly GridSplitter _bottomRowGridSplitter;
     private readonly GridSplitter _bottomColumnGridSplitter;
+    private readonly Border _leftTopPanelBorder;
+    private readonly Border _rightTopPanelBorder;
+    private readonly Border _leftBottomPanelBorder;
+    private readonly Border _rightBottomPanelBorder;
     private readonly Func<MainWindowViewModel?> _viewModelAccessor;
+    private LayoutGeometryState? _appliedState;
 
     public MainWindowLayoutController(
         Grid shellContentGrid,
@@ -26,6 +31,10 @@ internal sealed class MainWindowLayoutController
         GridSplitter rightColumnGridSplitter,
         GridSplitter bottomRowGridSplitter,
         GridSplitter bottomColumnGridSplitter,
+        Border leftTopPanelBorder,
+        Border rightTopPanelBorder,
+        Border leftBottomPanelBorder,
+        Border rightBottomPanelBorder,
         Func<MainWindowViewModel?> viewModelAccessor)
     {
         _shellContentGrid = shellContentGrid;
@@ -35,6 +44,10 @@ internal sealed class MainWindowLayoutController
         _rightColumnGridSplitter = rightColumnGridSplitter;
         _bottomRowGridSplitter = bottomRowGridSplitter;
         _bottomColumnGridSplitter = bottomColumnGridSplitter;
+        _leftTopPanelBorder = leftTopPanelBorder;
+        _rightTopPanelBorder = rightTopPanelBorder;
+        _leftBottomPanelBorder = leftBottomPanelBorder;
+        _rightBottomPanelBorder = rightBottomPanelBorder;
         _viewModelAccessor = viewModelAccessor;
 
         _leftColumnGridSplitter.DragDelta += LayoutTopColumnSplitter_OnDragDelta;
@@ -47,6 +60,8 @@ internal sealed class MainWindowLayoutController
         _bottomColumnGridSplitter.DragCompleted += LayoutSplitter_OnDragCompleted;
     }
 
+    internal int GeometryCommitCount { get; private set; }
+
     public void ApplyAdaptiveLayout()
     {
         var viewModel = _viewModelAccessor();
@@ -55,10 +70,10 @@ internal sealed class MainWindowLayoutController
             return;
         }
 
-        var hasLeftTop = viewModel.HasLeftTopPanelContent;
-        var hasRightTop = viewModel.HasRightTopPanelContent;
-        var hasLeftBottom = viewModel.HasLeftBottomPanelContent;
-        var hasRightBottom = viewModel.HasRightBottomPanelContent;
+        var hasLeftTop = viewModel.LeftTopPanel.IsDockVisible;
+        var hasRightTop = viewModel.RightTopPanel.IsDockVisible;
+        var hasLeftBottom = viewModel.LeftBottomPanel.IsDockVisible;
+        var hasRightBottom = viewModel.RightBottomPanel.IsDockVisible;
         var hasBottom = hasLeftBottom || hasRightBottom;
         var hasBottomSplit = hasLeftBottom && hasRightBottom;
 
@@ -77,24 +92,54 @@ internal sealed class MainWindowLayoutController
         var verticalWeights = ShellLayoutCalculator.CalculateVerticalWeights(viewModel.TopRowHeightRatio, hasBottom);
         var bottomWeights = ShellLayoutCalculator.CalculateBottomColumnWeights(viewModel.BottomSplitRatio, hasLeftBottom, hasRightBottom);
 
-        _shellContentGrid.RowDefinitions[0].Height = ToStarLength(verticalWeights.TopWeight);
-        _shellContentGrid.RowDefinitions[1].Height = new GridLength(verticalWeights.SplitterHeight);
-        _shellContentGrid.RowDefinitions[2].Height = ToStarLength(verticalWeights.BottomWeight);
+        var state = new LayoutGeometryState(
+            ToStarLength(verticalWeights.TopWeight),
+            new GridLength(verticalWeights.SplitterHeight),
+            ToStarLength(verticalWeights.BottomWeight),
+            ToPixelLength(topWidths.LeftWidth),
+            new GridLength(leftSplitterWidth),
+            ToStarLength(1),
+            new GridLength(rightSplitterWidth),
+            ToPixelLength(topWidths.RightWidth),
+            ToStarLength(bottomWeights.LeftWeight),
+            new GridLength(bottomColumnSplitterWidth),
+            ToStarLength(bottomWeights.RightWeight),
+            hasLeftTop,
+            hasRightTop,
+            hasLeftBottom,
+            hasRightBottom,
+            hasBottom,
+            hasBottomSplit);
+        if (_appliedState == state)
+        {
+            return;
+        }
 
-        _topContentGrid.ColumnDefinitions[0].Width = ToPixelLength(topWidths.LeftWidth);
-        _topContentGrid.ColumnDefinitions[1].Width = new GridLength(leftSplitterWidth);
-        _topContentGrid.ColumnDefinitions[2].Width = ToStarLength(1);
-        _topContentGrid.ColumnDefinitions[3].Width = new GridLength(rightSplitterWidth);
-        _topContentGrid.ColumnDefinitions[4].Width = ToPixelLength(topWidths.RightWidth);
+        SetHeight(_shellContentGrid.RowDefinitions[0], state.TopRowHeight);
+        SetHeight(_shellContentGrid.RowDefinitions[1], state.BottomSplitterHeight);
+        SetHeight(_shellContentGrid.RowDefinitions[2], state.BottomRowHeight);
 
-        _bottomContentGrid.ColumnDefinitions[0].Width = ToStarLength(bottomWeights.LeftWeight);
-        _bottomContentGrid.ColumnDefinitions[1].Width = new GridLength(bottomColumnSplitterWidth);
-        _bottomContentGrid.ColumnDefinitions[2].Width = ToStarLength(bottomWeights.RightWeight);
+        SetWidth(_topContentGrid.ColumnDefinitions[0], state.LeftPanelWidth);
+        SetWidth(_topContentGrid.ColumnDefinitions[1], state.LeftSplitterWidth);
+        SetWidth(_topContentGrid.ColumnDefinitions[2], state.MiddlePanelWidth);
+        SetWidth(_topContentGrid.ColumnDefinitions[3], state.RightSplitterWidth);
+        SetWidth(_topContentGrid.ColumnDefinitions[4], state.RightPanelWidth);
 
-        _leftColumnGridSplitter.IsVisible = hasLeftTop;
-        _rightColumnGridSplitter.IsVisible = hasRightTop;
-        _bottomRowGridSplitter.IsVisible = hasBottom;
-        _bottomColumnGridSplitter.IsVisible = hasBottomSplit;
+        SetWidth(_bottomContentGrid.ColumnDefinitions[0], state.LeftBottomWidth);
+        SetWidth(_bottomContentGrid.ColumnDefinitions[1], state.BottomColumnSplitterWidth);
+        SetWidth(_bottomContentGrid.ColumnDefinitions[2], state.RightBottomWidth);
+
+        SetVisible(_leftTopPanelBorder, state.HasLeftTop);
+        SetVisible(_rightTopPanelBorder, state.HasRightTop);
+        SetVisible(_leftBottomPanelBorder, state.HasLeftBottom);
+        SetVisible(_rightBottomPanelBorder, state.HasRightBottom);
+        SetVisible(_leftColumnGridSplitter, state.HasLeftTop);
+        SetVisible(_rightColumnGridSplitter, state.HasRightTop);
+        SetVisible(_bottomRowGridSplitter, state.HasBottom);
+        SetVisible(_bottomColumnGridSplitter, state.HasBottomSplit);
+
+        _appliedState = state;
+        GeometryCommitCount++;
     }
 
     internal static (double LeftWidth, double RightWidth) CalculateTopColumnWidths(
@@ -128,6 +173,30 @@ internal sealed class MainWindowLayoutController
     }
 
     private static GridLength ToPixelLength(double width) => new(Math.Max(0, width));
+
+    private static void SetHeight(RowDefinition definition, GridLength height)
+    {
+        if (definition.Height != height)
+        {
+            definition.Height = height;
+        }
+    }
+
+    private static void SetWidth(ColumnDefinition definition, GridLength width)
+    {
+        if (definition.Width != width)
+        {
+            definition.Width = width;
+        }
+    }
+
+    private static void SetVisible(Visual visual, bool isVisible)
+    {
+        if (visual.IsVisible != isVisible)
+        {
+            visual.IsVisible = isVisible;
+        }
+    }
 
     private void LayoutSplitter_OnDragCompleted(object? sender, VectorEventArgs e)
     {
@@ -198,17 +267,36 @@ internal sealed class MainWindowLayoutController
     {
         var resizableWidth = CalculateResizableExtent(
             GetTopContentWidth(),
-            viewModel.HasLeftTopPanelContent ? ShellLayoutCalculator.SplitterThickness : 0,
-            viewModel.HasRightTopPanelContent ? ShellLayoutCalculator.SplitterThickness : 0);
-        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.HasRightTopPanelContent ? viewModel.RightPanelWidth : 0);
+            viewModel.LeftTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0,
+            viewModel.RightTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0);
+        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.RightTopPanel.IsDockVisible ? viewModel.RightPanelWidth : 0);
     }
 
     private double GetMaximumRightPanelWidth(MainWindowViewModel viewModel)
     {
         var resizableWidth = CalculateResizableExtent(
             GetTopContentWidth(),
-            viewModel.HasLeftTopPanelContent ? ShellLayoutCalculator.SplitterThickness : 0,
-            viewModel.HasRightTopPanelContent ? ShellLayoutCalculator.SplitterThickness : 0);
-        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.HasLeftTopPanelContent ? viewModel.LeftPanelWidth : 0);
+            viewModel.LeftTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0,
+            viewModel.RightTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0);
+        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.LeftTopPanel.IsDockVisible ? viewModel.LeftPanelWidth : 0);
     }
+
+    private sealed record LayoutGeometryState(
+        GridLength TopRowHeight,
+        GridLength BottomSplitterHeight,
+        GridLength BottomRowHeight,
+        GridLength LeftPanelWidth,
+        GridLength LeftSplitterWidth,
+        GridLength MiddlePanelWidth,
+        GridLength RightSplitterWidth,
+        GridLength RightPanelWidth,
+        GridLength LeftBottomWidth,
+        GridLength BottomColumnSplitterWidth,
+        GridLength RightBottomWidth,
+        bool HasLeftTop,
+        bool HasRightTop,
+        bool HasLeftBottom,
+        bool HasRightBottom,
+        bool HasBottom,
+        bool HasBottomSplit);
 }

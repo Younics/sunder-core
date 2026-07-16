@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
 using Sunder.App.Features.Shell.Layout;
 using Sunder.App.Features.Shell.Lifecycle;
 using Sunder.App.Features.Shell.Menus;
@@ -57,6 +58,7 @@ public sealed class MainWindowViewModelShellViewTests
         await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(attachmentObserved);
+        Assert.True(probe.NavigationObservedWarmup);
         Assert.False(activation.IsCompleted);
         Assert.False(File.Exists(harness.StatePath));
         Assert.Equal("agent.chat", probe.Context?.ViewId);
@@ -136,6 +138,361 @@ public sealed class MainWindowViewModelShellViewTests
             harness.ViewModel.ListHotbarViews(),
             view => view.ViewId == "agent.subsessions" && view.IsOpen
         );
+    }
+
+    [Fact]
+    public async Task HotbarSelection_PreparesEagerlyRetainedViewBeforeActivationAndNavigation()
+    {
+        var rootPath = CreateTempDirectory();
+        var probe = new InitialNavigationProbe();
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        registry.RegisterPackageView<DisposablePackageView>(
+            "agent",
+            new PackageViewRegistration("agent.chat", "Chat"),
+            serviceProvider);
+        registry.RegisterPackageView<InitialNavigationPackageView>(
+            "agent",
+            new PackageViewRegistration("agent.workspaces", "Workspaces"),
+            serviceProvider);
+        var packageViewHostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: new ImmediateUiDispatcher());
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        var workGate = new WorkGate();
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(workGate.RunAsync);
+        var releaseNavigation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var navigationCancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        probe.NavigateAsync = async (_, cancellationToken) =>
+        {
+            probe.Started.TrySetResult();
+            try
+            {
+                await releaseNavigation.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                navigationCancelled.TrySetResult();
+                throw;
+            }
+        };
+        var item = Assert.Single(harness.ViewModel.RightTopBar.Items);
+        var retainedView = harness.ViewModel.RightTopPanel.GetRetainedView("agent.workspaces");
+        Assert.NotNull(retainedView);
+        Assert.False(harness.ViewModel.RightTopPanel.HasHostedView);
+
+        item.Activate();
+
+        await workGate.WaitForRequestAsync();
+        Assert.True(harness.ViewModel.HasRightTopPanelContent);
+        Assert.Null(harness.ViewModel.RightTopPanel.HostedView);
+        Assert.False(probe.WarmupCompleted);
+        Assert.False(probe.Started.Task.IsCompleted);
+
+        workGate.ReleaseNext();
+        await workGate.WaitForRequestAsync();
+        Assert.True(probe.WarmupCompleted);
+        Assert.Same(retainedView, harness.ViewModel.RightTopPanel.HostedView);
+        Assert.False(probe.Started.Task.IsCompleted);
+
+        workGate.ReleaseNext();
+        await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(probe.NavigationObservedWarmup);
+
+        item.Activate();
+
+        Assert.False(harness.ViewModel.HasRightTopPanelContent);
+        Assert.False(harness.ViewModel.RightTopPanel.HasHostedView);
+        Assert.Same(retainedView, harness.ViewModel.RightTopPanel.GetRetainedView("agent.workspaces"));
+        await navigationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task PreparedRetainedSideView_ReactivatesBeforeDeferredNavigation()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var retained = Assert.Single(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.workspaces");
+        Assert.True(harness.ViewModel.ClosePackageViewPanel("agent.workspaces"));
+        Assert.False(retained.IsActive);
+        Assert.Null(harness.ViewModel.RightTopPanel.HostedView);
+        var workGate = new WorkGate();
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(workGate.RunAsync);
+
+        var reopen = harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces").AsTask();
+        await workGate.WaitForRequestAsync();
+
+        Assert.True(retained.IsActive);
+        Assert.Same(retained.View, harness.ViewModel.RightTopPanel.HostedView);
+        workGate.ReleaseNext();
+        await workGate.WaitForRequestAsync();
+        workGate.ReleaseNext();
+        Assert.True(await reopen.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task RapidSamePlacementSwitch_OnlyLatestViewAttachesAndNavigates()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"),
+            ("agent", "agent.subsessions"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        Assert.True(await harness.ViewModel.AddPackageViewToDefaultHotbarAsync(
+            "agent.subsessions"));
+        var workGate = new WorkGate();
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(workGate.RunAsync);
+
+        var first = harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces").AsTask();
+        await workGate.WaitForRequestAsync();
+        var latest = harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions").AsTask();
+        await workGate.WaitForRequestAsync();
+        await workGate.WaitForRequestAsync();
+
+        Assert.Equal("agent.subsessions", harness.ViewModel.RightTopPanel.ActiveViewId);
+        Assert.Null(harness.ViewModel.RightTopPanel.HostedView);
+        workGate.ReleaseNext();
+        workGate.ReleaseNext();
+        await workGate.WaitForRequestAsync();
+        Assert.Equal("agent.subsessions", harness.ViewModel.RightTopPanel.ActiveViewId);
+        Assert.Same(
+            harness.ViewModel.RightTopPanel.GetRetainedView("agent.subsessions"),
+            harness.ViewModel.RightTopPanel.HostedView);
+        workGate.ReleaseNext();
+
+        Assert.False(await first.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await latest.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("agent.subsessions", harness.ViewModel.RightTopPanel.ActiveViewId);
+        Assert.Contains(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.workspaces" && !view.IsActive);
+    }
+
+    [Fact]
+    public async Task ClosePanel_DetachesImmediatelyWithSingleGeometryCommit()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var hostedView = harness.ViewModel.RightTopPanel.HostedView;
+        var shellStateChangeCount = 0;
+        harness.ViewModel.ShellViewStateChanged += () => shellStateChangeCount++;
+
+        Assert.True(harness.ViewModel.ClosePackageViewPanel("agent.workspaces"));
+
+        Assert.Null(harness.ViewModel.RightTopPanel.HostedView);
+        Assert.False(harness.ViewModel.RightTopPanel.IsDockVisible);
+        Assert.Equal(1, shellStateChangeCount);
+        Assert.Contains(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => ReferenceEquals(view.View, hostedView) && !view.IsActive);
+    }
+
+    [Fact]
+    public async Task ReopenAfterImmediateClose_ReusesRetainedContent()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var hostedView = harness.ViewModel.RightTopPanel.HostedView;
+        var shellStateChangeCount = 0;
+        harness.ViewModel.ShellViewStateChanged += () => shellStateChangeCount++;
+
+        Assert.True(harness.ViewModel.ClosePackageViewPanel("agent.workspaces"));
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+
+        Assert.Same(hostedView, harness.ViewModel.RightTopPanel.HostedView);
+        Assert.True(harness.ViewModel.RightTopPanel.IsDockVisible);
+        Assert.Equal(2, shellStateChangeCount);
+    }
+
+    [Fact]
+    public async Task PanelInteraction_DoesNotCancelOrRestartActivePreloadPass()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.chat"),
+            ("agent", "agent.workspaces"),
+            ("agent", "agent.subsessions"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        var firstPreloadWaitStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstPreloadWait = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var preloadCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var preloadWaitCount = 0;
+        CancellationToken firstPreloadCancellation = default;
+        harness.ViewModel.StartPackageViewPreloading(
+            async (work, cancellationToken) =>
+            {
+                var waitIndex = Interlocked.Increment(ref preloadWaitCount);
+                if (waitIndex == 1)
+                {
+                    firstPreloadCancellation = cancellationToken;
+                    firstPreloadWaitStarted.TrySetResult();
+                    await releaseFirstPreloadWait.Task.WaitAsync(cancellationToken);
+                }
+
+                await work(cancellationToken);
+                if (waitIndex == 3)
+                {
+                    preloadCompleted.TrySetResult();
+                }
+            },
+            static (work, cancellationToken) => work(cancellationToken));
+        await firstPreloadWaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(
+            await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces")
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.False(firstPreloadCancellation.IsCancellationRequested);
+        releaseFirstPreloadWait.TrySetResult();
+        await preloadCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(3, preloadWaitCount);
+        Assert.False(firstPreloadCancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task ReloadPackageViewAsync_DoesNotRunPreloadCancellationCallbacksInline()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService(
+            ("agent", "agent.workspaces"));
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        var preloadStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var waitCount = 0;
+        harness.ViewModel.StartPackageViewPreloading(
+            async (work, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref waitCount) != 1)
+                {
+                    await work(cancellationToken);
+                    return;
+                }
+
+                using var registration = cancellationToken.Register(() =>
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(1));
+                    cancellationCompleted.TrySetResult();
+                });
+                preloadStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            static (work, cancellationToken) => work(cancellationToken));
+        await preloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var startedAt = Stopwatch.GetTimestamp();
+        var reload = harness.ViewModel.ReloadPackageViewAsync("agent.workspaces").AsTask();
+        var synchronousElapsed = Stopwatch.GetElapsedTime(startedAt);
+
+        Assert.True(synchronousElapsed < TimeSpan.FromMilliseconds(500));
+        Assert.True(await reload.WaitAsync(TimeSpan.FromSeconds(2)));
+        await cancellationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task DeferredPresentation_OnlyLatestRequestNavigatesWithItsParameters()
+    {
+        var rootPath = CreateTempDirectory();
+        var probe = new InitialNavigationProbe();
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        registry.RegisterPackageView<InitialNavigationPackageView>(
+            "agent",
+            new PackageViewRegistration("agent.workspaces", "Workspaces"),
+            serviceProvider);
+        var packageViewHostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: new ImmediateUiDispatcher());
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        var workGate = new WorkGate();
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(workGate.RunAsync);
+        probe.NavigateAsync = (context, cancellationToken) =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            probe.Context = context;
+            probe.Started.TrySetResult();
+            return ValueTask.CompletedTask;
+        };
+
+        var firstOpen = harness.ViewModel.OpenPackageViewPanelAsync(
+            "agent.workspaces",
+            new Dictionary<string, string?> { ["request"] = "first" }).AsTask();
+        await workGate.WaitForRequestAsync();
+        Assert.True(harness.ViewModel.ClosePackageViewPanel("agent.workspaces"));
+        var latestOpen = harness.ViewModel.OpenPackageViewPanelAsync(
+            "agent.workspaces",
+            new Dictionary<string, string?> { ["request"] = "latest" }).AsTask();
+
+        for (var workIndex = 0; workIndex < 3; workIndex++)
+        {
+            await workGate.WaitForRequestAsync();
+            workGate.ReleaseNext();
+        }
+
+        Assert.False(await firstOpen.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await latestOpen.WaitAsync(TimeSpan.FromSeconds(2)));
+        await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("latest", probe.Context?.Parameters["request"]);
     }
 
     [Fact]
@@ -266,6 +623,94 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task ReloadPackageViewAsync_DoesNotReattachViewClosedDuringDeferredReload()
+    {
+        var rootPath = CreateTempDirectory();
+        var packageViewHostService = CreateRegisteredPackageViewHostService();
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
+        var originalView = AssertHostedView<DisposablePackageView>(
+            harness.ViewModel.MiddlePanel.HostedView);
+        var createdCountBeforeReload = DisposablePackageView.CreatedCount;
+        var workRequested = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWork = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(async (work, cancellationToken) =>
+        {
+            workRequested.TrySetResult();
+            await releaseWork.Task.WaitAsync(cancellationToken);
+            await work(cancellationToken);
+        });
+
+        var reload = harness.ViewModel.ReloadPackageViewAsync("agent.chat").AsTask();
+        await workRequested.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(createdCountBeforeReload, DisposablePackageView.CreatedCount);
+        Assert.False(originalView.IsDisposed);
+        Assert.True(harness.ViewModel.ClosePackageViewPanel("agent.chat"));
+        releaseWork.TrySetResult();
+
+        Assert.False(await reload.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(originalView.IsDisposed);
+        Assert.False(harness.ViewModel.HasMiddleSelection);
+        Assert.False(harness.ViewModel.MiddlePanel.HasHostedView);
+    }
+
+    [Fact]
+    public async Task ReloadPackageViewAsync_DoesNotSupersedeLaterParameterizedOpen()
+    {
+        var rootPath = CreateTempDirectory();
+        var probe = new InitialNavigationProbe();
+        var registry = new AppPackageViewRegistry();
+        var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        registry.RegisterPackageView<InitialNavigationPackageView>(
+            "agent",
+            new PackageViewRegistration("agent.workspaces", "Workspaces"),
+            serviceProvider);
+        var packageViewHostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: new ImmediateUiDispatcher());
+        using var harness = CreateHarness(
+            rootPath,
+            new ThrowingRuntimeApiClientFactory(),
+            packageViewHostService,
+            packageViewHostService);
+        probe.NavigateAsync = (context, cancellationToken) =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            probe.Context = context;
+            return ValueTask.CompletedTask;
+        };
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var workGate = new WorkGate();
+        harness.ViewModel.ConfigurePackageViewWorkScheduler(workGate.RunAsync);
+
+        var reload = harness.ViewModel.ReloadPackageViewAsync("agent.workspaces").AsTask();
+        await workGate.WaitForRequestAsync();
+        var latestOpen = harness.ViewModel.OpenPackageViewPanelAsync(
+            "agent.workspaces",
+            new Dictionary<string, string?> { ["request"] = "latest" }).AsTask();
+        await workGate.WaitForRequestAsync();
+
+        workGate.ReleaseNext();
+        await workGate.WaitForRequestAsync();
+        workGate.ReleaseNext();
+
+        Assert.False(await reload.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await latestOpen.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("latest", probe.Context?.Parameters["request"]);
+    }
+
+    [Fact]
     public void GetMainMenuItems_IncludesCommandGlyphsAndHotbarState()
     {
         using var harness = CreateHarness();
@@ -369,7 +814,7 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
-    public async Task RemovePackageViewFromHotbar_EvictsRetainedHostedView()
+    public async Task RemovePackageViewFromHotbar_RetainsHiddenHostedViewForReuse()
     {
         DisposablePackageView.ResetCreatedCount();
         var rootPath = CreateTempDirectory();
@@ -385,14 +830,15 @@ public sealed class MainWindowViewModelShellViewTests
         );
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
         Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
+        var retainedWorkspace = Assert.Single(
+            harness.ViewModel.RightTopPanel.HostedViews,
+            view => view.ViewId == "agent.workspaces");
 
         var removed = harness.ViewModel.RemovePackageViewFromHotbar("agent.workspaces");
 
         Assert.True(removed);
-        Assert.DoesNotContain(
-            harness.ViewModel.RightTopPanel.HostedViews,
-            view => view.ViewId == "agent.workspaces"
-        );
+        Assert.Contains(retainedWorkspace, harness.ViewModel.RightTopPanel.HostedViews);
+        Assert.False(retainedWorkspace.IsActive);
         Assert.Contains(
             harness.ViewModel.RightTopPanel.HostedViews,
             view => view.ViewId == "agent.subsessions"
@@ -415,6 +861,57 @@ public sealed class MainWindowViewModelShellViewTests
 
         Assert.Equal(originalLeftWidth, harness.ViewModel.LeftPanelWidth);
         Assert.Equal(originalRightWidth, harness.ViewModel.RightPanelWidth);
+    }
+
+    [Fact]
+    public async Task LayoutController_CommitsOncePerOpenAndCloseAndSkipsSameSideSwitch()
+    {
+        using var harness = CreateHarness();
+        var shellGrid = new Grid
+        {
+            RowDefinitions = new RowDefinitions("*,0,*"),
+        };
+        var topGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("0,0,*,0,0"),
+        };
+        var bottomGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,0,*"),
+        };
+        shellGrid.Arrange(new Rect(0, 0, 1200, 800));
+        topGrid.Arrange(new Rect(0, 0, 1200, 560));
+        bottomGrid.Arrange(new Rect(0, 0, 1200, 236));
+        var leftSplitter = new GridSplitter();
+        var rightSplitter = new GridSplitter();
+        var bottomRowSplitter = new GridSplitter();
+        var bottomColumnSplitter = new GridSplitter();
+        var controller = new MainWindowLayoutController(
+            shellGrid,
+            topGrid,
+            bottomGrid,
+            leftSplitter,
+            rightSplitter,
+            bottomRowSplitter,
+            bottomColumnSplitter,
+            new Border(),
+            new Border(),
+            new Border(),
+            new Border(),
+            () => harness.ViewModel);
+        controller.ApplyAdaptiveLayout();
+        var initialCommitCount = controller.GeometryCommitCount;
+        harness.ViewModel.ShellViewStateChanged += controller.ApplyAdaptiveLayout;
+
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+        var openedCommitCount = controller.GeometryCommitCount;
+        Assert.Equal(initialCommitCount + 1, openedCommitCount);
+
+        Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.subsessions"));
+        Assert.Equal(openedCommitCount, controller.GeometryCommitCount);
+
+        Assert.True(harness.ViewModel.ClosePackageViewPanel("agent.subsessions"));
+        Assert.Equal(openedCommitCount + 1, controller.GeometryCommitCount);
     }
 
     [Fact]
@@ -1973,8 +2470,14 @@ public sealed class MainWindowViewModelShellViewTests
         public void Dispose() { }
     }
 
-    private sealed class DisposablePackageView : Control, IDisposable
+    private sealed class DisposablePackageView
+        : Control,
+            IPackageViewWarmupTarget,
+            IPackageViewNavigationTarget,
+            IDisposable
     {
+        // Deferred shell tests use an inline dispatcher, so keep lifecycle probes off
+        // Avalonia's thread-affined DataContext fallback path.
         public DisposablePackageView()
         {
             CreatedCount++;
@@ -1986,6 +2489,20 @@ public sealed class MainWindowViewModelShellViewTests
 
         public static void ResetCreatedCount() => CreatedCount = 0;
 
+        public ValueTask WarmupAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
         public void Dispose()
         {
             IsDisposed = true;
@@ -1994,16 +2511,31 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class InitialNavigationPackageView(InitialNavigationProbe probe)
         : Control,
+            IPackageViewWarmupTarget,
             IPackageViewNavigationTarget
     {
+        public ValueTask WarmupAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            probe.WarmupCompleted = true;
+            return ValueTask.CompletedTask;
+        }
+
         public ValueTask OnNavigatedToAsync(
             PackageViewNavigationContext context,
-            CancellationToken cancellationToken = default
-        ) => probe.NavigateAsync(context, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            probe.NavigationObservedWarmup = probe.WarmupCompleted;
+            return probe.NavigateAsync(context, cancellationToken);
+        }
     }
 
     private sealed class InitialNavigationProbe
     {
+        public bool WarmupCompleted { get; set; }
+
+        public bool NavigationObservedWarmup { get; set; }
+
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -2033,6 +2565,77 @@ public sealed class MainWindowViewModelShellViewTests
         public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
 
         public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
+    }
+
+    private sealed class WorkGate
+    {
+        private readonly object _syncRoot = new();
+        private readonly Queue<WorkRequest> _work = new();
+        private readonly Queue<WorkRequest> _requestNotifications = new();
+        private readonly SemaphoreSlim _requested = new(0);
+
+        public async Task RunAsync(
+            Func<CancellationToken, Task> work,
+            CancellationToken cancellationToken)
+        {
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var cancellationRegistration = cancellationToken.Register(
+                () => completion.TrySetCanceled(cancellationToken));
+            var request = new WorkRequest(completion, cancellationToken);
+            lock (_syncRoot)
+            {
+                _work.Enqueue(request);
+                _requestNotifications.Enqueue(request);
+            }
+            _requested.Release();
+            await completion.Task;
+            await work(cancellationToken);
+        }
+
+        public async Task WaitForRequestAsync()
+        {
+            while (await _requested.WaitAsync(TimeSpan.FromSeconds(2)))
+            {
+                WorkRequest request;
+                lock (_syncRoot)
+                {
+                    request = _requestNotifications.Dequeue();
+                }
+                if (!request.Completion.Task.IsCompleted
+                    && !request.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+            }
+
+            throw new TimeoutException("No work request was queued within the timeout.");
+        }
+
+        public void ReleaseNext()
+        {
+            TaskCompletionSource? completion = null;
+            lock (_syncRoot)
+            {
+                while (_work.Count > 0)
+                {
+                    var candidate = _work.Dequeue();
+                    if (!candidate.Completion.Task.IsCompleted
+                        && !candidate.CancellationToken.IsCancellationRequested)
+                    {
+                        completion = candidate.Completion;
+                        break;
+                    }
+                }
+            }
+
+            Assert.NotNull(completion);
+            completion.TrySetResult();
+        }
+
+        private sealed record WorkRequest(
+            TaskCompletionSource Completion,
+            CancellationToken CancellationToken);
     }
 
     private sealed class TestPackageViewStagingSurface

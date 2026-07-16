@@ -332,16 +332,153 @@ public sealed class PackageViewHostService : IAsyncDisposable
         return CurrentGeneration.Composition.ViewFacade.GetOrCreateView(viewId);
     }
 
-    public Control? ReloadView(string viewId)
+    internal bool IsViewPrepared(string viewId, Guid expectedGenerationId)
     {
         ThrowIfDisposed();
-        return CurrentGeneration.Composition.ViewFacade.ReloadView(viewId);
+        var generation = CurrentGeneration;
+        return generation.Id == expectedGenerationId
+            && generation.Composition.ViewFacade.IsViewPrepared(viewId);
     }
 
-    public bool InvalidateView(string viewId)
+    internal async Task<Control?> PreloadViewAsync(
+        string viewId,
+        Guid expectedGenerationId,
+        CancellationToken cancellationToken,
+        Func<Control, bool>? retainView = null)
     {
-        ThrowIfDisposed();
-        return CurrentGeneration.Composition.ViewFacade.InvalidateView(viewId);
+        Control? result = null;
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId)
+            {
+                return;
+            }
+
+            result = await generation.Composition.ViewFacade
+                .WarmupViewAsync(
+                    viewId,
+                    cancellationToken,
+                    retainView is null
+                        ? null
+                        : control => CurrentGeneration.Id == expectedGenerationId
+                            && retainView(control));
+            if (CurrentGeneration.Id != expectedGenerationId)
+            {
+                result = null;
+            }
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    internal async Task<bool> PrepareViewForPresentationAsync(
+        string viewId,
+        Guid expectedGenerationId,
+        Func<Control?, bool> presentView,
+        CancellationToken cancellationToken)
+    {
+        var result = false;
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId)
+            {
+                return;
+            }
+
+            result = await generation.Composition.ViewFacade.PrepareViewAsync(
+                viewId,
+                control => CurrentGeneration.Id == expectedGenerationId && presentView(control),
+                cancellationToken);
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    public async ValueTask<Control?> ReloadViewAsync(
+        string viewId,
+        CancellationToken cancellationToken = default)
+    {
+        Control? result = null;
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            result = await CurrentGeneration.Composition.ViewFacade.ReloadViewAsync(
+                viewId,
+                cancellationToken);
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    internal async ValueTask<Control?> ReloadViewAsync(
+        string viewId,
+        Guid expectedGenerationId,
+        CancellationToken cancellationToken)
+    {
+        Control? result = null;
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId)
+            {
+                return;
+            }
+
+            result = await generation.Composition.ViewFacade.ReloadViewAsync(
+                viewId,
+                cancellationToken);
+            if (CurrentGeneration.Id != expectedGenerationId)
+            {
+                result = null;
+            }
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    public async ValueTask<bool> InvalidateViewAsync(
+        string viewId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = false;
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            result = await CurrentGeneration.Composition.ViewFacade.InvalidateViewAsync(
+                viewId,
+                cancellationToken);
+        }).ConfigureAwait(false);
+        return result;
+    }
+
+    internal async ValueTask<bool> InvalidateViewAsync(
+        string viewId,
+        Guid expectedGenerationId,
+        CancellationToken cancellationToken)
+    {
+        var result = false;
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId)
+            {
+                return;
+            }
+
+            result = await generation.Composition.ViewFacade.InvalidateViewAsync(
+                viewId,
+                cancellationToken);
+            result = result && CurrentGeneration.Id == expectedGenerationId;
+        }).ConfigureAwait(false);
+        return result;
     }
 
     public async ValueTask NotifyViewNavigatedAsync(
@@ -361,11 +498,63 @@ public sealed class PackageViewHostService : IAsyncDisposable
         }).ConfigureAwait(false);
     }
 
+    internal async ValueTask<bool> NotifyViewNavigatedAsync(
+        string viewId,
+        IReadOnlyDictionary<string, string?>? parameters,
+        Guid expectedGenerationId,
+        CancellationToken cancellationToken,
+        Func<bool>? canStart = null)
+    {
+        var notified = false;
+        cancellationToken.ThrowIfCancellationRequested();
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId)
+            {
+                return;
+            }
+
+            notified = await generation.Composition.ViewFacade.NotifyViewNavigatedAsync(
+                viewId,
+                parameters,
+                cancellationToken,
+                () => CurrentGeneration.Id == expectedGenerationId
+                    && (canStart is null || canStart()));
+            notified = notified && CurrentGeneration.Id == expectedGenerationId;
+        }).ConfigureAwait(false);
+        return notified;
+    }
+
     internal void CancelViewNavigation(string viewId)
         => CurrentGeneration.Composition.ViewFacade.CancelViewNavigation(viewId);
 
+    internal Task CancelViewNavigationAsync(string viewId)
+        => CurrentGeneration.Composition.ViewFacade.CancelViewNavigationAsync(viewId);
+
+    internal Task CancelViewNavigationAsync(
+        string viewId,
+        Guid expectedGenerationId,
+        Func<bool>? canStart = null)
+        => InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId
+                || canStart is not null && !canStart())
+            {
+                return;
+            }
+
+            await generation.Composition.ViewFacade.CancelViewNavigationAsync(viewId);
+        });
+
     internal void CancelAllViewNavigations()
         => CurrentGeneration.Composition.ViewFacade.CancelAllViewNavigations();
+
+    internal Task CancelAllViewNavigationsAsync()
+        => CurrentGeneration.Composition.ViewFacade.CancelAllViewNavigationsAsync();
 
     public bool HasSettingsView(string packageId)
     {
@@ -496,15 +685,28 @@ public sealed class PackageViewHostService : IAsyncDisposable
         => InvokeNavigationOnUiThreadAsync(async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var view = generation.Composition.ViewFacade.GetOrCreateView(viewId);
-            if (view is null)
+            Control? stagedView = null;
+            var prepared = await generation.Composition.ViewFacade.PrepareViewAsync(
+                viewId,
+                view =>
+                {
+                    if (view is null)
+                    {
+                        return false;
+                    }
+
+                    stageView(view);
+                    stagedView = view;
+                    return true;
+                },
+                cancellationToken);
+            if (!prepared)
             {
                 throw new InvalidOperationException($"Selected package view '{viewId}' could not be prepared.");
             }
 
-            stageView(view);
             await AppPackageViewNavigator.NotifyViewNavigatedAsync(
-                view,
+                stagedView!,
                 viewId,
                 parameters,
                 cancellationToken);

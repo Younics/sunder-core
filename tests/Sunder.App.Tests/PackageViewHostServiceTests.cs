@@ -97,6 +97,51 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task DisablePackageAsync_CancelsAndDrainsPackageViewOperationsBeforeDisposal()
+    {
+        var probe = new WarmupNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        var warmup = hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var disable = hostService.DisablePackageAsync(
+            "agent",
+            "Hosted view failed.",
+            PackageFailureOrigin.AppHostedView);
+        var duplicateDisable = hostService.DisablePackageAsync(
+            "agent",
+            "Duplicate hosted view failure.",
+            PackageFailureOrigin.AppHostedView);
+        await Task.Delay(50);
+        Assert.False(disable.IsCompleted);
+        Assert.False(duplicateDisable.IsCompleted);
+        Assert.False(probe.DisposalObserved.Task.IsCompleted);
+
+        probe.ReleaseWarmup.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => warmup.WaitAsync(TimeSpan.FromSeconds(2)));
+        await disable.WaitAsync(TimeSpan.FromSeconds(2));
+        await duplicateDisable.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(probe.DisposalObserved.Task.IsCompletedSuccessfully);
+    }
+
+    [Fact]
     public async Task DisablePackageAsync_WaitsForPackageScopedBackgroundProcessesToStop()
     {
         var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -257,8 +302,10 @@ public sealed class PackageViewHostServiceTests
         Assert.Throws<ObjectDisposedException>(() => hostService.FilterEnabledPackages([CreateActiveAgentPackage()]));
         Assert.Throws<ObjectDisposedException>(() => hostService.TryHandleUnhandledException(new InvalidOperationException("boom")));
         Assert.Throws<ObjectDisposedException>(() => hostService.GetOrCreateView("agent.chat"));
-        Assert.Throws<ObjectDisposedException>(() => hostService.ReloadView("agent.chat"));
-        Assert.Throws<ObjectDisposedException>(() => hostService.InvalidateView("agent.chat"));
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => hostService.ReloadViewAsync("agent.chat").AsTask());
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => hostService.InvalidateViewAsync("agent.chat").AsTask());
         Assert.Throws<ObjectDisposedException>(() => hostService.HasSettingsView("agent"));
         Assert.Throws<ObjectDisposedException>(() => hostService.ListSettingsViewPackages());
         Assert.Throws<ObjectDisposedException>(() => hostService.GetOrCreateSettingsView("agent"));
@@ -323,6 +370,423 @@ public sealed class PackageViewHostServiceTests
             releaseAttachmentBarrier.TrySetResult();
             await hostService.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task WarmupViewAsync_SerializesPresentationAndNavigationForTheSameView()
+    {
+        var probe = new WarmupNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+
+        var warmup = hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var presented = false;
+        var presentation = hostService.PrepareViewForPresentationAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            _ => presented = true,
+            CancellationToken.None);
+        var navigation = hostService.NotifyViewNavigatedAsync(
+            "agent.chat",
+            parameters: null).AsTask();
+
+        await Task.Delay(50);
+        Assert.False(presented);
+        Assert.False(probe.NavigationStarted.Task.IsCompleted);
+
+        probe.ReleaseWarmup.TrySetResult();
+        Assert.NotNull(await warmup.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await presentation.WaitAsync(TimeSpan.FromSeconds(2)));
+        await navigation.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(presented);
+        Assert.True(probe.NavigationStarted.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_CancelsAndDrainsInFlightViewWarmup()
+    {
+        var probe = new WarmupNavigationProbe { WaitForCancellation = true };
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        var warmup = hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var disposal = hostService.DisposeAsync().AsTask();
+        await probe.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(disposal.IsCompleted);
+
+        probe.ReleaseCancellationCleanup.TrySetResult();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => warmup.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task PresentationBeforePreload_SkipsLateWarmupForPresentedView()
+    {
+        var probe = new WarmupNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+
+        var presentation = hostService.PrepareViewForPresentationAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            _ => true,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(presentation.IsCompleted);
+
+        probe.ReleaseWarmup.TrySetResult();
+        Assert.True(await presentation.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.NotNull(await hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None));
+
+        Assert.Equal(1, probe.WarmupCount);
+    }
+
+    [Fact]
+    public async Task ReloadViewAsync_WaitsForInFlightWarmupBeforeReplacingControl()
+    {
+        var probe = new WarmupNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        var warmup = hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var reload = hostService.ReloadViewAsync("agent.chat").AsTask();
+        var navigation = hostService.NotifyViewNavigatedAsync(
+            "agent.chat",
+            parameters: null,
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await Task.Delay(50);
+        Assert.False(reload.IsCompleted);
+        Assert.False(navigation.IsCompleted);
+
+        probe.ReleaseWarmup.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => warmup.WaitAsync(TimeSpan.FromSeconds(2)));
+        var replacement = await reload.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.NotNull(replacement);
+        Assert.True(await navigation.AsTask().WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(probe.NavigationStarted.Task.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task NavigationCallback_CanReenterSameViewPresentationWithoutDeadlock()
+    {
+        var probe = new ReentrantNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<ReentrantNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        probe.OnNavigateAsync = async cancellationToken =>
+        {
+            await hostService.CancelViewNavigationAsync(
+                "agent.chat",
+                hostService.CurrentGenerationId);
+            Assert.True(await hostService.PrepareViewForPresentationAsync(
+                "agent.chat",
+                hostService.CurrentGenerationId,
+                _ => true,
+                cancellationToken));
+        };
+
+        await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, probe.NavigationCount);
+    }
+
+    [Fact]
+    public async Task EscapedNavigationScope_DoesNotBypassActiveViewGate()
+    {
+        var probe = new ReentrantNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<ReentrantNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        var releaseEscapedOperation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondNavigationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecondNavigation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? escapedOperation = null;
+        probe.OnNavigateAsync = async cancellationToken =>
+        {
+            if (probe.NavigationCount == 1)
+            {
+                escapedOperation = Task.Run(async () =>
+                {
+                    await releaseEscapedOperation.Task;
+                    return await hostService.PrepareViewForPresentationAsync(
+                        "agent.chat",
+                        hostService.CurrentGenerationId,
+                        _ => true,
+                        CancellationToken.None);
+                });
+                return;
+            }
+
+            secondNavigationStarted.TrySetResult();
+            await releaseSecondNavigation.Task.WaitAsync(cancellationToken);
+        };
+
+        await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null);
+        var secondNavigation = hostService.NotifyViewNavigatedAsync(
+            "agent.chat",
+            parameters: null).AsTask();
+        await secondNavigationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseEscapedOperation.TrySetResult();
+        await Task.Delay(50);
+        Assert.NotNull(escapedOperation);
+        Assert.False(escapedOperation!.IsCompleted);
+
+        releaseSecondNavigation.TrySetResult();
+        await secondNavigation.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(await escapedOperation.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task ReentrantNavigationCancellation_CancelsQueuedSuccessorWithoutDeadlock()
+    {
+        var probe = new ReentrantNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<ReentrantNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        Task? successor = null;
+        probe.OnNavigateAsync = async cancellationToken =>
+        {
+            if (probe.NavigationCount == 1)
+            {
+                successor = hostService.NotifyViewNavigatedAsync(
+                    "agent.chat",
+                    parameters: null).AsTask();
+                await hostService.CancelViewNavigationAsync(
+                    "agent.chat",
+                    hostService.CurrentGenerationId);
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => successor);
+                return;
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(2, probe.NavigationCount);
+    }
+
+    [Fact]
+    public async Task CanceledQueuedReset_PreservesPredecessorBarrierForLaterOperations()
+    {
+        var probe = new WarmupNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        var warmup = hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var firstReset = hostService.ReloadViewAsync("agent.chat").AsTask();
+        using var resetCancellation = new CancellationTokenSource();
+        var canceledReset = hostService.ReloadViewAsync(
+            "agent.chat",
+            resetCancellation.Token).AsTask();
+        var presentation = hostService.PrepareViewForPresentationAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            _ => true,
+            CancellationToken.None);
+
+        resetCancellation.Cancel();
+        await Task.Delay(50);
+        Assert.False(canceledReset.IsCompleted);
+        Assert.False(presentation.IsCompleted);
+
+        probe.ReleaseWarmup.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => warmup.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.NotNull(await firstReset.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => canceledReset.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await presentation.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task GenerationFencedNavigation_RevalidatesRequestBeforeCallbackStarts()
+    {
+        var probe = new ReentrantNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<ReentrantNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+
+        var notified = await hostService.NotifyViewNavigatedAsync(
+            "agent.chat",
+            parameters: null,
+            hostService.CurrentGenerationId,
+            CancellationToken.None,
+            canStart: () => false);
+
+        Assert.False(notified);
+        Assert.Equal(0, probe.NavigationCount);
+    }
+
+    [Fact]
+    public async Task GenerationFencedNavigation_RevalidatesRequestAfterWaitingForViewGate()
+    {
+        var probe = new WarmupNavigationProbe();
+        using var serviceProvider = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var registry = new AppPackageViewRegistry();
+        registry.RegisterPackageView<WarmupNavigationPackageView>(
+            "agent",
+            "agent.chat",
+            serviceProvider);
+        await using var hostService = new PackageViewHostService(
+            registry,
+            [],
+            [serviceProvider],
+            [],
+            faultReporter: null,
+            sessionFolder: null,
+            uiDispatcher: TestUiDispatcher);
+        var warmup = hostService.PreloadViewAsync(
+            "agent.chat",
+            hostService.CurrentGenerationId,
+            CancellationToken.None);
+        await probe.WarmupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var canStart = true;
+        var navigation = hostService.NotifyViewNavigatedAsync(
+            "agent.chat",
+            parameters: null,
+            hostService.CurrentGenerationId,
+            CancellationToken.None,
+            () => canStart);
+
+        canStart = false;
+        probe.ReleaseWarmup.TrySetResult();
+
+        Assert.NotNull(await warmup.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.False(await navigation.AsTask().WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.False(probe.NavigationStarted.Task.IsCompleted);
     }
 
     [Fact]
@@ -1301,6 +1765,101 @@ public sealed class PackageViewHostServiceTests
             PackageViewNavigationContext context,
             CancellationToken cancellationToken = default)
             => _probe.OnNavigatedToAsync(context, cancellationToken);
+    }
+
+    private sealed class WarmupNavigationPackageView(WarmupNavigationProbe probe)
+        : Control,
+            IPackageViewWarmupTarget,
+            IPackageViewNavigationTarget,
+            IDisposable
+    {
+        public async ValueTask WarmupAsync(CancellationToken cancellationToken = default)
+        {
+            probe.WarmupCount++;
+            probe.WarmupStarted.TrySetResult();
+            if (!probe.WaitForCancellation)
+            {
+                await probe.ReleaseWarmup.Task;
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                probe.CancellationObserved.TrySetResult();
+                await probe.ReleaseCancellationCleanup.Task;
+                throw;
+            }
+        }
+
+        public ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            probe.NavigationStarted.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        public void Dispose() => probe.DisposalObserved.TrySetResult();
+    }
+
+    private sealed class ReentrantNavigationPackageView(ReentrantNavigationProbe probe)
+        : Control,
+            IPackageViewWarmupTarget,
+            IPackageViewNavigationTarget
+    {
+        public ValueTask WarmupAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask OnNavigatedToAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            probe.NavigationCount++;
+            if (probe.OnNavigateAsync is not null)
+            {
+                await probe.OnNavigateAsync(cancellationToken);
+            }
+        }
+    }
+
+    private sealed class ReentrantNavigationProbe
+    {
+        public int NavigationCount { get; set; }
+
+        public Func<CancellationToken, Task>? OnNavigateAsync { get; set; }
+    }
+
+    private sealed class WarmupNavigationProbe
+    {
+        public int WarmupCount { get; set; }
+
+        public bool WaitForCancellation { get; init; }
+
+        public TaskCompletionSource WarmupStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ReleaseWarmup { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource NavigationStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource CancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ReleaseCancellationCleanup { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource DisposalObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class DispatcherDataContextPackageView : Control

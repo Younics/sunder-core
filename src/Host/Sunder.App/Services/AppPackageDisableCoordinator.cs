@@ -5,12 +5,80 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageDisableCoordinator(
     AppPackageViewRegistry viewRegistry,
+    AppPackageHostedViewFacade viewFacade,
     AppPackageExtensionCatalog extensionCatalog,
     AppPackageRuntimeWorkStopper runtimeWorkStopper,
     AppPackageFaultNotifier faultNotifier,
     Func<string, bool> markPackageDisabled)
 {
+    private readonly object _disableSyncRoot = new();
+    private readonly Dictionary<string, TaskCompletionSource> _disableOperations =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public async Task DisablePackageAsync(
+        object sender,
+        string packageId,
+        string message,
+        PackageFailureOrigin origin,
+        Exception? exception,
+        Func<string, CancellationToken, bool, Task<bool>> unloadPackageAsync,
+        CancellationToken cancellationToken)
+    {
+        TaskCompletionSource completion;
+        var ownsOperation = false;
+        lock (_disableSyncRoot)
+        {
+            if (!_disableOperations.TryGetValue(packageId, out completion!))
+            {
+                completion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _disableOperations.Add(packageId, completion);
+                ownsOperation = true;
+            }
+        }
+
+        if (!ownsOperation)
+        {
+            await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await DisablePackageCoreAsync(
+                sender,
+                packageId,
+                message,
+                origin,
+                exception,
+                unloadPackageAsync,
+                cancellationToken).ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (OperationCanceledException ex)
+        {
+            completion.TrySetCanceled(ex.CancellationToken);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            completion.TrySetException(ex);
+            throw;
+        }
+        finally
+        {
+            lock (_disableSyncRoot)
+            {
+                if (_disableOperations.TryGetValue(packageId, out var activeCompletion)
+                    && ReferenceEquals(activeCompletion, completion))
+                {
+                    _disableOperations.Remove(packageId);
+                }
+            }
+        }
+    }
+
+    private async Task DisablePackageCoreAsync(
         object sender,
         string packageId,
         string message,
@@ -47,8 +115,9 @@ internal sealed class AppPackageDisableCoordinator(
             return false;
         }
 
+        await viewFacade.CancelPackageViewOperationsAsync(packageId).ConfigureAwait(false);
         extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
-        await viewRegistry.RemoveCachedViewsAsync(packageId, cancellationToken);
+        await viewRegistry.RemoveCachedViewsAsync(packageId, CancellationToken.None);
         await faultNotifier.NotifyPackageDisabledAsync(sender, packageId, message, origin, exception);
         return true;
     }

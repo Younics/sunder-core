@@ -27,6 +27,7 @@ internal sealed class ShellPanelContentPresenter(
         }
 
         panel.Title = packageView.Title.ToUpperInvariant();
+        panel.SetDockVisible(true);
         panel.Subtitle = $"{packageView.PackageDisplayName} · {packageView.PackageId} · v{packageView.PackageVersion}";
         panel.Summary = packageView.Readiness == Sunder.Runtime.Contracts.PackageReadinessState.Ready
             ? $"{ShellPlacementCatalog.ToDisplayName(placement).ToUpperInvariant()} PACKAGE ACTIVE"
@@ -35,7 +36,7 @@ internal sealed class ShellPanelContentPresenter(
         if (!createHostedView)
         {
             panel.SetActiveView(viewId, hostedView: null);
-            panel.Lines.Add("Package view will open after the shell finishes rendering.");
+            panel.Lines.Add("Package view is preparing.");
             return;
         }
 
@@ -56,6 +57,7 @@ internal sealed class ShellPanelContentPresenter(
 
     private void ApplyEmptyPanelState(RailPlacement placement, ShellPanelViewModel panel, int middleBarItemCount)
     {
+        panel.SetDockVisible(false);
         panel.ClearActiveView();
 
         if (placement == RailPlacement.Middle)

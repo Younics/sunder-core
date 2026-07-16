@@ -67,8 +67,15 @@ internal sealed class InitialShellRenderWaiter(
         CancellationToken cancellationToken
     )
     {
-        await WaitForAnimationFrameAsync(mainWindow, cancellationToken).ConfigureAwait(false);
-        await WaitForCompositionBatchAsync(mainWindow, cancellationToken).ConfigureAwait(false);
+        var deadline = DateTimeOffset.UtcNow + _renderWaitTimeout;
+        await WaitForAnimationFrameAsync(
+            mainWindow,
+            GetRemainingTimeout(deadline),
+            cancellationToken).ConfigureAwait(false);
+        await WaitForCompositionBatchAsync(
+            mainWindow,
+            GetRemainingTimeout(deadline),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static IEnumerable<Control> GetHostedControls(Control control)
@@ -82,6 +89,7 @@ internal sealed class InitialShellRenderWaiter(
 
     private async Task WaitForAnimationFrameAsync(
         MainWindow mainWindow,
+        TimeSpan timeout,
         CancellationToken cancellationToken
     )
     {
@@ -94,19 +102,19 @@ internal sealed class InitialShellRenderWaiter(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            await frame.Task.WaitAsync(_renderWaitTimeout, cancellationToken).ConfigureAwait(false);
-            AppSessionLog.WriteInfo("Initial shell animation frame completed.");
+            await frame.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            AppSessionLog.WriteInfo("Shell animation frame completed.");
         }
         catch (TimeoutException)
         {
             AppSessionLog.WriteInfo(
-                "Initial shell animation frame was unavailable; continuing with the bounded render fallback."
+                "Shell animation frame was unavailable; continuing with the bounded render fallback."
             );
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             AppSessionLog.WriteError(
-                "Initial shell animation frame could not be requested; continuing with the render fallback.",
+                "Shell animation frame could not be requested; continuing with the render fallback.",
                 ex
             );
         }
@@ -114,6 +122,7 @@ internal sealed class InitialShellRenderWaiter(
 
     private async Task WaitForCompositionBatchAsync(
         MainWindow mainWindow,
+        TimeSpan timeout,
         CancellationToken cancellationToken
     )
     {
@@ -131,29 +140,35 @@ internal sealed class InitialShellRenderWaiter(
             if (batch is null)
             {
                 AppSessionLog.WriteInfo(
-                    "Initial shell compositor was unavailable; continuing with the bounded render fallback."
+                    "Shell compositor was unavailable; continuing with the bounded render fallback."
                 );
                 return;
             }
 
             await batch
-                .Rendered.WaitAsync(_renderWaitTimeout, cancellationToken)
+                .Rendered.WaitAsync(timeout, cancellationToken)
                 .ConfigureAwait(false);
-            AppSessionLog.WriteInfo("Initial shell composition batch rendered.");
+            AppSessionLog.WriteInfo("Shell composition batch rendered.");
         }
         catch (TimeoutException)
         {
             AppSessionLog.WriteInfo(
-                "Initial shell composition render timed out; continuing with the bounded render fallback."
+                "Shell composition render timed out; continuing with the bounded render fallback."
             );
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             AppSessionLog.WriteError(
-                "Initial shell composition render was unavailable; continuing with the bounded render fallback.",
+                "Shell composition render was unavailable; continuing with the bounded render fallback.",
                 ex
             );
         }
+    }
+
+    private static TimeSpan GetRemainingTimeout(DateTimeOffset deadline)
+    {
+        var remaining = deadline - DateTimeOffset.UtcNow;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1);
     }
 
     private sealed class ControlReadiness : IDisposable

@@ -5,6 +5,22 @@ namespace Sunder.App.Services;
 
 internal static class AppPackageViewNavigator
 {
+    public static async ValueTask WarmupViewAsync(
+        Control view,
+        CancellationToken cancellationToken)
+    {
+        if (view is IPackageViewWarmupTarget viewTarget)
+        {
+            await viewTarget.WarmupAsync(cancellationToken);
+            return;
+        }
+
+        if (view.DataContext is IPackageViewWarmupTarget dataContextTarget)
+        {
+            await dataContextTarget.WarmupAsync(cancellationToken);
+        }
+    }
+
     public static async ValueTask NotifyViewNavigatedAsync(
         Control view,
         string viewId,

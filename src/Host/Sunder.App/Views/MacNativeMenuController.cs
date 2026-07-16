@@ -1,8 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Avalonia.Threading;
 using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
@@ -11,15 +11,16 @@ namespace Sunder.App.Views;
 
 internal sealed class MacNativeMenuController : IDisposable
 {
+    private const int NativeMenuIconSize = 16;
     private static readonly Uri DefaultIconUri = new("avares://Sunder.App/Assets/Images/icon.png");
     private readonly Window _window;
     private readonly Func<MainWindowViewModel?> _viewModelAccessor;
     private readonly OwnedTaskObserver _tasks = new("macOS native menu");
+    private readonly Dictionary<Bitmap, Bitmap> _scaledIcons = new(ReferenceEqualityComparer.Instance);
     private NativeMenu? _rootMenu;
     private Bitmap? _defaultIcon;
     private MainWindowViewModel? _subscribedViewModel;
     private bool _menuDirty = true;
-    private bool _menuRefreshScheduled;
     private bool _disposed;
 
     public MacNativeMenuController(Window window, Func<MainWindowViewModel?> viewModelAccessor)
@@ -56,6 +57,11 @@ internal sealed class MacNativeMenuController : IDisposable
             _rootMenu = null;
         }
 
+        foreach (var icon in _scaledIcons.Values)
+        {
+            icon.Dispose();
+        }
+        _scaledIcons.Clear();
         _defaultIcon?.Dispose();
         _defaultIcon = null;
     }
@@ -67,7 +73,7 @@ internal sealed class MacNativeMenuController : IDisposable
     private void Window_OnDataContextChanged(object? sender, EventArgs e)
     {
         SubscribeToCurrentViewModel();
-        ScheduleMenuRefresh();
+        _menuDirty = true;
         AttachMenu();
     }
 
@@ -155,23 +161,7 @@ internal sealed class MacNativeMenuController : IDisposable
         _subscribedViewModel = null;
     }
 
-    private void ViewModel_OnShellViewStateChanged() => ScheduleMenuRefresh();
-
-    private void ScheduleMenuRefresh()
-    {
-        _menuDirty = true;
-        if (_disposed || _rootMenu is null || _menuRefreshScheduled)
-        {
-            return;
-        }
-
-        _menuRefreshScheduled = true;
-        Dispatcher.UIThread.Post(() =>
-        {
-            _menuRefreshScheduled = false;
-            UpdateMenuIfDirty();
-        }, DispatcherPriority.Background);
-    }
+    private void ViewModel_OnShellViewStateChanged() => _menuDirty = true;
 
     private void UpdateMenuIfDirty()
     {
@@ -181,7 +171,34 @@ internal sealed class MacNativeMenuController : IDisposable
         }
     }
 
-    private Bitmap ResolveMenuIcon(IImage? iconImage) => iconImage as Bitmap ?? DefaultIcon;
+    private Bitmap ResolveMenuIcon(IImage? iconImage)
+    {
+        if (iconImage is not Bitmap bitmap)
+        {
+            return DefaultIcon;
+        }
+
+        var sourceSize = bitmap.PixelSize;
+        if (sourceSize.Width <= NativeMenuIconSize && sourceSize.Height <= NativeMenuIconSize)
+        {
+            return bitmap;
+        }
+
+        if (!_scaledIcons.TryGetValue(bitmap, out var scaled))
+        {
+            var scale = Math.Min(
+                (double)NativeMenuIconSize / sourceSize.Width,
+                (double)NativeMenuIconSize / sourceSize.Height);
+            scaled = bitmap.CreateScaledBitmap(
+                new PixelSize(
+                    Math.Max(1, (int)Math.Round(sourceSize.Width * scale)),
+                    Math.Max(1, (int)Math.Round(sourceSize.Height * scale))),
+                BitmapInterpolationMode.HighQuality);
+            _scaledIcons.Add(bitmap, scaled);
+        }
+
+        return scaled;
+    }
 
     private Bitmap DefaultIcon
     {
@@ -193,7 +210,10 @@ internal sealed class MacNativeMenuController : IDisposable
             }
 
             using var stream = AssetLoader.Open(DefaultIconUri);
-            return _defaultIcon = new Bitmap(stream);
+            return _defaultIcon = Bitmap.DecodeToWidth(
+                stream,
+                NativeMenuIconSize,
+                BitmapInterpolationMode.HighQuality);
         }
     }
 }

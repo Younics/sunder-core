@@ -10,7 +10,9 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
     Func<bool> isDisposed,
     Action<Control> stageCandidateView,
     Action detachStagedCandidateViews,
-    IUiDispatcher uiDispatcher)
+    IUiDispatcher uiDispatcher,
+    Action? beginPresentationCommit = null,
+    Action? completePresentationCommit = null)
 {
     private readonly AppPackageLifecycleGate _packageLifecycleGate = new(nameof(ShellPackageLifecycleRefreshCoordinator));
 
@@ -52,9 +54,17 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
 
                     return () =>
                     {
-                        detachStagedCandidateViews();
-                        detachAuxiliaryPackageViews?.Invoke();
-                        packageLifecyclePresenter.CommitPreparedLifecycleChanges(presentation, stabilizedViewIds);
+                        beginPresentationCommit?.Invoke();
+                        try
+                        {
+                            detachStagedCandidateViews();
+                            detachAuxiliaryPackageViews?.Invoke();
+                            packageLifecyclePresenter.CommitPreparedLifecycleChanges(presentation, stabilizedViewIds);
+                        }
+                        finally
+                        {
+                            completePresentationCommit?.Invoke();
+                        }
                     };
                 },
                 cancellationToken).ConfigureAwait(false);

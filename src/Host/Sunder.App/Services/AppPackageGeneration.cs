@@ -46,7 +46,7 @@ internal sealed class AppPackageGeneration(
         }
 
         Composition.UnpublishServices();
-        Composition.ViewFacade.CancelAllViewNavigations();
+        await Composition.ViewFacade.CancelAllViewOperationsAsync().ConfigureAwait(false);
         foreach (var packageId in State.SnapshotLoadedPackageIds())
         {
             await Composition.UnloadPackageAsync(packageId).ConfigureAwait(false);

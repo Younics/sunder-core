@@ -19,11 +19,12 @@ internal sealed class ShellRailCollectionPresenter(
         bool createHostedViews,
         IReadOnlySet<string>? stabilizedViewIds = null)
     {
+        var viewIdsToCancel = new List<string>();
         foreach (var slot in slots)
         {
             if (!string.IsNullOrWhiteSpace(slot.Panel.ActiveViewId))
             {
-                cancelViewNavigation(slot.Panel.ActiveViewId);
+                viewIdsToCancel.Add(slot.Panel.ActiveViewId);
             }
             selectionPresenter.SetSelectedItem(slot.Placement, null);
             slot.Panel.ClearActiveView();
@@ -37,6 +38,7 @@ internal sealed class ShellRailCollectionPresenter(
         }
 
         var middleBarItemCount = slots.FirstOrDefault(slot => slot.Placement == RailPlacement.Middle)?.Bar.Items.Count ?? 0;
+        var viewIdsToNavigate = new List<string>();
         foreach (var slot in slots)
         {
             RestoreSelection(slot, ShellSelectionState.GetSelectedViewId(shellState, slot.Placement));
@@ -46,8 +48,17 @@ internal sealed class ShellRailCollectionPresenter(
                 && !string.IsNullOrWhiteSpace(selectedViewId)
                 && stabilizedViewIds?.Contains(selectedViewId) != true)
             {
-                notifyViewNavigated(selectedViewId);
+                viewIdsToNavigate.Add(selectedViewId);
             }
+        }
+
+        foreach (var viewId in viewIdsToCancel)
+        {
+            cancelViewNavigation(viewId);
+        }
+        foreach (var viewId in viewIdsToNavigate)
+        {
+            notifyViewNavigated(viewId);
         }
     }
 
@@ -81,6 +92,7 @@ internal sealed class ShellRailCollectionPresenter(
 
         var middleBarItemCount = slots.FirstOrDefault(slot => slot.Placement == RailPlacement.Middle)?.Bar.Items.Count ?? 0;
         var selectedViewIdsAfterUpdate = new Dictionary<RailPlacement, string?>();
+        var viewIdsToCancel = new List<string>();
         foreach (var slot in affectedSlots)
         {
             var selectedViewIdBeforeUpdate = selectedViewIdsBeforeUpdate[slot.Placement];
@@ -97,12 +109,13 @@ internal sealed class ShellRailCollectionPresenter(
             {
                 if (!string.IsNullOrWhiteSpace(activeViewIdsBeforeUpdate[slot.Placement]))
                 {
-                    cancelViewNavigation(activeViewIdsBeforeUpdate[slot.Placement]!);
+                    viewIdsToCancel.Add(activeViewIdsBeforeUpdate[slot.Placement]!);
                 }
                 slot.Panel.ClearActiveView();
             }
         }
 
+        var viewIdsToNavigate = new List<string>();
         foreach (var slot in affectedSlots)
         {
             var selectedViewIdAfterUpdate = selectedViewIdsAfterUpdate[slot.Placement];
@@ -123,8 +136,17 @@ internal sealed class ShellRailCollectionPresenter(
                 createHostedViews);
             if (createHostedViews && !string.IsNullOrWhiteSpace(selectedViewIdAfterUpdate))
             {
-                notifyViewNavigated(selectedViewIdAfterUpdate);
+                viewIdsToNavigate.Add(selectedViewIdAfterUpdate);
             }
+        }
+
+        foreach (var viewId in viewIdsToCancel)
+        {
+            cancelViewNavigation(viewId);
+        }
+        foreach (var viewId in viewIdsToNavigate)
+        {
+            notifyViewNavigated(viewId);
         }
     }
 
@@ -175,10 +197,11 @@ internal sealed class ShellRailCollectionPresenter(
         return selected;
     }
 
-    private static void PruneRetainedHostedViews(ShellPlacementSlot slot)
+    private void PruneRetainedHostedViews(ShellPlacementSlot slot)
     {
-        var retainedViewIds = slot.Bar.Items
-            .Select(item => item.Id)
+        var retainedViewIds = viewsById.Values
+            .Where(view => view.Placement == slot.Placement)
+            .Select(view => view.ViewId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         slot.Panel.PruneHostedViews(retainedViewIds);
     }

@@ -15,6 +15,7 @@ public sealed class ShellSession : IAsyncDisposable
     private readonly IUiDispatcher _uiDispatcher;
     private readonly InitialWindowReveal _initialWindowReveal;
     private readonly InitialShellRenderWaiter _initialShellRenderWaiter;
+    private readonly ShellUiWorkScheduler _shellUiWorkScheduler;
     private readonly DeveloperLogService? _developerLog;
     private readonly OwnedTaskObserver _tasks = new(nameof(ShellSession));
     private ServiceProvider? _serviceProvider;
@@ -47,6 +48,7 @@ public sealed class ShellSession : IAsyncDisposable
         _initialWindowReveal = initialWindowReveal ?? new InitialWindowReveal();
         _initialShellRenderWaiter =
             initialShellRenderWaiter ?? new InitialShellRenderWaiter(uiDispatcher);
+        _shellUiWorkScheduler = new ShellUiWorkScheduler();
         _developerLog = developerLog;
     }
 
@@ -179,6 +181,9 @@ public sealed class ShellSession : IAsyncDisposable
 
     internal void StartPostRevealWork(bool openCoreShell, AppLaunchRequest initialLaunchRequest)
     {
+        MainWindowViewModel.StartPackageViewPreloading(
+            _shellUiWorkScheduler.RunBelowInputPriorityAsync,
+            _shellUiWorkScheduler.RunBelowInputPriorityAsync);
         if (_developerLog?.IsEnabled == true)
         {
             _developerLog.StartPackageLogStreaming();
