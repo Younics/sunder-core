@@ -9,7 +9,7 @@ namespace Sunder.App.Services;
 
 internal interface IRuntimePersistentLauncher
 {
-    Task LaunchAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken);
+    Task LaunchAsync(ProcessStartInfo startInfo, bool replaceExisting, CancellationToken cancellationToken);
 }
 
 internal static class RuntimePersistentLauncher
@@ -37,37 +37,100 @@ internal static class RuntimePersistentLauncher
 internal sealed class MacOsLaunchdRuntimeLauncher : IRuntimePersistentLauncher
 {
     private const string Label = "dev.sunder.runtime";
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> _runAsync;
+    private readonly string _launchAgentsPath;
+    private readonly string _diagnosticsPath;
+    private readonly uint _userId;
 
-    public async Task LaunchAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    public MacOsLaunchdRuntimeLauncher()
+        : this(RuntimeLauncherProcess.RunWithResultAsync)
     {
-        var launchAgents = Path.Combine(
+    }
+
+    internal MacOsLaunchdRuntimeLauncher(
+        Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> runAsync,
+        string? launchAgentsPath = null,
+        uint? userId = null,
+        string? diagnosticsPath = null)
+    {
+        _runAsync = runAsync;
+        _launchAgentsPath = launchAgentsPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "Library",
             "LaunchAgents");
-        Directory.CreateDirectory(launchAgents);
-        var plistPath = Path.Combine(launchAgents, $"{Label}.plist");
+        _diagnosticsPath = diagnosticsPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library",
+            "Logs",
+            "Sunder");
+        _userId = userId ?? GetUserId();
+    }
+
+    public async Task LaunchAsync(
+        ProcessStartInfo startInfo,
+        bool replaceExisting,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Directory.CreateDirectory(_launchAgentsPath);
+        var plistPath = Path.Combine(_launchAgentsPath, $"{Label}.plist");
         var executable = RuntimeLauncherProcess.ResolveExecutable(startInfo.FileName);
         var arguments = new[] { executable }.Concat(startInfo.ArgumentList).ToArray();
-        var plist = CreatePlist(arguments, startInfo);
+        var diagnostics = PrepareDiagnostics();
+        var plist = CreatePlist(arguments, startInfo, diagnostics.StandardOutputPath, diagnostics.StandardErrorPath);
+        var domain = $"gui/{_userId}";
+        var status = await _runAsync(
+            "/bin/launchctl",
+            ["list", Label],
+            cancellationToken,
+            false).ConfigureAwait(false);
+        if (!replaceExisting
+            && status.ExitCode == 0
+            && TryGetLaunchdProcessId(status.StandardOutput, out var processId)
+            && await PlistMatchesAsync(plistPath, plist, cancellationToken).ConfigureAwait(false))
+        {
+            AppSessionLog.WriteInfo($"Reusing launchd Runtime job '{Label}' (PID {processId}).");
+            return;
+        }
+
         var tempPath = $"{plistPath}.{Guid.NewGuid():N}.tmp";
         await File.WriteAllTextAsync(tempPath, plist, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
         File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.Move(tempPath, plistPath, overwrite: true);
-        File.SetUnixFileMode(plistPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        try
+        {
+            if (status.ExitCode == 0)
+            {
+                await _runAsync(
+                    "/bin/launchctl",
+                    ["bootout", $"{domain}/{Label}"],
+                    cancellationToken,
+                    true).ConfigureAwait(false);
+            }
 
-        var domain = $"gui/{GetUserId()}";
-        _ = await RuntimeLauncherProcess.RunAsync(
-            "/bin/launchctl",
-            ["bootout", $"{domain}/{Label}"],
-            cancellationToken,
-            throwOnFailure: false).ConfigureAwait(false);
-        await RuntimeLauncherProcess.RunAsync(
-            "/bin/launchctl",
-            ["bootstrap", domain, plistPath],
-            cancellationToken).ConfigureAwait(false);
+            File.Move(tempPath, plistPath, overwrite: true);
+            File.SetUnixFileMode(plistPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            ResetDiagnosticFile(diagnostics.StandardOutputPath);
+            ResetDiagnosticFile(diagnostics.StandardErrorPath);
+            await _runAsync(
+                "/bin/launchctl",
+                ["bootstrap", domain, plistPath],
+                cancellationToken,
+                true).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
-    private static string CreatePlist(IReadOnlyList<string> arguments, ProcessStartInfo startInfo)
+    private static string CreatePlist(
+        IReadOnlyList<string> arguments,
+        ProcessStartInfo startInfo,
+        string standardOutputPath,
+        string standardErrorPath)
     {
         var builder = new StringBuilder();
         builder.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
@@ -82,14 +145,79 @@ internal sealed class MacOsLaunchdRuntimeLauncher : IRuntimePersistentLauncher
         builder.AppendLine("</array>");
         AppendKeyString(builder, "WorkingDirectory", startInfo.WorkingDirectory);
         builder.AppendLine("<key>RunAtLoad</key><true/>");
-        builder.AppendLine("<key>ProcessType</key><string>Background</string>");
+        builder.AppendLine("<key>ProcessType</key><string>Standard</string>");
+        AppendKeyString(builder, "StandardOutPath", standardOutputPath);
+        AppendKeyString(builder, "StandardErrorPath", standardErrorPath);
         builder.AppendLine("<key>EnvironmentVariables</key><dict>");
-        foreach (var pair in RuntimeLauncherProcess.GetExplicitEnvironment(startInfo))
+        foreach (var pair in RuntimeLauncherProcess.GetExplicitEnvironment(startInfo)
+                     .OrderBy(static pair => pair.Key, StringComparer.Ordinal))
         {
             AppendKeyString(builder, pair.Key, pair.Value);
         }
         builder.AppendLine("</dict></dict></plist>");
         return builder.ToString();
+    }
+
+    private static async Task<bool> PlistMatchesAsync(
+        string plistPath,
+        string expected,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return File.Exists(plistPath)
+                   && string.Equals(
+                       await File.ReadAllTextAsync(plistPath, cancellationToken).ConfigureAwait(false),
+                       expected,
+                       StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private RuntimeLaunchDiagnostics PrepareDiagnostics()
+    {
+        Directory.CreateDirectory(_diagnosticsPath);
+        File.SetUnixFileMode(
+            _diagnosticsPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return new RuntimeLaunchDiagnostics(
+            Path.Combine(_diagnosticsPath, "runtime-launchd.stdout.log"),
+            Path.Combine(_diagnosticsPath, "runtime-launchd.stderr.log"));
+    }
+
+    private static void ResetDiagnosticFile(string path)
+    {
+        File.WriteAllText(path, string.Empty, new UTF8Encoding(false));
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    private static bool TryGetLaunchdProcessId(string output, out int processId)
+    {
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("\"PID\"", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var separator = line.IndexOf('=');
+            if (separator >= 0
+                && int.TryParse(
+                    line[(separator + 1)..].Trim().TrimEnd(';'),
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out processId)
+                && processId > 0)
+            {
+                return true;
+            }
+        }
+
+        processId = 0;
+        return false;
     }
 
     private static void AppendKeyString(StringBuilder builder, string key, string? value)
@@ -108,12 +236,17 @@ internal sealed class MacOsLaunchdRuntimeLauncher : IRuntimePersistentLauncher
     private static extern uint getuid();
 
     private static uint GetUserId() => getuid();
+
+    private sealed record RuntimeLaunchDiagnostics(string StandardOutputPath, string StandardErrorPath);
 }
 
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxSystemdRuntimeLauncher : IRuntimePersistentLauncher
 {
-    public async Task LaunchAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    public async Task LaunchAsync(
+        ProcessStartInfo startInfo,
+        bool replaceExisting,
+        CancellationToken cancellationToken)
     {
         var executable = RuntimeLauncherProcess.ResolveExecutable(startInfo.FileName);
         var arguments = new List<string>
@@ -137,7 +270,7 @@ internal sealed class LinuxSystemdRuntimeLauncher : IRuntimePersistentLauncher
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
         {
             AppSessionLog.WriteInfo($"systemd user launch was unavailable; using detached Runtime fallback: {exception.Message}");
-            await new UnixDetachedRuntimeLauncher().LaunchAsync(startInfo, cancellationToken).ConfigureAwait(false);
+            await new UnixDetachedRuntimeLauncher().LaunchAsync(startInfo, replaceExisting, cancellationToken).ConfigureAwait(false);
         }
     }
 }
@@ -145,7 +278,10 @@ internal sealed class LinuxSystemdRuntimeLauncher : IRuntimePersistentLauncher
 [SupportedOSPlatform("linux")]
 internal sealed class UnixDetachedRuntimeLauncher : IRuntimePersistentLauncher
 {
-    public Task LaunchAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    public Task LaunchAsync(
+        ProcessStartInfo startInfo,
+        bool replaceExisting,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var setsid = File.Exists("/usr/bin/setsid") ? "/usr/bin/setsid" : "/bin/setsid";
@@ -190,7 +326,10 @@ internal sealed class WindowsBreakawayRuntimeLauncher : IRuntimePersistentLaunch
     private const uint CreateBreakawayFromJob = 0x01000000;
     private const uint CreateNoWindow = 0x08000000;
 
-    public Task LaunchAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    public Task LaunchAsync(
+        ProcessStartInfo startInfo,
+        bool replaceExisting,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var executable = RuntimeLauncherProcess.ResolveExecutable(startInfo.FileName);
@@ -318,7 +457,10 @@ internal sealed class WindowsBreakawayRuntimeLauncher : IRuntimePersistentLaunch
 
 internal sealed class DirectRuntimeLauncher : IRuntimePersistentLauncher
 {
-    public Task LaunchAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    public Task LaunchAsync(
+        ProcessStartInfo startInfo,
+        bool replaceExisting,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var process = Process.Start(startInfo)
@@ -362,6 +504,17 @@ internal static class RuntimeLauncherProcess
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken,
         bool throwOnFailure = true)
+        => (await RunWithResultAsync(
+            fileName,
+            arguments,
+            cancellationToken,
+            throwOnFailure).ConfigureAwait(false)).ExitCode;
+
+    public static async Task<RuntimeLauncherResult> RunWithResultAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken,
+        bool throwOnFailure = true)
     {
         var startInfo = new ProcessStartInfo(fileName)
         {
@@ -377,9 +530,30 @@ internal static class RuntimeLauncherProcess
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Could not start '{fileName}'.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
+            {
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
+            throw;
+        }
+
         var output = await standardOutput.ConfigureAwait(false);
         var error = await standardError.ConfigureAwait(false);
         if (throwOnFailure && process.ExitCode != 0)
@@ -387,6 +561,8 @@ internal static class RuntimeLauncherProcess
             throw new InvalidOperationException(
                 $"'{fileName}' exited with code {process.ExitCode}: {(string.IsNullOrWhiteSpace(error) ? output : error).Trim()}");
         }
-        return process.ExitCode;
+        return new RuntimeLauncherResult(process.ExitCode, output, error);
     }
 }
+
+internal sealed record RuntimeLauncherResult(int ExitCode, string StandardOutput, string StandardError);

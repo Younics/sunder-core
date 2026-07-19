@@ -184,9 +184,11 @@ public sealed class ShellSession : IAsyncDisposable
         MainWindowViewModel.StartPackageViewPreloading(
             _shellUiWorkScheduler.RunBelowInputPriorityAsync,
             _shellUiWorkScheduler.RunBelowInputPriorityAsync);
-        if (_developerLog?.IsEnabled == true)
+        var developerLog = _developerLog;
+        if (developerLog is not null
+            && ShouldStreamPackageLogs(openCoreShell, developerLog.IsEnabled))
         {
-            _developerLog.StartPackageLogStreaming();
+            developerLog.StartPackageLogStreaming();
         }
         _tasks.Run(
             cancellationToken => PackageViewHostService.CollectContentCacheGarbageAsync(cancellationToken),
@@ -220,6 +222,9 @@ public sealed class ShellSession : IAsyncDisposable
             );
         }
     }
+
+    internal static bool ShouldStreamPackageLogs(bool openCoreShell, bool developerLogEnabled)
+        => !openCoreShell && developerLogEnabled;
 
     internal bool TryHandleUnhandledException(Exception exception) =>
         Volatile.Read(ref _disposed) == 0

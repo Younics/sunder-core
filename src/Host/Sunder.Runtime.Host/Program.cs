@@ -7,6 +7,7 @@ using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 
+var startupPhaseStarted = Stopwatch.GetTimestamp();
 var startupOptions = RuntimeHostStartupOptions.Parse(args);
 if (startupOptions.WaitForDebugger)
 {
@@ -27,12 +28,14 @@ var listenUrls = RuntimeListenUrlValidator.ParseAndValidate(
     builder.Configuration["urls"],
     startupOptions.DevelopmentAllowNonLoopbackRuntimeListen);
 builder.WebHost.UseUrls(listenUrls.ToArray());
+LogStartupPhase("host builder", ref startupPhaseStarted);
 
 var packagePaths = new RuntimePackagePaths();
 Environment.SetEnvironmentVariable(RuntimeLocalState.StateRootEnvironmentVariable, null);
 RuntimeLocalState.Validate(packagePaths.RootPath);
 using var runtimeRootLease = RuntimeRootLease.Acquire(packagePaths);
 RuntimeLocalState.EnsureInitialized(packagePaths.RootPath);
+LogStartupPhase("local state and lease", ref startupPhaseStarted);
 
 var bearerToken = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_BEARER_TOKEN");
 Environment.SetEnvironmentVariable("SUNDER_RUNTIME_BEARER_TOKEN", null);
@@ -53,6 +56,7 @@ try
     builder.Services.AddRuntimeHostServices(
         packagePaths,
         new RuntimeBearerTokenValidator(bearerToken));
+    LogStartupPhase("service registration", ref startupPhaseStarted);
 
     await using var app = builder.Build();
     app.UseMiddleware<RuntimeProblemDetailsMiddleware>();
@@ -86,9 +90,10 @@ try
     var transferStore = app.Services.GetRequiredService<RuntimeContentTransferStore>();
     var snapshotStore = app.Services.GetRequiredService<PackageUiSnapshotStore>();
     var shutdownLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("RuntimeShutdown");
+    var packageLogStartupTask = Task.CompletedTask;
+    LogStartupPhase("host composition", ref startupPhaseStarted);
     try
     {
-        packageLogStreamService.Start();
         await RuntimeHostBootstrapRunner.StartAsync(
             app,
             runtimeSessionOwner,
@@ -106,13 +111,34 @@ try
                     : throw new InvalidOperationException("The Runtime did not publish exactly one bound listener address.");
                 connectionInfo = new RuntimeConnectionInfo(new Uri(boundAddress), bearerToken);
                 RuntimeConnectionInfoStore.Save(connectionInfo, connectionInfoPath);
+                LogStartupPhase("listener bind and connection publication", ref startupPhaseStarted);
             });
+        LogStartupPhase("package bootstrap", ref startupPhaseStarted);
+        packageLogStartupTask = Task.Run(() =>
+        {
+            try
+            {
+                packageLogStreamService.Start(app.Lifetime.ApplicationStopping);
+                LogStartupPhase("package log replay", ref startupPhaseStarted);
+            }
+            catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception)
+            {
+                app.Logger.LogWarning(exception, "Package log discovery was unavailable during Runtime startup");
+            }
+        });
 
         await app.WaitForShutdownAsync();
     }
     finally
     {
         runtimeSessionOwner.MarkShuttingDown();
+        await RunCleanupStepAsync(
+            "finish package log discovery",
+            () => packageLogStartupTask,
+            shutdownLogger);
         await RunCleanupStepAsync(
             "stop package callbacks",
             runtimeSessionOwner.Callbacks.ShutdownAsync,
@@ -172,3 +198,12 @@ static async Task RunCleanupStepAsync(
 
 static IResult RuntimeApiNotFound()
     => throw new RuntimeNotFoundException("The requested Runtime API endpoint was not found.");
+
+static void LogStartupPhase(string phase, ref long phaseStarted)
+{
+    var now = Stopwatch.GetTimestamp();
+    var elapsed = Stopwatch.GetElapsedTime(phaseStarted, now);
+    Console.Error.WriteLine(FormattableString.Invariant(
+        $"{DateTimeOffset.UtcNow:O} level=Information runtime-startup phase='{phase}' elapsed_ms={elapsed.TotalMilliseconds:0}"));
+    phaseStarted = now;
+}

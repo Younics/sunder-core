@@ -91,4 +91,54 @@ public sealed class RuntimeConnectionInfoStoreTests
             }
         }
     }
+
+    [Fact]
+    public void DeleteIfMatches_MatchingConnectionDeletesFile()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-connection-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(rootPath, "connection-v1.json");
+        var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), RuntimeBearerToken.Create());
+        try
+        {
+            RuntimeConnectionInfoStore.Save(connection, path);
+
+            RuntimeConnectionInfoStore.DeleteIfMatches(connection, path);
+
+            Assert.Null(RuntimeConnectionInfoStore.Load(path));
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void DeleteIfMatches_DifferentConnectionPreservesReplacement()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-connection-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(rootPath, "connection-v1.json");
+        var previous = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), RuntimeBearerToken.Create());
+        var replacement = previous with { BearerToken = RuntimeBearerToken.Create() };
+        try
+        {
+            RuntimeConnectionInfoStore.Save(previous, path);
+            RuntimeConnectionInfoStore.Save(replacement, path);
+
+            RuntimeConnectionInfoStore.DeleteIfMatches(previous, path);
+
+            var loaded = RuntimeConnectionInfoStore.Load(path);
+            Assert.NotNull(loaded);
+            Assert.Equal(replacement.BearerToken, loaded.BearerToken);
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
 }

@@ -117,6 +117,32 @@ public static class RuntimeLocalState
         DeleteStaleSchemaTemps(root);
     }
 
+    public static bool IsLeaseAvailable(string? rootPath = null)
+    {
+        var root = Path.GetFullPath(rootPath ?? GetV1RootPath());
+        var leasePath = Path.Combine(root, LeaseFileName);
+        if (!File.Exists(leasePath))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var lease = new FileStream(
+                leasePath,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 1,
+                FileOptions.WriteThrough);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private static bool IsSchemaTemp(string path)
     {
         var fileName = Path.GetFileName(path);

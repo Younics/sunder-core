@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -557,6 +558,19 @@ public sealed class PackageStoreCoordinatorTests
 
         Assert.Contains("Another Sunder Runtime", error.Message, StringComparison.Ordinal);
         Assert.Contains(paths.RootPath, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeRootLease_AvailabilityTracksOwnershipRelease()
+    {
+        var paths = new RuntimePackagePaths(Path.Combine(CreateTempDirectory(), "store"));
+        var lease = RuntimeRootLease.Acquire(paths);
+
+        Assert.False(RuntimeLocalState.IsLeaseAvailable(paths.RootPath));
+
+        lease.Dispose();
+
+        Assert.True(RuntimeLocalState.IsLeaseAvailable(paths.RootPath));
     }
 
     [Fact]

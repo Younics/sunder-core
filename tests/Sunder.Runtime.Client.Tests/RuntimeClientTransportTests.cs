@@ -67,6 +67,39 @@ public sealed class RuntimeClientTransportTests
     }
 
     [Fact]
+    public async Task ProbeHandshakeAsync_IsUncachedAndReturnsIncompatibleRuntimeDetails()
+    {
+        var incompatible = CreateHandshake(
+            revision: RuntimeProtocol.MinimumSupportedRevision - 1,
+            minimum: RuntimeProtocol.MinimumSupportedRevision - 1,
+            maximum: RuntimeProtocol.MinimumSupportedRevision - 1);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(incompatible),
+            "/api/v1/system/shutdown" => new HttpResponseMessage(HttpStatusCode.NoContent),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var transport = new RuntimeClientTransport(() => connection, handler);
+
+        var first = await transport.ProbeHandshakeAsync();
+        var second = await transport.ProbeHandshakeAsync();
+
+        Assert.Equal(incompatible.ProtocolIdentity, first.ProtocolIdentity);
+        Assert.Equal(incompatible.ProtocolRevision, first.ProtocolRevision);
+        Assert.Equal(incompatible.RuntimeInstanceId, first.RuntimeInstanceId);
+        Assert.Equal(first.RuntimeInstanceId, second.RuntimeInstanceId);
+        Assert.Equal(2, handler.Paths.Count(path => path == "/api/handshake"));
+        await Assert.ThrowsAsync<RuntimeProtocolException>(() => transport.NegotiateAsync());
+        Assert.Equal(3, handler.Paths.Count(path => path == "/api/handshake"));
+
+        await transport.ShutdownWithoutProtocolNegotiationAsync();
+
+        Assert.Equal(3, handler.Paths.Count(path => path == "/api/handshake"));
+        Assert.Equal("/api/v1/system/shutdown", handler.Paths[^1]);
+    }
+
+    [Fact]
     public async Task ResponseHeadersRead_StreamReadRetainsTransportDeadline()
     {
         var blockingBody = new CancellationBlockingStream();
@@ -103,12 +136,15 @@ public sealed class RuntimeClientTransportTests
     private static HttpResponseMessage Json<T>(T value)
         => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
 
-    private static RuntimeHandshakeResponse CreateHandshake()
+    private static RuntimeHandshakeResponse CreateHandshake(
+        int revision = RuntimeProtocol.CurrentRevision,
+        int minimum = RuntimeProtocol.MinimumSupportedRevision,
+        int maximum = RuntimeProtocol.MaximumSupportedRevision)
         => new(
             RuntimeProtocol.Identity,
-            RuntimeProtocol.CurrentRevision,
-            RuntimeProtocol.MinimumSupportedRevision,
-            RuntimeProtocol.MaximumSupportedRevision,
+            revision,
+            minimum,
+            maximum,
             Guid.NewGuid(),
             [RuntimeProtocolFeatures.VersionedApiV1],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));

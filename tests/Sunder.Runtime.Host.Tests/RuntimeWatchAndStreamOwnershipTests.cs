@@ -88,6 +88,46 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     }
 
     [Fact]
+    public async Task PackageLogs_InitialReplayIsLimitedToNewestFiles()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var timestamp = DateTime.UtcNow.AddDays(-1);
+            string? oldestPath = null;
+            for (var index = 0; index < PackageLogStreamService.MaxInitialReplayFiles + 2; index++)
+            {
+                var logs = Path.Combine(root, $"test.package.{index}", "logs");
+                Directory.CreateDirectory(logs);
+                var path = Path.Combine(logs, "runtime.log");
+                await File.WriteAllTextAsync(path, $"level=info category=test msg=entry-{index}{Environment.NewLine}");
+                File.SetLastWriteTimeUtc(path, timestamp.AddSeconds(index));
+                oldestPath ??= path;
+            }
+
+            await using var service = new PackageLogStreamService(root);
+            service.Start();
+            var snapshot = service.GetSnapshot(limit: 1000);
+
+            Assert.Equal(PackageLogStreamService.MaxInitialReplayFiles, snapshot.Entries.Count);
+            Assert.DoesNotContain(snapshot.Entries, entry => entry.Message == "entry-0");
+            Assert.DoesNotContain(snapshot.Entries, entry => entry.Message == "entry-1");
+            Assert.Contains(snapshot.Entries, entry => entry.Message == $"entry-{PackageLogStreamService.MaxInitialReplayFiles + 1}");
+
+            await File.AppendAllTextAsync(oldestPath!, $"level=info category=test msg=entry-0-new{Environment.NewLine}");
+            service.ProcessFileForTest(oldestPath!);
+            var updated = service.GetSnapshot(limit: 1000);
+
+            Assert.DoesNotContain(updated.Entries, entry => entry.Message == "entry-0");
+            Assert.Contains(updated.Entries, entry => entry.Message == "entry-0-new");
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task PackageLogs_ShutdownCompletesLiveStream()
     {
         var root = CreateTempDirectory();

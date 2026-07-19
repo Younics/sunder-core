@@ -55,6 +55,21 @@ public sealed class RuntimeClientTransport : IDisposable
         return AuthenticatedHandler.NegotiateAsync(cancellationToken);
     }
 
+    public Task<RuntimeHandshakeResponse> ProbeHandshakeAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        return AuthenticatedHandler.ProbeHandshakeAsync(cancellationToken);
+    }
+
+    public async Task ShutdownWithoutProtocolNegotiationAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        using var request = new HttpRequestMessage(HttpMethod.Post, CreateRequestUri("system/shutdown"));
+        request.Options.Set(RuntimeAuthenticatedHttpMessageHandler.SkipProtocolNegotiationKey, true);
+        using var response = await SendAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
+        await Responses.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
     public Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         HttpCompletionOption completionOption = HttpCompletionOption.ResponseContentRead,

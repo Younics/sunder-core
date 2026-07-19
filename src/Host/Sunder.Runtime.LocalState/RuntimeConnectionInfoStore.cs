@@ -7,13 +7,14 @@ namespace Sunder.Runtime.LocalState;
 public static class RuntimeConnectionInfoStore
 {
     private const int FormatVersion = 1;
+    private const int MutationLockAttempts = 100;
     private static readonly byte[] WindowsEntropy = "Sunder.Runtime.Connection.V1"u8.ToArray();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const UnixFileMode PrivateDirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     private const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     public static string GetDefaultPath()
-        => Path.Combine(RuntimeLocalState.GetV1RootPath(), "connection.json");
+        => Path.Combine(RuntimeLocalState.GetV1RootPath(), RuntimeV1StateDescriptor.ConnectionFile);
 
     public static RuntimeConnectionInfo? Load(string? path = null)
     {
@@ -23,18 +24,18 @@ public static class RuntimeConnectionInfoStore
         {
             RuntimeLocalState.EnsureInitialized();
         }
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        if (!OperatingSystem.IsWindows() && !HasPrivateUnixPermissions(path))
-        {
-            return null;
-        }
-
         try
         {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            if (!OperatingSystem.IsWindows() && !HasPrivateUnixPermissions(path))
+            {
+                return null;
+            }
+
             var document = JsonSerializer.Deserialize<ConnectionDocument>(File.ReadAllText(path), JsonOptions);
             if (document is null || document.Version != FormatVersion || string.IsNullOrWhiteSpace(document.RuntimeUrl))
             {
@@ -88,6 +89,7 @@ public static class RuntimeConnectionInfoStore
             File.SetUnixFileMode(directory, PrivateDirectoryMode);
         }
 
+        using var mutationLock = AcquireMutationLock(fullPath);
         var document = ProtectToken(connection);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
@@ -129,24 +131,65 @@ public static class RuntimeConnectionInfoStore
     public static void DeleteIfMatches(RuntimeConnectionInfo connection, string? path = null)
     {
         path ??= GetDefaultPath();
-        var stored = Load(path);
-        if (stored is null
-            || !stored.Matches(connection.RuntimeUrl)
-            || !CryptographicOperations.FixedTimeEquals(
-                System.Text.Encoding.UTF8.GetBytes(stored.BearerToken),
-                System.Text.Encoding.UTF8.GetBytes(connection.BearerToken)))
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath))
         {
             return;
         }
 
         try
         {
-            File.Delete(path);
+            using var mutationLock = AcquireMutationLock(fullPath);
+            var stored = Load(fullPath);
+            if (stored is null
+                || !stored.Matches(connection.RuntimeUrl)
+                || !CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(stored.BearerToken),
+                    System.Text.Encoding.UTF8.GetBytes(connection.BearerToken)))
+            {
+                return;
+            }
+
+            File.Delete(fullPath);
         }
         catch
         {
             // A newer process may be replacing the connection file concurrently.
         }
+    }
+
+    private static FileStream AcquireMutationLock(string connectionPath)
+    {
+        var lockPath = $"{connectionPath}.lock";
+        for (var attempt = 0; attempt < MutationLockAttempts; attempt++)
+        {
+            try
+            {
+                var options = new FileStreamOptions
+                {
+                    Mode = FileMode.OpenOrCreate,
+                    Access = FileAccess.ReadWrite,
+                    Share = FileShare.None,
+                };
+                if (!OperatingSystem.IsWindows())
+                {
+                    options.UnixCreateMode = PrivateFileMode;
+                }
+
+                var stream = new FileStream(lockPath, options);
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(lockPath, PrivateFileMode);
+                }
+                return stream;
+            }
+            catch (IOException) when (attempt < MutationLockAttempts - 1)
+            {
+                Thread.Sleep(10);
+            }
+        }
+
+        throw new IOException($"Could not acquire the Runtime connection mutation lock for '{connectionPath}'.");
     }
 
     private static ConnectionDocument ProtectToken(RuntimeConnectionInfo connection)

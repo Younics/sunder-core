@@ -54,7 +54,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(2));
             return HasMatchingConnection(runtimeUrl)
-                ? await _transport.NegotiateAsync(deadline.Token).ConfigureAwait(false)
+                ? await _transport.ProbeHandshakeAsync(deadline.Token).ConfigureAwait(false)
                 : null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -73,7 +73,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
         {
             if (HasMatchingConnection(runtimeUrl))
             {
-                await _management.ShutdownAsync(cancellationToken).ConfigureAwait(false);
+                await _transport.ShutdownWithoutProtocolNegotiationAsync(cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -87,28 +87,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
     }
 
     public async Task<bool> IsRuntimeHealthyAsync(Uri runtimeUrl, CancellationToken cancellationToken)
-    {
-        if (_connectionState.ConnectionInfo is null)
-        {
-            return await CanConnectAsync(runtimeUrl, cancellationToken);
-        }
-
-        try
-        {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(TimeSpan.FromSeconds(2));
-            return HasMatchingConnection(runtimeUrl)
-                   && await _management.IsRuntimeHealthyAsync(deadline.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+        => await CanConnectAsync(runtimeUrl, cancellationToken);
 
     private static async Task<bool> CanConnectAsync(Uri runtimeUrl, CancellationToken cancellationToken)
     {

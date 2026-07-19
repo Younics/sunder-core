@@ -18,9 +18,9 @@
 
 `Sunder.App` does not own installed package state, dev-package directory watching, or package-log discovery. Those responsibilities belong to `Sunder.Runtime.Host`.
 
-App-to-Runtime HTTP endpoints are versioned under `/api/v1` and require a per-Runtime-instance bearer token, including health and status. The App generates the token before launching its managed Runtime and passes it only through the launcher environment. The Runtime publishes the matching URL/token through the per-user private connection file only after it owns local Runtime state and has successfully bound its listener. Tokens are never command-line arguments, and prelaunch App state is not connection authority.
+App-to-Runtime HTTP endpoints are versioned under `/api/v1` and require a per-Runtime-instance bearer token, including health and status. The Runtime generates the token and publishes the matching URL/token through the per-user private connection file only after it owns local Runtime state and has successfully bound its listener. The App passes only the private connection-file path through the launcher environment. Tokens are never command-line arguments, and prelaunch App state is not connection authority.
 
-The managed Runtime is a persistent per-user service rather than an App child lifetime. App uses `launchd` on macOS, a user `systemd` transient service with a detached fallback on Linux, and an independent breakaway process on Windows. Closing App does not stop Runtime. A later App invocation reconnects to the warm Runtime; explicit custom/manual Runtime URLs keep their existing connect-only behavior.
+The managed Runtime is a persistent per-user service rather than an App child lifetime. App uses `launchd` on macOS, a user `systemd` transient service with a detached fallback on Linux, and an independent breakaway process on Windows. Closing App does not stop Runtime. A later App invocation reconnects to the warm Runtime. An unoccupied custom loopback URL can host the managed Runtime; non-loopback URLs are connect-only and require matching authenticated connection information.
 
 ## Local State V1
 

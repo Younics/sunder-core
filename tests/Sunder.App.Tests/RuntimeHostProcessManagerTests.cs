@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.Runtime.Client;
@@ -57,6 +59,112 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureStartedAsync_WhenReplacingRuntime_WaitsForStateLeaseRelease()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        RuntimeConnectionInfoStore.Save(
+            new RuntimeConnectionInfo(runtimeUrl, "existing-token"),
+            connectionInfoPath);
+        var runtimeRunning = true;
+        var leaseAvailable = false;
+        var replacementStarted = false;
+        var delayCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                replacementStarted
+                    ? CreateHandshake()
+                    : runtimeRunning
+                        ? CreateHandshake(revision: 1, minimum: 1, maximum: 1)
+                        : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeRunning),
+            shutdownRuntimeAsync: (_, _) =>
+            {
+                runtimeRunning = false;
+                return Task.CompletedTask;
+            },
+            startProcess: _ =>
+            {
+                Assert.True(leaseAvailable);
+                replacementStarted = true;
+            },
+            delayAsync: (_, _) =>
+            {
+                if (Interlocked.Increment(ref delayCount) == 2)
+                {
+                    leaseAvailable = true;
+                }
+                return Task.CompletedTask;
+            },
+            connectionInfoPath: connectionInfoPath,
+            isRuntimeLeaseAvailable: () => leaseAvailable);
+
+        try
+        {
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.True(replacementStarted);
+            Assert.Equal(2, delayCount);
+        }
+        finally
+        {
+            manager.Dispose();
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenSameUrlRuntimeIsShuttingDown_WaitsForStateLeaseRelease()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        RuntimeConnectionInfoStore.Save(
+            new RuntimeConnectionInfo(runtimeUrl, "stopping-token"),
+            connectionInfoPath);
+        var leaseAvailable = false;
+        var replacementStarted = false;
+        var delayCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                replacementStarted ? CreateHandshake() : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            startProcess: _ =>
+            {
+                Assert.True(leaseAvailable);
+                replacementStarted = true;
+            },
+            delayAsync: (_, _) =>
+            {
+                if (Interlocked.Increment(ref delayCount) == 2)
+                {
+                    leaseAvailable = true;
+                }
+                return Task.CompletedTask;
+            },
+            connectionInfoPath: connectionInfoPath,
+            isRuntimeLeaseAvailable: () => leaseAvailable);
+
+        try
+        {
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.True(replacementStarted);
+            Assert.Equal(2, delayCount);
+        }
+        finally
+        {
+            manager.Dispose();
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task EnsureStartedAsync_WhenUnknownServiceResponds_ThrowsAndDoesNotStartRuntime()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
@@ -66,7 +174,8 @@ public sealed class RuntimeHostProcessManagerTests
             resolveRuntimeHostPath: () => runtimeHostPath,
             tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(CreateHandshake("other.runtime")),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(true),
-            startProcess: _ => startCount++);
+            startProcess: _ => startCount++,
+            connectionInfoPath: Path.Combine(rootPath, "connection-v1.json"));
 
         try
         {
@@ -92,7 +201,8 @@ public sealed class RuntimeHostProcessManagerTests
             resolveRuntimeHostPath: () => runtimeHostPath,
             tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(null),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(true),
-            startProcess: _ => startCount++);
+            startProcess: _ => startCount++,
+            connectionInfoPath: Path.Combine(rootPath, "connection-v1.json"));
 
         try
         {
@@ -155,7 +265,8 @@ public sealed class RuntimeHostProcessManagerTests
                 runtimeStarted = true;
             },
             delayAsync: (_, _) => Task.CompletedTask,
-            connectionInfoPath: connectionInfoPath);
+            connectionInfoPath: connectionInfoPath,
+            isRuntimeLeaseAvailable: () => true);
 
         try
         {
@@ -201,7 +312,8 @@ public sealed class RuntimeHostProcessManagerTests
                 runtimeRunning = true;
             },
             delayAsync: (_, _) => Task.CompletedTask,
-            connectionInfoPath: connectionInfoPath);
+            connectionInfoPath: connectionInfoPath,
+            isRuntimeLeaseAvailable: () => true);
 
         try
         {
@@ -247,7 +359,8 @@ public sealed class RuntimeHostProcessManagerTests
                 runtimeStarted = true;
             },
             delayAsync: (_, _) => Task.CompletedTask,
-            connectionInfoPath: connectionInfoPath);
+            connectionInfoPath: connectionInfoPath,
+            isRuntimeLeaseAvailable: () => true);
 
         try
         {
@@ -262,6 +375,162 @@ public sealed class RuntimeHostProcessManagerTests
         finally
         {
             Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenAnotherPublishedRuntimeIsRunning_PreservesItAndRejectsLaunch()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var publishedUrl = new Uri("http://127.0.0.1:5275/");
+        var requestedUrl = new Uri("http://127.0.0.1:5276/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        var published = new RuntimeConnectionInfo(publishedUrl, "published-token");
+        RuntimeConnectionInfoStore.Save(published, connectionInfoPath);
+        var connectionState = new RuntimeConnectionState(requestedUrl);
+        var startCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            runtimeConnectionState: connectionState,
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (url, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                url == publishedUrl ? CreateHandshake() : null),
+            isRuntimeHealthyAsync: (url, _) => Task.FromResult(url == publishedUrl),
+            startProcess: _ => startCount++,
+            connectionInfoPath: connectionInfoPath);
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => manager.EnsureStartedAsync(requestedUrl));
+
+            Assert.Contains("is still running", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, startCount);
+            Assert.Equal(published.BearerToken, RuntimeConnectionInfoStore.Load(connectionInfoPath)?.BearerToken);
+        }
+        finally
+        {
+            manager.Dispose();
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenConnectionPublishesAtDeadline_PerformsFinalProbe()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        var connection = new RuntimeConnectionInfo(runtimeUrl, "late-token");
+        var connectionState = new RuntimeConnectionState(runtimeUrl);
+        var timeProvider = new ManualTimeProvider();
+        var delayCount = 0;
+        var startCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            runtimeConnectionState: connectionState,
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                connectionState.ConnectionInfo?.BearerToken == connection.BearerToken
+                    ? CreateHandshake()
+                    : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            startProcess: _ => startCount++,
+            delayAsync: (delay, _) =>
+            {
+                timeProvider.Advance(delay);
+                if (Interlocked.Increment(ref delayCount) == 2)
+                {
+                    RuntimeConnectionInfoStore.Save(connection, connectionInfoPath);
+                }
+                return Task.CompletedTask;
+            },
+            connectionInfoPath: connectionInfoPath,
+            timeProvider: timeProvider,
+            startupTimeout: TimeSpan.FromMilliseconds(800),
+            isRuntimeLeaseAvailable: () => true);
+
+        try
+        {
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(1, startCount);
+            Assert.Equal(2, delayCount);
+            Assert.Equal(connection.BearerToken, connectionState.ConnectionInfo?.BearerToken);
+        }
+        finally
+        {
+            manager.Dispose();
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_AfterTimeoutReusesLateRuntimeWithoutSecondLaunch()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://localhost:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        var connection = new RuntimeConnectionInfo(runtimeUrl, "late-token");
+        var connectionState = new RuntimeConnectionState(runtimeUrl);
+        var timeProvider = new ManualTimeProvider();
+        var startCount = 0;
+        var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            runtimeConnectionState: connectionState,
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                connectionState.ConnectionInfo?.BearerToken == connection.BearerToken
+                    ? CreateHandshake()
+                    : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            startProcess: _ => startCount++,
+            delayAsync: (delay, _) =>
+            {
+                timeProvider.Advance(delay);
+                return Task.CompletedTask;
+            },
+            connectionInfoPath: connectionInfoPath,
+            timeProvider: timeProvider,
+            startupTimeout: TimeSpan.FromMilliseconds(400),
+            isRuntimeLeaseAvailable: () => true);
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => manager.EnsureStartedAsync(runtimeUrl));
+            Assert.Contains("may still be starting", exception.Message, StringComparison.Ordinal);
+
+            RuntimeConnectionInfoStore.Save(connection, connectionInfoPath);
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(1, startCount);
+        }
+        finally
+        {
+            manager.Dispose();
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RuntimeHealthProbe_WithStaleTokenStillDetectsOccupiedTcpPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var endpoint = Assert.IsType<IPEndPoint>(listener.LocalEndpoint);
+            var runtimeUrl = new Uri($"http://127.0.0.1:{endpoint.Port}/");
+            var connectionState = new RuntimeConnectionState(runtimeUrl);
+            connectionState.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "stale-token"));
+            using var probe = new RuntimeHealthProbe(connectionState);
+
+            Assert.True(await probe.IsRuntimeHealthyAsync(runtimeUrl, CancellationToken.None));
+        }
+        finally
+        {
+            listener.Stop();
         }
     }
 
@@ -286,5 +555,23 @@ public sealed class RuntimeHostProcessManagerTests
         var runtimeHostPath = Path.Combine(rootPath, OperatingSystem.IsWindows() ? "Sunder.Runtime.Host.exe" : "Sunder.Runtime.Host");
         await File.WriteAllTextAsync(runtimeHostPath, string.Empty);
         return (rootPath, runtimeHostPath);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow = DateTimeOffset.UnixEpoch;
+        private long _timestamp;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public void Advance(TimeSpan duration)
+        {
+            _utcNow += duration;
+            _timestamp += duration.Ticks;
+        }
     }
 }

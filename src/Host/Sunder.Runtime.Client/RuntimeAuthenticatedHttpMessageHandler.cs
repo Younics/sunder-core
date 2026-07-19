@@ -8,6 +8,8 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
 {
     internal static readonly HttpRequestOptionsKey<IReadOnlyList<string>> RequiredFeaturesKey =
         new("Sunder.Runtime.RequiredFeatures");
+    internal static readonly HttpRequestOptionsKey<bool> SkipProtocolNegotiationKey =
+        new("Sunder.Runtime.SkipProtocolNegotiation");
     private readonly Func<RuntimeConnectionInfo?> _getConnection;
     private readonly RuntimeClientPolicyOptions _policy;
     private readonly RuntimeProtocolNegotiationCache _negotiations;
@@ -59,7 +61,9 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         }
 
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.BearerToken);
-        if (IsVersionedRequest(connection, request.RequestUri))
+        var skipProtocolNegotiation = request.Options.TryGetValue(SkipProtocolNegotiationKey, out var skip)
+                                      && skip;
+        if (!skipProtocolNegotiation && IsVersionedRequest(connection, request.RequestUri))
         {
             var handshake = await NegotiateAsync(connection, cancellationToken).ConfigureAwait(false);
             if (request.Options.TryGetValue(RequiredFeaturesKey, out var requiredFeatures)
@@ -92,32 +96,48 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         return NegotiateAsync(connection, cancellationToken);
     }
 
+    internal Task<RuntimeHandshakeResponse> ProbeHandshakeAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = _getConnection()
+            ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
+        return RequestHandshakeAsync(connection, requireCompatibility: false, cancellationToken);
+    }
+
     private async Task<RuntimeHandshakeResponse> NegotiateAsync(
         RuntimeConnectionInfo connection,
         CancellationToken cancellationToken)
     {
         return await _negotiations.GetOrAddAsync(
             connection,
-            async negotiationToken =>
-            {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(negotiationToken);
-                timeout.CancelAfter(_policy.RequestTimeout);
-                using var request = new HttpRequestMessage(
-                    HttpMethod.Get,
-                    new Uri(RuntimeConnectionInfo.Normalize(connection.RuntimeUrl), "api/handshake"));
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.BearerToken);
-                using var response = await base.SendAsync(request, timeout.Token).ConfigureAwait(false);
-                var handshakePolicy = _policy with { MaxJsonResponseBytes = _policy.MaxHandshakeResponseBytes };
-                var handshake = await new RuntimeHttpResponseReader(handshakePolicy)
-                    .ReadRequiredJsonAsync<RuntimeHandshakeResponse>(response, timeout.Token)
-                    .ConfigureAwait(false);
-                if (RuntimeProtocolCompatibility.GetIncompatibility(handshake) is { } incompatibility)
-                {
-                    throw new RuntimeProtocolException(incompatibility);
-                }
-                return handshake;
-            },
+            negotiationToken => RequestHandshakeAsync(
+                connection,
+                requireCompatibility: true,
+                negotiationToken),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<RuntimeHandshakeResponse> RequestHandshakeAsync(
+        RuntimeConnectionInfo connection,
+        bool requireCompatibility,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_policy.RequestTimeout);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RuntimeConnectionInfo.Normalize(connection.RuntimeUrl), "api/handshake"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.BearerToken);
+        using var response = await base.SendAsync(request, timeout.Token).ConfigureAwait(false);
+        var handshakePolicy = _policy with { MaxJsonResponseBytes = _policy.MaxHandshakeResponseBytes };
+        var handshake = await new RuntimeHttpResponseReader(handshakePolicy)
+            .ReadRequiredJsonAsync<RuntimeHandshakeResponse>(response, timeout.Token)
+            .ConfigureAwait(false);
+        if (requireCompatibility
+            && RuntimeProtocolCompatibility.GetIncompatibility(handshake) is { } incompatibility)
+        {
+            throw new RuntimeProtocolException(incompatibility);
+        }
+        return handshake;
     }
 
     private static bool IsVersionedRequest(RuntimeConnectionInfo connection, Uri requestUri)

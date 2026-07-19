@@ -95,6 +95,16 @@ public sealed class ShellStartupCoordinatorTests
     public void ShouldCheckPackageUpdates_SkipsCoreShell(bool openCoreShell, bool expected)
         => Assert.Equal(expected, ShellStartupCoordinator.ShouldCheckPackageUpdates(openCoreShell));
 
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    public void ShouldStreamPackageLogs_SkipsCoreShell(
+        bool openCoreShell,
+        bool developerLogEnabled,
+        bool expected)
+        => Assert.Equal(expected, ShellSession.ShouldStreamPackageLogs(openCoreShell, developerLogEnabled));
+
     [Fact]
     public void StartupCoordinator_UsesOnlyAtomicPackageSnapshotForPackageStartupState()
     {

@@ -24,6 +24,7 @@ public static class RuntimeV1StateDescriptor
     public const string RegistryCredentialNamespace = "registry";
     public const string RegistryCredentialsDirectory = "credentials/registry";
     public const string ConnectionFile = "connection.json";
+    public const string ConnectionLockFile = "connection.json.lock";
     public const string RegistryCredentialFile = "credentials.enc.json";
     public const string PackageSecretsKeyFile = "secrets.json.key";
     public const string RegistryCredentialsKeyFile = "credentials.enc.json.key";
@@ -36,7 +37,7 @@ public static class RuntimeV1StateDescriptor
         new("package-state-files-secrets-and-logs", [PackageDataDirectory]),
         new("uploads-and-snapshots", [TransfersDirectory, CacheDirectory]),
         new("registry-credentials", [CredentialsDirectory]),
-        new("runtime-connection", [ConnectionFile]),
+        new("runtime-connection", [ConnectionFile, ConnectionLockFile]),
         new("runtime-v1-root", []),
     ]);
 
@@ -52,6 +53,7 @@ public static class RuntimeV1StateDescriptor
         CacheDirectory,
         CredentialsDirectory,
         ConnectionFile,
+        ConnectionLockFile,
         RuntimeLocalState.SchemaFileName,
         RuntimeLocalState.LeaseFileName,
     }.ToFrozenSet(StringComparer.Ordinal);
