@@ -4,7 +4,6 @@ public enum HostRuntimeDesiredState
 {
     Stopped = 0,
     Running = 1,
-    Maintenance = 2,
 }
 
 public enum HostRuntimeState
@@ -12,13 +11,10 @@ public enum HostRuntimeState
     Stopped = 0,
     Starting = 1,
     Ready = 2,
-    Draining = 3,
-    Stopping = 4,
-    Restarting = 5,
-    Updating = 6,
-    RollingBack = 7,
-    Failed = 8,
-    CrashLoop = 9,
+    Stopping = 3,
+    Restarting = 4,
+    Failed = 5,
+    CrashLoop = 6,
 }
 
 public enum HostOperationState
@@ -27,8 +23,6 @@ public enum HostOperationState
     Running = 1,
     Succeeded = 2,
     Failed = 3,
-    RolledBack = 4,
-    Cancelled = 5,
 }
 
 public static class HostOperationKinds
@@ -42,10 +36,7 @@ public sealed record HostRuntimeStatus(
     HostRuntimeDesiredState DesiredState,
     HostRuntimeState State,
     long DeploymentGeneration,
-    string? ActiveVersion,
-    string? PreviousVersion,
     Guid? RuntimeInstanceId,
-    DateTimeOffset? RuntimeStartedAtUtc,
     string? FailureCode,
     string? FailureMessage,
     string? ActiveOperationId);
@@ -65,6 +56,4 @@ public sealed record HostOperationDescriptor(
     string? Message,
     string? FailureCode);
 
-public sealed record HostLifecycleSubmission(
-    HostOperationDescriptor Operation,
-    HostRuntimeStatus Status);
+public sealed record HostLifecycleSubmission(HostOperationDescriptor Operation);

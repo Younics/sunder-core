@@ -27,7 +27,7 @@ if (string.IsNullOrWhiteSpace(externalToken))
 
 var configuredConnectionPath = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_CONNECTION_FILE");
 Environment.SetEnvironmentVariable("SUNDER_RUNTIME_CONNECTION_FILE", null);
-var hostStateRoot = options.HostStateRoot ?? HostIdentityStore.GetDefaultRootPath();
+var hostStateRoot = options.HostStateRoot ?? HostStatePaths.GetDefaultRootPath();
 var runtimeStateRoot = options.RuntimeStateRoot ?? RuntimeLocalState.GetV1RootPath();
 var externalConnectionPath = string.IsNullOrWhiteSpace(configuredConnectionPath)
     ? Path.Combine(hostStateRoot, "connection", "host.json")

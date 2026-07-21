@@ -34,8 +34,6 @@ internal sealed class UserHostPayloadStore
             : payloadVersion;
     }
 
-    public string PayloadRoot => _payloadRoot;
-
     internal string InstallationLockPath => _installationLockPath;
 
     public UserHostPayload Prepare()
@@ -161,11 +159,7 @@ internal sealed class UserHostPayloadStore
                handshake.Product.InformationalVersion,
                payload.Version,
                StringComparison.Ordinal)
-           && HostProtocolCompatibility.GetIncompatibility(
-               handshake,
-               HostProtocolFeatures.RuntimeGatewayV1,
-               HostProtocolFeatures.RuntimeLifecycleV1,
-               HostProtocolFeatures.DurableOperationsV1) is null;
+            && HostProtocolCompatibility.GetManagedSupervisorIncompatibility(handshake) is null;
 
     public void Abandon(UserHostPayload payload)
     {
@@ -214,15 +208,6 @@ internal sealed class UserHostPayloadStore
             throw new InvalidOperationException("The current user's local application data directory is unavailable.");
         }
         return Path.Combine(localApplicationData, "Sunder", "host", "payloads");
-    }
-
-    public static void RemoveStagedPayloads()
-    {
-        var payloadRoot = GetDefaultPayloadRoot();
-        using var installationLock = TryAcquireInstallationLock(payloadRoot, TimeSpan.Zero)
-            ?? throw new InvalidOperationException(
-                "Another Sunder process is updating the current-user Host payload.");
-        RemoveStagedPayloadsCore(payloadRoot);
     }
 
     internal static bool TryRemoveStagedPayloads(string payloadRoot, TimeSpan lockWait)

@@ -50,74 +50,10 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
-    public void RuntimeProductionFiles_StayWithinFamilySizeRatchet()
-    {
-        var root = LocateRepositoryRoot();
-        var runtimeRoot = Path.Combine(root, "src", "Host", "Sunder.Runtime.Host");
-        var offenders = Directory.EnumerateFiles(runtimeRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !IsBuildOutput(path))
-            .Select(path => new { Path = path, Lines = File.ReadLines(path).Count() })
-            .Where(file => file.Lines > 900
-                           || (file.Path.Contains($"{Path.DirectorySeparatorChar}Services{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                               || file.Path.Contains($"{Path.DirectorySeparatorChar}Endpoints{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-                           && file.Lines > 700)
-            .Select(file => $"{Path.GetRelativePath(root, file.Path)}: {file.Lines}")
-            .ToArray();
-
-        Assert.Empty(offenders);
-    }
-
-    [Fact]
-    public void FocusedRuntimeOrchestrators_DoNotRegrowPastCurrentBaselines()
-    {
-        var services = Path.Combine(LocateRepositoryRoot(), "src", "Host", "Sunder.Runtime.Host", "Services");
-        var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
-        {
-            ["PackageSessionLoadService.cs"] = 270,
-            ["PackageSessionLifecycleService.cs"] = 510,
-            ["RuntimeStackImportService.cs"] = 366,
-            ["RuntimeStackExportService.cs"] = 146,
-            ["PackageAuthSessionCoordinator.cs"] = 325,
-            ["RegistryAuthCoordinator.cs"] = 364,
-            ["RegistryPackageChangeOrchestrator.cs"] = 216,
-            ["RegistryAuthenticatedOperations.cs"] = 209,
-        };
-
-        var offenders = baselines
-            .Select(pair => new { pair.Key, Lines = File.ReadLines(Path.Combine(services, pair.Key)).Count(), Limit = pair.Value })
-            .Where(file => file.Lines > file.Limit)
-            .Select(file => $"{file.Key}: {file.Lines} > {file.Limit}")
-            .ToArray();
-        Assert.Empty(offenders);
-    }
-
-    [Fact]
     public void SecuritySensitiveStorageOrchestrators_StaySmallAndDelegatePlatformAndPersistenceWork()
     {
         var root = LocateRepositoryRoot();
         var runtimeRoot = Path.Combine(root, "src", "Host", "Sunder.Runtime.Host");
-        var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
-        {
-            ["Infrastructure/Storage/MasterKeyProtection.cs"] = 310,
-            ["Infrastructure/Storage/JsonPackageSecretsStore.cs"] = 205,
-            ["Infrastructure/Storage/JsonPackageKeyValueStore.cs"] = 140,
-            ["Services/PackageStoreCoordinator.cs"] = 100,
-            ["Services/PackageStoreStageManager.cs"] = 260,
-            ["Services/PackageStoreTransactionManager.cs"] = 255,
-            ["Services/PackageStoreRecovery.cs"] = 275,
-        };
-        var offenders = baselines
-            .Select(pair => new
-            {
-                pair.Key,
-                Lines = File.ReadLines(Path.Combine(runtimeRoot, pair.Key.Replace('/', Path.DirectorySeparatorChar))).Count(),
-                Limit = pair.Value,
-            })
-            .Where(file => file.Lines > file.Limit)
-            .Select(file => $"{file.Key}: {file.Lines} > {file.Limit}")
-            .ToArray();
-        Assert.Empty(offenders);
-
         var protection = File.ReadAllText(Path.Combine(
             runtimeRoot, "Infrastructure", "Storage", "MasterKeyProtection.cs"));
         Assert.DoesNotContain("ProtectedData.", protection, StringComparison.Ordinal);

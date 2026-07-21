@@ -23,7 +23,7 @@ public sealed class RuntimePersistentLauncherTests
             (_, arguments, _, _) =>
             {
                 commands.Add(arguments.ToArray());
-                return Task.FromResult(new RuntimeLauncherResult(0, string.Empty, string.Empty));
+                return Task.CompletedTask;
             },
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "legacy.plist"));
         var startInfo = CreateMacStartInfo(Path.GetTempPath());
@@ -50,7 +50,7 @@ public sealed class RuntimePersistentLauncherTests
             (_, arguments, _, _) =>
             {
                 commands.Add(arguments.ToArray());
-                return Task.FromResult(new RuntimeLauncherResult(0, string.Empty, string.Empty));
+                return Task.CompletedTask;
             },
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "legacy.plist"));
 
@@ -72,7 +72,7 @@ public sealed class RuntimePersistentLauncherTests
             (fileName, arguments, _, throwOnFailure) =>
             {
                 commands.Add((fileName, arguments.ToArray(), throwOnFailure));
-                return Task.FromResult(new RuntimeLauncherResult(0, string.Empty, string.Empty));
+                return Task.CompletedTask;
             });
         var startInfo = new ProcessStartInfo("/opt/sunder/Sunder.Host.Supervisor")
         {
@@ -108,7 +108,7 @@ public sealed class RuntimePersistentLauncherTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var started = Stopwatch.StartNew();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RuntimeLauncherProcess.RunWithResultAsync(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => RuntimeLauncherProcess.RunAsync(
             "/bin/sh",
             ["-c", "sleep 30"],
             cancellation.Token));
@@ -124,6 +124,11 @@ public sealed class RuntimePersistentLauncherTests
             return;
         }
 
+        if (!File.Exists("/bin/sh")
+            || (!File.Exists("/usr/bin/setsid") && !File.Exists("/bin/setsid")))
+        {
+            return;
+        }
         var python = new[] { "/usr/bin/python3", "/usr/local/bin/python3" }.FirstOrDefault(File.Exists);
         if (python is null)
         {
@@ -182,12 +187,19 @@ public sealed class RuntimePersistentLauncherTests
                 {
                     using var process = Process.GetProcessById(processId);
                     process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
                 }
                 catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
                 {
                 }
             }
-            Directory.Delete(root, recursive: true);
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
         }
     }
 

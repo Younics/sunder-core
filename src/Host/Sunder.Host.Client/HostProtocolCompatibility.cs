@@ -4,8 +4,12 @@ namespace Sunder.Host.Client;
 
 public static class HostProtocolCompatibility
 {
-    public static bool IsCompatible(HostHandshakeResponse? handshake)
-        => GetIncompatibility(handshake) is null;
+    public static string? GetManagedSupervisorIncompatibility(HostHandshakeResponse? handshake)
+        => GetIncompatibility(
+            handshake,
+            HostProtocolFeatures.RuntimeGatewayV1,
+            HostProtocolFeatures.RuntimeLifecycleV1,
+            HostProtocolFeatures.DurableOperationsV1);
 
     public static string? GetIncompatibility(HostHandshakeResponse? handshake, params string[] requiredFeatures)
     {

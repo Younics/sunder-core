@@ -1,8 +1,8 @@
 # Sunder
 
-Sunder Core is the public core of the Sunder local-first package platform. It contains the Avalonia desktop shell, current-user Host Supervisor and Runtime worker, CLI, package SDK/build pipeline, package template, package archive validation, and public Registry DTO contracts.
+Sunder Core is the public core of the Sunder local-first package platform. It contains the Avalonia desktop shell, current-user Host gateway (`Sunder.Host.Supervisor`), nested Runtime worker (`Sunder.Runtime.Host`), CLI, package SDK/build pipeline, package template, package archive validation, and public Registry DTO contracts.
 
-This document is the current-state overview. Package authoring, CLI commands, app development arguments, and Registry behavior are documented in the sibling Sunder docs.
+This document is the canonical current-state project map and architecture overview. In current documentation, **Host** or **Supervisor** means the public current-user gateway, **Runtime worker** means the nested `Sunder.Runtime.Host` process, and **standalone Runtime** means the direct-loopback development fallback. Package authoring, CLI commands, app development arguments, and Registry behavior are documented in the sibling Sunder docs.
 
 ## Project Map
 
@@ -11,10 +11,10 @@ Primary Sunder Core projects:
 | Area | Project | Responsibility |
 | --- | --- | --- |
 | Desktop app | `src/Host/Sunder.App` | Avalonia shell, package UI activation, package marketplace/install UX |
-| Host Supervisor | `src/Host/Sunder.Host.Supervisor` | Stable authenticated loopback API, durable Runtime lifecycle, private worker gateway |
+| Current-user Host (Supervisor) | `src/Host/Sunder.Host.Supervisor` | Stable authenticated loopback API, durable Runtime worker lifecycle, private worker gateway |
 | Host client/contracts | `src/Host/Sunder.Host.Client`, `src/Host/Sunder.Host.Contracts` | Host discovery, credentials, protocol, and lifecycle DTOs |
-| Runtime worker | `src/Host/Sunder.Runtime.Host` | Local package state, package install/update/uninstall, runtime activation, private or standalone HTTP API |
-| CLI | `src/Host/Sunder.Cli` | Registry browse/install/publish commands and Host-gatewayed Runtime commands |
+| Runtime worker | `src/Host/Sunder.Runtime.Host` | Nested local package state, package install/update/uninstall, runtime activation, and private worker API; direct loopback only as a standalone development fallback |
+| CLI | `src/Host/Sunder.Cli` | Registry browse/install/publish commands and current-user Host-gatewayed Runtime worker commands |
 | SDK | `src/Sdk/Sunder.Sdk` | Public package contracts, package module API, package context, theme keys |
 | Stack SDK | `src/Sdk/Sunder.Sdk.Stacks` | Optional public Stack import/export and contributor contracts |
 | Avalonia SDK | `src/Sdk/Sunder.Sdk.Avalonia` | Optional App role, Avalonia contribution contracts, and themes |
@@ -33,16 +33,16 @@ Important related concepts:
 
 | Concept | Current meaning |
 | --- | --- |
-| Package | Runtime unit installed, loaded, enabled, disabled, updated, and uninstalled by `Sunder.Runtime.Host` |
+| Package | Runtime unit installed, loaded, enabled, disabled, updated, and uninstalled by the Runtime worker (`Sunder.Runtime.Host`) |
 | Dev package | Unpacked `sunder-dev` build output used for local package development |
 | `.sunderpkg` | Distributable package archive produced from the dev output |
 | Contracts package | NuGet package used by developers when one package exposes typed extension contracts |
 | Bundle | Registry install recipe that points to multiple packages, not a runtime package kind |
-| Theme | App-side UI styling data, not managed by `Sunder.Runtime.Host` as a runtime package |
+| Theme | App-side UI styling data, not managed by the Runtime worker as a runtime package |
 
-## App, Host, And Runtime Boundary
+## App, Host, And Runtime Worker Boundary
 
-`Sunder.App`, `Sunder.Host.Supervisor`, and `Sunder.Runtime.Host` are separate processes. The App stages and launches the versioned Host payload for the current user without installing a machine service or requiring elevation. The Supervisor may remain alive after the App UI closes and owns:
+`Sunder.App`, the current-user Host gateway (`Sunder.Host.Supervisor`), and its nested Runtime worker (`Sunder.Runtime.Host`) are separate processes. The App stages and launches the versioned Host payload for the current user without installing a machine service or requiring elevation. The Host may remain alive after the App UI closes and owns:
 
 - the stable authenticated loopback endpoint and per-user Host identity
 - durable Runtime desired state and lifecycle operations
@@ -50,7 +50,7 @@ Important related concepts:
 - a private per-worker Unix socket or current-user-only named pipe
 - credential separation and selective forwarding of Runtime APIs
 
-The nested `Sunder.Runtime.Host` worker owns:
+The nested Runtime worker (`Sunder.Runtime.Host`) owns:
 
 - installed package records
 - package archive validation
@@ -70,9 +70,9 @@ The nested `Sunder.Runtime.Host` worker owns:
 - desktop notifications and app-side fault reporting
 - visual theme resources and app branding
 
-App and CLI Runtime requests normally pass through the Supervisor gateway. The Supervisor remains reachable while the worker is stopped or replaced and returns typed unavailability responses instead of exposing the private worker endpoint. Standalone loopback Runtime mode remains available for development.
+App and CLI Runtime-worker requests normally pass through the public current-user Host gateway. The Host remains reachable while the worker is stopped or replaced and returns typed unavailability responses instead of exposing the private worker endpoint. A standalone Runtime uses direct loopback only as a development fallback.
 
-Development packages are coordinated by Runtime. Runtime validates and activates runtime contributions, owns directory watching and reload transactions, and publishes bounded sequence-based lifecycle events. The App observes session generations and activates app-side views/settings from authenticated UI snapshots without reading dev package or package-log directories.
+Development packages are coordinated by the Runtime worker. The Runtime worker validates and activates runtime contributions, owns directory watching and reload transactions, and publishes bounded sequence-based lifecycle events. The App observes session generations and activates app-side views/settings from authenticated UI snapshots without reading dev package or package-log directories.
 
 ## Registry Boundary
 
@@ -88,7 +88,7 @@ The Registry owns:
 - dist tags such as `latest`
 - search, details, download, install-plan, and update-resolution APIs
 
-The local runtime owns:
+The local Runtime worker owns:
 
 - installed versions
 - enabled or disabled state
@@ -113,5 +113,8 @@ For package development, `dotnet build` emits `sunder-dev`, and `dotnet publish`
 - `docs/SUNDER-PACKAGE-DEVELOPMENT.md`: package author workflow from template to publish.
 - `docs/SUNDER-CLI.md`: implemented CLI command reference.
 - `docs/SUNDER-APP.md`: desktop app behavior, dev arguments, package icons, and theme/branding notes.
-- `docs/SUNDER-HOST-SERVICE.md`: implemented current-user Host launch, payload activation, state, distribution, and removal.
-- `docs/SUNDER-HOST-ARCHITECTURE.md`: current foundations and target remote Host protocol, trust, and transport boundaries.
+- `docs/SUNDER-HOST-SERVICE.md`: canonical current-user Host gateway launch, payload activation, state, distribution, and removal.
+
+## Future Design Docs
+
+- `docs/design/SUNDER-HOST-ARCHITECTURE.md`: proposed future Host architecture. It does not describe current behavior.

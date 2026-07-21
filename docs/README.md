@@ -1,18 +1,21 @@
 # Documentation
 
-This folder contains the current Sunder documentation for the implementation in this repository.
+This folder contains current Sunder documentation for the implementation in this repository and a separate `design/` area for future designs.
 
-## Starting Points
+## Current Documentation
 
-- Sunder overview: `docs/SUNDER.md`
-- Package standard: `docs/SUNDER-PACKAGE-STANDARD.md`
-- Package developer manual: `docs/SUNDER-PACKAGE-DEVELOPMENT.md`
-- CLI reference: `docs/SUNDER-CLI.md`
-- Desktop app and dev arguments: `docs/SUNDER-APP.md`
-- Current-user Host behavior: `docs/SUNDER-HOST-SERVICE.md`
-- Current foundations and target remote Host architecture: `docs/SUNDER-HOST-ARCHITECTURE.md`
-- Core release and signing model: `docs/SUNDER-CORE-RELEASES.md`
+- [Sunder overview](SUNDER.md)
+- [Package standard](SUNDER-PACKAGE-STANDARD.md)
+- [Package developer manual](SUNDER-PACKAGE-DEVELOPMENT.md)
+- [CLI reference](SUNDER-CLI.md)
+- [Desktop app and development arguments](SUNDER-APP.md)
+- [Canonical current-user Host behavior](SUNDER-HOST-SERVICE.md)
+- [Core release workflow and signing status](SUNDER-CORE-RELEASES.md)
+
+## Future Designs
+
+- [Future Host architecture](design/SUNDER-HOST-ARCHITECTURE.md)
 
 ## Scope
 
-The Sunder core docs describe current behavior verified against source. Historical planning docs, private Registry implementation notes, and target-state roadmap notes are intentionally excluded from this folder.
+Current documentation describes behavior verified against source. Design documents describe proposed future behavior only and must not be read as current implementation documentation. Historical planning docs and private Registry implementation notes are intentionally excluded.

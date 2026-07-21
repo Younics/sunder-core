@@ -7,15 +7,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Host\Sunder.App\Sunder.App.csproj" />
-    <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-  </ItemGroup>
 </Project>

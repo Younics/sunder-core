@@ -12,7 +12,6 @@
     <Project Path="src/Host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj" />
     <Project Path="src/Sunder.Package.Format/Sunder.Package.Format.csproj" />
     <Project Path="tests/Sunder.App.Tests/Sunder.App.Tests.csproj" />
-    <Project Path="tests/Sunder.Host.Contracts.Tests/Sunder.Host.Contracts.Tests.csproj" />
     <Project Path="tests/Sunder.Host.Client.Tests/Sunder.Host.Client.Tests.csproj" />
     <Project Path="tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj" />
     <Project Path="tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj" />

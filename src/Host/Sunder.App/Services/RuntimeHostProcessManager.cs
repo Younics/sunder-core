@@ -482,11 +482,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
         CancellationToken cancellationToken)
     {
         var handshake = await _tryGetHostHandshakeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
-        var incompatibility = HostProtocolCompatibility.GetIncompatibility(
-            handshake,
-            HostProtocolFeatures.RuntimeGatewayV1,
-            HostProtocolFeatures.RuntimeLifecycleV1,
-            HostProtocolFeatures.DurableOperationsV1);
+        var incompatibility = HostProtocolCompatibility.GetManagedSupervisorIncompatibility(handshake);
         if (incompatibility is not null)
         {
             throw new InvalidOperationException(incompatibility);

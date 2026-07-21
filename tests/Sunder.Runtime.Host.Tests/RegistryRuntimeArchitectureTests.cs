@@ -183,8 +183,8 @@ public sealed class RegistryRuntimeArchitectureTests
             await coordinator.StopAsync(CancellationToken.None);
 
             Assert.Equal(0, coordinator.SessionCount);
-            using var client = new TcpClient();
-            await Assert.ThrowsAnyAsync<SocketException>(() => client.ConnectAsync(callback.Host, callback.Port));
+            using var listener = new TcpListener(IPAddress.Loopback, callback.Port);
+            listener.Start();
         }
         finally
         {

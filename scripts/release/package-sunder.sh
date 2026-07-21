@@ -144,8 +144,10 @@ download_velopack_history() {
 
 usage() {
   cat <<'USAGE'
-Usage: package-sunder.sh --version <semver> [--runtime <rid>] [--channel stable|beta|nightly]
-                         [--github-repository-url <url>] [--include-prerelease-updates]
+Usage: package-sunder.sh --version <semver> [--runtime <linux-x64|linux-arm64|osx-x64|osx-arm64>]
+                         [--channel stable|beta|nightly] [--configuration <configuration>]
+                         [--output-root <directory>] [--github-repository-url <url>]
+                         [--github-token <token>] [--include-prerelease-updates]
                          [--mac-bundle-id <id>]
                          [--mac-sign-app-identity <identity>] [--mac-notary-profile <profile>]
                          [--mac-keychain <path>] [--mac-team-id <team-id>]
@@ -231,15 +233,34 @@ if [[ -z "$version" ]]; then
   exit 2
 fi
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-  echo "Version '$version' is not a valid SemVer value for Velopack." >&2
+if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  echo "Version '$version' must be strict SemVer without build metadata." >&2
   exit 2
+fi
+
+if [[ "$version" == *-* ]]; then
+  prerelease="${version#*-}"
+  IFS='.' read -ra identifiers <<< "$prerelease"
+  for identifier in "${identifiers[@]}"; do
+    if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
+      echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
+      exit 2
+    fi
+  done
 fi
 
 if [[ "$channel" != "stable" && "$channel" != "beta" && "$channel" != "nightly" ]]; then
   echo "Channel must be stable, beta, or nightly." >&2
   exit 2
 fi
+
+case "$runtime" in
+  linux-x64|linux-arm64|osx-x64|osx-arm64) ;;
+  *)
+    echo "Runtime must be linux-x64, linux-arm64, osx-x64, or osx-arm64." >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "$mac_bundle_id" ]]; then
   echo "macOS bundle id must not be empty." >&2
@@ -285,17 +306,17 @@ create_macos_icon() {
   local iconset="$icon_root/Sunder.iconset"
   local icns="$icon_root/Sunder.icns"
 
-  if [[ -f "$icns" ]]; then
-    printf '%s\n' "$icns"
-    return 0
-  fi
-
   if ! command -v sips >/dev/null 2>&1 || ! command -v iconutil >/dev/null 2>&1; then
     echo "macOS packaging requires sips and iconutil to create an .icns icon." >&2
     exit 1
   fi
+  if [[ ! -f "$source_png" ]]; then
+    echo "macOS packaging icon source is missing: $source_png" >&2
+    exit 1
+  fi
 
   rm -rf "$iconset"
+  rm -f "$icns"
   mkdir -p "$iconset"
   sips -z 16 16 "$source_png" --out "$iconset/icon_16x16.png" >/dev/null
   sips -z 32 32 "$source_png" --out "$iconset/icon_16x16@2x.png" >/dev/null
@@ -421,10 +442,6 @@ release_dir="$artifact_root/velopack/$channel/$runtime"
 velopack_channel="app-$runtime-$channel"
 main_exe="Sunder.App"
 
-if [[ "$runtime" == win-* ]]; then
-  main_exe="Sunder.App.exe"
-fi
-
 for restore_project in "$project_path" "$runtime_host_project_path" "$cli_project_path"; do
   dotnet restore "$restore_project" -r "$runtime" -p:Configuration="$configuration"
 done
@@ -466,14 +483,10 @@ jq \
   "$published_settings" > "$published_settings_temp"
 mv "$published_settings_temp" "$published_settings"
 
-executable_suffix=""
-if [[ "$runtime" == win-* ]]; then
-  executable_suffix=".exe"
-fi
 required_bundled_files=(
-  "$publish_dir/RuntimeHost/Sunder.Host.Supervisor$executable_suffix"
-  "$publish_dir/RuntimeHost/RuntimeHost/Sunder.Runtime.Host$executable_suffix"
-  "$publish_dir/Cli/sunder$executable_suffix"
+  "$publish_dir/RuntimeHost/Sunder.Host.Supervisor"
+  "$publish_dir/RuntimeHost/RuntimeHost/Sunder.Runtime.Host"
+  "$publish_dir/Cli/sunder"
 )
 for required_bundled_file in "${required_bundled_files[@]}"; do
   [[ -f "$required_bundled_file" ]] || {
@@ -493,9 +506,6 @@ pack_args=(pack \
   --outputDir "$release_dir")
 
 case "$runtime" in
-  win-*)
-    pack_args+=(--icon "$repo_root/src/Host/Sunder.App/Assets/Images/app.ico")
-    ;;
   linux-*)
     pack_args+=(--icon "$repo_root/src/Host/Sunder.App/Assets/Images/logo.png" --categories Utility)
     ;;

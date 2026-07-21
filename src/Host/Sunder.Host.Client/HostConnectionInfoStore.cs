@@ -1,20 +1,12 @@
 using Sunder.Runtime.LocalState;
+using Sunder.Host.Contracts;
 
 namespace Sunder.Host.Client;
 
 public static class HostConnectionInfoStore
 {
     public static string GetDefaultRootPath()
-    {
-        var configured = Environment.GetEnvironmentVariable("SUNDER_HOST_STATE_ROOT");
-        return string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Sunder",
-                "host",
-                "v1")
-            : Path.GetFullPath(configured);
-    }
+        => HostStatePaths.GetDefaultRootPath();
 
     public static string GetDefaultPath()
         => Path.Combine(GetDefaultRootPath(), "connection", "host.json");
@@ -44,13 +36,6 @@ public static class HostConnectionInfoStore
 
     public static RuntimeConnectionInfo? Load()
         => RuntimeConnectionInfoStore.Load(GetDefaultPath());
-
-    public static RuntimeConnectionInfo? LoadFor(Uri hostUrl)
-    {
-        ArgumentNullException.ThrowIfNull(hostUrl);
-        var connection = Load();
-        return connection is not null && connection.Matches(hostUrl) ? connection : null;
-    }
 
     public static RuntimeConnectionInfo? LoadPreferredFor(Uri runtimeUrl)
         => LoadPreferredFor(runtimeUrl, GetDefaultPath(), RuntimeConnectionInfoStore.GetDefaultPath());

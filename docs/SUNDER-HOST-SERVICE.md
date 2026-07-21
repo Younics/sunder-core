@@ -1,8 +1,10 @@
-# Sunder Current-User Host
+# Sunder Current-User Host Service
 
 ## Scope
 
-The desktop App owns one Host for the current user. Opening Sunder starts the Host when it is not already running. The Host survives the desktop window closing so Runtime and Agent work can continue for the login session, but it is not registered as a machine service and does not start before the user opens Sunder after login.
+This is the canonical documentation for implemented current-user Host behavior. The Host is the public current-user gateway implemented by `Sunder.Host.Supervisor`; its nested Runtime worker is `Sunder.Runtime.Host`. A direct-loopback standalone Runtime is a development fallback and is not the managed Host.
+
+The desktop App owns one Host for the current user. Opening Sunder starts the Host when it is not already running. The Host survives the desktop window closing so Runtime-worker and Agent work can continue for the login session, but it is not registered as a machine service and does not start before the user opens Sunder after login.
 
 The Host remains bound to `http://127.0.0.1:5275/`; remote TLS and pairing are separate work. Because loopback TCP ports are not user-namespaced, simultaneous Sunder Hosts in multiple logged-in user sessions are not supported by this first current-user implementation.
 
@@ -10,7 +12,7 @@ No App distribution requires administrator privileges, a dedicated operating-sys
 
 ## Payload
 
-Each App artifact contains the Supervisor and nested Runtime worker under `RuntimeHost/`. Before launch, the App copies that payload into a versioned current-user directory under the platform local-application-data root:
+Each App artifact contains the Host Supervisor and nested Runtime worker under `RuntimeHost/`. Before launch, the App copies that payload into a versioned current-user directory under the platform local-application-data root:
 
 ```text
 Sunder/host/payloads/host-<version-hash>/
@@ -21,8 +23,8 @@ The App rejects links and reparse points while staging, preserves executable mod
 When the bundled Host version changes, the App:
 
 1. Stages the new payload without changing the active descriptor.
-2. Authenticates to and stops the previous Supervisor.
-3. Starts the staged Supervisor and waits for a compatible ready Runtime.
+2. Authenticates to and stops the previous Host Supervisor.
+3. Starts the staged Host Supervisor and waits for a compatible ready Runtime worker.
 4. Commits the new active descriptor and removes old payloads.
 5. Restarts the previous payload when activation fails.
 
@@ -30,7 +32,7 @@ Durable Host and Runtime state are not stored with executable payloads and survi
 
 ## Session Launch
 
-- Windows launches the staged Supervisor as an independent current-user process.
+- Windows launches the staged Host Supervisor as an independent current-user process.
 - Linux uses a transient `systemd-run --user` service with restart-on-failure and falls back to `setsid` when no user systemd manager is available.
 - macOS submits a transient `launchctl` job in the current login session. It does not install a LaunchAgent and removes the legacy `dev.sunder.runtime` LaunchAgent when encountered.
 
@@ -44,21 +46,21 @@ Host state defaults to:
 <LocalApplicationData>/Sunder/host/v1/
 ```
 
-Runtime and package state defaults to:
+Runtime-worker and package state defaults to:
 
 ```text
 <LocalApplicationData>/Sunder/runtime/v1/
 ```
 
-The Supervisor creates a stable Host identity and a new external bearer credential when it starts. The private connection document is available only to the current user. Windows protects its token with DPAPI CurrentUser; Unix connection directories and files use current-user-only modes. App and CLI clients resolve this Host connection before the legacy direct-Runtime connection.
+The Host Supervisor creates a stable Host identity and a new external bearer credential when it starts. The private connection document is available only to the current user. Windows protects its token with DPAPI CurrentUser; Unix connection directories and files use current-user-only modes. App and CLI clients resolve this Host connection before the direct standalone Runtime connection.
 
-The Supervisor owns the Runtime worker, private IPC endpoint, worker credential, durable desired state, crash recovery, and lifecycle operations. Authenticated Host shutdown remains available for App-owned payload replacement.
+The Host Supervisor owns the Runtime worker, private IPC endpoint, worker credential, durable desired state, crash recovery, and lifecycle operations. Authenticated Host shutdown remains available for App-owned payload replacement.
 
 ## Distribution And Removal
 
-- Windows distributes the signed Velopack `Setup.exe`.
-- macOS distributes a signed and notarized DMG containing `Sunder.app` and an Applications shortcut.
-- Linux distributes the Velopack AppImage.
+- The Windows App release workflow requires Azure Trusted Signing for the Velopack `Setup.exe`.
+- The macOS App release workflow requires Developer ID signing and notarization for the DMG containing `Sunder.app` and an Applications shortcut.
+- Linux distributes an unsigned Velopack AppImage.
 
 App updates require no elevation. The updated App stages and activates its matching Host payload on the next start.
 

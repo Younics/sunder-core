@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
 
           tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^cli/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+          if [[ ! "$tag" =~ ^cli/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)$ ]]; then
             echo "CLI release tags must use SemVer format, for example cli/v0.1.0 or cli/v0.1.0-beta.1." >&2
             exit 1
           fi
@@ -38,6 +38,14 @@ jobs:
           is_prerelease="false"
           if [[ "$version" == *-* ]]; then
             is_prerelease="true"
+            prerelease="${version#*-}"
+            IFS='.' read -ra identifiers <<< "$prerelease"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
+                echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
+                exit 1
+              fi
+            done
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -67,10 +75,10 @@ jobs:
             os: macos-14
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -120,7 +128,7 @@ jobs:
           }
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sunder-cli-${{ matrix.runtime }}
           path: artifacts/release/cli/${{ matrix.runtime }}/*
@@ -137,15 +145,15 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Download CLI artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: release-assets
 
@@ -161,17 +169,50 @@ jobs:
           shopt -s nullglob
 
           tag="cli/v$VERSION"
+          expected_archive_names=(
+            "sunder-cli-$VERSION-win-x64.zip"
+            "sunder-cli-$VERSION-win-arm64.zip"
+            "sunder-cli-$VERSION-linux-x64.tar.gz"
+            "sunder-cli-$VERSION-linux-arm64.tar.gz"
+            "sunder-cli-$VERSION-osx-x64.tar.gz"
+            "sunder-cli-$VERSION-osx-arm64.tar.gz"
+          )
+          expected_archive_paths=(
+            "release-assets/sunder-cli-win-x64/${expected_archive_names[0]}"
+            "release-assets/sunder-cli-win-arm64/${expected_archive_names[1]}"
+            "release-assets/sunder-cli-linux-x64/${expected_archive_names[2]}"
+            "release-assets/sunder-cli-linux-arm64/${expected_archive_names[3]}"
+            "release-assets/sunder-cli-osx-x64/${expected_archive_names[4]}"
+            "release-assets/sunder-cli-osx-arm64/${expected_archive_names[5]}"
+          )
           binaries=(release-assets/sunder-cli-*/*)
-          if [[ ${#binaries[@]} -eq 0 ]]; then
-            echo "No CLI release assets were downloaded." >&2
+          if [[ ${#binaries[@]} -ne ${#expected_archive_names[@]} ]]; then
+            echo "Expected exactly ${#expected_archive_names[@]} CLI release archives, found ${#binaries[@]}." >&2
             exit 1
           fi
+          for asset in "${expected_archive_paths[@]}"; do
+            test -f "$asset" || { echo "Missing exact CLI release archive: $asset" >&2; exit 1; }
+          done
 
           bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
           mapfile -t assets < <(find release-assets -type f | sort)
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+          expected_remote_names=(
+            "${expected_archive_names[@]}"
+            SHA256SUMS
+            release-provenance.json
+            release-sbom.spdx.json
+            toolchain.txt
+          )
+          if [[ ${#assets[@]} -ne ${#expected_remote_names[@]} ]]; then
+            echo "Expected exactly ${#expected_remote_names[@]} CLI release assets after evidence generation, found ${#assets[@]}." >&2
             exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+              exit 1
+            fi
+            gh release delete "$tag" --yes
           fi
 
           create_args=(
@@ -185,4 +226,35 @@ jobs:
             create_args+=(--prerelease)
           fi
 
-          gh "${create_args[@]}" "${assets[@]}"
+          gh "${create_args[@]}" --draft
+          cleanup_failed_draft() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+                gh release delete "$tag" --yes || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_draft EXIT
+          gh release upload "$tag" "${assets[@]}"
+
+          release_json="$(gh release view "$tag" --json isDraft,assets)"
+          [[ "$(jq -r '.isDraft' <<< "$release_json")" == "true" ]] \
+            || { echo "CLI release '$tag' must remain a draft until its assets are verified." >&2; exit 1; }
+          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
+          if [[ "$remote_asset_count" != "${#expected_remote_names[@]}" ]]; then
+            echo "Draft CLI release must contain exactly ${#expected_remote_names[@]} assets, found $remote_asset_count." >&2
+            exit 1
+          fi
+          remote_asset_names="$(jq -r '.assets[].name' <<< "$release_json")"
+          for expected_name in "${expected_remote_names[@]}"; do
+            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
+            if [[ "$asset_count" != "1" ]]; then
+              echo "Draft CLI release must contain exactly one '$expected_name'; found $asset_count." >&2
+              exit 1
+            fi
+          done
+
+          gh release edit "$tag" --draft=false
+          trap - EXIT

@@ -15,6 +15,12 @@ env:
   DOTNET_VERSION: "10.0.100"
 
 jobs:
+  host-validation:
+    name: Validate Supervisor and Runtime
+    uses: ./.github/workflows/sunder-host-validation.yml
+    permissions:
+      contents: read
+
   prepare:
     name: Prepare release metadata
     runs-on: ubuntu-latest
@@ -53,7 +59,9 @@ jobs:
 
   package:
     name: Package ${{ matrix.runtime }}
-    needs: prepare
+    needs:
+      - prepare
+      - host-validation
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -180,17 +188,50 @@ jobs:
           shopt -s nullglob
 
           tag="host/v$VERSION"
+          expected_archive_names=(
+            "sunder-runtime-host-$VERSION-win-x64.zip"
+            "sunder-runtime-host-$VERSION-win-arm64.zip"
+            "sunder-runtime-host-$VERSION-linux-x64.tar.gz"
+            "sunder-runtime-host-$VERSION-linux-arm64.tar.gz"
+            "sunder-runtime-host-$VERSION-osx-x64.tar.gz"
+            "sunder-runtime-host-$VERSION-osx-arm64.tar.gz"
+          )
+          expected_archive_paths=(
+            "release-assets/sunder-runtime-host-win-x64/${expected_archive_names[0]}"
+            "release-assets/sunder-runtime-host-win-arm64/${expected_archive_names[1]}"
+            "release-assets/sunder-runtime-host-linux-x64/${expected_archive_names[2]}"
+            "release-assets/sunder-runtime-host-linux-arm64/${expected_archive_names[3]}"
+            "release-assets/sunder-runtime-host-osx-x64/${expected_archive_names[4]}"
+            "release-assets/sunder-runtime-host-osx-arm64/${expected_archive_names[5]}"
+          )
           binaries=(release-assets/sunder-runtime-host-*/*)
-          if [[ ${#binaries[@]} -eq 0 ]]; then
-            echo "No Runtime Host release assets were downloaded." >&2
+          if [[ ${#binaries[@]} -ne ${#expected_archive_names[@]} ]]; then
+            echo "Expected exactly ${#expected_archive_names[@]} Runtime Host release archives, found ${#binaries[@]}." >&2
             exit 1
           fi
+          for asset in "${expected_archive_paths[@]}"; do
+            test -f "$asset" || { echo "Missing exact Runtime Host release archive: $asset" >&2; exit 1; }
+          done
 
           bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
           mapfile -t assets < <(find release-assets -type f | sort)
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+          expected_remote_names=(
+            "${expected_archive_names[@]}"
+            SHA256SUMS
+            release-provenance.json
+            release-sbom.spdx.json
+            toolchain.txt
+          )
+          if [[ ${#assets[@]} -ne ${#expected_remote_names[@]} ]]; then
+            echo "Expected exactly ${#expected_remote_names[@]} Runtime Host release assets after evidence generation, found ${#assets[@]}." >&2
             exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+              exit 1
+            fi
+            gh release delete "$tag" --yes
           fi
 
           create_args=(
@@ -204,4 +245,35 @@ jobs:
             create_args+=(--prerelease)
           fi
 
-          gh "${create_args[@]}" "${assets[@]}"
+          gh "${create_args[@]}" --draft
+          cleanup_failed_draft() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+                gh release delete "$tag" --yes || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_draft EXIT
+          gh release upload "$tag" "${assets[@]}"
+
+          release_json="$(gh release view "$tag" --json isDraft,assets)"
+          [[ "$(jq -r '.isDraft' <<< "$release_json")" == "true" ]] \
+            || { echo "Runtime Host release '$tag' must remain a draft until its assets are verified." >&2; exit 1; }
+          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
+          if [[ "$remote_asset_count" != "${#expected_remote_names[@]}" ]]; then
+            echo "Draft Runtime Host release must contain exactly ${#expected_remote_names[@]} assets, found $remote_asset_count." >&2
+            exit 1
+          fi
+          remote_asset_names="$(jq -r '.assets[].name' <<< "$release_json")"
+          for expected_name in "${expected_remote_names[@]}"; do
+            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
+            if [[ "$asset_count" != "1" ]]; then
+              echo "Draft Runtime Host release must contain exactly one '$expected_name'; found $asset_count." >&2
+              exit 1
+            fi
+          done
+
+          gh release edit "$tag" --draft=false
+          trap - EXIT

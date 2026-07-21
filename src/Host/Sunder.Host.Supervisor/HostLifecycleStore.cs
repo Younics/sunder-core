@@ -7,16 +7,12 @@ namespace Sunder.Host.Supervisor;
 internal sealed record HostLifecyclePersistentState(
     HostRuntimeDesiredState DesiredState,
     long DeploymentGeneration,
-    string? ActiveVersion,
-    string? PreviousVersion,
     string? ActiveOperationId,
     IReadOnlyList<HostOperationDescriptor> Operations)
 {
     public static HostLifecyclePersistentState Initial { get; } = new(
         HostRuntimeDesiredState.Running,
         0,
-        null,
-        null,
         null,
         []);
 }
@@ -94,8 +90,6 @@ internal sealed class HostLifecycleStore : IDisposable
             var state = new HostLifecyclePersistentState(
                 document.DesiredState.Value,
                 document.DeploymentGeneration.Value,
-                document.ActiveVersion,
-                document.PreviousVersion,
                 document.ActiveOperationId,
                 Array.AsReadOnly(document.Operations));
             Validate(state);
@@ -117,8 +111,6 @@ internal sealed class HostLifecycleStore : IDisposable
             FormatVersion,
             state.DesiredState,
             state.DeploymentGeneration,
-            state.ActiveVersion,
-            state.PreviousVersion,
             state.ActiveOperationId,
             state.Operations.ToArray());
         try
@@ -168,9 +160,6 @@ internal sealed class HostLifecycleStore : IDisposable
         {
             throw new InvalidDataException("Sunder Host lifecycle state contains invalid Runtime state.");
         }
-        ValidateText(state.ActiveVersion, nameof(state.ActiveVersion));
-        ValidateText(state.PreviousVersion, nameof(state.PreviousVersion));
-
         var operationIds = new HashSet<string>(StringComparer.Ordinal);
         var mutationIds = new HashSet<Guid>();
         HostOperationDescriptor? activeOperation = null;
@@ -262,8 +251,6 @@ internal sealed class HostLifecycleStore : IDisposable
         int? Version,
         HostRuntimeDesiredState? DesiredState,
         long? DeploymentGeneration,
-        string? ActiveVersion,
-        string? PreviousVersion,
         string? ActiveOperationId,
         HostOperationDescriptor[]? Operations);
 

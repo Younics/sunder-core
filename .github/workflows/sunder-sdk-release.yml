@@ -14,6 +14,7 @@ concurrency:
 env:
   DOTNET_VERSION: "10.0.100"
   NUGET_SOURCE: https://api.nuget.org/v3/index.json
+  NUGET_FLAT_CONTAINER: https://api.nuget.org/v3-flatcontainer
 
 jobs:
   prepare:
@@ -30,7 +31,7 @@ jobs:
           set -euo pipefail
 
           tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^sdk/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+          if [[ ! "$tag" =~ ^sdk/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)$ ]]; then
             echo "SDK release tags must use SemVer format, for example sdk/v1.1.0 or sdk/v1.1.1-beta.1." >&2
             exit 1
           fi
@@ -39,6 +40,14 @@ jobs:
           is_prerelease="false"
           if [[ "$version" == *-* ]]; then
             is_prerelease="true"
+            prerelease="${version#*-}"
+            IFS='.' read -ra identifiers <<< "$prerelease"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
+                echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
+                exit 1
+              fi
+            done
           fi
 
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
@@ -59,10 +68,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -84,10 +93,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -269,7 +278,7 @@ jobs:
           validate_template "Sample.TypedExtension" "sample.typedextension" "Sample Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion "$host_contracts_version"
 
       - name: Upload NuGet package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sunder-sdk-nuget-packages
           path: artifacts/release/sdk/*.nupkg
@@ -286,20 +295,20 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Download NuGet package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: sunder-sdk-nuget-packages
           path: release-assets
 
-      - name: Upload GitHub release assets
+      - name: Create and verify draft GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -311,17 +320,51 @@ jobs:
           shopt -s nullglob
 
           tag="sdk/v$VERSION"
+          cleanup_failed_draft() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+                gh release delete "$tag" --yes || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_draft EXIT
+          expected_package_names=(
+            "Sunder.Sdk.$VERSION.nupkg"
+            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
+            "Sunder.Sdk.Stacks.$VERSION.nupkg"
+            "Sunder.Package.Build.$VERSION.nupkg"
+            "Sunder.Package.Templates.$VERSION.nupkg"
+          )
           packages=(release-assets/*.nupkg)
           if [[ ${#packages[@]} -ne 5 ]]; then
             echo "Expected exactly five NuGet release assets, found ${#packages[@]}." >&2
             exit 1
           fi
+          for package in "${expected_package_names[@]}"; do
+            test -f "release-assets/$package" || { echo "Missing exact NuGet release asset: $package" >&2; exit 1; }
+          done
 
           bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f | sort)
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+          expected_remote_names=(
+            "${expected_package_names[@]}"
+            SHA256SUMS
+            release-provenance.json
+            release-sbom.spdx.json
+            toolchain.txt
+          )
+          if [[ ${#assets[@]} -ne ${#expected_remote_names[@]} ]]; then
+            echo "Expected exactly ${#expected_remote_names[@]} SDK release assets after evidence generation, found ${#assets[@]}." >&2
             exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+              exit 1
+            fi
+            gh release delete "$tag" --yes
           fi
 
           create_args=(
@@ -335,15 +378,49 @@ jobs:
             create_args+=(--prerelease)
           fi
 
-          gh "${create_args[@]}" "${assets[@]}"
+          gh "${create_args[@]}" --draft
+          gh release upload "$tag" "${assets[@]}"
+
+          release_json="$(gh release view "$tag" --json isDraft,assets)"
+          [[ "$(jq -r '.isDraft' <<< "$release_json")" == "true" ]] \
+            || { echo "SDK release '$tag' must remain a draft until NuGet publication is verified." >&2; exit 1; }
+          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
+          if [[ "$remote_asset_count" != "${#expected_remote_names[@]}" ]]; then
+            echo "Draft SDK release must contain exactly ${#expected_remote_names[@]} assets, found $remote_asset_count." >&2
+            exit 1
+          fi
+          remote_asset_names="$(jq -r '.assets[].name' <<< "$release_json")"
+          for expected_name in "${expected_remote_names[@]}"; do
+            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
+            if [[ "$asset_count" != "1" ]]; then
+              echo "Draft SDK release must contain exactly one '$expected_name'; found $asset_count." >&2
+              exit 1
+            fi
+          done
+          trap - EXIT
 
       - name: Push packages to NuGet.org
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           shopt -s nullglob
+
+          tag="sdk/v$VERSION"
+          cleanup_failed_draft() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+                gh release delete "$tag" --yes || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_draft EXIT
 
           if [[ -z "${NUGET_API_KEY:-}" ]]; then
             echo "Repository secret NUGET_API_KEY is not configured." >&2
@@ -356,8 +433,114 @@ jobs:
             exit 1
           fi
 
-          for package in "${packages[@]}"; do
-            dotnet nuget push "$package" \
-              --source "$NUGET_SOURCE" \
-              --api-key "$NUGET_API_KEY"
+          expected_package_names=(
+            "Sunder.Sdk.$VERSION.nupkg"
+            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
+            "Sunder.Sdk.Stacks.$VERSION.nupkg"
+            "Sunder.Package.Build.$VERSION.nupkg"
+            "Sunder.Package.Templates.$VERSION.nupkg"
+          )
+          for package in "${expected_package_names[@]}"; do
+            test -f "release-assets/$package" || { echo "Missing exact NuGet package to push: $package" >&2; exit 1; }
           done
+
+          package_ids=(
+            Sunder.Sdk
+            Sunder.Sdk.Avalonia
+            Sunder.Sdk.Stacks
+            Sunder.Package.Build
+            Sunder.Package.Templates
+          )
+          verify_published_package() {
+            local package_id="$1"
+            local package_path="$2"
+            local package_id_lower="${package_id,,}"
+            local version_lower="${VERSION,,}"
+            local package_name="$(basename "$package_path")"
+            local expected_sha="$(sha256sum "$package_path" | cut -d ' ' -f 1)"
+            local remote_path="$RUNNER_TEMP/$package_name"
+            local actual_sha
+            for attempt in {1..30}; do
+              if curl -fsSL "$NUGET_FLAT_CONTAINER/$package_id_lower/$version_lower/$package_id_lower.$version_lower.nupkg" \
+                -o "$remote_path" 2>/dev/null; then
+                actual_sha="$(sha256sum "$remote_path" | cut -d ' ' -f 1)"
+                if [[ "$actual_sha" != "$expected_sha" ]]; then
+                  echo "NuGet.org package '$package_name' does not match the release artifact." >&2
+                  exit 1
+                fi
+                return
+              fi
+              sleep 10
+            done
+            echo "NuGet.org did not expose '$package_id' version '$VERSION' after publication." >&2
+            exit 1
+          }
+
+          for index in "${!package_ids[@]}"; do
+            package_id="${package_ids[$index]}"
+            package="release-assets/${expected_package_names[$index]}"
+            package_id_lower="${package_id,,}"
+            version_lower="${VERSION,,}"
+            remote_package="$RUNNER_TEMP/${expected_package_names[$index]}"
+            if ! curl -fsSL "$NUGET_FLAT_CONTAINER/$package_id_lower/$version_lower/$package_id_lower.$version_lower.nupkg" \
+              -o "$remote_package" 2>/dev/null; then
+              if ! dotnet nuget push "$package" \
+                --source "$NUGET_SOURCE" \
+                --api-key "$NUGET_API_KEY"; then
+                verify_published_package "$package_id" "$package"
+              fi
+            fi
+            verify_published_package "$package_id" "$package"
+          done
+          trap - EXIT
+
+      - name: Publish verified GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          tag="sdk/v$VERSION"
+          cleanup_failed_draft() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+                gh release delete "$tag" --yes || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_draft EXIT
+          release_json="$(gh release view "$tag" --json isDraft,assets)"
+          [[ "$(jq -r '.isDraft' <<< "$release_json")" == "true" ]] \
+            || { echo "SDK release '$tag' is not an expected draft." >&2; exit 1; }
+          expected_remote_names=(
+            "Sunder.Sdk.$VERSION.nupkg"
+            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
+            "Sunder.Sdk.Stacks.$VERSION.nupkg"
+            "Sunder.Package.Build.$VERSION.nupkg"
+            "Sunder.Package.Templates.$VERSION.nupkg"
+            SHA256SUMS
+            release-provenance.json
+            release-sbom.spdx.json
+            toolchain.txt
+          )
+          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
+          if [[ "$remote_asset_count" != "${#expected_remote_names[@]}" ]]; then
+            echo "Draft SDK release must contain exactly ${#expected_remote_names[@]} assets, found $remote_asset_count." >&2
+            exit 1
+          fi
+          remote_asset_names="$(jq -r '.assets[].name' <<< "$release_json")"
+          for expected_name in "${expected_remote_names[@]}"; do
+            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
+            if [[ "$asset_count" != "1" ]]; then
+              echo "Draft SDK release must contain exactly one '$expected_name'; found $asset_count." >&2
+              exit 1
+            fi
+          done
+
+          gh release edit "$tag" --draft=false
+          trap - EXIT

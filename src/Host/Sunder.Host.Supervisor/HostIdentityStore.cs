@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.Host.Contracts;
 
 namespace Sunder.Host.Supervisor;
 
@@ -8,14 +9,6 @@ internal sealed class HostIdentityStore(string rootPath)
     private const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _rootPath = Path.GetFullPath(rootPath);
-
-    public static string GetDefaultRootPath()
-    {
-        var configured = Environment.GetEnvironmentVariable("SUNDER_HOST_STATE_ROOT");
-        return string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sunder", "host", "v1")
-            : Path.GetFullPath(configured);
-    }
 
     public Guid LoadOrCreateHostId()
     {

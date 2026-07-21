@@ -1,4 +1,3 @@
-using System.Net;
 using System.Net.Sockets;
 using Sunder.Host.Client;
 using Sunder.Host.Contracts;
@@ -11,7 +10,6 @@ internal sealed class RuntimeHealthProbe : IDisposable
 {
     private readonly RuntimeConnectionState _connectionState;
     private readonly RuntimeClientTransport _transport;
-    private readonly RuntimeManagementClient _management;
     private readonly HostManagementClient _hostManagement;
     private readonly bool _ownsTransport;
 
@@ -25,30 +23,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
         _transport = transport ?? new RuntimeClientTransport(
             connectionState.GetConnectionInfo,
             policy: new RuntimeClientPolicyOptions { RequestTimeout = TimeSpan.FromSeconds(2) });
-        _management = new RuntimeManagementClient(_transport);
         _hostManagement = new HostManagementClient(connectionState.GetConnectionInfo, hostHandler);
-    }
-
-    public async Task<SystemStatusResponse?> TryGetRuntimeStatusAsync(
-        Uri runtimeUrl,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(TimeSpan.FromSeconds(2));
-            return HasMatchingConnection(runtimeUrl)
-                ? await _management.GetSystemStatusAsync(deadline.Token).ConfigureAwait(false)
-                : null;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     public async Task<RuntimeHandshakeResponse?> TryGetRuntimeHandshakeAsync(
@@ -104,90 +79,34 @@ internal sealed class RuntimeHealthProbe : IDisposable
     public async Task<bool> TryEnsureSupervisedRuntimeStartedAsync(
         Uri runtimeUrl,
         CancellationToken cancellationToken)
-    {
-        if (!HasMatchingConnection(runtimeUrl))
-        {
-            return false;
-        }
-
-        var handshake = await TryGetHostHandshakeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
-        if (handshake is null)
-        {
-            return false;
-        }
-
-        if (HostProtocolCompatibility.GetIncompatibility(
-                handshake,
-                HostProtocolFeatures.RuntimeLifecycleV1) is { } incompatibility)
-        {
-            throw new InvalidOperationException(incompatibility);
-        }
-
-        try
-        {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(TimeSpan.FromMinutes(2));
-            var durable = SupportsDurableOperations(handshake);
-            var mutationId = Guid.NewGuid();
-            while (true)
-            {
-                var status = await _hostManagement.GetStatusAsync(deadline.Token).ConfigureAwait(false);
-                if (durable && status.ActiveOperationId is not null)
-                {
-                    await _hostManagement.WaitForOperationAsync(
-                        await _hostManagement.GetOperationAsync(status.ActiveOperationId, deadline.Token).ConfigureAwait(false),
-                        deadline.Token).ConfigureAwait(false);
-                    continue;
-                }
-                if (status.State == HostRuntimeState.Ready)
-                {
-                    return true;
-                }
-                if (IsTransitional(status.State))
-                {
-                    if (!durable)
-                    {
-                        return true;
-                    }
-                    await Task.Delay(TimeSpan.FromMilliseconds(200), deadline.Token).ConfigureAwait(false);
-                    continue;
-                }
-
-                var request = new HostLifecycleRequest(mutationId, status.DeploymentGeneration);
-                try
-                {
-                    if (durable)
-                    {
-                        var submission = await _hostManagement.SubmitStartRuntimeAsync(request, deadline.Token).ConfigureAwait(false);
-                        await WaitForSuccessfulOperationAsync(submission.Operation, deadline.Token).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await _hostManagement.StartRuntimeLegacyAsync(request, deadline.Token).ConfigureAwait(false);
-                    }
-                    return true;
-                }
-                catch (HttpRequestException exception) when (
-                    durable && exception.StatusCode == HttpStatusCode.Conflict)
-                {
-                    // Startup reconciliation may have advanced the generation while submission waited.
-                }
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            throw new InvalidOperationException(
-                $"Sunder Host at '{runtimeUrl}' could not start its Runtime worker.",
-                exception);
-        }
-    }
+        => await TrySetSupervisedRuntimeStateAsync(
+                runtimeUrl,
+                TimeSpan.FromMinutes(2),
+                "start",
+                static status => status.State == HostRuntimeState.Ready,
+                _hostManagement.SubmitStartRuntimeAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
 
     public async Task<bool> TryStopSupervisedRuntimeAsync(
         Uri runtimeUrl,
+        CancellationToken cancellationToken)
+        => await TrySetSupervisedRuntimeStateAsync(
+                runtimeUrl,
+                TimeSpan.FromSeconds(90),
+                "stop",
+                static status => status.State == HostRuntimeState.Stopped
+                                 && status.DesiredState == HostRuntimeDesiredState.Stopped,
+                _hostManagement.SubmitStopRuntimeAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<bool> TrySetSupervisedRuntimeStateAsync(
+        Uri runtimeUrl,
+        TimeSpan timeout,
+        string operationName,
+        Func<HostRuntimeStatus, bool> isComplete,
+        Func<HostLifecycleRequest, CancellationToken, Task<HostLifecycleSubmission>> submit,
         CancellationToken cancellationToken)
     {
         if (!HasMatchingConnection(runtimeUrl))
@@ -201,9 +120,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
             return false;
         }
 
-        if (HostProtocolCompatibility.GetIncompatibility(
-                handshake,
-                HostProtocolFeatures.RuntimeLifecycleV1) is { } incompatibility)
+        if (HostProtocolCompatibility.GetManagedSupervisorIncompatibility(handshake) is { } incompatibility)
         {
             throw new InvalidOperationException(incompatibility);
         }
@@ -211,25 +128,23 @@ internal sealed class RuntimeHealthProbe : IDisposable
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(TimeSpan.FromSeconds(90));
-            var durable = SupportsDurableOperations(handshake);
+            deadline.CancelAfter(timeout);
             var mutationId = Guid.NewGuid();
             while (true)
             {
                 var status = await _hostManagement.GetStatusAsync(deadline.Token).ConfigureAwait(false);
-                if (durable && status.ActiveOperationId is not null)
+                if (status.ActiveOperationId is not null)
                 {
                     await _hostManagement.WaitForOperationAsync(
                         await _hostManagement.GetOperationAsync(status.ActiveOperationId, deadline.Token).ConfigureAwait(false),
                         deadline.Token).ConfigureAwait(false);
                     continue;
                 }
-                if (status.State == HostRuntimeState.Stopped
-                    && status.DesiredState == HostRuntimeDesiredState.Stopped)
+                if (isComplete(status))
                 {
                     return true;
                 }
-                if (durable && IsTransitional(status.State))
+                if (IsTransitional(status.State))
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(200), deadline.Token).ConfigureAwait(false);
                     continue;
@@ -238,19 +153,11 @@ internal sealed class RuntimeHealthProbe : IDisposable
                 var request = new HostLifecycleRequest(mutationId, status.DeploymentGeneration);
                 try
                 {
-                    if (durable)
-                    {
-                        var submission = await _hostManagement.SubmitStopRuntimeAsync(request, deadline.Token).ConfigureAwait(false);
-                        await WaitForSuccessfulOperationAsync(submission.Operation, deadline.Token).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await _hostManagement.StopRuntimeLegacyAsync(request, deadline.Token).ConfigureAwait(false);
-                    }
+                    var submission = await submit(request, deadline.Token).ConfigureAwait(false);
+                    await WaitForSuccessfulOperationAsync(submission.Operation, deadline.Token).ConfigureAwait(false);
                     return true;
                 }
-                catch (HttpRequestException exception) when (
-                    durable && exception.StatusCode == HttpStatusCode.Conflict)
+                catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Conflict)
                 {
                     // Startup reconciliation may have advanced the generation while submission waited.
                 }
@@ -263,7 +170,7 @@ internal sealed class RuntimeHealthProbe : IDisposable
         catch (Exception exception)
         {
             throw new InvalidOperationException(
-                $"Sunder Host at '{runtimeUrl}' could not stop its Runtime worker.",
+                $"Sunder Host at '{runtimeUrl}' could not {operationName} its Runtime worker.",
                 exception);
         }
     }
@@ -335,18 +242,10 @@ internal sealed class RuntimeHealthProbe : IDisposable
     private bool HasMatchingConnection(Uri runtimeUrl)
         => _connectionState.ConnectionInfo?.Matches(runtimeUrl) == true;
 
-    private static bool SupportsDurableOperations(HostHandshakeResponse handshake)
-        => handshake.SupportedFeatures.Contains(
-            HostProtocolFeatures.DurableOperationsV1,
-            StringComparer.Ordinal);
-
     private static bool IsTransitional(HostRuntimeState state)
         => state is HostRuntimeState.Starting
-            or HostRuntimeState.Draining
             or HostRuntimeState.Stopping
-            or HostRuntimeState.Restarting
-            or HostRuntimeState.Updating
-            or HostRuntimeState.RollingBack;
+            or HostRuntimeState.Restarting;
 
     private async Task WaitForSuccessfulOperationAsync(
         HostOperationDescriptor operation,
@@ -365,7 +264,6 @@ internal sealed class RuntimeHealthProbe : IDisposable
     public void Dispose()
     {
         _hostManagement.Dispose();
-        _management.Dispose();
         if (_ownsTransport)
         {
             _transport.Dispose();

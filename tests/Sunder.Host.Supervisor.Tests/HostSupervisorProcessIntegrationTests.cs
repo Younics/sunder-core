@@ -2,11 +2,11 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Reflection;
 using Sunder.Host.Contracts;
 using Sunder.Host.Supervisor;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host;
 using Sunder.Runtime.LocalState;
 using Xunit;
 
@@ -24,7 +24,7 @@ public sealed class HostSupervisorProcessIntegrationTests
         var workerConnectionPath = Path.Combine(hostStateRoot, "connection", "runtime-worker.json");
         var externalToken = $"integration-external-{Guid.NewGuid():N}";
         using var process = StartSupervisor(
-            FindRuntimeHostAssembly(),
+            typeof(RuntimeHostStartupOptions).Assembly.Location,
             hostStateRoot,
             runtimeStateRoot,
             externalConnectionPath,
@@ -267,33 +267,6 @@ public sealed class HostSupervisorProcessIntegrationTests
             throw new InvalidOperationException(
                 $"Sunder Host Supervisor exited with code {process.ExitCode} before it could {operation}.");
         }
-    }
-
-    private static string FindRuntimeHostAssembly()
-    {
-        var configuration = typeof(HostSupervisorProcessIntegrationTests).Assembly
-            .GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration ?? "Debug";
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
-             directory is not null;
-             directory = directory.Parent)
-        {
-            var candidate = Path.Combine(
-                directory.FullName,
-                "src",
-                "Host",
-                "Sunder.Runtime.Host",
-                "bin",
-                configuration,
-                "net10.0",
-                "Sunder.Runtime.Host.dll");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate the {configuration} Sunder.Runtime.Host build output from '{AppContext.BaseDirectory}'.");
     }
 
     private static string ResolveDotnetHost()

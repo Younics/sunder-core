@@ -5,9 +5,9 @@ on:
     paths:
       - ".github/workflows/sunder-app-packaging-ci.yml"
       - ".github/workflows/sunder-app-release.yml"
-      - "scripts/install/install.sh"
-      - "scripts/release/macos/**"
-      - "scripts/release/package-sunder.sh"
+      - ".github/workflows/sunder-host-validation.yml"
+      - "scripts/install/**"
+      - "scripts/release/**"
       - "tests/Sunder.App.Tests/MacOsReleasePackagingTests.cs"
   push:
     branches:
@@ -15,9 +15,9 @@ on:
     paths:
       - ".github/workflows/sunder-app-packaging-ci.yml"
       - ".github/workflows/sunder-app-release.yml"
-      - "scripts/install/install.sh"
-      - "scripts/release/macos/**"
-      - "scripts/release/package-sunder.sh"
+      - ".github/workflows/sunder-host-validation.yml"
+      - "scripts/install/**"
+      - "scripts/release/**"
       - "tests/Sunder.App.Tests/MacOsReleasePackagingTests.cs"
 
 permissions:
@@ -28,6 +28,79 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-script-validation:
+    name: Release script and evidence validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: "10.0.100"
+
+      - name: Validate Bash scripts and release evidence fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install/install.sh
+          bash -n scripts/release/package-sunder.sh
+          bash -n scripts/release/generate-release-evidence.sh
+          bash -n scripts/release/macos/create-sunder-dmg.sh
+
+          fixture="$RUNNER_TEMP/release-evidence-fixture"
+          mkdir -p "$fixture"
+          printf 'CLI release fixture\n' > "$fixture/sunder-cli-1.2.3-linux-x64.tar.gz"
+          printf 'Host release fixture\n' > "$fixture/sunder-runtime-host-1.2.3-linux-x64.tar.gz"
+          source_sha="0123456789012345678901234567890123456789"
+          bash scripts/release/generate-release-evidence.sh "$fixture" "sunder-core=$source_sha"
+
+          jq -e --arg source_sha "$source_sha" '
+            .schemaVersion == 1
+            and .sources == [{name: "sunder-core", sha: $source_sha}]
+            and (.artifacts | length == 2)
+            and all(.artifacts[]; .path | test("^[A-Za-z0-9][A-Za-z0-9._+-]*$"))
+            and all(.artifacts[]; .sha256 | test("^[0-9a-f]{64}$"))
+          ' "$fixture/release-provenance.json" >/dev/null
+          jq -e '.spdxVersion == "SPDX-2.3" and (.files | length == 2)' \
+            "$fixture/release-sbom.spdx.json" >/dev/null
+          test "$(grep -Ec '^[0-9a-f]{64}  sunder-cli-1\.2\.3-linux-x64\.tar\.gz$' "$fixture/SHA256SUMS")" -eq 1
+          test "$(grep -Ec '^[0-9a-f]{64}  sunder-runtime-host-1\.2\.3-linux-x64\.tar\.gz$' "$fixture/SHA256SUMS")" -eq 1
+          if bash scripts/release/generate-release-evidence.sh "$fixture" "sunder-core=not-a-sha"; then
+            echo "Release evidence accepted an invalid source SHA." >&2
+            exit 1
+          fi
+
+  powershell-script-validation:
+    name: PowerShell release script syntax
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(
+            "scripts/install/install.ps1",
+            "scripts/release/package-sunder.ps1"
+          )
+
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $file).Path,
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $details = ($errors | ForEach-Object { $_.Message }) -join "; "
+              throw "PowerShell parser errors in '$file': $details"
+            }
+          }
+
   dmg-layout-smoke:
     name: Branded DMG layout smoke
     runs-on: macos-14
@@ -40,8 +113,10 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/release/package-sunder.sh
+          bash -n scripts/release/generate-release-evidence.sh
           bash -n scripts/release/macos/create-sunder-dmg.sh
           bash -n scripts/install/install.sh
+          swiftc -typecheck scripts/release/macos/render-sunder-dmg-background.swift
 
       - name: Create unsigned fixture app
         id: fixture

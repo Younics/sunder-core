@@ -1,10 +1,12 @@
-# Sunder Host Architecture
+# Future Sunder Host Architecture
 
 ## Status
 
-This document defines the target architecture for a Sunder desktop client that connects to a Sunder Host on the same or a different machine. Implementation is incremental. Existing Runtime API behavior remains supported until each Host-owned concern is migrated.
+This is a future-state design, not current implementation documentation. It defines a target architecture for a Sunder desktop client that will connect to a Sunder Host on the same or a different machine. It specifies no current public behavior, operational guarantees, release behavior, or supported transport.
 
-## Product Model
+The present tense in the remaining sections states target requirements. For implemented current-user Host behavior, use [`../SUNDER-HOST-SERVICE.md`](../SUNDER-HOST-SERVICE.md). In current terminology, the Host/Supervisor is the public current-user gateway, the Runtime worker is nested `Sunder.Runtime.Host`, and a standalone Runtime is the direct-loopback development fallback.
+
+## Target Product Model
 
 Sunder has three process roles:
 
@@ -85,7 +87,7 @@ The Supervisor retains the Runtime worker process handle and persists desired st
 
 Lifecycle mutations are durable and idempotent. They return an operation ID that can be queried after disconnect or timeout. A restart completes only after the old worker exits, the Runtime root lease is released, the replacement worker authenticates over private IPC, and Runtime package bootstrap reaches `Ready`.
 
-The initial durable implementation stores desired state, deployment generation, and operation records in one atomically replaced `runtime/v1/lifecycle.json` document under the Host state root. The temporary payload is flushed to durable storage before replacement, and the containing directory is synchronized where the platform/filesystem supports directory `fsync`. The atomic replacement is the acceptance point; post-replacement best-effort synchronization cannot turn a committed mutation into an in-memory rejection. An exclusive lifecycle lock prevents two Supervisor processes from owning the same Host state root.
+The initial durable implementation will store desired state, deployment generation, and operation records in one atomically replaced `runtime/v1/lifecycle.json` document under the Host state root. The temporary payload will be flushed to durable storage before replacement, and the containing directory will be synchronized where the platform/filesystem supports directory `fsync`. The atomic replacement will be the acceptance point; post-replacement best-effort synchronization will not turn a committed mutation into an in-memory rejection. An exclusive lifecycle lock will prevent two Supervisor processes from owning the same Host state root.
 
 Persisting that document is the mutation acceptance boundary. Before it, request cancellation produces no operation or desired-state change. After it, client disconnect or polling cancellation does not cancel worker orchestration. The operation remains queryable at `/api/host/v1/operations/{operationId}`. Reusing a `MutationId` with the same kind and expected generation returns the original operation before current-generation validation; reusing it with different input is a conflict. A different mutation conflicts while another lifecycle operation is active.
 

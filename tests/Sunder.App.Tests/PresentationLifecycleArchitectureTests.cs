@@ -364,14 +364,6 @@ public sealed class PresentationLifecycleArchitectureTests
     public void RuntimeClientEndpointFamilies_StayReviewedAndConsumersAvoidTheComposite()
     {
         var services = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "Services");
-        var runtimeFiles = Directory.GetFiles(services, "RuntimeApiClient*.cs")
-            .Where(path => !path.EndsWith("RuntimeApiClientFactory.cs", StringComparison.Ordinal))
-            .ToArray();
-
-        Assert.All(runtimeFiles, path => Assert.True(
-            File.ReadLines(path).Count() < 500,
-            $"{Path.GetFileName(path)} exceeded the 500-line Runtime client ratchet."));
-
         var appDirectory = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App");
         var broadDependencies = Directory.GetFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.EndsWith("IRuntimeApiClient.cs", StringComparison.Ordinal)

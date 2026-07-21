@@ -35,14 +35,14 @@ internal static class RuntimePersistentLauncher
 
 [SupportedOSPlatform("macos")]
 internal sealed class MacOsSessionRuntimeLauncher(
-    Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>>? runAsync = null,
+    Func<string, IReadOnlyList<string>, CancellationToken, bool, Task>? runAsync = null,
     string? legacyLaunchAgentPath = null)
     : IRuntimePersistentLauncher
 {
     private const string Label = "dev.sunder.host";
     private const string LegacyLabel = "dev.sunder.runtime";
-    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> _runAsync
-        = runAsync ?? RuntimeLauncherProcess.RunWithResultAsync;
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task> _runAsync
+        = runAsync ?? RuntimeLauncherProcess.RunAsync;
     private readonly string _legacyLaunchAgentPath = legacyLaunchAgentPath ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         "Library",
@@ -86,12 +86,12 @@ internal sealed class MacOsSessionRuntimeLauncher(
 
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxSystemdRuntimeLauncher(
-    Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>>? runAsync = null,
+    Func<string, IReadOnlyList<string>, CancellationToken, bool, Task>? runAsync = null,
     Func<ProcessStartInfo, bool, CancellationToken, Task>? launchFallbackAsync = null)
     : IRuntimePersistentLauncher
 {
-    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> _runAsync
-        = runAsync ?? RuntimeLauncherProcess.RunWithResultAsync;
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task> _runAsync
+        = runAsync ?? RuntimeLauncherProcess.RunAsync;
     private readonly Func<ProcessStartInfo, bool, CancellationToken, Task> _launchFallbackAsync
         = launchFallbackAsync ?? new UnixDetachedRuntimeLauncher().LaunchAsync;
 
@@ -360,8 +360,8 @@ internal static class RuntimeLauncherProcess
     public static IEnumerable<KeyValuePair<string, string>> GetExplicitEnvironment(ProcessStartInfo startInfo)
         => startInfo.Environment
             .Where(pair => pair.Value is not null
-                           && (pair.Key.StartsWith("SUNDER_", StringComparison.Ordinal)
-                               || pair.Key is "DOTNET_ROOT" or "PATH"))
+                            && (pair.Key.StartsWith("SUNDER_", StringComparison.OrdinalIgnoreCase)
+                                || pair.Key is "DOTNET_ROOT" or "PATH"))
             .Select(pair => new KeyValuePair<string, string>(pair.Key, pair.Value!));
 
     public static string ResolveExecutable(string fileName)
@@ -384,18 +384,7 @@ internal static class RuntimeLauncherProcess
         return fileName;
     }
 
-    public static async Task<int> RunAsync(
-        string fileName,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken,
-        bool throwOnFailure = true)
-        => (await RunWithResultAsync(
-            fileName,
-            arguments,
-            cancellationToken,
-            throwOnFailure).ConfigureAwait(false)).ExitCode;
-
-    public static async Task<RuntimeLauncherResult> RunWithResultAsync(
+    public static async Task RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken,
@@ -446,8 +435,5 @@ internal static class RuntimeLauncherProcess
             throw new InvalidOperationException(
                 $"'{fileName}' exited with code {process.ExitCode}: {(string.IsNullOrWhiteSpace(error) ? output : error).Trim()}");
         }
-        return new RuntimeLauncherResult(process.ExitCode, output, error);
     }
 }
-
-internal sealed record RuntimeLauncherResult(int ExitCode, string StandardOutput, string StandardError);

@@ -1,6 +1,6 @@
 # Contributing to Sunder Core
 
-Thanks for helping improve Sunder Core. This repository contains the public desktop shell, runtime host, CLI, SDK, package build tooling, templates, archive validation, and Registry contracts.
+Thanks for helping improve Sunder Core. This repository contains the public desktop shell, current-user Host gateway (`Sunder.Host.Supervisor`), nested Runtime worker (`Sunder.Runtime.Host`), CLI, SDK, package build tooling, templates, archive validation, and Registry contracts. A direct-loopback standalone Runtime is a development fallback.
 
 ## Before You Start
 
@@ -21,7 +21,9 @@ Useful targeted tests:
 
 ```powershell
 dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
+dotnet test tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --no-restore
 dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
+dotnet test tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj --no-restore
 dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
 dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
 ```
@@ -31,8 +33,9 @@ dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -
 | Area | Owns |
 | --- | --- |
 | `Sunder.App` | Avalonia shell UI, app-side package activation, package views, marketplace/install UX |
-| `Sunder.Runtime.Host` | Installed package state, validation, install/update/uninstall, runtime activation, local API |
-| `Sunder.Cli` | Thin command-line client over Registry and runtime APIs |
+| `Sunder.Host.Supervisor` | Public current-user Host gateway, Host identity, durable Runtime worker lifecycle, private worker gateway |
+| `Sunder.Runtime.Host` | Nested Runtime worker package state, validation, install/update/uninstall, runtime activation, and private worker API; direct loopback only as a standalone development fallback |
+| `Sunder.Cli` | Thin command-line client over Registry and the public current-user Host gateway |
 | `Sunder.Sdk` | Public package author contracts only |
 | `Sunder.Sdk.Avalonia` | Optional Avalonia view/settings, workspace, and theme contracts |
 | `Sunder.Sdk.Stacks` | Optional public Stack package-author contracts; references only `Sunder.Sdk` |
@@ -40,6 +43,8 @@ dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -
 | `Sunder.Package.Format` | Archive inspection and validation |
 
 The public package-author NuGet surface is `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`, `Sunder.Package.Build`, and `Sunder.Package.Templates`.
+
+[`docs/SUNDER.md`](docs/SUNDER.md) is the canonical current project map and architecture reference.
 
 ## Pull Request Checklist
 

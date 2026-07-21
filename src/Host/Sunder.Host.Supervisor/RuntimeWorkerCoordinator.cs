@@ -44,9 +44,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
     private HostRuntimeState _state = HostRuntimeState.Stopped;
     private long _deploymentGeneration;
     private Guid? _runtimeInstanceId;
-    private DateTimeOffset? _runtimeStartedAtUtc;
-    private string? _activeVersion;
-    private string? _previousVersion;
     private string? _failureCode;
     private string? _failureMessage;
     private Task? _activeOperationTask;
@@ -79,8 +76,6 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         _persistentState = lifecycleStore.LoadOrCreate();
         _desiredState = _persistentState.DesiredState;
         _deploymentGeneration = _persistentState.DeploymentGeneration;
-        _activeVersion = _persistentState.ActiveVersion;
-        _previousVersion = _persistentState.PreviousVersion;
     }
 
     public RuntimeWorkerConnection? GetWorkerConnection()
@@ -111,10 +106,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 _desiredState,
                 _state,
                 _deploymentGeneration,
-                _activeVersion,
-                _previousVersion,
                 _runtimeInstanceId,
-                _runtimeStartedAtUtc,
                 _failureCode,
                 _failureMessage,
                 _persistentState.ActiveOperationId);
@@ -309,7 +301,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                             "host.mutation-reuse",
                             $"Mutation '{request.MutationId:D}' was already used for a different lifecycle request.");
                     }
-                    submission = new HostLifecycleSubmission(existing, GetStatus());
+                    submission = new HostLifecycleSubmission(existing);
                     return submission;
                 }
 
@@ -346,7 +338,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 _deploymentGeneration = updated.DeploymentGeneration;
                 _failureCode = null;
                 _failureMessage = null;
-                submission = new HostLifecycleSubmission(operation, GetStatus());
+                submission = new HostLifecycleSubmission(operation);
                 schedule = true;
             }
             if (schedule)
@@ -562,16 +554,11 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 {
                     throw new InvalidOperationException("Runtime worker exited or changed while startup was being verified.");
                 }
-                var activeVersion = handshake.Product.ProductVersion;
                 var updated = _persistentState with
                 {
                     DeploymentGeneration = completingOperationId is null
                         ? _deploymentGeneration + 1
                         : _deploymentGeneration,
-                    PreviousVersion = string.Equals(_activeVersion, activeVersion, StringComparison.Ordinal)
-                        ? _previousVersion
-                        : _activeVersion,
-                    ActiveVersion = activeVersion,
                 };
                 if (completingOperationId is not null
                     && string.Equals(updated.ActiveOperationId, completingOperationId, StringComparison.Ordinal))
@@ -592,14 +579,11 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 _persistentState = updated;
                 _desiredState = updated.DesiredState;
                 _deploymentGeneration = updated.DeploymentGeneration;
-                _activeVersion = updated.ActiveVersion;
-                _previousVersion = updated.PreviousVersion;
                 _connection = new RuntimeWorkerConnection(
                     connection,
                     endpointLease.Endpoint,
                     ++_workerEpoch);
                 _runtimeInstanceId = handshake.RuntimeInstanceId;
-                _runtimeStartedAtUtc = DateTimeOffset.UtcNow;
                 _state = HostRuntimeState.Ready;
                 _lifecycleOwnsProcessExit = false;
             }
@@ -647,15 +631,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             {
                 if (ReferenceEquals(_process, process))
                 {
-                    _process = null;
-                    _lifecycleOwnsProcessExit = false;
-                    _processExitObserved = false;
-                    _supervisorLifetimePipe = null;
-                    _workerEndpoint = null;
-                    _connection = null;
-                    _runtimeInstanceId = null;
-                    _runtimeStartedAtUtc = null;
-                    _state = HostRuntimeState.Failed;
+                    ClearWorkerStateCore(HostRuntimeState.Failed);
                     _failureCode = exception is OperationCanceledException
                         ? "host.worker-start-cancelled"
                         : "host.worker-start-failed";
@@ -697,27 +673,12 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             endpointLease = _workerEndpoint;
             if (process is null)
             {
-                _lifecycleOwnsProcessExit = false;
-                _processExitObserved = false;
-                _state = HostRuntimeState.Stopped;
-                _connection = null;
-                _runtimeInstanceId = null;
-                _runtimeStartedAtUtc = null;
-                _supervisorLifetimePipe = null;
-                _workerEndpoint = null;
+                ClearWorkerStateCore(HostRuntimeState.Stopped);
             }
             else if (process.HasExited)
             {
                 processAlreadyExited = true;
-                _process = null;
-                _lifecycleOwnsProcessExit = false;
-                _processExitObserved = false;
-                _supervisorLifetimePipe = null;
-                _workerEndpoint = null;
-                _connection = null;
-                _runtimeInstanceId = null;
-                _runtimeStartedAtUtc = null;
-                _state = HostRuntimeState.Stopped;
+                ClearWorkerStateCore(HostRuntimeState.Stopped);
             }
             else
             {
@@ -800,15 +761,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         {
             if (ReferenceEquals(_process, process))
             {
-                _process = null;
-                _lifecycleOwnsProcessExit = false;
-                _processExitObserved = false;
-                _supervisorLifetimePipe = null;
-                _workerEndpoint = null;
-                _connection = null;
-                _runtimeInstanceId = null;
-                _runtimeStartedAtUtc = null;
-                _state = HostRuntimeState.Stopped;
+                ClearWorkerStateCore(HostRuntimeState.Stopped);
             }
         }
         DeleteConnectionIfMatches(connection);
@@ -950,22 +903,12 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             {
                 exitedConnection = _connection;
                 exitedEndpoint = _workerEndpoint;
-                _process = null;
-                _lifecycleOwnsProcessExit = false;
-                _processExitObserved = false;
-                _supervisorLifetimePipe = null;
-                _workerEndpoint = null;
-                _connection = null;
-                _runtimeInstanceId = null;
-                _runtimeStartedAtUtc = null;
-                if (_state != HostRuntimeState.CrashLoop)
+                var wasCrashLoop = _state == HostRuntimeState.CrashLoop;
+                ClearWorkerStateCore(wasCrashLoop ? HostRuntimeState.CrashLoop : HostRuntimeState.Failed);
+                if (!wasCrashLoop)
                 {
-                    if (_state != HostRuntimeState.Failed)
-                    {
-                        _state = HostRuntimeState.Failed;
-                        _failureCode = "host.worker-exited";
-                        _failureMessage = $"Runtime worker exited with code {exitCode}.";
-                    }
+                    _failureCode = "host.worker-exited";
+                    _failureMessage = $"Runtime worker exited with code {exitCode}.";
                     if (_desiredState == HostRuntimeDesiredState.Running && !_recoveryScheduled)
                     {
                         var delay = RecordWorkerFailureForRecoveryCore();
@@ -1276,9 +1219,19 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
 
     private static bool IsTerminal(HostOperationState state)
         => state is HostOperationState.Succeeded
-            or HostOperationState.Failed
-            or HostOperationState.RolledBack
-            or HostOperationState.Cancelled;
+            or HostOperationState.Failed;
+
+    private void ClearWorkerStateCore(HostRuntimeState state)
+    {
+        _process = null;
+        _lifecycleOwnsProcessExit = false;
+        _processExitObserved = false;
+        _supervisorLifetimePipe = null;
+        _workerEndpoint = null;
+        _connection = null;
+        _runtimeInstanceId = null;
+        _state = state;
+    }
 
     private static string? Truncate(string? value)
         => value is null || value.Length <= MaximumOperationMessageLength
@@ -1421,12 +1374,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 {
                     if (ReferenceEquals(_process, process))
                     {
-                        _process = null;
-                        _lifecycleOwnsProcessExit = false;
-                        _processExitObserved = false;
-                        _supervisorLifetimePipe = null;
-                        _workerEndpoint = null;
-                        _connection = null;
+                        ClearWorkerStateCore(HostRuntimeState.Stopped);
                     }
                 }
                 process?.Dispose();

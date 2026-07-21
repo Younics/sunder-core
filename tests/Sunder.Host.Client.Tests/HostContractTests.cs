@@ -1,11 +1,39 @@
 using System.Text.Json;
+using Sunder.Host.Client;
 using Sunder.Host.Contracts;
 using Xunit;
 
-namespace Sunder.Host.Contracts.Tests;
+namespace Sunder.Host.Client.Tests;
 
 public sealed class HostContractTests
 {
+    [Fact]
+    public void ProtocolRevision2_IsACleanBreakFromRevision1()
+    {
+        var revision1 = new HostHandshakeResponse(
+            HostProtocol.Identity,
+            ProtocolRevision: 1,
+            MinimumSupportedRevision: 1,
+            MaximumSupportedRevision: 1,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            [HostProtocolFeatures.RuntimeGatewayV1],
+            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "Development", "Development"));
+        var revision2 = new HostHandshakeResponse(
+            HostProtocol.Identity,
+            HostProtocol.CurrentRevision,
+            HostProtocol.MinimumSupportedRevision,
+            HostProtocol.MaximumSupportedRevision,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            [HostProtocolFeatures.RuntimeGatewayV1],
+            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "Development", "Development"));
+
+        Assert.Equal(2, HostProtocol.CurrentRevision);
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(revision1));
+        Assert.Null(HostProtocolCompatibility.GetIncompatibility(revision2));
+    }
+
     [Fact]
     public void Handshake_FreezesSupportedFeatures()
     {
@@ -34,10 +62,7 @@ public sealed class HostContractTests
             HostRuntimeDesiredState.Running,
             HostRuntimeState.Ready,
             7,
-            "1.2.3",
-            "1.2.2",
             Guid.Parse("c809b7d8-9be6-4de4-9215-596336371884"),
-            DateTimeOffset.Parse("2026-07-19T12:00:00Z"),
             null,
             null,
             null);
@@ -47,7 +72,7 @@ public sealed class HostContractTests
         Assert.Contains("\"desiredState\":1", json, StringComparison.Ordinal);
         Assert.Contains("\"state\":2", json, StringComparison.Ordinal);
         Assert.Contains("\"deploymentGeneration\":7", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("FailureCode", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("activeVersion", json, StringComparison.Ordinal);
     }
 
     [Fact]

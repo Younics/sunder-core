@@ -25,8 +25,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
-    throw "Version '$Version' is not a valid SemVer value for Velopack. Use a value like 0.1.0 or 0.1.0-beta.1."
+if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
+    throw "Version '$Version' must be strict SemVer without build metadata. Use a value like 0.1.0 or 0.1.0-beta.1."
+}
+if ($Version.Contains("-")) {
+    foreach ($identifier in $Version.Substring($Version.IndexOf("-") + 1).Split(".")) {
+        if ($identifier -match '^[0-9]+$' -and $identifier.Length -gt 1 -and $identifier.StartsWith("0", [StringComparison]::Ordinal)) {
+            throw "Numeric SemVer prerelease identifiers must not contain leading zeroes."
+        }
+    }
+}
+if ($Runtime -notin @("win-x64", "win-arm64")) {
+    throw "Runtime must be win-x64 or win-arm64. Use package-sunder.sh for Linux and macOS runtimes."
 }
 
 $vpk = Get-Command "vpk" -ErrorAction SilentlyContinue
@@ -42,14 +52,11 @@ $artifactRoot = if ([System.IO.Path]::IsPathRooted($OutputRoot)) { $OutputRoot }
 $publishDir = Join-Path $artifactRoot "publish\sunder\$Runtime"
 $velopackChannel = "app-$Runtime-$Channel"
 $releaseDir = Join-Path $artifactRoot "velopack\$Channel\$Runtime"
-$mainExe = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) { "Sunder.App.exe" } else { "Sunder.App" }
+$mainExe = "Sunder.App.exe"
 $imageDir = Join-Path $repoRoot "src\Host\Sunder.App\Assets\Images"
-$iconPath = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) {
-    Join-Path $imageDir "app.ico"
-} elseif ($Runtime.StartsWith("linux-", [StringComparison]::OrdinalIgnoreCase)) {
-    Join-Path $imageDir "logo.png"
-} else {
-    Join-Path $imageDir "app.icns"
+$iconPath = Join-Path $imageDir "app.ico"
+if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
+    throw "Windows packaging icon is missing: $iconPath"
 }
 
 function Import-VelopackHistory {
@@ -233,11 +240,10 @@ $publishedSettings |
     ConvertTo-Json -Depth 8 |
     Set-Content -LiteralPath $publishedSettingsPath -Encoding utf8NoBOM
 
-$executableSuffix = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) { ".exe" } else { "" }
 $requiredBundledFiles = @(
-    (Join-Path $publishDir "RuntimeHost\Sunder.Host.Supervisor$executableSuffix"),
-    (Join-Path $publishDir "RuntimeHost\RuntimeHost\Sunder.Runtime.Host$executableSuffix"),
-    (Join-Path $publishDir "Cli\sunder$executableSuffix")
+    (Join-Path $publishDir "RuntimeHost\Sunder.Host.Supervisor.exe"),
+    (Join-Path $publishDir "RuntimeHost\RuntimeHost\Sunder.Runtime.Host.exe"),
+    (Join-Path $publishDir "Cli\sunder.exe")
 )
 foreach ($requiredBundledFile in $requiredBundledFiles) {
     if (-not (Test-Path -LiteralPath $requiredBundledFile -PathType Leaf)) {
@@ -257,19 +263,13 @@ $packArgs = @(
     "--outputDir", $releaseDir
 )
 
-if (Test-Path -LiteralPath $iconPath) {
-    $packArgs += @("--icon", $iconPath)
-}
-
-$isWindowsRuntime = $Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)
+$packArgs += @("--icon", $iconPath)
 $hasWindowsSignParams = -not [string]::IsNullOrWhiteSpace($WindowsSignParams)
 
-if ($isWindowsRuntime -and $hasWindowsSignParams) {
+if ($hasWindowsSignParams) {
     $packArgs += @("--signParams", $WindowsSignParams)
 }
-if ($isWindowsRuntime) {
-    $packArgs += "--noPortable"
-}
+$packArgs += "--noPortable"
 
 & $vpk.Source @packArgs
 if ($LASTEXITCODE -ne 0) {
@@ -286,26 +286,24 @@ if (Test-Path -LiteralPath $historyManifestPath) {
 }
 Get-ChildItem -LiteralPath $releaseDir -File -Filter "RELEASES-*" | Remove-Item -Force
 
-if ($isWindowsRuntime) {
-    $setupName = "Sunder-$velopackChannel-Setup.exe"
-    $setupPath = Join-Path $releaseDir $setupName
-    $setupFiles = @(Get-ChildItem -LiteralPath $releaseDir -File -Filter "*-Setup.exe")
-    if ($setupFiles.Count -ne 1 -or $setupFiles[0].Name -cne $setupName) {
-        throw "Expected exactly one Windows installer named '$setupName' in '$releaseDir'."
-    }
-    if (Test-Path -LiteralPath (Join-Path $releaseDir "Sunder-$velopackChannel-Portable.zip")) {
-        throw "The Windows release unexpectedly contains a portable ZIP."
-    }
+$setupName = "Sunder-$velopackChannel-Setup.exe"
+$setupPath = Join-Path $releaseDir $setupName
+$setupFiles = @(Get-ChildItem -LiteralPath $releaseDir -File -Filter "*-Setup.exe")
+if ($setupFiles.Count -ne 1 -or $setupFiles[0].Name -cne $setupName) {
+    throw "Expected exactly one Windows installer named '$setupName' in '$releaseDir'."
+}
+if (Test-Path -LiteralPath (Join-Path $releaseDir "Sunder-$velopackChannel-Portable.zip")) {
+    throw "The Windows release unexpectedly contains a portable ZIP."
+}
 
-    if ($hasWindowsSignParams) {
-        $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
-        if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-            throw "The Velopack Setup signature is not valid: $($signature.Status)."
-        }
-        if (-not [string]::IsNullOrWhiteSpace($WindowsPublisherSubject) -and
-            $signature.SignerCertificate.Subject -cne $WindowsPublisherSubject) {
-            throw "The Velopack Setup is not signed by the expected Windows publisher."
-        }
+if ($hasWindowsSignParams) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        throw "The Velopack Setup signature is not valid: $($signature.Status)."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WindowsPublisherSubject) -and
+        $signature.SignerCertificate.Subject -cne $WindowsPublisherSubject) {
+        throw "The Velopack Setup is not signed by the expected Windows publisher."
     }
 }
 

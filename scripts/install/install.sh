@@ -43,24 +43,19 @@ done
 
 os="$(uname -s)"
 arch="$(uname -m)"
-runtime=""
 asset_name=""
 
 case "$os:$arch" in
   Linux:x86_64|Linux:amd64)
-    runtime="linux-x64"
     asset_name="Sunder-app-linux-x64-stable.AppImage"
     ;;
   Linux:aarch64|Linux:arm64)
-    runtime="linux-arm64"
     asset_name="Sunder-app-linux-arm64-stable.AppImage"
     ;;
   Darwin:x86_64)
-    runtime="osx-x64"
     asset_name="Sunder-app-osx-x64-stable.dmg"
     ;;
   Darwin:arm64)
-    runtime="osx-arm64"
     asset_name="Sunder-app-osx-arm64-stable.dmg"
     ;;
   *)

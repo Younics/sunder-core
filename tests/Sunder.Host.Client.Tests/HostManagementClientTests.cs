@@ -10,30 +10,6 @@ namespace Sunder.Host.Client.Tests;
 public sealed class HostManagementClientTests
 {
     [Fact]
-    public async Task Client_UsesExactHostOriginAndBearerForLifecycleRequests()
-    {
-        HttpRequestMessage? recorded = null;
-        HostLifecycleRequest? payload = null;
-        var status = CreateStatus();
-        using var client = new HostManagementClient(
-            () => new RuntimeConnectionInfo(new Uri("https://host.example:5275/"), "client-token"),
-            new RecordingHandler(async request =>
-            {
-                recorded = request;
-                payload = await request.Content!.ReadFromJsonAsync<HostLifecycleRequest>();
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(status) };
-            }));
-        var mutation = new HostLifecycleRequest(Guid.NewGuid(), 4);
-
-        var response = await client.RestartRuntimeLegacyAsync(mutation);
-
-        Assert.Equal(status, response);
-        Assert.Equal("https://host.example:5275/api/host/v1/runtime/restart", recorded!.RequestUri!.AbsoluteUri);
-        Assert.Equal("Bearer client-token", recorded.Headers.Authorization!.ToString());
-        Assert.Equal(mutation, payload);
-    }
-
-    [Fact]
     public async Task Client_SubmitsAndPollsDurableLifecycleOperation()
     {
         var operationId = "11111111111111111111111111111111";
@@ -45,7 +21,7 @@ public sealed class HostManagementClientTests
             UpdatedAtUtc = accepted.UpdatedAtUtc.AddSeconds(1),
             Message = "Runtime worker is ready.",
         };
-        var submission = new HostLifecycleSubmission(accepted, CreateStatus());
+        var submission = new HostLifecycleSubmission(accepted);
         var requests = new List<(HttpMethod Method, string Uri, string? Authorization)>();
         using var client = new HostManagementClient(
             () => new RuntimeConnectionInfo(new Uri("https://host.example:5275/"), "client-token"),
@@ -92,7 +68,7 @@ public sealed class HostManagementClientTests
             () => new RuntimeConnectionInfo(new Uri("https://host.example:5275/"), "client-token"),
             new RecordingHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted)
             {
-                Content = JsonContent.Create(new HostLifecycleSubmission(operation, CreateStatus())),
+                Content = JsonContent.Create(new HostLifecycleSubmission(operation)),
             })));
 
         await Assert.ThrowsAsync<InvalidDataException>(() => client.SubmitStartRuntimeAsync(request));
@@ -151,14 +127,14 @@ public sealed class HostManagementClientTests
             [HostProtocolFeatures.RuntimeGatewayV1],
             new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "1.0.0"));
 
-        Assert.True(HostProtocolCompatibility.IsCompatible(compatible));
+        Assert.Null(HostProtocolCompatibility.GetIncompatibility(compatible));
         Assert.Null(HostProtocolCompatibility.GetIncompatibility(
             compatible,
             HostProtocolFeatures.RuntimeGatewayV1));
         Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(
             compatible,
             HostProtocolFeatures.RuntimeLifecycleV1));
-        Assert.False(HostProtocolCompatibility.IsCompatible(compatible with { HostId = Guid.Empty }));
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(compatible with { HostId = Guid.Empty }));
     }
 
     private static HostRuntimeStatus CreateStatus()
@@ -166,10 +142,7 @@ public sealed class HostManagementClientTests
             HostRuntimeDesiredState.Running,
             HostRuntimeState.Ready,
             4,
-            "1.0.0",
-            null,
             Guid.NewGuid(),
-            DateTimeOffset.UtcNow,
             null,
             null,
             null);

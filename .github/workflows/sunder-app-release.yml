@@ -18,6 +18,12 @@ env:
   RELEASE_REPO_URL: https://github.com/${{ github.repository }}
 
 jobs:
+  host-validation:
+    name: Validate Supervisor and Runtime
+    uses: ./.github/workflows/sunder-host-validation.yml
+    permissions:
+      contents: read
+
   prepare:
     name: Prepare release metadata
     runs-on: ubuntu-latest
@@ -85,6 +91,7 @@ jobs:
     needs:
       - prepare
       - clear-stale-draft
+      - host-validation
     runs-on: ${{ matrix.os }}
     environment: sunder-app-signing
     permissions:

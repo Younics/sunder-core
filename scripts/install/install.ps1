@@ -64,7 +64,7 @@ function Assert-AssetDigest {
     }
 }
 
-$downloadDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "sunder-install"
+$downloadDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "sunder-install-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
 $installerPath = Join-Path $downloadDirectory $asset.name
 $appSha256 = Get-AssetSha256 $asset
@@ -100,4 +100,7 @@ try {
     }
 } finally {
     if ($null -ne $appLock) { $appLock.Dispose() }
+    if (Test-Path -LiteralPath $downloadDirectory) {
+        Remove-Item -LiteralPath $downloadDirectory -Recurse -Force
+    }
 }

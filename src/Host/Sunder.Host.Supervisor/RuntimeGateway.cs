@@ -185,7 +185,7 @@ internal sealed class RuntimeGateway : IDisposable
             }
             if (connection.WorkerEpoch < _workerEpoch)
             {
-                throw new RuntimeWorkerUnavailableException();
+                throw new IOException("Runtime worker epoch is stale.");
             }
             _workerClient?.Dispose();
             _workerClient = CreateClient(_handlerFactory(connection.Endpoint));
@@ -208,6 +208,4 @@ internal sealed class RuntimeGateway : IDisposable
             _fixedClient?.Dispose();
         }
     }
-
-    private sealed class RuntimeWorkerUnavailableException : IOException;
 }

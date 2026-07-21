@@ -5,9 +5,9 @@ namespace Sunder.Host.Contracts;
 public static class HostProtocol
 {
     public const string Identity = "dev.sunder.host";
-    public const int CurrentRevision = 1;
-    public const int MinimumSupportedRevision = 1;
-    public const int MaximumSupportedRevision = 1;
+    public const int CurrentRevision = 2;
+    public const int MinimumSupportedRevision = 2;
+    public const int MaximumSupportedRevision = 2;
 }
 
 public static class HostProtocolFeatures

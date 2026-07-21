@@ -76,7 +76,9 @@ public sealed class UserHostPayloadStoreTests
         try
         {
             var source = CreatePayloadSource(root, "source", "one");
-            Directory.CreateSymbolicLink(Path.Combine(source, "unsafe-link"), "/tmp");
+            var outside = Path.Combine(root, "outside");
+            Directory.CreateDirectory(outside);
+            Directory.CreateSymbolicLink(Path.Combine(source, "unsafe-link"), outside);
             var store = new UserHostPayloadStore(source, Path.Combine(root, "payloads"), "1.0.0");
 
             var exception = Assert.Throws<InvalidDataException>(() => store.Prepare());

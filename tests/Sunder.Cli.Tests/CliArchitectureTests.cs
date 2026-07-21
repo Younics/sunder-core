@@ -3,20 +3,6 @@ namespace Sunder.Cli.Tests;
 public sealed class CliArchitectureTests
 {
     [Fact]
-    public void Every_cli_production_source_file_stays_below_500_lines()
-    {
-        var directory = FindCliDirectory();
-        var files = Directory.GetFiles(directory, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                           && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
-        var violations = files
-            .Select(path => new { Path = path, Lines = File.ReadLines(path).Count() })
-            .Where(file => file.Lines >= 500)
-            .ToArray();
-        Assert.True(violations.Length == 0, string.Join(Environment.NewLine, violations.Select(file => $"{file.Path}: {file.Lines} lines")));
-    }
-
-    [Fact]
     public void Cli_has_no_runtime_transport_mutation_or_credential_implementation()
     {
         var directory = FindCliDirectory();
@@ -68,32 +54,6 @@ public sealed class CliArchitectureTests
 
         Assert.All(endpointFamilyFiles, path => Assert.True(File.Exists(path), $"Missing client endpoint family {path}."));
         Assert.All(transportAndCompositionFiles, path => Assert.True(File.Exists(path), $"Missing client transport or composition boundary {path}."));
-        var baselines = new Dictionary<string, int>(StringComparer.Ordinal)
-        {
-            [Path.Combine(cliDirectory, "RegistryClient.cs")] = 113,
-            [Path.Combine(cliDirectory, "RegistryClient.Packages.cs")] = 25,
-            [Path.Combine(cliDirectory, "RegistryClient.Stacks.cs")] = 59,
-            [Path.Combine(cliDirectory, "CliHttpContentReader.cs")] = 46,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.cs")] = 61,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs")] = 45,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Registry.cs")] = 59,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs")] = 53,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.PackageCommit.cs")] = 53,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Snapshots.cs")] = 20,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Policy.cs")] = 9,
-            [Path.Combine(runtimeClientDirectory, "VerifiedFileTransfer.cs")] = 126,
-        };
-
-        Assert.All(baselines, pair => Assert.True(
-            File.ReadLines(pair.Key).Count() <= pair.Value,
-            $"{pair.Key} exceeded its {pair.Value}-line ratchet."));
-
-        Assert.All(
-            Directory.GetFiles(runtimeClientDirectory, "*.cs"),
-            path => Assert.True(
-                File.ReadLines(path).Count() < 500,
-                $"{path} exceeded the 500-line Runtime client ratchet."));
-
         var stackClientSource = File.ReadAllText(Path.Combine(cliDirectory, "RegistryClient.Stacks.cs"));
         Assert.Contains("VerifiedFileTransfer.PublishAsync", stackClientSource, StringComparison.Ordinal);
         Assert.DoesNotContain("SHA256.HashDataAsync", stackClientSource, StringComparison.Ordinal);

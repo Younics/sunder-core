@@ -27,48 +27,6 @@ public sealed class HostManagementClient : IDisposable
     public Task<HostRuntimeStatus> GetStatusAsync(CancellationToken cancellationToken = default)
         => GetRequiredAsync<HostRuntimeStatus>("v1/status", cancellationToken);
 
-    public Task<HostRuntimeStatus> StartRuntimeAsync(
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken = default)
-        => SubmitAndWaitAsync(
-            "v1/runtime/start",
-            HostOperationKinds.RuntimeStart,
-            request,
-            cancellationToken);
-
-    public Task<HostRuntimeStatus> StopRuntimeAsync(
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken = default)
-        => SubmitAndWaitAsync(
-            "v1/runtime/stop",
-            HostOperationKinds.RuntimeStop,
-            request,
-            cancellationToken);
-
-    public Task<HostRuntimeStatus> RestartRuntimeAsync(
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken = default)
-        => SubmitAndWaitAsync(
-            "v1/runtime/restart",
-            HostOperationKinds.RuntimeRestart,
-            request,
-            cancellationToken);
-
-    public Task<HostRuntimeStatus> StartRuntimeLegacyAsync(
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken = default)
-        => PostAsync("v1/runtime/start", request, cancellationToken);
-
-    public Task<HostRuntimeStatus> StopRuntimeLegacyAsync(
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken = default)
-        => PostAsync("v1/runtime/stop", request, cancellationToken);
-
-    public Task<HostRuntimeStatus> RestartRuntimeLegacyAsync(
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken = default)
-        => PostAsync("v1/runtime/restart", request, cancellationToken);
-
     public Task<HostLifecycleSubmission> SubmitStartRuntimeAsync(
         HostLifecycleRequest request,
         CancellationToken cancellationToken = default)
@@ -138,37 +96,6 @@ public sealed class HostManagementClient : IDisposable
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken).ConfigureAwait(false)
                ?? throw new InvalidDataException("Sunder Host returned an empty response.");
-    }
-
-    private async Task<HostRuntimeStatus> PostAsync(
-        string path,
-        HostLifecycleRequest payload,
-        CancellationToken cancellationToken)
-    {
-        using var request = CreateRequest(HttpMethod.Post, path);
-        request.Content = JsonContent.Create(payload);
-        using var response = await _client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<HostRuntimeStatus>(cancellationToken: cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidDataException("Sunder Host returned an empty lifecycle response.");
-    }
-
-    private async Task<HostRuntimeStatus> SubmitAndWaitAsync(
-        string path,
-        string expectedKind,
-        HostLifecycleRequest request,
-        CancellationToken cancellationToken)
-    {
-        var submission = await SubmitAsync(path, expectedKind, request, cancellationToken).ConfigureAwait(false);
-        var operation = await WaitForOperationAsync(submission.Operation, cancellationToken).ConfigureAwait(false);
-        if (operation.State != HostOperationState.Succeeded)
-        {
-            throw new InvalidOperationException(
-                $"Host lifecycle operation '{operation.OperationId}' failed"
-                + (operation.FailureCode is null ? string.Empty : $" ({operation.FailureCode})")
-                + $": {operation.Message ?? operation.State.ToString()}.");
-        }
-        return await GetStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HostLifecycleSubmission> SubmitAsync(
