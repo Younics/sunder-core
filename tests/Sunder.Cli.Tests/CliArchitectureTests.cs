@@ -34,6 +34,14 @@ public sealed class CliArchitectureTests
     }
 
     [Fact]
+    public void Cli_runtime_client_prefers_managed_host_connection()
+    {
+        var source = File.ReadAllText(Path.Combine(FindCliDirectory(), "CliClients.cs"));
+
+        Assert.Contains("HostConnectionInfoStore.LoadPreferredFor(runtimeUrl)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegistryAndRuntimeClients_KeepEndpointFamiliesSeparateFromTransport()
     {
         var cliDirectory = FindCliDirectory();
@@ -67,7 +75,7 @@ public sealed class CliArchitectureTests
             [Path.Combine(cliDirectory, "RegistryClient.Stacks.cs")] = 59,
             [Path.Combine(cliDirectory, "CliHttpContentReader.cs")] = 46,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.cs")] = 61,
-            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs")] = 16,
+            [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.System.cs")] = 45,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Registry.cs")] = 59,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.Packages.cs")] = 53,
             [Path.Combine(runtimeClientDirectory, "RuntimeManagementClient.PackageCommit.cs")] = 53,

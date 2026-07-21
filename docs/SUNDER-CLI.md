@@ -38,11 +38,11 @@ Environment overrides:
 | `SUNDER_REGISTRY_WEB_URL` | Registry web URL |
 | `SUNDER_RUNTIME_URL` | Local runtime host URL |
 
-Runtime-bound commands authenticate automatically from the current user's private Runtime connection file. The Runtime URL in that file must exactly match the configured `Runtime:Url`, `SUNDER_RUNTIME_URL`, or `--runtime-url`; a missing or mismatched entry fails closed instead of sending an unauthenticated request.
+Runtime-bound commands authenticate automatically from the current user's private Host connection file, with the direct-Runtime connection retained as a development fallback. The URL in the selected file must exactly match the configured `Runtime:Url`, `SUNDER_RUNTIME_URL`, or `--runtime-url`; a missing or mismatched entry fails closed instead of sending an unauthenticated request.
 
 Before any `/api/v1` call, the CLI performs the authenticated unversioned `/api/handshake` request. The handshake identifies the Runtime protocol, supported revision range, Runtime instance, and feature set. An absent, malformed, unauthenticated, or incompatible handshake stops the command before a versioned request is sent. Runtime product and informational versions are diagnostics only; product SemVer does not determine protocol compatibility.
 
-The connection document lives only in the Runtime V1 local-state root. Unversioned connection files and legacy `auth.json` files are not read.
+The managed Host connection document lives under the current user's Host V1 root. The direct-Runtime fallback remains under the Runtime V1 root. Unversioned connection files and legacy `auth.json` files are not read.
 
 ## Output And Exit Codes
 

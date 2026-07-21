@@ -93,4 +93,68 @@ public sealed class RuntimeResetCommandTests
         Assert.Equal(CliExitCodes.Timeout, result.ExitCode);
         Assert.False(localResetCalled);
     }
+
+    [Fact]
+    public async Task Drain_failure_after_prepare_does_not_delete_local_state()
+    {
+        var localResetCalled = false;
+        var runtime = new FakeRuntimeClient
+        {
+            ResetDrain = (_, _) => throw new HttpRequestException("Reset drain response was lost."),
+            LocalReset = _ =>
+            {
+                localResetCalled = true;
+                throw new InvalidOperationException("Local reset must not run after ambiguous drain failure.");
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["runtime", "reset", "--yes"], runtime);
+
+        Assert.NotEqual(CliExitCodes.Success, result.ExitCode);
+        Assert.False(localResetCalled);
+    }
+
+    [Fact]
+    public async Task Expired_challenge_does_not_fall_back_to_offline_deletion()
+    {
+        var localResetCalled = false;
+        var runtime = new FakeRuntimeClient
+        {
+            ResetPrepare = _ => Task.FromResult(new RuntimeResetChallengeResponse(
+                "expired",
+                DateTimeOffset.UtcNow.AddSeconds(-1))),
+            LocalReset = _ =>
+            {
+                localResetCalled = true;
+                throw new InvalidOperationException("Local reset must not run after challenge expiration.");
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["runtime", "reset", "--yes"], runtime);
+
+        Assert.NotEqual(CliExitCodes.Success, result.ExitCode);
+        Assert.False(localResetCalled);
+    }
+
+    [Fact]
+    public async Task Unreachable_prepare_uses_offline_lease_reset()
+    {
+        var localResetCalled = false;
+        var runtime = new FakeRuntimeClient
+        {
+            ResetPrepare = _ => throw new HttpRequestException("Runtime is offline."),
+            LocalReset = _ =>
+            {
+                localResetCalled = true;
+                return Task.FromResult(new RuntimeV1ResetResult([
+                    new("runtime-v1-root", "already-empty"),
+                ]));
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(["runtime", "reset", "--yes"], runtime);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.True(localResetCalled);
+    }
 }

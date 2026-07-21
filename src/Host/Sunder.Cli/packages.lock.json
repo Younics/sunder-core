@@ -2,6 +2,16 @@
   "version": 2,
   "dependencies": {
     "net10.0": {
+      "sunder.host.client": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Host.Contracts": "[1.0.0, )",
+          "Sunder.Runtime.LocalState": "[1.0.0, )"
+        }
+      },
+      "sunder.host.contracts": {
+        "type": "Project"
+      },
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {

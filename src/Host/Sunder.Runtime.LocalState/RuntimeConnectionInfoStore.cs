@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace Sunder.Runtime.LocalState;
@@ -42,7 +44,7 @@ public static class RuntimeConnectionInfoStore
                 return null;
             }
 
-            var token = UnprotectToken(document);
+            var token = UnprotectToken(document, path);
             return string.IsNullOrWhiteSpace(token)
                 || !Uri.TryCreate(document.RuntimeUrl, UriKind.Absolute, out var runtimeUrl)
                     ? null
@@ -210,7 +212,7 @@ public static class RuntimeConnectionInfoStore
             Convert.ToBase64String(protectedToken));
     }
 
-    private static string? UnprotectToken(ConnectionDocument document)
+    private static string? UnprotectToken(ConnectionDocument document, string path)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -219,7 +221,9 @@ public static class RuntimeConnectionInfoStore
 
         if (string.IsNullOrWhiteSpace(document.ProtectedToken))
         {
-            return null;
+            return !string.IsNullOrWhiteSpace(document.Token) && HasPrivateWindowsPermissions(path)
+                ? document.Token
+                : null;
         }
 
         var token = ProtectedData.Unprotect(
@@ -227,6 +231,57 @@ public static class RuntimeConnectionInfoStore
             WindowsEntropy,
             DataProtectionScope.CurrentUser);
         return System.Text.Encoding.UTF8.GetString(token);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool HasPrivateWindowsPermissions(string path)
+    {
+        try
+        {
+            var currentSid = WindowsIdentity.GetCurrent().User;
+            if (currentSid is null)
+            {
+                return false;
+            }
+            var allowed = new HashSet<string>(StringComparer.Ordinal)
+            {
+                currentSid.Value,
+                "S-1-5-18",
+                "S-1-5-32-544",
+            };
+            var security = new FileInfo(path).GetAccessControl(
+                AccessControlSections.Owner | AccessControlSections.Access);
+            var owner = (SecurityIdentifier?)security.GetOwner(typeof(SecurityIdentifier));
+            if (owner is null || !allowed.Contains(owner.Value))
+            {
+                return false;
+            }
+
+            foreach (FileSystemAccessRule rule in security.GetAccessRules(
+                         includeExplicit: true,
+                         includeInherited: true,
+                         typeof(SecurityIdentifier)))
+            {
+                if (rule.AccessControlType == AccessControlType.Allow
+                    && (rule.FileSystemRights & (
+                        FileSystemRights.ReadData
+                        | FileSystemRights.WriteData
+                        | FileSystemRights.AppendData
+                        | FileSystemRights.Delete
+                        | FileSystemRights.ChangePermissions
+                        | FileSystemRights.TakeOwnership)) != 0
+                    && rule.IdentityReference is SecurityIdentifier sid
+                    && !allowed.Contains(sid.Value))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsDefaultPath(string path)

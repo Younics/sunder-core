@@ -32,7 +32,19 @@ sealed class Program
                     WindowsShellAssociationService.RegisterForCurrentUser()
                 )
                 .OnBeforeUninstallFastCallback(_ =>
-                    WindowsShellAssociationService.UnregisterForCurrentUser()
+                {
+                    var cleanup = Task.Run(() =>
+                    {
+                        WindowsShellAssociationService.UnregisterForCurrentUser();
+                        UserHostPayloadStore.StopAndRemoveForUninstall();
+                    });
+                    if (Task.WhenAny(cleanup, Task.Delay(TimeSpan.FromSeconds(25)))
+                            .GetAwaiter()
+                            .GetResult() == cleanup)
+                    {
+                        cleanup.GetAwaiter().GetResult();
+                    }
+                }
                 );
         }
 

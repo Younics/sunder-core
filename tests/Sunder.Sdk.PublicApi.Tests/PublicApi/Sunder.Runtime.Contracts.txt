@@ -348,6 +348,7 @@ type sealed class Sunder.Runtime.Contracts.PackageLogEntryDescriptor : System.IE
   property Sunder.Runtime.Contracts.RuntimePackageLogLevel Level { get; init; }
   property System.String Message { get; init; }
   property System.String PackageId { get; init; }
+  property System.Guid RuntimeInstanceId { get; init; }
   property System.Int64 SequenceId { get; init; }
   property System.DateTimeOffset Timestamp { get; init; }
   property System.Boolean Truncated { get; init; }
@@ -361,6 +362,7 @@ type sealed class Sunder.Runtime.Contracts.PackageLogSnapshot : System.IEquatabl
   method .ctor(System.Int64 SequenceId, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageLogEntryDescriptor> Entries, System.Boolean HistoryGap)
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageLogEntryDescriptor> Entries { get; init; }
   property System.Boolean HistoryGap { get; init; }
+  property System.Guid RuntimeInstanceId { get; init; }
   property System.Int64 SequenceId { get; init; }
   method Sunder.Runtime.Contracts.PackageLogSnapshot <Clone>$()
   method System.Void Deconstruct(out System.Int64 SequenceId, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageLogEntryDescriptor> Entries, out System.Boolean HistoryGap)

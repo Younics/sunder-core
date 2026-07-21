@@ -136,7 +136,10 @@ internal sealed class RuntimeSessionOwner
         => State.DiscardPublication(publication);
 
     public bool ReportPackageFault(string packageId, ReportPackageFaultRequest request)
-        => CommitPackageFault(
+        => request.Origin is not (PackageFailureOrigin.AppActivation
+                or PackageFailureOrigin.AppHostedView
+                or PackageFailureOrigin.AppUnhandledUi)
+           && CommitPackageFault(
             packageId,
             request.GenerationId,
             request.Message,

@@ -6,6 +6,7 @@ namespace Sunder.Runtime.Host.Endpoints;
 
 internal static class RuntimeStreamEndpoints
 {
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public static IEndpointRouteBuilder MapRuntimeStreamEndpoints(this IEndpointRouteBuilder endpoints)
@@ -61,16 +62,46 @@ internal static class RuntimeStreamEndpoints
         context.Response.Headers.Append("X-Accel-Buffering", "no");
         try
         {
-            await foreach (var item in reader.ReadAllAsync(cancellationToken))
+            await context.Response.StartAsync(cancellationToken);
+            await context.Response.WriteAsync(": connected\n\n", cancellationToken);
+            await context.Response.Body.FlushAsync(cancellationToken);
+            using var heartbeat = new PeriodicTimer(HeartbeatInterval);
+            var waitToRead = reader.WaitToReadAsync(cancellationToken).AsTask();
+            var waitForHeartbeat = heartbeat.WaitForNextTickAsync(cancellationToken).AsTask();
+            while (true)
             {
-                var sequenceId = item switch
+                var completed = await Task.WhenAny(waitToRead, waitForHeartbeat);
+                if (completed == waitForHeartbeat)
                 {
-                    RuntimeEventDescriptor runtimeEvent => runtimeEvent.SequenceId,
-                    PackageLogEntryDescriptor packageLog => packageLog.SequenceId,
-                    _ => 0,
-                };
-                await context.Response.WriteAsync($"id: {sequenceId}\nevent: {eventName}\ndata: {JsonSerializer.Serialize(item, JsonOptions)}\n\n", cancellationToken);
-                await context.Response.Body.FlushAsync(cancellationToken);
+                    if (!await waitForHeartbeat)
+                    {
+                        return;
+                    }
+
+                    await context.Response.WriteAsync(": heartbeat\n\n", cancellationToken);
+                    await context.Response.Body.FlushAsync(cancellationToken);
+                    waitForHeartbeat = heartbeat.WaitForNextTickAsync(cancellationToken).AsTask();
+                    continue;
+                }
+
+                if (!await waitToRead)
+                {
+                    return;
+                }
+
+                while (reader.TryRead(out var item))
+                {
+                    var sequenceId = item switch
+                    {
+                        RuntimeEventDescriptor runtimeEvent => runtimeEvent.SequenceId,
+                        PackageLogEntryDescriptor packageLog => packageLog.SequenceId,
+                        _ => 0,
+                    };
+                    await context.Response.WriteAsync($"id: {sequenceId}\nevent: {eventName}\ndata: {JsonSerializer.Serialize(item, JsonOptions)}\n\n", cancellationToken);
+                    await context.Response.Body.FlushAsync(cancellationToken);
+                }
+
+                waitToRead = reader.WaitToReadAsync(cancellationToken).AsTask();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

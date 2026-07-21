@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
 
           tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^app/v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$ ]]; then
+          if [[ ! "$tag" =~ ^app/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)$ ]]; then
             echo "App release tags must use SemVer format, for example app/v0.1.0 or app/v0.1.0-beta.1." >&2
             exit 1
           fi
@@ -41,14 +41,50 @@ jobs:
           is_prerelease="false"
           if [[ "$version" == *-* ]]; then
             is_prerelease="true"
+            prerelease="${version#*-}"
+            IFS='.' read -ra identifiers <<< "$prerelease"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
+                echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
+                exit 1
+              fi
+            done
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
 
+  clear-stale-draft:
+    name: Clear stale App draft
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete stale draft for this tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          tag="app/v$VERSION"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            exit 0
+          fi
+          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != "true" ]]; then
+            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+            exit 1
+          fi
+          gh release delete "$tag" --yes
+
   package:
     name: Package ${{ matrix.runtime }}
-    needs: prepare
+    needs:
+      - prepare
+      - clear-stale-draft
     runs-on: ${{ matrix.os }}
     environment: sunder-app-signing
     permissions:
@@ -72,13 +108,14 @@ jobs:
             os: macos-14
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: |
             ${{ env.DOTNET_VERSION }}
+            9.0.x
             8.0.x
 
       - name: Add .NET tools to PATH
@@ -98,7 +135,7 @@ jobs:
 
       - name: Azure login for Windows signing
         if: startsWith(matrix.runtime, 'win-')
-        uses: azure/login@v3
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
@@ -112,6 +149,7 @@ jobs:
           AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT || secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          WINDOWS_PUBLISHER_SUBJECT: ${{ vars.WINDOWS_PUBLISHER_SUBJECT || secrets.WINDOWS_PUBLISHER_SUBJECT }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -127,11 +165,15 @@ jobs:
             }
           }
 
-          $nugetPath = Join-Path $env:RUNNER_TEMP "nuget.exe"
+          $clientPackage = Join-Path $env:RUNNER_TEMP "artifact-signing-client.1.0.128.zip"
           $clientRoot = Join-Path $env:RUNNER_TEMP "artifact-signing-client"
-          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile $nugetPath
-          & $nugetPath install Microsoft.ArtifactSigning.Client -OutputDirectory $clientRoot -ExcludeVersion
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Invoke-WebRequest `
+            -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/1.0.128/microsoft.artifactsigning.client.1.0.128.nupkg" `
+            -OutFile $clientPackage
+          if ((Get-FileHash -LiteralPath $clientPackage -Algorithm SHA256).Hash -ne "74BD7D27E6CE1051409C38D9B46BC8DF0400ECD643D51FFBF2AC00869061E40B") {
+            throw "Microsoft.ArtifactSigning.Client package digest validation failed."
+          }
+          Expand-Archive -LiteralPath $clientPackage -DestinationPath $clientRoot
 
           $dlib = Get-ChildItem -Path $clientRoot -Filter "Azure.CodeSigning.Dlib.dll" -Recurse |
             Where-Object { $_.FullName -match "[\\/]x64[\\/]" } |
@@ -169,27 +211,23 @@ jobs:
         shell: bash
         env:
           APPLE_BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_BUILD_CERTIFICATE_BASE64 }}
-          APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_SIGNING_KEYCHAIN_PASSWORD }}
           APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
-          APPLE_SIGN_INSTALL_IDENTITY: ${{ secrets.APPLE_SIGN_INSTALL_IDENTITY }}
         run: |
           set -euo pipefail
 
           required_vars=(
             APPLE_BUILD_CERTIFICATE_BASE64
-            APPLE_INSTALLER_CERTIFICATE_BASE64
             APPLE_CERTIFICATE_PASSWORD
             APPLE_ID
             APPLE_APP_SPECIFIC_PASSWORD
             APPLE_TEAM_ID
             APPLE_SIGNING_KEYCHAIN_PASSWORD
             APPLE_SIGN_APP_IDENTITY
-            APPLE_SIGN_INSTALL_IDENTITY
           )
 
           for var_name in "${required_vars[@]}"; do
@@ -211,12 +249,10 @@ jobs:
           }
 
           build_cert_path="$RUNNER_TEMP/apple-build-certificate.p12"
-          installer_cert_path="$RUNNER_TEMP/apple-installer-certificate.p12"
           keychain_path="$RUNNER_TEMP/sunder-app-signing.keychain-db"
           notary_profile="sunder-app-notary"
 
           decode_base64 "$APPLE_BUILD_CERTIFICATE_BASE64" "$build_cert_path"
-          decode_base64 "$APPLE_INSTALLER_CERTIFICATE_BASE64" "$installer_cert_path"
 
           security create-keychain -p "$APPLE_SIGNING_KEYCHAIN_PASSWORD" "$keychain_path"
           security set-keychain-settings -lut 21600 "$keychain_path"
@@ -225,10 +261,9 @@ jobs:
           security list-keychains -d user -s "$keychain_path"
 
           security import "$build_cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
-          security import "$installer_cert_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$APPLE_SIGNING_KEYCHAIN_PASSWORD" "$keychain_path" >/dev/null
 
-          rm -f "$build_cert_path" "$installer_cert_path"
+          rm -f "$build_cert_path"
 
           xcrun notarytool store-credentials "$notary_profile" \
             --apple-id "$APPLE_ID" \
@@ -244,6 +279,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOWS_PUBLISHER_SUBJECT: ${{ vars.WINDOWS_PUBLISHER_SUBJECT || secrets.WINDOWS_PUBLISHER_SUBJECT }}
         run: |
           $dlibPath = "${{ steps.windows-signing.outputs.dlib_path }}"
           $metadataPath = "${{ steps.windows-signing.outputs.metadata_path }}"
@@ -255,6 +291,7 @@ jobs:
             Channel = "${{ env.RELEASE_CHANNEL }}"
             GitHubRepositoryUrl = "${{ env.RELEASE_REPO_URL }}"
             WindowsSignParams = $windowsSignParams
+            WindowsPublisherSubject = $env:WINDOWS_PUBLISHER_SUBJECT
           }
 
           if ("${{ needs.prepare.outputs.is_prerelease }}" -eq "true") {
@@ -269,7 +306,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
-          APPLE_SIGN_INSTALL_IDENTITY: ${{ secrets.APPLE_SIGN_INSTALL_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_NOTARY_PROFILE: ${{ steps.apple-signing.outputs.notary_profile }}
           APPLE_KEYCHAIN_PATH: ${{ steps.apple-signing.outputs.keychain_path }}
         run: |
@@ -287,9 +324,9 @@ jobs:
             package_args+=(
               --mac-bundle-id com.younics.sunder
               --mac-sign-app-identity "$APPLE_SIGN_APP_IDENTITY"
-              --mac-sign-install-identity "$APPLE_SIGN_INSTALL_IDENTITY"
               --mac-notary-profile "$APPLE_NOTARY_PROFILE"
               --mac-keychain "$APPLE_KEYCHAIN_PATH"
+              --mac-team-id "$APPLE_TEAM_ID"
             )
           fi
 
@@ -299,8 +336,85 @@ jobs:
 
           bash "${package_args[@]}"
 
+      - name: Validate custom macOS DMG
+        if: startsWith(matrix.runtime, 'osx-')
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          output_dir="artifacts/velopack/$RELEASE_CHANNEL/$RUNTIME"
+          expected_dmg="$output_dir/Sunder-app-$RUNTIME-$RELEASE_CHANNEL.dmg"
+          dmg_files=("$output_dir"/*.dmg)
+          if [[ ${#dmg_files[@]} -ne 1 || "${dmg_files[0]}" != "$expected_dmg" ]]; then
+            echo "Expected exactly one custom macOS DMG named '$(basename "$expected_dmg")'." >&2
+            exit 1
+          fi
+
+          hdiutil verify "$expected_dmg" >/dev/null
+          codesign --verify --strict --verbose=2 "$expected_dmg"
+          dmg_team_id="$(codesign --display --verbose=4 "$expected_dmg" 2>&1 \
+            | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')"
+          [[ "$dmg_team_id" == "$APPLE_TEAM_ID" ]] || { echo "DMG Team ID verification failed." >&2; exit 1; }
+          xcrun stapler validate "$expected_dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$expected_dmg"
+
+          mount_dir="$(mktemp -d "$RUNNER_TEMP/sunder-dmg.XXXXXX")"
+          mounted="false"
+          cleanup_mount() {
+            if [[ "$mounted" == "true" ]]; then
+              hdiutil detach "$mount_dir" -quiet >/dev/null 2>&1 || true
+            fi
+            rm -rf "$mount_dir"
+          }
+          trap cleanup_mount EXIT
+
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$expected_dmg" >/dev/null
+          mounted="true"
+          app_path="$mount_dir/Sunder.app"
+          applications_link="$mount_dir/Applications"
+          background_path="$mount_dir/.background/Sunder.tiff"
+          finder_layout="$mount_dir/.DS_Store"
+          [[ -d "$app_path" ]] || { echo "Sunder.app is missing from the DMG." >&2; exit 1; }
+          [[ -L "$applications_link" && "$(readlink "$applications_link")" == "/Applications" ]] \
+            || { echo "The Applications symlink is missing from the DMG." >&2; exit 1; }
+          [[ -f "$background_path" && -s "$background_path" ]] \
+            || { echo "The Sunder Finder background is missing from the DMG." >&2; exit 1; }
+          [[ -f "$finder_layout" && -s "$finder_layout" ]] \
+            || { echo "The Sunder Finder layout is missing from the DMG." >&2; exit 1; }
+          visible_entries=("$mount_dir"/*)
+          if [[ ${#visible_entries[@]} -ne 2 ]]; then
+            printf 'Unexpected visible DMG entry: %s\n' "${visible_entries[@]}" >&2
+            exit 1
+          fi
+          hidden_entries=("$mount_dir"/.[!.]*)
+          for hidden_entry in "${hidden_entries[@]}"; do
+            case "$(basename "$hidden_entry")" in
+              .background|.DS_Store) ;;
+              *) echo "Unexpected hidden DMG entry: $hidden_entry" >&2; exit 1 ;;
+            esac
+          done
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          app_team_id="$(codesign --display --verbose=4 "$app_path" 2>&1 \
+            | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')"
+          [[ "$app_team_id" == "$APPLE_TEAM_ID" ]] || { echo "Sunder.app Team ID verification failed." >&2; exit 1; }
+          app_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
+          [[ "$app_bundle_id" == "com.younics.sunder" ]] || { echo "Sunder.app bundle ID verification failed." >&2; exit 1; }
+          app_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
+          app_architectures="$(lipo -archs "$app_path/Contents/MacOS/$app_executable")"
+          expected_architecture="x86_64"
+          [[ "$RUNTIME" == "osx-arm64" ]] && expected_architecture="arm64"
+          [[ " $app_architectures " == *" $expected_architecture "* ]] \
+            || { echo "Sunder.app does not contain expected architecture '$expected_architecture'." >&2; exit 1; }
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sunder-${{ matrix.runtime }}
           path: artifacts/velopack/${{ env.RELEASE_CHANNEL }}/${{ matrix.runtime }}/*
@@ -329,12 +443,14 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-version: |
+            ${{ env.DOTNET_VERSION }}
+            9.0.x
 
       - name: Add .NET tools to PATH
         shell: bash
@@ -345,7 +461,7 @@ jobs:
         run: dotnet tool install --global vpk --version "$VELOPACK_VERSION"
 
       - name: Download package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: release-assets
 
@@ -358,19 +474,81 @@ jobs:
           IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
 
           tag="app/v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+              gh release delete "$tag" --yes
+            else
+              echo "Release '$tag' already exists; immutable release assets cannot be overwritten." >&2
+              exit 1
+            fi
+          fi
+
+          cleanup_failed_release() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 ]] && gh release view "$tag" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+                gh release delete "$tag" --yes || true
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_failed_release EXIT
+
+          expected_setup_assets=(
+            "release-assets/sunder-win-x64/Sunder-app-win-x64-$RELEASE_CHANNEL-Setup.exe"
+            "release-assets/sunder-win-arm64/Sunder-app-win-arm64-$RELEASE_CHANNEL-Setup.exe"
+          )
+          expected_appimage_assets=(
+            "release-assets/sunder-linux-x64/Sunder-app-linux-x64-$RELEASE_CHANNEL.AppImage"
+            "release-assets/sunder-linux-arm64/Sunder-app-linux-arm64-$RELEASE_CHANNEL.AppImage"
+          )
+          expected_dmg_assets=(
+            "release-assets/sunder-osx-x64/Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg"
+            "release-assets/sunder-osx-arm64/Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg"
+          )
+          expected_distribution_assets=(
+            "${expected_setup_assets[@]}"
+            "${expected_appimage_assets[@]}"
+            "${expected_dmg_assets[@]}"
+          )
+          for asset in "${expected_distribution_assets[@]}"; do
+            test -f "$asset" || { echo "Missing exact Sunder distribution asset: $asset" >&2; exit 1; }
+          done
+
+          setup_assets=(release-assets/sunder-*/*-Setup.exe)
+          appimage_assets=(release-assets/sunder-*/*.AppImage)
+          dmg_assets=(release-assets/sunder-*/*.dmg)
+          if [[ ${#setup_assets[@]} -ne 2 || ${#appimage_assets[@]} -ne 2 || ${#dmg_assets[@]} -ne 2 ]]; then
+            echo "Expected exactly two Setup.exe, two AppImage, and two DMG distribution assets." >&2
             exit 1
           fi
+
+          alternate_distribution_assets=(
+            release-assets/sunder-*/*-Setup.pkg
+            release-assets/sunder-*/*-Portable.zip
+          )
+          if [[ ${#alternate_distribution_assets[@]} -ne 0 ]]; then
+            printf 'Unexpected alternate distribution artifact: %s\n' "${alternate_distribution_assets[@]}" >&2
+            exit 1
+          fi
+
           bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
+          for dmg_asset in "${expected_dmg_assets[@]}"; do
+            dmg_name="$(basename "$dmg_asset")"
+            checksum_count="$(grep -Ec "^[0-9a-fA-F]{64}  ${dmg_name//./\\.}$" release-assets/SHA256SUMS || true)"
+            if [[ "$checksum_count" != "1" ]]; then
+              echo "SHA256SUMS must contain exactly one entry for '$dmg_name'." >&2
+              exit 1
+            fi
+          done
 
           upload_args=(
             upload github
             --repoUrl "$RELEASE_REPO_URL"
             --token "$GITHUB_TOKEN"
-            --publish
             --merge
             --releaseName "Sunder App $VERSION"
             --tag "app/v$VERSION"
@@ -394,7 +572,53 @@ jobs:
           done
 
           gh release upload "$tag" \
+            "${expected_dmg_assets[@]}" \
             release-assets/SHA256SUMS \
             release-assets/release-provenance.json \
             release-assets/release-sbom.spdx.json \
             release-assets/toolchain.txt
+
+          expected_distribution_names=(
+            "Sunder-app-win-x64-$RELEASE_CHANNEL-Setup.exe"
+            "Sunder-app-win-arm64-$RELEASE_CHANNEL-Setup.exe"
+            "Sunder-app-linux-x64-$RELEASE_CHANNEL.AppImage"
+            "Sunder-app-linux-arm64-$RELEASE_CHANNEL.AppImage"
+            "Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg"
+            "Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg"
+          )
+          remote_asset_names="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+          for expected_name in "${expected_distribution_names[@]}"; do
+            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
+            if [[ "$asset_count" != "1" ]]; then
+              echo "Draft release must contain exactly one '$expected_name'; found $asset_count." >&2
+              exit 1
+            fi
+          done
+          expected_mac_update_assets=(
+            "releases.app-osx-x64-$RELEASE_CHANNEL.json"
+            "releases.app-osx-arm64-$RELEASE_CHANNEL.json"
+            "Sunder-$VERSION-app-osx-x64-$RELEASE_CHANNEL-full.nupkg"
+            "Sunder-$VERSION-app-osx-arm64-$RELEASE_CHANNEL-full.nupkg"
+          )
+          for expected_name in "${expected_mac_update_assets[@]}"; do
+            asset_count="$(printf '%s\n' "$remote_asset_names" | grep -Fxc "$expected_name" || true)"
+            if [[ "$asset_count" != "1" ]]; then
+              echo "Draft release must retain exactly one macOS update asset '$expected_name'; found $asset_count." >&2
+              exit 1
+            fi
+          done
+          while IFS= read -r remote_asset_name; do
+            case "$remote_asset_name" in
+              *-Setup.pkg|*-Portable.zip)
+                echo "Draft release contains alternate distribution asset '$remote_asset_name'." >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$remote_asset_names"
+
+          edit_args=(release edit "$tag" --draft=false)
+          if [[ "$IS_PRERELEASE" != "true" ]]; then
+            edit_args+=(--latest)
+          fi
+          gh "${edit_args[@]}"
+          trap - EXIT

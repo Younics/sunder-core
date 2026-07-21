@@ -178,6 +178,7 @@ jobs:
             release create "$tag"
             --title "Sunder CLI $VERSION"
             --notes "Automated Sunder CLI release for $VERSION."
+            --latest=false
           )
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then

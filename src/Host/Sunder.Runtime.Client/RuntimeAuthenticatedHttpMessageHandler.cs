@@ -96,6 +96,19 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         return NegotiateAsync(connection, cancellationToken);
     }
 
+    public async Task<RuntimeHandshakeResponse> RefreshNegotiationAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = _getConnection()
+            ?? throw new InvalidOperationException("Authenticated Runtime connection information is not available.");
+        return await _negotiations.RefreshAsync(
+            connection,
+            negotiationToken => RequestHandshakeAsync(
+                connection,
+                requireCompatibility: true,
+                negotiationToken),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     internal Task<RuntimeHandshakeResponse> ProbeHandshakeAsync(CancellationToken cancellationToken = default)
     {
         var connection = _getConnection()
@@ -302,6 +315,38 @@ internal sealed class RuntimeProtocolNegotiationCache : IDisposable
             }
             _handshakes[identity] = handshake;
             return handshake;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<RuntimeHandshakeResponse> RefreshAsync(
+        RuntimeConnectionInfo connection,
+        Func<CancellationToken, Task<RuntimeHandshakeResponse>> negotiateAsync,
+        CancellationToken cancellationToken)
+    {
+        var identity = RuntimeConnectionIdentity.Create(connection);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _handshakes.Remove(identity);
+            try
+            {
+                var handshake = await negotiateAsync(cancellationToken).ConfigureAwait(false);
+                if (_handshakes.Count >= MaximumEntries)
+                {
+                    _handshakes.Clear();
+                }
+                _handshakes[identity] = handshake;
+                return handshake;
+            }
+            catch
+            {
+                _handshakes.Remove(identity);
+                throw;
+            }
         }
         finally
         {

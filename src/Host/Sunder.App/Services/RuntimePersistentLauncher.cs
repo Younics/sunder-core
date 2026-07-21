@@ -18,7 +18,7 @@ internal static class RuntimePersistentLauncher
     {
         if (OperatingSystem.IsMacOS())
         {
-            return new MacOsLaunchdRuntimeLauncher();
+            return new MacOsSessionRuntimeLauncher();
         }
         if (OperatingSystem.IsLinux())
         {
@@ -34,37 +34,20 @@ internal static class RuntimePersistentLauncher
 }
 
 [SupportedOSPlatform("macos")]
-internal sealed class MacOsLaunchdRuntimeLauncher : IRuntimePersistentLauncher
+internal sealed class MacOsSessionRuntimeLauncher(
+    Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>>? runAsync = null,
+    string? legacyLaunchAgentPath = null)
+    : IRuntimePersistentLauncher
 {
-    private const string Label = "dev.sunder.runtime";
-    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> _runAsync;
-    private readonly string _launchAgentsPath;
-    private readonly string _diagnosticsPath;
-    private readonly uint _userId;
-
-    public MacOsLaunchdRuntimeLauncher()
-        : this(RuntimeLauncherProcess.RunWithResultAsync)
-    {
-    }
-
-    internal MacOsLaunchdRuntimeLauncher(
-        Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> runAsync,
-        string? launchAgentsPath = null,
-        uint? userId = null,
-        string? diagnosticsPath = null)
-    {
-        _runAsync = runAsync;
-        _launchAgentsPath = launchAgentsPath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Library",
-            "LaunchAgents");
-        _diagnosticsPath = diagnosticsPath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Library",
-            "Logs",
-            "Sunder");
-        _userId = userId ?? GetUserId();
-    }
+    private const string Label = "dev.sunder.host";
+    private const string LegacyLabel = "dev.sunder.runtime";
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> _runAsync
+        = runAsync ?? RuntimeLauncherProcess.RunWithResultAsync;
+    private readonly string _legacyLaunchAgentPath = legacyLaunchAgentPath ?? Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        "Library",
+        "LaunchAgents",
+        $"{LegacyLabel}.plist");
 
     public async Task LaunchAsync(
         ProcessStartInfo startInfo,
@@ -72,190 +55,83 @@ internal sealed class MacOsLaunchdRuntimeLauncher : IRuntimePersistentLauncher
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Directory.CreateDirectory(_launchAgentsPath);
-        var plistPath = Path.Combine(_launchAgentsPath, $"{Label}.plist");
-        var executable = RuntimeLauncherProcess.ResolveExecutable(startInfo.FileName);
-        var arguments = new[] { executable }.Concat(startInfo.ArgumentList).ToArray();
-        var diagnostics = PrepareDiagnostics();
-        var plist = CreatePlist(arguments, startInfo, diagnostics.StandardOutputPath, diagnostics.StandardErrorPath);
-        var domain = $"gui/{_userId}";
-        var status = await _runAsync(
-            "/bin/launchctl",
-            ["list", Label],
-            cancellationToken,
-            false).ConfigureAwait(false);
-        if (!replaceExisting
-            && status.ExitCode == 0
-            && TryGetLaunchdProcessId(status.StandardOutput, out var processId)
-            && await PlistMatchesAsync(plistPath, plist, cancellationToken).ConfigureAwait(false))
+        if (File.Exists(_legacyLaunchAgentPath))
         {
-            AppSessionLog.WriteInfo($"Reusing launchd Runtime job '{Label}' (PID {processId}).");
-            return;
-        }
-
-        var tempPath = $"{plistPath}.{Guid.NewGuid():N}.tmp";
-        await File.WriteAllTextAsync(tempPath, plist, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
-        File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        try
-        {
-            if (status.ExitCode == 0)
-            {
-                await _runAsync(
-                    "/bin/launchctl",
-                    ["bootout", $"{domain}/{Label}"],
-                    cancellationToken,
-                    true).ConfigureAwait(false);
-            }
-
-            File.Move(tempPath, plistPath, overwrite: true);
-            File.SetUnixFileMode(plistPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            ResetDiagnosticFile(diagnostics.StandardOutputPath);
-            ResetDiagnosticFile(diagnostics.StandardErrorPath);
             await _runAsync(
-                "/bin/launchctl",
-                ["bootstrap", domain, plistPath],
-                cancellationToken,
-                true).ConfigureAwait(false);
+                    "/bin/launchctl",
+                    ["remove", LegacyLabel],
+                    cancellationToken,
+                    false)
+                .ConfigureAwait(false);
+            File.Delete(_legacyLaunchAgentPath);
         }
-        finally
+        if (replaceExisting)
         {
-            if (File.Exists(tempPath))
-            {
-                File.Delete(tempPath);
-            }
-        }
-    }
-
-    private static string CreatePlist(
-        IReadOnlyList<string> arguments,
-        ProcessStartInfo startInfo,
-        string standardOutputPath,
-        string standardErrorPath)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-        builder.AppendLine("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
-        builder.AppendLine("<plist version=\"1.0\"><dict>");
-        AppendKeyString(builder, "Label", Label);
-        builder.AppendLine("<key>ProgramArguments</key><array>");
-        foreach (var argument in arguments)
-        {
-            builder.Append("<string>").Append(Escape(argument)).AppendLine("</string>");
-        }
-        builder.AppendLine("</array>");
-        AppendKeyString(builder, "WorkingDirectory", startInfo.WorkingDirectory);
-        builder.AppendLine("<key>RunAtLoad</key><true/>");
-        builder.AppendLine("<key>ProcessType</key><string>Standard</string>");
-        AppendKeyString(builder, "StandardOutPath", standardOutputPath);
-        AppendKeyString(builder, "StandardErrorPath", standardErrorPath);
-        builder.AppendLine("<key>EnvironmentVariables</key><dict>");
-        foreach (var pair in RuntimeLauncherProcess.GetExplicitEnvironment(startInfo)
-                     .OrderBy(static pair => pair.Key, StringComparer.Ordinal))
-        {
-            AppendKeyString(builder, pair.Key, pair.Value);
-        }
-        builder.AppendLine("</dict></dict></plist>");
-        return builder.ToString();
-    }
-
-    private static async Task<bool> PlistMatchesAsync(
-        string plistPath,
-        string expected,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return File.Exists(plistPath)
-                   && string.Equals(
-                       await File.ReadAllTextAsync(plistPath, cancellationToken).ConfigureAwait(false),
-                       expected,
-                       StringComparison.Ordinal);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private RuntimeLaunchDiagnostics PrepareDiagnostics()
-    {
-        Directory.CreateDirectory(_diagnosticsPath);
-        File.SetUnixFileMode(
-            _diagnosticsPath,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        return new RuntimeLaunchDiagnostics(
-            Path.Combine(_diagnosticsPath, "runtime-launchd.stdout.log"),
-            Path.Combine(_diagnosticsPath, "runtime-launchd.stderr.log"));
-    }
-
-    private static void ResetDiagnosticFile(string path)
-    {
-        File.WriteAllText(path, string.Empty, new UTF8Encoding(false));
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-    }
-
-    private static bool TryGetLaunchdProcessId(string output, out int processId)
-    {
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (!line.StartsWith("\"PID\"", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var separator = line.IndexOf('=');
-            if (separator >= 0
-                && int.TryParse(
-                    line[(separator + 1)..].Trim().TrimEnd(';'),
-                    System.Globalization.NumberStyles.None,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out processId)
-                && processId > 0)
-            {
-                return true;
-            }
+            await _runAsync(
+                    "/bin/launchctl",
+                    ["remove", Label],
+                    cancellationToken,
+                    false)
+                .ConfigureAwait(false);
         }
 
-        processId = 0;
-        return false;
+        var arguments = new List<string> { "submit", "-l", Label, "--", "/usr/bin/env" };
+        arguments.AddRange(RuntimeLauncherProcess.GetExplicitEnvironment(startInfo)
+            .Select(pair => $"{pair.Key}={pair.Value}"));
+        arguments.Add(RuntimeLauncherProcess.ResolveExecutable(startInfo.FileName));
+        arguments.AddRange(startInfo.ArgumentList);
+        await _runAsync("/bin/launchctl", arguments, cancellationToken, true).ConfigureAwait(false);
     }
-
-    private static void AppendKeyString(StringBuilder builder, string key, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return;
-        }
-        builder.Append("<key>").Append(Escape(key)).Append("</key><string>")
-            .Append(Escape(value)).AppendLine("</string>");
-    }
-
-    private static string Escape(string value) => SecurityElement.Escape(value) ?? string.Empty;
-
-    [DllImport("libc")]
-    private static extern uint getuid();
-
-    private static uint GetUserId() => getuid();
-
-    private sealed record RuntimeLaunchDiagnostics(string StandardOutputPath, string StandardErrorPath);
 }
 
 [SupportedOSPlatform("linux")]
-internal sealed class LinuxSystemdRuntimeLauncher : IRuntimePersistentLauncher
+internal sealed class LinuxSystemdRuntimeLauncher(
+    Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>>? runAsync = null,
+    Func<ProcessStartInfo, bool, CancellationToken, Task>? launchFallbackAsync = null)
+    : IRuntimePersistentLauncher
 {
+    private readonly Func<string, IReadOnlyList<string>, CancellationToken, bool, Task<RuntimeLauncherResult>> _runAsync
+        = runAsync ?? RuntimeLauncherProcess.RunWithResultAsync;
+    private readonly Func<ProcessStartInfo, bool, CancellationToken, Task> _launchFallbackAsync
+        = launchFallbackAsync ?? new UnixDetachedRuntimeLauncher().LaunchAsync;
+
     public async Task LaunchAsync(
         ProcessStartInfo startInfo,
         bool replaceExisting,
         CancellationToken cancellationToken)
     {
+        if (replaceExisting)
+        {
+            try
+            {
+                await _runAsync(
+                        "systemctl",
+                        ["--user", "stop", "sunder-host.service"],
+                        cancellationToken,
+                        false)
+                    .ConfigureAwait(false);
+                await _runAsync(
+                        "systemctl",
+                        ["--user", "reset-failed", "sunder-host.service"],
+                        cancellationToken,
+                        false)
+                    .ConfigureAwait(false);
+            }
+            catch (Win32Exception)
+            {
+            }
+        }
+
         var executable = RuntimeLauncherProcess.ResolveExecutable(startInfo.FileName);
         var arguments = new List<string>
         {
             "--user",
             "--quiet",
             "--collect",
-            "--unit=sunder-runtime",
+            "--unit=sunder-host",
             "--service-type=exec",
+            "--property=Restart=on-failure",
+            "--property=RestartSec=2",
             $"--working-directory={startInfo.WorkingDirectory}",
         };
         arguments.AddRange(RuntimeLauncherProcess.GetExplicitEnvironment(startInfo)
@@ -265,12 +141,20 @@ internal sealed class LinuxSystemdRuntimeLauncher : IRuntimePersistentLauncher
 
         try
         {
-            await RuntimeLauncherProcess.RunAsync("systemd-run", arguments, cancellationToken).ConfigureAwait(false);
+            await _runAsync("systemd-run", arguments, cancellationToken, true).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        catch (Win32Exception exception)
         {
             AppSessionLog.WriteInfo($"systemd user launch was unavailable; using detached Runtime fallback: {exception.Message}");
-            await new UnixDetachedRuntimeLauncher().LaunchAsync(startInfo, replaceExisting, cancellationToken).ConfigureAwait(false);
+            await _launchFallbackAsync(startInfo, replaceExisting, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains("Failed to connect to bus", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("not been booted with systemd", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("No medium found", StringComparison.OrdinalIgnoreCase))
+        {
+            AppSessionLog.WriteInfo($"systemd user launch was unavailable; using detached Runtime fallback: {exception.Message}");
+            await _launchFallbackAsync(startInfo, replaceExisting, cancellationToken).ConfigureAwait(false);
         }
     }
 }
@@ -296,9 +180,10 @@ internal sealed class UnixDetachedRuntimeLauncher : IRuntimePersistentLauncher
             CreateNoWindow = true,
             WorkingDirectory = startInfo.WorkingDirectory,
         };
-        foreach (var pair in RuntimeLauncherProcess.GetExplicitEnvironment(startInfo))
+        detached.Environment.Clear();
+        foreach (var pair in startInfo.Environment.Where(static pair => pair.Value is not null))
         {
-            detached.Environment[pair.Key] = pair.Value;
+            detached.Environment[pair.Key] = pair.Value!;
         }
         detached.ArgumentList.Add("-c");
         detached.ArgumentList.Add("exec \"$@\" </dev/null >/dev/null 2>&1");

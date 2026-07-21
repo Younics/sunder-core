@@ -1,6 +1,6 @@
 # Sunder
 
-Sunder Core is the public core of the Sunder local-first package platform. It contains the Avalonia desktop shell, local runtime host, CLI, package SDK/build pipeline, package template, package archive validation, and public Registry DTO contracts.
+Sunder Core is the public core of the Sunder local-first package platform. It contains the Avalonia desktop shell, current-user Host Supervisor and Runtime worker, CLI, package SDK/build pipeline, package template, package archive validation, and public Registry DTO contracts.
 
 This document is the current-state overview. Package authoring, CLI commands, app development arguments, and Registry behavior are documented in the sibling Sunder docs.
 
@@ -11,8 +11,10 @@ Primary Sunder Core projects:
 | Area | Project | Responsibility |
 | --- | --- | --- |
 | Desktop app | `src/Host/Sunder.App` | Avalonia shell, package UI activation, package marketplace/install UX |
-| Runtime host | `src/Host/Sunder.Runtime.Host` | Local package state, package install/update/uninstall, runtime activation, local HTTP API |
-| CLI | `src/Host/Sunder.Cli` | Registry browse/install/publish commands and runtime package commands |
+| Host Supervisor | `src/Host/Sunder.Host.Supervisor` | Stable authenticated loopback API, durable Runtime lifecycle, private worker gateway |
+| Host client/contracts | `src/Host/Sunder.Host.Client`, `src/Host/Sunder.Host.Contracts` | Host discovery, credentials, protocol, and lifecycle DTOs |
+| Runtime worker | `src/Host/Sunder.Runtime.Host` | Local package state, package install/update/uninstall, runtime activation, private or standalone HTTP API |
+| CLI | `src/Host/Sunder.Cli` | Registry browse/install/publish commands and Host-gatewayed Runtime commands |
 | SDK | `src/Sdk/Sunder.Sdk` | Public package contracts, package module API, package context, theme keys |
 | Stack SDK | `src/Sdk/Sunder.Sdk.Stacks` | Optional public Stack import/export and contributor contracts |
 | Avalonia SDK | `src/Sdk/Sunder.Sdk.Avalonia` | Optional App role, Avalonia contribution contracts, and themes |
@@ -38,11 +40,17 @@ Important related concepts:
 | Bundle | Registry install recipe that points to multiple packages, not a runtime package kind |
 | Theme | App-side UI styling data, not managed by `Sunder.Runtime.Host` as a runtime package |
 
-## App And Runtime Boundary
+## App, Host, And Runtime Boundary
 
-`Sunder.App` and `Sunder.Runtime.Host` are separate processes.
+`Sunder.App`, `Sunder.Host.Supervisor`, and `Sunder.Runtime.Host` are separate processes. The App stages and launches the versioned Host payload for the current user without installing a machine service or requiring elevation. The Supervisor may remain alive after the App UI closes and owns:
 
-`Sunder.Runtime.Host` owns:
+- the stable authenticated loopback endpoint and per-user Host identity
+- durable Runtime desired state and lifecycle operations
+- nested Runtime worker startup, crash recovery, and shutdown
+- a private per-worker Unix socket or current-user-only named pipe
+- credential separation and selective forwarding of Runtime APIs
+
+The nested `Sunder.Runtime.Host` worker owns:
 
 - installed package records
 - package archive validation
@@ -61,6 +69,8 @@ Important related concepts:
 - settings views and view placement
 - desktop notifications and app-side fault reporting
 - visual theme resources and app branding
+
+App and CLI Runtime requests normally pass through the Supervisor gateway. The Supervisor remains reachable while the worker is stopped or replaced and returns typed unavailability responses instead of exposing the private worker endpoint. Standalone loopback Runtime mode remains available for development.
 
 Development packages are coordinated by Runtime. Runtime validates and activates runtime contributions, owns directory watching and reload transactions, and publishes bounded sequence-based lifecycle events. The App observes session generations and activates app-side views/settings from authenticated UI snapshots without reading dev package or package-log directories.
 
@@ -103,3 +113,5 @@ For package development, `dotnet build` emits `sunder-dev`, and `dotnet publish`
 - `docs/SUNDER-PACKAGE-DEVELOPMENT.md`: package author workflow from template to publish.
 - `docs/SUNDER-CLI.md`: implemented CLI command reference.
 - `docs/SUNDER-APP.md`: desktop app behavior, dev arguments, package icons, and theme/branding notes.
+- `docs/SUNDER-HOST-SERVICE.md`: implemented current-user Host launch, payload activation, state, distribution, and removal.
+- `docs/SUNDER-HOST-ARCHITECTURE.md`: current foundations and target remote Host protocol, trust, and transport boundaries.

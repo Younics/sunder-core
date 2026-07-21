@@ -290,6 +290,28 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
+    public void ReleasePublishes_UseOneCanonicalInformationalVersionAcrossBundledProcesses()
+    {
+        var root = LocateRepositoryRoot();
+        var appProject = File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.App", "Sunder.App.csproj"));
+        var supervisorProject = File.ReadAllText(Path.Combine(
+            root, "src", "Host", "Sunder.Host.Supervisor", "Sunder.Host.Supervisor.csproj"));
+        var windowsPackager = File.ReadAllText(Path.Combine(
+            root, "scripts", "release", "package-sunder.ps1"));
+        var unixPackager = File.ReadAllText(Path.Combine(
+            root, "scripts", "release", "package-sunder.sh"));
+        var hostWorkflow = File.ReadAllText(Path.Combine(
+            root, ".github", "workflows", "sunder-host-release.yml"));
+
+        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", appProject, StringComparison.Ordinal);
+        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", supervisorProject, StringComparison.Ordinal);
+        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", windowsPackager, StringComparison.Ordinal);
+        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", unixPackager, StringComparison.Ordinal);
+        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", hostWorkflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PackageSettings_DoNotEnumerateOpaqueState()
     {
         var root = LocateRepositoryRoot();

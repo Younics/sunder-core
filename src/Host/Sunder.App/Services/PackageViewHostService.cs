@@ -33,6 +33,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         backgroundProcessQueue: null);
 
     private readonly AppPackageLifecycleGate _lifecycleGate = new(nameof(PackageViewHostService));
+    private readonly OwnedTaskObserver _faultTasks = new(nameof(PackageViewHostService));
     private readonly IUiDispatcher _uiDispatcher;
     private readonly AppPackageSnapshotCache _snapshotCache;
     private readonly AppPackageGenerationBuilder _generationBuilder;
@@ -100,6 +101,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             this,
             _snapshotCache,
             EnsureSessionFolder,
+            DisablePackageForGeneration,
             faultReporter,
             shellViewService,
             settingsNavigationService,
@@ -634,9 +636,11 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await _faultTasks.StopAsync().ConfigureAwait(false);
         using var lifecycle = await _lifecycleGate.TryEnterDisposeAsync().ConfigureAwait(false);
         if (lifecycle is null)
         {
+            _faultTasks.Dispose();
             return;
         }
 
@@ -646,6 +650,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         _retirementOwner.Enqueue(generation);
         _iconCoordinator.Dispose();
         await _retirementOwner.DisposeAsync().ConfigureAwait(false);
+        _faultTasks.Dispose();
 
         // Keep the verified cache for the rest of the process; native finalizers can run after package unload.
         GC.SuppressFinalize(this);
@@ -662,7 +667,52 @@ public sealed class PackageViewHostService : IAsyncDisposable
         string message,
         PackageFailureOrigin origin,
         Exception? exception = null)
-        => CurrentGeneration.Composition.DisablePackage(packageId, message, origin, exception);
+        => _faultTasks.Run(
+            cancellationToken => DisablePackageAsync(
+                packageId,
+                message,
+                origin,
+                exception,
+                cancellationToken),
+            $"disabling package '{packageId}'");
+
+    private void DisablePackageForGeneration(
+        Guid generationId,
+        string packageId,
+        string message,
+        PackageFailureOrigin origin,
+        Exception? exception)
+    {
+        var faultedGeneration = CurrentGeneration;
+        if (faultedGeneration.Id != generationId)
+        {
+            return;
+        }
+
+        var faultedContentHash = faultedGeneration.State.GetLoadedPackage(packageId)?.Source.ContentHash;
+        _faultTasks.Run(
+            async cancellationToken =>
+            {
+                using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+                var currentGeneration = CurrentGeneration;
+                if (currentGeneration.Id != generationId
+                    && (faultedContentHash is null
+                        || !string.Equals(
+                            currentGeneration.State.GetLoadedPackage(packageId)?.Source.ContentHash,
+                            faultedContentHash,
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+                await currentGeneration.Composition.DisablePackageAsync(
+                    packageId,
+                    message,
+                    origin,
+                    exception,
+                    cancellationToken).ConfigureAwait(false);
+            },
+            $"disabling package '{packageId}' for generation '{generationId:N}'");
+    }
 
     internal async Task DisablePackageAsync(
         string packageId,

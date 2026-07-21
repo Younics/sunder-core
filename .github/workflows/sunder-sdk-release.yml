@@ -328,6 +328,7 @@ jobs:
             release create "$tag"
             --title "Sunder SDK $VERSION"
             --notes "Automated Sunder SDK, package build tooling, and package templates release for $VERSION."
+            --latest=false
           )
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then

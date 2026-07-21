@@ -9,6 +9,9 @@ This folder contains the current Sunder documentation for the implementation in 
 - Package developer manual: `docs/SUNDER-PACKAGE-DEVELOPMENT.md`
 - CLI reference: `docs/SUNDER-CLI.md`
 - Desktop app and dev arguments: `docs/SUNDER-APP.md`
+- Current-user Host behavior: `docs/SUNDER-HOST-SERVICE.md`
+- Current foundations and target remote Host architecture: `docs/SUNDER-HOST-ARCHITECTURE.md`
+- Core release and signing model: `docs/SUNDER-CORE-RELEASES.md`
 
 ## Scope
 

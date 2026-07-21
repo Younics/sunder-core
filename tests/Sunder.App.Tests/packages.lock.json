@@ -295,6 +295,7 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "LiveMarkdown.Avalonia": "[2.0.1, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.8, )",
+          "Sunder.Host.Client": "[1.0.0, )",
           "Sunder.Package.Format": "[1.0.0, )",
           "Sunder.Package.Hosting": "[1.0.0, )",
           "Sunder.Registry.Contracts": "[1.0.0, )",
@@ -306,6 +307,16 @@
           "Sunder.Sdk.Stacks": "[1.1.0, )",
           "Velopack": "[0.0.1298, )"
         }
+      },
+      "sunder.host.client": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Host.Contracts": "[1.0.0, )",
+          "Sunder.Runtime.LocalState": "[1.0.0, )"
+        }
+      },
+      "sunder.host.contracts": {
+        "type": "Project"
       },
       "sunder.package.format": {
         "type": "Project",

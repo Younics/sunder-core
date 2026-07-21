@@ -1,0 +1,114 @@
+name: Sunder App Packaging CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sunder-app-packaging-ci.yml"
+      - ".github/workflows/sunder-app-release.yml"
+      - "scripts/install/install.sh"
+      - "scripts/release/macos/**"
+      - "scripts/release/package-sunder.sh"
+      - "tests/Sunder.App.Tests/MacOsReleasePackagingTests.cs"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/sunder-app-packaging-ci.yml"
+      - ".github/workflows/sunder-app-release.yml"
+      - "scripts/install/install.sh"
+      - "scripts/release/macos/**"
+      - "scripts/release/package-sunder.sh"
+      - "tests/Sunder.App.Tests/MacOsReleasePackagingTests.cs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sunder-app-packaging-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dmg-layout-smoke:
+    name: Branded DMG layout smoke
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Validate shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/release/package-sunder.sh
+          bash -n scripts/release/macos/create-sunder-dmg.sh
+          bash -n scripts/install/install.sh
+
+      - name: Create unsigned fixture app
+        id: fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/sunder-dmg-fixture/Sunder.app"
+          mkdir -p "$fixture/Contents/MacOS"
+          cat > "$fixture/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>Sunder</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.younics.sunder.fixture</string>
+            <key>CFBundleName</key>
+            <string>Sunder</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+          </dict>
+          </plist>
+          PLIST
+          printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture/Contents/MacOS/Sunder"
+          chmod +x "$fixture/Contents/MacOS/Sunder"
+          echo "app=$fixture" >> "$GITHUB_OUTPUT"
+
+      - name: Create and inspect branded DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$RUNNER_TEMP/Sunder.dmg"
+          mount_dir="$RUNNER_TEMP/sunder-dmg-mount"
+          mounted="false"
+          cleanup() {
+            if [[ "$mounted" == "true" ]]; then
+              hdiutil detach "$mount_dir" -quiet >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          scripts/release/macos/create-sunder-dmg.sh \
+            --app "${{ steps.fixture.outputs.app }}" \
+            --output "$dmg"
+          hdiutil verify "$dmg" >/dev/null
+          mkdir -p "$mount_dir"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
+          mounted="true"
+
+          test -d "$mount_dir/Sunder.app"
+          test -L "$mount_dir/Applications"
+          test "$(readlink "$mount_dir/Applications")" = "/Applications"
+          test -s "$mount_dir/.background/Sunder.tiff"
+          test -s "$mount_dir/.DS_Store"
+          visible_entries=("$mount_dir"/*)
+          test "${#visible_entries[@]}" -eq 2
+          hidden_entries=("$mount_dir"/.[!.]*)
+          test "${#hidden_entries[@]}" -eq 2
+          tiff_info="$(tiffutil -info "$mount_dir/.background/Sunder.tiff")"
+          grep -q 'Image Width: 820 Image Length: 460' <<< "$tiff_info"
+          grep -q 'Image Width: 1640 Image Length: 920' <<< "$tiff_info"
+
+      - name: Upload DMG smoke artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sunder-themed-dmg-smoke
+          path: ${{ runner.temp }}/Sunder.dmg
+          if-no-files-found: error
+          retention-days: 3

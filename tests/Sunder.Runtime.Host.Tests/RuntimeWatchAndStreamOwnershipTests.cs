@@ -71,7 +71,9 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             service.Start();
             var snapshot = service.GetSnapshot(limit: 10);
 
+            Assert.NotEqual(Guid.Empty, snapshot.RuntimeInstanceId);
             Assert.Equal(2, snapshot.Entries.Count);
+            Assert.All(snapshot.Entries, entry => Assert.Equal(snapshot.RuntimeInstanceId, entry.RuntimeInstanceId));
             Assert.Equal(RuntimePackageLogLevel.Information, snapshot.Entries[0].Level);
             var entry = snapshot.Entries[1];
             Assert.Equal(RuntimePackageLogLevel.Error, entry.Level);

@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sunder.Host.Client\Sunder.Host.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\..\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />

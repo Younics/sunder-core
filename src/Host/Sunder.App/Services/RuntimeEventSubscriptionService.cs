@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using Sunder.Runtime.Contracts;
 
@@ -418,6 +419,7 @@ public sealed class RuntimeEventSubscriptionService(
     private async Task RunEventReaderAsync(long initialSequenceId, CancellationToken cancellationToken)
     {
         var sequenceId = initialSequenceId;
+        var reconnectFailures = 0;
         Guid runtimeInstanceId;
         lock (_syncRoot)
         {
@@ -426,12 +428,19 @@ public sealed class RuntimeEventSubscriptionService(
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            var connectedAt = Stopwatch.GetTimestamp();
             try
             {
                 using var client = runtimeApiClientFactory.CreateClient<IRuntimeEventClient>();
                 var snapshot = await client.GetRuntimeEventSnapshotAsync(sequenceId, cancellationToken).ConfigureAwait(false);
                 if (snapshot.RuntimeInstanceId != runtimeInstanceId)
                 {
+                    using var handshakeClient = runtimeApiClientFactory.CreateClient<IRuntimeDevPackageOwnerClient>();
+                    var handshake = await handshakeClient.GetRuntimeHandshakeAsync(cancellationToken).ConfigureAwait(false);
+                    if (handshake.RuntimeInstanceId != snapshot.RuntimeInstanceId)
+                    {
+                        throw new InvalidDataException("Runtime instance changed while refreshing protocol negotiation.");
+                    }
                     runtimeInstanceId = snapshot.RuntimeInstanceId;
                     sequenceId = snapshot.SequenceId;
                     QueuePresentationRefresh(
@@ -460,8 +469,8 @@ public sealed class RuntimeEventSubscriptionService(
 
                     if (runtimeEvent.RuntimeInstanceId != runtimeInstanceId)
                     {
-                        runtimeInstanceId = runtimeEvent.RuntimeInstanceId;
                         sequenceId = 0;
+                        break;
                     }
                     sequenceId = runtimeEvent.SequenceId;
                     if (runtimeEvent.Kind is RuntimeEventKind.Snapshot
@@ -486,6 +495,11 @@ public sealed class RuntimeEventSubscriptionService(
                             message);
                     }
                 }
+
+                reconnectFailures = ResetBackoffAfterStableConnection(connectedAt, reconnectFailures);
+                await Task.Delay(
+                    RuntimeReconnectBackoff.GetDelay(reconnectFailures++),
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -494,10 +508,16 @@ public sealed class RuntimeEventSubscriptionService(
             catch (Exception ex)
             {
                 developerLog.Warning("runtime.events", $"Runtime event stream disconnected: {ex.Message}");
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+                reconnectFailures = ResetBackoffAfterStableConnection(connectedAt, reconnectFailures);
+                await Task.Delay(
+                    RuntimeReconnectBackoff.GetDelay(reconnectFailures++),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
     }
+
+    private static int ResetBackoffAfterStableConnection(long connectedAt, int failures)
+        => Stopwatch.GetElapsedTime(connectedAt) >= TimeSpan.FromSeconds(30) ? 0 : failures;
 
     private async Task RunPresentationWorkerAsync(CancellationToken cancellationToken)
     {

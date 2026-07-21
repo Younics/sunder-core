@@ -18,6 +18,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
 
     private readonly object _gate = new();
     private readonly string _packageRootPath;
+    private readonly Guid _runtimeInstanceId;
     private readonly BoundedReplayFeed<PackageLogEntryDescriptor> _feed = new(ReplayCapacity, SubscriberCapacity);
     private readonly Dictionary<string, FileTailState> _files = new(PathComparer);
     private FileSystemWatcher? _watcher;
@@ -25,13 +26,16 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     private bool _disposed;
 
     public PackageLogStreamService()
-        : this(new RuntimePackagePaths().PackageDataRootPath)
+        : this(new RuntimePackagePaths().PackageDataRootPath, Guid.NewGuid())
     {
     }
 
-    internal PackageLogStreamService(string packageRootPath)
+    internal PackageLogStreamService(string packageRootPath, Guid? runtimeInstanceId = null)
     {
         _packageRootPath = Path.GetFullPath(packageRootPath);
+        _runtimeInstanceId = runtimeInstanceId is { } value && value != Guid.Empty
+            ? value
+            : Guid.NewGuid();
     }
 
     public void Start(CancellationToken cancellationToken = default)
@@ -89,7 +93,10 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     public PackageLogSnapshot GetSnapshot(long afterSequenceId = 0, int limit = 500)
     {
         var replay = _feed.Snapshot(afterSequenceId, Math.Clamp(limit, 1, 1000));
-        return new PackageLogSnapshot(replay.SequenceId, replay.Items, replay.HistoryGap);
+        return new PackageLogSnapshot(replay.SequenceId, replay.Items, replay.HistoryGap)
+        {
+            RuntimeInstanceId = _runtimeInstanceId,
+        };
     }
 
     public BoundedReplayFeed<PackageLogEntryDescriptor>.ReplayFeedSubscription<PackageLogEntryDescriptor> Subscribe(long afterSequenceId)
@@ -382,7 +389,10 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             level,
             category,
             message,
-            oversized || categoryTruncated || messageTruncated));
+            oversized || categoryTruncated || messageTruncated)
+        {
+            RuntimeInstanceId = _runtimeInstanceId,
+        });
     }
 
     private bool IsLogPath(string filePath)

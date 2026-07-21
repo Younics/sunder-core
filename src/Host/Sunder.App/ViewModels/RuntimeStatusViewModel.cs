@@ -180,24 +180,25 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
         await _operationSemaphore.WaitAsync(cancellationToken);
         try
         {
-            if (!TrySyncRuntimeAddressFromText(persistPreference: true, out _))
+            if (!TrySyncRuntimeAddressFromText(persistPreference: true, out var runtimeUrl) || runtimeUrl is null)
             {
                 return;
             }
 
             SetBusyState("Stopping runtime...");
+            Exception? stopFailure = null;
             try
             {
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimeConnectionClient>();
-                await runtimeApiClient.ShutdownAsync(cancellationToken);
+                await _runtimeHostProcessManager.StopAsync(runtimeUrl, cancellationToken);
                 await Task.Delay(250, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-            catch
+            catch (Exception exception)
             {
+                stopFailure = exception;
                 await Task.Delay(250, cancellationToken);
             }
             finally
@@ -206,6 +207,11 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
             }
 
             await RefreshRuntimeStateAsync(cancellationToken);
+            if (stopFailure is not null && IsRuntimeRunning)
+            {
+                RuntimeLastError = stopFailure.Message;
+                SystemStatusText = "Runtime stop failed";
+            }
         }
         finally
         {

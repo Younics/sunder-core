@@ -9,6 +9,9 @@ using Sunder.Runtime.LocalState;
 
 var startupPhaseStarted = Stopwatch.GetTimestamp();
 var startupOptions = RuntimeHostStartupOptions.Parse(args);
+var supervisorEndpoint = RuntimeSupervisedTransport.ReadFromEnvironment();
+var supervisorLifetimeHandle = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_SUPERVISOR_PIPE");
+Environment.SetEnvironmentVariable("SUNDER_RUNTIME_SUPERVISOR_PIPE", null);
 if (startupOptions.WaitForDebugger)
 {
     while (!Debugger.IsAttached)
@@ -21,13 +24,20 @@ var builder = WebApplication.CreateBuilder(args);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
 {
     throw new InvalidOperationException(
-        "Configured Kestrel endpoints are not supported by the local Runtime. Configure one loopback URL with --urls or ASPNETCORE_URLS instead.");
+        "Configured Kestrel endpoints are not supported by the Runtime. Use Supervisor IPC or configure one standalone loopback URL.");
 }
 
-var listenUrls = RuntimeListenUrlValidator.ParseAndValidate(
-    builder.Configuration["urls"],
-    startupOptions.DevelopmentAllowNonLoopbackRuntimeListen);
-builder.WebHost.UseUrls(listenUrls.ToArray());
+if (supervisorEndpoint is null)
+{
+    var listenUrls = RuntimeListenUrlValidator.ParseAndValidate(
+        builder.Configuration["urls"],
+        startupOptions.DevelopmentAllowNonLoopbackRuntimeListen);
+    builder.WebHost.UseUrls(listenUrls.ToArray());
+}
+else
+{
+    RuntimeSupervisedTransport.Configure(builder.WebHost, supervisorEndpoint);
+}
 LogStartupPhase("host builder", ref startupPhaseStarted);
 
 var packagePaths = new RuntimePackagePaths();
@@ -59,6 +69,10 @@ try
     LogStartupPhase("service registration", ref startupPhaseStarted);
 
     await using var app = builder.Build();
+    await using var supervisorLifetime = RuntimeSupervisorLifetime.Start(
+        supervisorLifetimeHandle,
+        app.Lifetime,
+        app.Logger);
     app.UseMiddleware<RuntimeProblemDetailsMiddleware>();
     app.UseMiddleware<RuntimeBearerAuthenticationMiddleware>();
 
@@ -104,12 +118,22 @@ try
             },
             () =>
             {
-                var addresses = app.Services.GetRequiredService<IServer>()
-                    .Features.Get<IServerAddressesFeature>()?.Addresses;
-                var boundAddress = addresses is { Count: 1 }
-                    ? addresses.Single()
-                    : throw new InvalidOperationException("The Runtime did not publish exactly one bound listener address.");
-                connectionInfo = new RuntimeConnectionInfo(new Uri(boundAddress), bearerToken);
+                Uri runtimeUrl;
+                if (supervisorEndpoint is not null)
+                {
+                    RuntimeSupervisedTransport.RestrictEndpoint(supervisorEndpoint);
+                    runtimeUrl = RuntimeIpcEndpoint.LogicalRuntimeUrl;
+                }
+                else
+                {
+                    var addresses = app.Services.GetRequiredService<IServer>()
+                        .Features.Get<IServerAddressesFeature>()?.Addresses;
+                    var boundAddress = addresses is { Count: 1 }
+                        ? addresses.Single()
+                        : throw new InvalidOperationException("The Runtime did not publish exactly one bound listener address.");
+                    runtimeUrl = new Uri(boundAddress);
+                }
+                connectionInfo = new RuntimeConnectionInfo(runtimeUrl, bearerToken);
                 RuntimeConnectionInfoStore.Save(connectionInfo, connectionInfoPath);
                 LogStartupPhase("listener bind and connection publication", ref startupPhaseStarted);
             });
@@ -179,6 +203,7 @@ finally
     {
         RuntimeConnectionInfoStore.DeleteIfMatches(connectionInfo, connectionInfoPath);
     }
+    RuntimeSupervisedTransport.CleanupEndpoint(supervisorEndpoint);
 }
 
 static async Task RunCleanupStepAsync(

@@ -11,21 +11,151 @@ github_token=""
 include_prerelease_updates="false"
 mac_bundle_id="com.younics.sunder"
 mac_sign_app_identity=""
-mac_sign_install_identity=""
 mac_notary_profile=""
 mac_keychain=""
+mac_team_id=""
+
+download_velopack_history() {
+  local repository_url="$1"
+  local velopack_channel="$2"
+  local destination="$3"
+  local access_token="$4"
+  local include_prerelease="$5"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required to download paginated Velopack release history." >&2
+    return 1
+  fi
+  if [[ ! "$repository_url" =~ ^https://github\.com/([^/]+)/([^/?#]+)(/)?$ ]]; then
+    echo "GitHub repository URL must use https://github.com/owner/repository." >&2
+    return 1
+  fi
+
+  local owner="${BASH_REMATCH[1]}"
+  local repository="${BASH_REMATCH[2]%.git}"
+  local manifest_name="releases.$velopack_channel.json"
+  local page=1
+  local page_json
+  local page_count
+  local release_assets=""
+  local best_release=""
+  local page_best
+  local api_headers=(
+    -H "Accept: application/vnd.github+json"
+    -H "User-Agent: sunder-release-packager"
+    -H "X-GitHub-Api-Version: 2022-11-28"
+  )
+  if [[ -n "$access_token" ]]; then
+    api_headers+=(-H "Authorization: Bearer $access_token")
+  fi
+
+  while true; do
+    if ! page_json="$(curl -fsSL "${api_headers[@]}" \
+      "https://api.github.com/repos/$owner/$repository/releases?per_page=100&page=$page")"; then
+      return 1
+    fi
+    if ! page_best="$(jq -c \
+      --arg manifest "$manifest_name" \
+      --arg include_prerelease "$include_prerelease" \
+      'def semver_key:
+         (.tag_name
+          | capture("^app/v(?<major>0|[1-9][0-9]*)\\.(?<minor>0|[1-9][0-9]*)\\.(?<patch>0|[1-9][0-9]*)(?:-(?<pre>[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$")) as $version
+         | [($version.major | tonumber),
+            ($version.minor | tonumber),
+            ($version.patch | tonumber),
+            (if ($version.pre // "") == "" then 1 else 0 end),
+            (($version.pre // "") | split(".")
+              | map(if test("^[0-9]+$") then [0, tonumber] else [1, .] end))];
+       [.[]
+        | select(.draft == false)
+        | select(($include_prerelease == "true") or (.prerelease == false))
+        | select([.assets[]? | select(.name == $manifest)] | length == 1)
+        | select(.tag_name | test("^app/v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"))
+        | . + {_sunderSemverKey: semver_key}
+      ] | sort_by(._sunderSemverKey) | last // empty' <<< "$page_json")"; then
+      return 1
+    fi
+    if [[ -n "$page_best" ]]; then
+      if [[ -z "$best_release" ]]; then
+        best_release="$page_best"
+      elif ! best_release="$(jq -nc \
+        --argjson current "$best_release" \
+        --argjson candidate "$page_best" \
+        '[$current, $candidate] | max_by(._sunderSemverKey)')"; then
+        return 1
+      fi
+    fi
+    if ! page_count="$(jq 'length' <<< "$page_json")" || [[ ! "$page_count" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+    if [[ "$page_count" -lt 100 ]]; then
+      break
+    fi
+    page=$((page + 1))
+  done
+  if [[ -z "$best_release" ]]; then
+    return 0
+  fi
+  if ! release_assets="$(jq -c '.assets' <<< "$best_release")"; then
+    return 1
+  fi
+
+  local history_directory="$destination/.history-$$-$RANDOM"
+  mkdir -p "$history_directory"
+  if ! (
+    set -euo pipefail
+
+    manifest_count="$(jq --arg name "$manifest_name" \
+      '[.[] | select(.name == $name)] | length' <<< "$release_assets")" || exit 1
+    [[ "$manifest_count" == "1" ]] || exit 1
+    manifest_url="$(jq -r --arg name "$manifest_name" \
+      '.[] | select(.name == $name) | .browser_download_url' <<< "$release_assets")" || exit 1
+    manifest_path="$history_directory/$manifest_name"
+    curl -fsSL "${api_headers[@]}" "$manifest_url" -o "$manifest_path" || exit 1
+    jq -e '.Assets | type == "array" and length > 0' "$manifest_path" >/dev/null || exit 1
+
+    while IFS=$'\t' read -r package_name expected_sha256; do
+      [[ "$package_name" =~ ^[A-Za-z0-9._+-]+\.nupkg$ ]] || exit 1
+      [[ "$expected_sha256" =~ ^[0-9a-fA-F]{64}$ ]] || exit 1
+      package_count="$(jq --arg name "$package_name" \
+        '[.[] | select(.name == $name)] | length' <<< "$release_assets")" || exit 1
+      [[ "$package_count" == "1" ]] || exit 1
+      package_url="$(jq -r --arg name "$package_name" \
+        '.[] | select(.name == $name) | .browser_download_url' <<< "$release_assets")" || exit 1
+      package_path="$history_directory/$package_name"
+      curl -fsSL "${api_headers[@]}" "$package_url" -o "$package_path" || exit 1
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual_sha256="$(sha256sum "$package_path" | cut -d ' ' -f 1)" || exit 1
+      else
+        actual_sha256="$(shasum -a 256 "$package_path" | cut -d ' ' -f 1)" || exit 1
+      fi
+      actual_sha256="$(printf '%s' "$actual_sha256" | tr '[:lower:]' '[:upper:]')"
+      expected_sha256="$(printf '%s' "$expected_sha256" | tr '[:lower:]' '[:upper:]')"
+      [[ "$actual_sha256" == "$expected_sha256" ]] || exit 1
+    done < <(jq -r '.Assets[] | [.FileName, .SHA256] | @tsv' "$manifest_path")
+
+    mv "$history_directory"/* "$destination"/ || exit 1
+  ); then
+    rm -rf "$history_directory"
+    return 1
+  fi
+  rm -rf "$history_directory"
+}
 
 usage() {
   cat <<'USAGE'
 Usage: package-sunder.sh --version <semver> [--runtime <rid>] [--channel stable|beta|nightly]
                          [--github-repository-url <url>] [--include-prerelease-updates]
                          [--mac-bundle-id <id>]
-                         [--mac-sign-app-identity <identity>] [--mac-sign-install-identity <identity>]
-                         [--mac-notary-profile <profile>] [--mac-keychain <path>]
+                         [--mac-sign-app-identity <identity>] [--mac-notary-profile <profile>]
+                         [--mac-keychain <path>] [--mac-team-id <team-id>]
 
 Examples:
   ./scripts/release/package-sunder.sh --version 0.1.0 --runtime linux-x64
-  ./scripts/release/package-sunder.sh --version 0.1.0-beta.1 --runtime osx-arm64 --channel beta
+  ./scripts/release/package-sunder.sh --version 0.1.0 --runtime osx-arm64 \
+    --mac-sign-app-identity "Developer ID Application: Example" \
+    --mac-notary-profile sunder-notary --mac-keychain signing.keychain-db \
+    --mac-team-id ABCDE12345
 USAGE
 }
 
@@ -71,16 +201,16 @@ while [[ $# -gt 0 ]]; do
       mac_sign_app_identity="${2:-}"
       shift 2
       ;;
-    --mac-sign-install-identity)
-      mac_sign_install_identity="${2:-}"
-      shift 2
-      ;;
     --mac-notary-profile)
       mac_notary_profile="${2:-}"
       shift 2
       ;;
     --mac-keychain)
       mac_keychain="${2:-}"
+      shift 2
+      ;;
+    --mac-team-id)
+      mac_team_id="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -119,12 +249,12 @@ fi
 if [[ "$runtime" == osx-* ]]; then
   mac_signing_arg_count=0
   [[ -n "$mac_sign_app_identity" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
-  [[ -n "$mac_sign_install_identity" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
   [[ -n "$mac_notary_profile" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
   [[ -n "$mac_keychain" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
+  [[ -n "$mac_team_id" ]] && mac_signing_arg_count=$((mac_signing_arg_count + 1))
 
-  if [[ "$mac_signing_arg_count" -ne 0 && "$mac_signing_arg_count" -ne 4 ]]; then
-    echo "macOS signing requires app identity, installer identity, notary profile, and keychain." >&2
+  if [[ "$mac_signing_arg_count" -ne 4 || ! "$mac_team_id" =~ ^[A-Z0-9]{10}$ ]]; then
+    echo "macOS packaging requires an app identity, notary profile, keychain, and 10-character Team ID." >&2
     exit 2
   fi
 fi
@@ -133,11 +263,15 @@ if ! command -v vpk >/dev/null 2>&1; then
   echo "The Velopack CLI 'vpk' was not found. Install it with: dotnet tool install --global vpk --version 0.0.1298" >&2
   exit 127
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required for Sunder release packaging." >&2
+  exit 127
+fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 project_path="$repo_root/src/Host/Sunder.App/Sunder.App.csproj"
-runtime_host_project_path="$repo_root/src/Host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj"
+runtime_host_project_path="$repo_root/src/Host/Sunder.Host.Supervisor/Sunder.Host.Supervisor.csproj"
 cli_project_path="$repo_root/src/Host/Sunder.Cli/Sunder.Cli.csproj"
 if [[ "$output_root" = /* ]]; then
   artifact_root="$output_root"
@@ -300,17 +434,12 @@ mkdir -p "$publish_dir" "$release_dir"
 
 if [[ -n "$github_repository_url" ]]; then
   effective_github_token="${github_token:-${GITHUB_TOKEN:-}}"
-  download_args=(download github --repoUrl "$github_repository_url" --channel "$velopack_channel" --outputDir "$release_dir")
-
-  if [[ -n "$effective_github_token" ]]; then
-    download_args+=(--token "$effective_github_token")
-  fi
-
-  if [[ "$include_prerelease_updates" == "true" ]]; then
-    download_args+=(--pre)
-  fi
-
-  if ! vpk "${download_args[@]}"; then
+  if ! download_velopack_history \
+    "$github_repository_url" \
+    "$velopack_channel" \
+    "$release_dir" \
+    "$effective_github_token" \
+    "$include_prerelease_updates"; then
     echo "Existing Velopack assets for channel '$velopack_channel' could not be downloaded. Continuing without delta history." >&2
   fi
 fi
@@ -322,9 +451,36 @@ dotnet publish "$project_path" \
   --self-contained true \
   -p:Version="$version" \
   -p:InformationalVersion="$version" \
+  -p:IncludeSourceRevisionInInformationalVersion=false \
   -p:ContinuousIntegrationBuild=true \
   -p:PublishSingleFile=false \
   -o "$publish_dir"
+
+published_settings="$publish_dir/appsettings.json"
+published_settings_temp="$published_settings.$$.tmp"
+jq \
+  --arg repository_url "$github_repository_url" \
+  --argjson include_prerelease "$include_prerelease_updates" \
+  '.Updates.IncludePrerelease = $include_prerelease
+   | if $repository_url == "" then . else .Updates.GitHubRepositoryUrl = $repository_url end' \
+  "$published_settings" > "$published_settings_temp"
+mv "$published_settings_temp" "$published_settings"
+
+executable_suffix=""
+if [[ "$runtime" == win-* ]]; then
+  executable_suffix=".exe"
+fi
+required_bundled_files=(
+  "$publish_dir/RuntimeHost/Sunder.Host.Supervisor$executable_suffix"
+  "$publish_dir/RuntimeHost/RuntimeHost/Sunder.Runtime.Host$executable_suffix"
+  "$publish_dir/Cli/sunder$executable_suffix"
+)
+for required_bundled_file in "${required_bundled_files[@]}"; do
+  [[ -f "$required_bundled_file" ]] || {
+    echo "The App publish is missing bundled payload '$required_bundled_file'." >&2
+    exit 1
+  }
+done
 
 pack_args=(pack \
   --packId Sunder \
@@ -346,18 +502,141 @@ case "$runtime" in
   osx-*)
     macos_icon="$(create_macos_icon)"
     macos_plist="$(create_macos_plist)"
-    pack_args+=(--icon "$macos_icon" --plist "$macos_plist")
-    if [[ -n "$mac_sign_app_identity" ]]; then
-      pack_args+=(
-        --signAppIdentity "$mac_sign_app_identity"
-        --signInstallIdentity "$mac_sign_install_identity"
-        --notaryProfile "$mac_notary_profile"
-        --keychain "$mac_keychain"
-      )
-    fi
+    pack_args+=(
+      --icon "$macos_icon"
+      --plist "$macos_plist"
+      --noInst
+      --signAppIdentity "$mac_sign_app_identity"
+      --notaryProfile "$mac_notary_profile"
+      --keychain "$mac_keychain"
+    )
     ;;
 esac
 
 vpk "${pack_args[@]}"
+
+rm -f "$release_dir/releases.$velopack_channel.json" "$release_dir"/RELEASES-*
+shopt -s nullglob
+for historical_package in "$release_dir"/*.nupkg; do
+  if [[ "$(basename "$historical_package")" != Sunder-"$version"-"$velopack_channel"-*.nupkg ]]; then
+    rm -f "$historical_package"
+  fi
+done
+
+case "$runtime" in
+  linux-*)
+    expected_appimage="$release_dir/Sunder-$velopack_channel.AppImage"
+    shopt -s nullglob
+    appimages=("$release_dir"/*.AppImage)
+    if [[ ${#appimages[@]} -ne 1 || "${appimages[0]}" != "$expected_appimage" ]]; then
+      echo "Expected exactly one Linux AppImage named '$(basename "$expected_appimage")'." >&2
+      exit 1
+    fi
+    ;;
+  osx-*)
+    portable_name="Sunder-$velopack_channel-Portable.zip"
+    portable_zip="$release_dir/$portable_name"
+    assets_manifest="$release_dir/assets.$velopack_channel.json"
+    dmg_name="Sunder-$velopack_channel.dmg"
+    dmg_path="$release_dir/$dmg_name"
+    dmg_builder="$script_dir/macos/create-sunder-dmg.sh"
+    [[ -f "$portable_zip" ]] || { echo "Missing exact Velopack portable app output: $portable_zip" >&2; exit 1; }
+    [[ -f "$assets_manifest" ]] || { echo "Missing Velopack build asset manifest: $assets_manifest" >&2; exit 1; }
+    [[ -x "$dmg_builder" ]] || { echo "Missing executable Sunder DMG builder: $dmg_builder" >&2; exit 1; }
+
+    dmg_work_root="$(mktemp -d "${TMPDIR:-/tmp}/sunder-dmg.XXXXXX")"
+    cleanup_dmg_work() {
+      rm -rf "$dmg_work_root"
+    }
+    trap cleanup_dmg_work EXIT
+
+    ditto -x -k "$portable_zip" "$dmg_work_root"
+    app_path="$dmg_work_root/Sunder.app"
+    [[ -d "$app_path" && ! -L "$app_path" ]] \
+      || { echo "The Velopack portable output does not contain a real Sunder.app directory." >&2; exit 1; }
+    app_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
+    if [[ "$app_bundle_id" != "$mac_bundle_id" ]]; then
+      echo "The Velopack-generated Sunder.app has unexpected bundle id '$app_bundle_id'." >&2
+      exit 1
+    fi
+    codesign --verify --deep --strict --verbose=2 "$app_path"
+    app_signature="$(codesign --display --verbose=4 "$app_path" 2>&1)"
+    app_team_id="$(printf '%s\n' "$app_signature" | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')"
+    if [[ "$app_team_id" != "$mac_team_id" ]]; then
+      echo "The Velopack-generated Sunder.app is not signed by the expected Apple team." >&2
+      exit 1
+    fi
+    xcrun stapler validate "$app_path"
+    spctl --assess --type execute --verbose=4 "$app_path"
+
+    rm -f "$dmg_path"
+    "$dmg_builder" --app "$app_path" --output "$dmg_path"
+
+    codesign --force --timestamp --sign "$mac_sign_app_identity" --keychain "$mac_keychain" "$dmg_path"
+    codesign --verify --strict --verbose=2 "$dmg_path"
+    dmg_signature="$(codesign --display --verbose=4 "$dmg_path" 2>&1)"
+    dmg_team_id="$(printf '%s\n' "$dmg_signature" | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')"
+    if [[ "$dmg_team_id" != "$mac_team_id" ]]; then
+      echo "The Sunder DMG is not signed by the expected Apple team." >&2
+      exit 1
+    fi
+    xcrun notarytool submit "$dmg_path" \
+      --keychain-profile "$mac_notary_profile" \
+      --keychain "$mac_keychain" \
+      --wait
+    xcrun stapler staple "$dmg_path"
+    xcrun stapler validate "$dmg_path"
+    spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+    hdiutil verify "$dmg_path" >/dev/null
+
+    portable_asset_count="$(jq \
+      --arg portable "$portable_name" \
+      '[.[] | select(.RelativeFileName == $portable and .Type == "Portable")] | length' \
+      "$assets_manifest")"
+    if [[ "$portable_asset_count" != "1" ]]; then
+      echo "Velopack upload manifest must contain exactly one '$portable_name' Portable entry." >&2
+      exit 1
+    fi
+    sanitized_assets="$assets_manifest.$$.tmp"
+    jq \
+      --arg portable "$portable_name" \
+      'map(select(.RelativeFileName != $portable or .Type != "Portable"))
+       | if all(.[]; (.Type == "Full" or .Type == "Delta")
+                       and (.RelativeFileName | endswith(".nupkg")))
+         then .
+         else error("unexpected non-update asset remains after removing the Portable entry")
+         end' \
+      "$assets_manifest" > "$sanitized_assets"
+    full_asset_name="Sunder-$version-$velopack_channel-full.nupkg"
+    full_asset_count="$(jq \
+      --arg full "$full_asset_name" \
+      '[.[] | select(.RelativeFileName == $full and .Type == "Full")] | length' \
+      "$sanitized_assets")"
+    if [[ "$full_asset_count" != "1" ]]; then
+      rm -f "$sanitized_assets"
+      echo "Velopack upload manifest must retain exactly one current Full package '$full_asset_name'." >&2
+      exit 1
+    fi
+    while IFS= read -r update_asset; do
+      if [[ "$(basename "$update_asset")" != "$update_asset" || ! -f "$release_dir/$update_asset" ]]; then
+        rm -f "$sanitized_assets"
+        echo "Velopack upload manifest references missing or unsafe update asset '$update_asset'." >&2
+        exit 1
+      fi
+    done < <(jq -r '.[].RelativeFileName' "$sanitized_assets")
+    mv "$sanitized_assets" "$assets_manifest"
+    rm -f "$portable_zip"
+
+    shopt -s nullglob
+    portable_files=("$release_dir"/*-Portable.zip)
+    pkg_files=("$release_dir"/*.pkg)
+    dmg_files=("$release_dir"/*.dmg)
+    if [[ ${#portable_files[@]} -ne 0 || ${#pkg_files[@]} -ne 0 \
+        || ${#dmg_files[@]} -ne 1 || "${dmg_files[0]}" != "$dmg_path" ]]; then
+      echo "The macOS release must contain exactly one DMG and no portable ZIP or PKG." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 echo "Sunder Velopack release created: $release_dir ($velopack_channel)"

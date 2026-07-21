@@ -1,4 +1,5 @@
 using Sunder.Runtime.Client;
+using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 
 namespace Sunder.Cli;
@@ -12,9 +13,19 @@ internal sealed class RuntimeResetCommandHandler(ICliRuntimeResetClient runtime,
             throw new CliUsageException("Runtime reset requires --yes.");
         }
 
+        RuntimeResetChallengeResponse? challenge = null;
         try
         {
-            var challenge = await runtime.PrepareResetAsync(token).ConfigureAwait(false);
+            challenge = await runtime.PrepareResetAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            (exception is HttpRequestException or InvalidOperationException)
+            && !CliErrorMapper.IsTimeout(exception))
+        {
+            output.Warning("Runtime is not reachable; attempting the same validated reset under the offline Runtime lease.");
+        }
+        if (challenge is not null)
+        {
             if (challenge.ExpiresAtUtc <= DateTimeOffset.UtcNow)
             {
                 throw new InvalidOperationException("The Runtime reset confirmation challenge expired before it could be used.");
@@ -22,12 +33,6 @@ internal sealed class RuntimeResetCommandHandler(ICliRuntimeResetClient runtime,
 
             await runtime.DrainForResetAsync(challenge.Challenge, token).ConfigureAwait(false);
             output.Info("Runtime accepted the one-time reset challenge and is draining.");
-        }
-        catch (Exception exception) when (
-            (exception is HttpRequestException or InvalidOperationException)
-            && !CliErrorMapper.IsTimeout(exception))
-        {
-            output.Warning("Runtime is not reachable; attempting the same validated reset under the offline Runtime lease.");
         }
 
         var result = await runtime.ResetLocalStateAsync(token).ConfigureAwait(false);

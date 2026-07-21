@@ -1262,6 +1262,61 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
+    public async Task ApplyPackageGenerationAsync_PreservesVisibleFaultForSamePackageContent()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        var sessionFolder = Path.Combine(rootPath, "session");
+        Directory.CreateDirectory(sessionFolder);
+        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        File.WriteAllText(
+            Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ThrowNavigationMarkerFileName),
+            string.Empty);
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: TestUiDispatcher);
+        var candidateReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCandidate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var packageFaulted = new TaskCompletionSource<PackageViewHostFaultEventArgs>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        hostService.PackageFaulted += (_, fault) => packageFaulted.TrySetResult(fault);
+
+        try
+        {
+            await hostService.ApplyPackageDeltaAsync([package], [source]);
+            var apply = hostService.ApplyPackageGenerationAsync(
+                CreateRuntimeSnapshot(package, source, generation: 2),
+                retryDisabledPackageIds: null,
+                async (_, _, cancellationToken) =>
+                {
+                    candidateReady.TrySetResult();
+                    await releaseCandidate.Task.WaitAsync(cancellationToken);
+                    return null;
+                },
+                CancellationToken.None);
+            await candidateReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await hostService.NotifyViewNavigatedAsync("agent.chat", parameters: null);
+            releaseCandidate.TrySetResult();
+            await apply.WaitAsync(TimeSpan.FromSeconds(2));
+            var fault = await packageFaulted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal("agent", fault.PackageId);
+            Assert.Equal(PackageFailureOrigin.AppHostedView, fault.Origin);
+            Assert.Empty(hostService.FilterEnabledPackages([package]));
+            Assert.Null(hostService.GetOrCreateView("agent.chat"));
+        }
+        finally
+        {
+            releaseCandidate.TrySetResult();
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task ApplyPackageGenerationAsync_WhenCandidateActivationFails_PreservesCurrentGeneration()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));

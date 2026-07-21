@@ -16,16 +16,28 @@ hash_file() {
 artifacts=()
 while IFS= read -r -d '' file; do
   case "$(basename "$file")" in
-    SHA256SUMS|release-provenance.json|release-sbom.spdx.json|toolchain.txt) ;;
+    SHA256SUMS|release-provenance.json|release-sbom.spdx.json|toolchain.txt|assets.*.json|RELEASES-*) ;;
     *) artifacts+=("$file") ;;
   esac
 done < <(find "$artifact_dir" -type f -print0 | sort -z)
 [[ ${#artifacts[@]} -gt 0 ]] || { printf 'No release artifacts found in %s.\n' "$artifact_dir" >&2; exit 1; }
 
+artifact_names=()
+for file in "${artifacts[@]}"; do
+  name="$(basename "$file")"
+  for existing in "${artifact_names[@]}"; do
+    [[ "$existing" != "$name" ]] || {
+      printf 'Duplicate flat release asset name: %s\n' "$name" >&2
+      exit 1
+    }
+  done
+  artifact_names+=("$name")
+done
+
 : > "$artifact_dir/SHA256SUMS"
 for file in "${artifacts[@]}"; do
-  relative="${file#"$artifact_dir"/}"
-  printf '%s  %s\n' "$(hash_file "$file")" "$relative" >> "$artifact_dir/SHA256SUMS"
+  name="$(basename "$file")"
+  printf '%s  %s\n' "$(hash_file "$file")" "$name" >> "$artifact_dir/SHA256SUMS"
 done
 
 {
@@ -49,8 +61,8 @@ done
   printf '],"artifacts":['
   separator=''
   for file in "${artifacts[@]}"; do
-    relative="${file#"$artifact_dir"/}"
-    printf '%s{"path":"%s","sha256":"%s","size":%s}' "$separator" "$relative" "$(hash_file "$file")" "$(wc -c < "$file" | tr -d ' ')"
+    name="$(basename "$file")"
+    printf '%s{"path":"%s","sha256":"%s","size":%s}' "$separator" "$name" "$(hash_file "$file")" "$(wc -c < "$file" | tr -d ' ')"
     separator=','
   done
   printf ']}\n'
@@ -63,9 +75,9 @@ namespace_sha="$(hash_file "$artifact_dir/SHA256SUMS")"
   separator=''
   index=0
   for file in "${artifacts[@]}"; do
-    relative="${file#"$artifact_dir"/}"
+    name="$(basename "$file")"
     printf '%s{"fileName":"./%s","SPDXID":"SPDXRef-File-%s","checksums":[{"algorithm":"SHA256","checksumValue":"%s"}]}' \
-      "$separator" "$relative" "$index" "$(hash_file "$file")"
+      "$separator" "$name" "$index" "$(hash_file "$file")"
     separator=','
     index=$((index + 1))
   done

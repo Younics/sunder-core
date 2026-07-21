@@ -1,12 +1,28 @@
+using Sunder.Host.Client;
 using Sunder.Runtime.Client;
 
 namespace Sunder.App.Services;
 
-public sealed class RuntimeConnectionState(Uri runtimeUrl)
+public sealed class RuntimeConnectionState
 {
     private readonly object _syncRoot = new();
-    private Uri _runtimeUrl = RuntimeUrlHelper.Normalize(runtimeUrl);
-    private RuntimeConnectionInfo? _connectionInfo = LoadConnection(runtimeUrl);
+    private readonly Func<Uri, RuntimeConnectionInfo?> _loadConnection;
+    private Uri _runtimeUrl;
+    private RuntimeConnectionInfo? _connectionInfo;
+
+    public RuntimeConnectionState(Uri runtimeUrl)
+        : this(runtimeUrl, HostConnectionInfoStore.LoadPreferredFor)
+    {
+    }
+
+    internal RuntimeConnectionState(
+        Uri runtimeUrl,
+        Func<Uri, RuntimeConnectionInfo?> loadConnection)
+    {
+        _loadConnection = loadConnection ?? throw new ArgumentNullException(nameof(loadConnection));
+        _runtimeUrl = RuntimeUrlHelper.Normalize(runtimeUrl);
+        _connectionInfo = LoadConnection(_runtimeUrl);
+    }
 
     public Uri RuntimeUrl
     {
@@ -38,7 +54,35 @@ public sealed class RuntimeConnectionState(Uri runtimeUrl)
         }
     }
 
-    public RuntimeConnectionInfo? GetConnectionInfo() => ConnectionInfo;
+    public RuntimeConnectionInfo? GetConnectionInfo()
+    {
+        Uri runtimeUrl;
+        RuntimeConnectionInfo? current;
+        lock (_syncRoot)
+        {
+            runtimeUrl = _runtimeUrl;
+            current = _connectionInfo;
+        }
+
+        var refreshed = LoadConnection(runtimeUrl);
+        if (refreshed is null)
+        {
+            lock (_syncRoot)
+            {
+                return _runtimeUrl == runtimeUrl ? current : _connectionInfo;
+            }
+        }
+
+        lock (_syncRoot)
+        {
+            if (_runtimeUrl == runtimeUrl)
+            {
+                _connectionInfo = refreshed;
+                return refreshed;
+            }
+            return _connectionInfo;
+        }
+    }
 
     public void SetConnection(RuntimeConnectionInfo connectionInfo)
     {
@@ -50,9 +94,6 @@ public sealed class RuntimeConnectionState(Uri runtimeUrl)
         }
     }
 
-    private static RuntimeConnectionInfo? LoadConnection(Uri runtimeUrl)
-    {
-        var connectionInfo = RuntimeConnectionInfoStore.Load();
-        return connectionInfo is not null && connectionInfo.Matches(runtimeUrl) ? connectionInfo : null;
-    }
+    private RuntimeConnectionInfo? LoadConnection(Uri runtimeUrl)
+        => _loadConnection(runtimeUrl);
 }

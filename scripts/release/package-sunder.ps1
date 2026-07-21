@@ -18,7 +18,9 @@ param(
 
     [switch]$IncludePrereleaseUpdates,
 
-    [string]$WindowsSignParams = ""
+    [string]$WindowsSignParams = "",
+
+    [string]$WindowsPublisherSubject = $env:SUNDER_WINDOWS_PUBLISHER_SUBJECT
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,7 +36,7 @@ if ($null -eq $vpk) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $projectPath = Join-Path $repoRoot "src\Host\Sunder.App\Sunder.App.csproj"
-$runtimeHostProjectPath = Join-Path $repoRoot "src\Host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj"
+$runtimeHostProjectPath = Join-Path $repoRoot "src\Host\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj"
 $cliProjectPath = Join-Path $repoRoot "src\Host\Sunder.Cli\Sunder.Cli.csproj"
 $artifactRoot = if ([System.IO.Path]::IsPathRooted($OutputRoot)) { $OutputRoot } else { Join-Path $repoRoot $OutputRoot }
 $publishDir = Join-Path $artifactRoot "publish\sunder\$Runtime"
@@ -48,6 +50,124 @@ $iconPath = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCas
     Join-Path $imageDir "logo.png"
 } else {
     Join-Path $imageDir "app.icns"
+}
+
+function Import-VelopackHistory {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryUrl,
+        [Parameter(Mandatory = $true)][string]$VelopackChannel,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$AccessToken = "",
+        [switch]$IncludePrerelease
+    )
+
+    [Uri]$repository = $null
+    if (-not [Uri]::TryCreate($RepositoryUrl, [UriKind]::Absolute, [ref]$repository) -or
+        $repository.Scheme -ne "https" -or
+        $repository.Host -ne "github.com" -or
+        -not [string]::IsNullOrEmpty($repository.Query) -or
+        -not [string]::IsNullOrEmpty($repository.Fragment)) {
+        throw "GitHubRepositoryUrl must be an https://github.com/owner/repository URL."
+    }
+    $segments = @($repository.AbsolutePath.Trim('/').Split('/', [StringSplitOptions]::RemoveEmptyEntries))
+    if ($segments.Count -ne 2) {
+        throw "GitHubRepositoryUrl must identify exactly one GitHub owner and repository."
+    }
+    $repositoryName = $segments[1]
+    if ($repositoryName.EndsWith(".git", [StringComparison]::OrdinalIgnoreCase)) {
+        $repositoryName = $repositoryName.Substring(0, $repositoryName.Length - 4)
+    }
+
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        "User-Agent" = "sunder-release-packager"
+        "X-GitHub-Api-Version" = "2022-11-28"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($AccessToken)) {
+        $headers.Authorization = "Bearer $AccessToken"
+    }
+
+    $manifestName = "releases.$VelopackChannel.json"
+    $release = $null
+    $releaseVersion = $null
+    $page = 1
+    while ($true) {
+        $apiUrl = "https://api.github.com/repos/$($segments[0])/$repositoryName/releases?per_page=100&page=$page"
+        $pageReleases = @(Invoke-RestMethod -Uri $apiUrl -Headers $headers)
+        foreach ($candidate in $pageReleases) {
+            if (-not (
+                -not $candidate.draft -and
+                ($IncludePrerelease -or -not $candidate.prerelease) -and
+                @($candidate.assets | Where-Object { [string]$_.name -ceq $manifestName }).Count -eq 1)) {
+                continue
+            }
+            if ([string]$candidate.tag_name -notmatch '^app/v(.+)$') {
+                continue
+            }
+            try {
+                $candidateVersion = [System.Management.Automation.SemanticVersion]$Matches[1]
+            }
+            catch {
+                continue
+            }
+            if ($null -eq $releaseVersion -or $candidateVersion -gt $releaseVersion) {
+                $release = $candidate
+                $releaseVersion = $candidateVersion
+            }
+        }
+        if ($pageReleases.Count -lt 100) {
+            break
+        }
+        $page++
+    }
+    if ($null -eq $release) {
+        Write-Verbose "No previous Velopack release was found for channel '$VelopackChannel'."
+        return
+    }
+
+    $historyDirectory = Join-Path $Destination ".history-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $historyDirectory -Force | Out-Null
+    try {
+        $releaseAssets = @($release.assets)
+        $manifestAsset = @($releaseAssets | Where-Object { [string]$_.name -ceq $manifestName })[0]
+        $manifestPath = Join-Path $historyDirectory $manifestName
+        Invoke-WebRequest -Uri $manifestAsset.browser_download_url -Headers $headers -OutFile $manifestPath
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $packageEntries = @($manifest.Assets)
+        if ($packageEntries.Count -eq 0) {
+            throw "Velopack history manifest '$manifestName' contains no packages."
+        }
+
+        foreach ($packageEntry in $packageEntries) {
+            $fileName = [string]$packageEntry.FileName
+            if ([string]::IsNullOrWhiteSpace($fileName) -or
+                [IO.Path]::GetFileName($fileName) -cne $fileName -or
+                -not $fileName.EndsWith(".nupkg", [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Velopack history manifest '$manifestName' contains an unsafe package name."
+            }
+            $packageAssets = @($releaseAssets | Where-Object { [string]$_.name -ceq $fileName })
+            if ($packageAssets.Count -ne 1) {
+                throw "Release '$($release.tag_name)' does not contain exactly one '$fileName' asset."
+            }
+            if ([string]$packageEntry.SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
+                throw "Velopack history manifest '$manifestName' contains an invalid SHA-256 for '$fileName'."
+            }
+
+            $packagePath = Join-Path $historyDirectory $fileName
+            Invoke-WebRequest -Uri $packageAssets[0].browser_download_url -Headers $headers -OutFile $packagePath
+            $actualSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
+            if ($actualSha256 -cne ([string]$packageEntry.SHA256).ToUpperInvariant()) {
+                throw "Velopack history package '$fileName' does not match its release manifest SHA-256."
+            }
+        }
+
+        Get-ChildItem -LiteralPath $historyDirectory -File | Move-Item -Destination $Destination
+    }
+    finally {
+        if (Test-Path -LiteralPath $historyDirectory) {
+            Remove-Item -LiteralPath $historyDirectory -Recurse -Force
+        }
+    }
 }
 
 foreach ($restoreProject in @($projectPath, $runtimeHostProjectPath, $cliProjectPath)) {
@@ -70,25 +190,16 @@ New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 
 if (-not [string]::IsNullOrWhiteSpace($GitHubRepositoryUrl)) {
     $effectiveGitHubToken = if (-not [string]::IsNullOrWhiteSpace($GitHubToken)) { $GitHubToken } else { $env:GITHUB_TOKEN }
-    $downloadArgs = @(
-        "download",
-        "github",
-        "--repoUrl", $GitHubRepositoryUrl.Trim(),
-        "--channel", $velopackChannel,
-        "--outputDir", $releaseDir
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($effectiveGitHubToken)) {
-        $downloadArgs += @("--token", $effectiveGitHubToken)
+    try {
+        Import-VelopackHistory `
+            -RepositoryUrl $GitHubRepositoryUrl.Trim() `
+            -VelopackChannel $velopackChannel `
+            -Destination $releaseDir `
+            -AccessToken $effectiveGitHubToken `
+            -IncludePrerelease:$IncludePrereleaseUpdates
     }
-
-    if ($IncludePrereleaseUpdates) {
-        $downloadArgs += "--pre"
-    }
-
-    & $vpk.Source @downloadArgs
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Existing Velopack assets for channel '$velopackChannel' could not be downloaded. Continuing without delta history."
+    catch {
+        Write-Warning "Existing Velopack assets for channel '$velopackChannel' could not be downloaded. Continuing without delta history: $($_.Exception.Message)"
     }
 }
 
@@ -101,6 +212,7 @@ $publishArgs = @(
     "--self-contained", "true",
     "-p:Version=$Version",
     "-p:InformationalVersion=$Version",
+    "-p:IncludeSourceRevisionInInformationalVersion=false",
     "-p:ContinuousIntegrationBuild=true",
     "-p:PublishSingleFile=false",
     "-o", $publishDir
@@ -109,6 +221,28 @@ $publishArgs = @(
 & dotnet @publishArgs
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed for runtime $Runtime."
+}
+
+$publishedSettingsPath = Join-Path $publishDir "appsettings.json"
+$publishedSettings = Get-Content -LiteralPath $publishedSettingsPath -Raw | ConvertFrom-Json
+$publishedSettings.Updates.IncludePrerelease = [bool]$IncludePrereleaseUpdates
+if (-not [string]::IsNullOrWhiteSpace($GitHubRepositoryUrl)) {
+    $publishedSettings.Updates.GitHubRepositoryUrl = $GitHubRepositoryUrl.Trim()
+}
+$publishedSettings |
+    ConvertTo-Json -Depth 8 |
+    Set-Content -LiteralPath $publishedSettingsPath -Encoding utf8NoBOM
+
+$executableSuffix = if ($Runtime.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) { ".exe" } else { "" }
+$requiredBundledFiles = @(
+    (Join-Path $publishDir "RuntimeHost\Sunder.Host.Supervisor$executableSuffix"),
+    (Join-Path $publishDir "RuntimeHost\RuntimeHost\Sunder.Runtime.Host$executableSuffix"),
+    (Join-Path $publishDir "Cli\sunder$executableSuffix")
+)
+foreach ($requiredBundledFile in $requiredBundledFiles) {
+    if (-not (Test-Path -LiteralPath $requiredBundledFile -PathType Leaf)) {
+        throw "The App publish is missing bundled payload '$requiredBundledFile'."
+    }
 }
 
 $packArgs = @(
@@ -133,10 +267,46 @@ $hasWindowsSignParams = -not [string]::IsNullOrWhiteSpace($WindowsSignParams)
 if ($isWindowsRuntime -and $hasWindowsSignParams) {
     $packArgs += @("--signParams", $WindowsSignParams)
 }
+if ($isWindowsRuntime) {
+    $packArgs += "--noPortable"
+}
 
 & $vpk.Source @packArgs
 if ($LASTEXITCODE -ne 0) {
     throw "vpk pack failed for runtime $Runtime."
+}
+
+$currentPackagePrefix = "Sunder-$Version-$velopackChannel-"
+Get-ChildItem -LiteralPath $releaseDir -File -Filter "*.nupkg" |
+    Where-Object { -not $_.Name.StartsWith($currentPackagePrefix, [StringComparison]::Ordinal) } |
+    Remove-Item -Force
+$historyManifestPath = Join-Path $releaseDir "releases.$velopackChannel.json"
+if (Test-Path -LiteralPath $historyManifestPath) {
+    Remove-Item -LiteralPath $historyManifestPath -Force
+}
+Get-ChildItem -LiteralPath $releaseDir -File -Filter "RELEASES-*" | Remove-Item -Force
+
+if ($isWindowsRuntime) {
+    $setupName = "Sunder-$velopackChannel-Setup.exe"
+    $setupPath = Join-Path $releaseDir $setupName
+    $setupFiles = @(Get-ChildItem -LiteralPath $releaseDir -File -Filter "*-Setup.exe")
+    if ($setupFiles.Count -ne 1 -or $setupFiles[0].Name -cne $setupName) {
+        throw "Expected exactly one Windows installer named '$setupName' in '$releaseDir'."
+    }
+    if (Test-Path -LiteralPath (Join-Path $releaseDir "Sunder-$velopackChannel-Portable.zip")) {
+        throw "The Windows release unexpectedly contains a portable ZIP."
+    }
+
+    if ($hasWindowsSignParams) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+        if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "The Velopack Setup signature is not valid: $($signature.Status)."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WindowsPublisherSubject) -and
+            $signature.SignerCertificate.Subject -cne $WindowsPublisherSubject) {
+            throw "The Velopack Setup is not signed by the expected Windows publisher."
+        }
+    }
 }
 
 "Sunder Velopack release created: $releaseDir ($velopackChannel)"

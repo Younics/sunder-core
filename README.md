@@ -21,7 +21,7 @@
 
 ---
 
-Sunder Core is the public foundation of Sunder: the desktop app, local runtime host, CLI, package SDK, package build pipeline, package template, archive validation, and public Registry contracts.
+Sunder Core is the public foundation of Sunder: the desktop app, current-user Host Supervisor and Runtime worker, CLI, package SDK, package build pipeline, package template, archive validation, and public Registry contracts.
 
 First-party AI Agent packages live in [`Younics/sunder-agent-package`](https://github.com/Younics/sunder-agent-package). The private Registry implementation is not part of this repository.
 
@@ -30,7 +30,8 @@ First-party AI Agent packages live in [`Younics/sunder-agent-package`](https://g
 | Area | What it does |
 | --- | --- |
 | Desktop shell | Avalonia app that hosts package views, settings views, marketplace/install UX, and Sunder visual theme resources. |
-| Runtime host | Local package state, archive validation, install/update/uninstall, activation, runtime services, and package asset serving. |
+| Host Supervisor | Stable authenticated loopback endpoint, private Runtime worker lifecycle, durable lifecycle intent, and current-user Host identity. |
+| Runtime worker | Local package state, archive validation, install/update/uninstall, activation, runtime services, and package asset serving. |
 | CLI | Commands for Registry discovery/publishing and local runtime package operations. |
 | SDK | Public contracts for package metadata, modules, views, extensions, configuration, secrets, storage, logging, callbacks, and theme resources. |
 | Build tooling | MSBuild targets that generate manifests, emit `sunder-dev`, and create distributable `.sunderpkg` archives. |
@@ -68,26 +69,31 @@ sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.
 ## Architecture
 
 ```text
-Sunder.App
-  |  desktop shell, package UI, settings, notifications
+Sunder.App / Sunder.Cli
+  |  authenticated current-user Host API
+  v
+Sunder.Host.Supervisor
+  |  private Unix socket or current-user-only named pipe
   v
 Sunder.Runtime.Host
   |  local install state, validation, activation, package services
   v
 installed packages / dev packages / .sunderpkg archives
 
-Sunder.Cli <-> Registry API / Runtime API
+Sunder.App / Sunder.Cli <-> Registry API
 ```
 
-`Sunder.App` and `Sunder.Runtime.Host` are separate processes. The persistent per-user Runtime stays alive when App closes and owns installed package state and activation. The app owns shell UI and app-side package views. Development folders are invocation-owned Runtime overlays with heartbeat/release semantics, not Runtime process startup arguments.
+`Sunder.App`, `Sunder.Host.Supervisor`, and `Sunder.Runtime.Host` are separate processes. The App stages and starts the versioned current-user Host payload without elevation. The Supervisor may outlive the UI for the login session, owns the stable authenticated loopback endpoint and durable worker lifecycle, and gives each nested Runtime worker a separate credential and private IPC endpoint. The Runtime worker owns installed package state and activation; the App owns shell UI and app-side package views. Development folders are invocation-owned Runtime overlays with heartbeat/release semantics, not process startup arguments.
 
 ## Repository Map
 
 | Area | Project | Responsibility |
 | --- | --- | --- |
 | Desktop app | `src/Host/Sunder.App` | Avalonia shell, package UI activation, marketplace/install UX |
-| Runtime host | `src/Host/Sunder.Runtime.Host` | Registry credentials and package orchestration, local package state, runtime activation, local HTTP API |
-| CLI | `src/Host/Sunder.Cli` | Registry and runtime commands |
+| Host Supervisor | `src/Host/Sunder.Host.Supervisor` | Authenticated Host API, durable Runtime lifecycle, private IPC gateway |
+| Host client/contracts | `src/Host/Sunder.Host.Client`, `src/Host/Sunder.Host.Contracts` | Host discovery, credentials, protocol, lifecycle DTOs |
+| Runtime worker | `src/Host/Sunder.Runtime.Host` | Registry credentials and package orchestration, local package state, runtime activation, private or standalone HTTP API |
+| CLI | `src/Host/Sunder.Cli` | Registry and Host-gatewayed Runtime commands |
 | Runtime contracts | `src/Host/Sunder.Runtime.Contracts` | Host-neutral DTOs for app/CLI/runtime communication |
 | SDK | `src/Sdk/Sunder.Sdk` | Public package author contracts |
 | Avalonia SDK | `src/Sdk/Sunder.Sdk.Avalonia` | Optional Avalonia UI contracts and theme resources |
@@ -124,6 +130,7 @@ Most projects target `.NET 10`.
 
 ```powershell
 dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
+dotnet test tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --no-restore
 dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
 dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
 dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
@@ -139,6 +146,8 @@ dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -
 | [`docs/SUNDER-SDK-COMPATIBILITY.md`](docs/SUNDER-SDK-COMPATIBILITY.md) | Host/SDK/package compatibility policy |
 | [`docs/SUNDER-CLI.md`](docs/SUNDER-CLI.md) | CLI command reference |
 | [`docs/SUNDER-APP.md`](docs/SUNDER-APP.md) | Desktop app behavior, dev arguments, package icons, and theme guidance |
+| [`docs/SUNDER-HOST-SERVICE.md`](docs/SUNDER-HOST-SERVICE.md) | Current-user Host launch, payload activation, state, distribution, and removal |
+| [`docs/SUNDER-HOST-ARCHITECTURE.md`](docs/SUNDER-HOST-ARCHITECTURE.md) | Current foundations and target remote Host protocol, trust, and transport boundaries |
 
 ## Releases
 
@@ -147,7 +156,7 @@ Release automation is tag-driven:
 | Tag prefix | Release |
 | --- | --- |
 | `app/v*` | Sunder desktop app |
-| `host/v*` | Sunder runtime host |
+| `host/v*` | Standalone Sunder Host Supervisor archive |
 | `cli/v*` | Sunder CLI |
 | `sdk/v*` | SDK contract packages, build tooling, and templates |
 

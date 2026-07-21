@@ -34,9 +34,10 @@ internal sealed class SettingsUpdateCoordinator(SunderUpdateService updateServic
             {
                 DownloadUpdatesAutomatically = downloadUpdatesAutomatically,
             });
-            return new SettingsUpdateSaveResult(true, downloadUpdatesAutomatically
+            var message = downloadUpdatesAutomatically
                 ? "Sunder will download app updates in the background and apply them on the next start."
-                : "Automatic app update downloads are disabled.");
+                : "Automatic app update downloads are disabled.";
+            return new SettingsUpdateSaveResult(true, message);
         }
         catch (Exception ex)
         {

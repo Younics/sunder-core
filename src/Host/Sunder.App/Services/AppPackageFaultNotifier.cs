@@ -5,7 +5,6 @@ using Sunder.Sdk.Notifications;
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageFaultNotifier(
-    PackageRuntimeFaultReporter? faultReporter,
     IPackageNotificationService? notificationService,
     IUiDispatcher? uiDispatcher = null)
 {
@@ -24,7 +23,6 @@ internal sealed class AppPackageFaultNotifier(
             exception,
             developerLogScope: DeveloperLogEntryScope.Package,
             developerLogSource: packageId);
-        faultReporter?.ReportPackageFault(packageId, origin, message);
         await PublishPackageDisabledNotificationAsync(packageId, message).ConfigureAwait(false);
 
         var args = new PackageViewHostFaultEventArgs(packageId, message, origin);

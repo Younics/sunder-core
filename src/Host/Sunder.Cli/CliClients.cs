@@ -1,3 +1,4 @@
+using Sunder.Host.Client;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -63,11 +64,13 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
 
     public CliRuntimeClient(Uri runtimeUrl, TimeSpan requestTimeout)
     {
-        _client = new(runtimeUrl, new RuntimeClientPolicyOptions
-        {
-            RequestTimeout = Timeout.InfiniteTimeSpan,
-            StreamLifetimeTimeout = Timeout.InfiniteTimeSpan,
-        });
+        _client = new RuntimeManagementClient(
+            () => HostConnectionInfoStore.LoadPreferredFor(runtimeUrl),
+            policy: new RuntimeClientPolicyOptions
+            {
+                RequestTimeout = Timeout.InfiniteTimeSpan,
+                StreamLifetimeTimeout = Timeout.InfiniteTimeSpan,
+            });
         _resetLeaseWait = requestTimeout;
     }
 

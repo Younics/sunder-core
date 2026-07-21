@@ -19,7 +19,10 @@ public sealed record PackageLogEntryDescriptor(
     RuntimePackageLogLevel Level,
     string Category,
     string Message,
-    bool Truncated);
+    bool Truncated)
+{
+    public Guid RuntimeInstanceId { get; init; }
+}
 
 public sealed record PackageLogSnapshot(
     long SequenceId,
@@ -34,4 +37,6 @@ public sealed record PackageLogSnapshot(
         get => _entries;
         init => _entries = RuntimeContractCollections.Freeze(value);
     }
+
+    public Guid RuntimeInstanceId { get; init; }
 }

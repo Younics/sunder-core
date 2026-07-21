@@ -30,11 +30,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
+    <ProjectReference Include="..\Sunder.Host.Client\Sunder.Host.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
-    <ProjectReference Include="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" Private="false" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
     <ProjectReference Include="..\..\Sdk\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
@@ -50,7 +51,7 @@
           AfterTargets="Build"
           Condition="'$(DesignTimeBuild)' != 'true'">
     <PropertyGroup>
-      <BundledRuntimeHostSourceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host\bin\$(Configuration)\$(TargetFramework)\'))</BundledRuntimeHostSourceDir>
+      <BundledRuntimeHostSourceDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Host.Supervisor\bin\$(Configuration)\$(TargetFramework)\'))</BundledRuntimeHostSourceDir>
       <BundledRuntimeHostOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'RuntimeHost'))\</BundledRuntimeHostOutputDir>
     </PropertyGroup>
 
@@ -93,9 +94,9 @@
   <Target Name="BundleRuntimeHostForPublish"
           AfterTargets="Publish"
           Condition="'$(DesignTimeBuild)' != 'true'">
-    <MSBuild Projects="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj"
+    <MSBuild Projects="..\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj"
              Targets="Restore;Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishDir=$(PublishDir)RuntimeHost\"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishDir=$(PublishDir)RuntimeHost\"
              RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
   </Target>
 
@@ -109,7 +110,7 @@
 
     <MSBuild Projects="..\Sunder.Cli\Sunder.Cli.csproj"
              Targets="Restore;Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
              RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
   </Target>
 </Project>

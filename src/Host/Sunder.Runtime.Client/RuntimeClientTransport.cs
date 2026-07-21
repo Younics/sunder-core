@@ -61,6 +61,12 @@ public sealed class RuntimeClientTransport : IDisposable
         return AuthenticatedHandler.ProbeHandshakeAsync(cancellationToken);
     }
 
+    public Task<RuntimeHandshakeResponse> RefreshHandshakeAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        return AuthenticatedHandler.RefreshNegotiationAsync(cancellationToken);
+    }
+
     public async Task ShutdownWithoutProtocolNegotiationAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);

@@ -100,6 +100,90 @@ public sealed class RuntimeClientTransportTests
     }
 
     [Fact]
+    public async Task ResetControlCalls_BypassRuntimeHandshakeAndRemainAuthenticated()
+    {
+        RuntimeResetConfirmRequest? confirmation = null;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/v1/system/reset/prepare" => Json(new RuntimeResetChallengeResponse(
+                "one-time",
+                DateTimeOffset.UtcNow.AddSeconds(30))),
+            "/api/v1/system/reset/drain" => Json(new RuntimeResetDrainResponse([])),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        }, request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/v1/system/reset/drain")
+            {
+                confirmation = request.Content!.ReadFromJsonAsync<RuntimeResetConfirmRequest>()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+
+        var challenge = await management.PrepareResetAsync();
+        await management.DrainForResetAsync(challenge.Challenge);
+
+        Assert.Equal(
+            ["/api/v1/system/reset/prepare", "/api/v1/system/reset/drain"],
+            handler.Paths);
+        Assert.All(handler.Authorizations, authorization => Assert.Equal("Bearer secret", authorization));
+        Assert.Equal("one-time", confirmation?.Challenge);
+    }
+
+    [Fact]
+    public async Task RefreshHandshakeAsync_ReplacesCachedWorkerInstance()
+    {
+        var first = CreateHandshake();
+        var second = CreateHandshake();
+        var current = first;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(current),
+            "/api/v1/system" => Json(new SystemStatusResponse("Runtime", "1.0.0", true, DateTimeOffset.UtcNow)),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var transport = new RuntimeClientTransport(() => connection, handler);
+        using var management = new RuntimeManagementClient(transport);
+
+        Assert.Equal(first.RuntimeInstanceId, (await transport.NegotiateAsync()).RuntimeInstanceId);
+        current = second;
+        Assert.Equal(second.RuntimeInstanceId, (await transport.RefreshHandshakeAsync()).RuntimeInstanceId);
+        await management.GetSystemStatusAsync();
+
+        Assert.Equal(2, handler.Paths.Count(path => path == "/api/handshake"));
+    }
+
+    [Fact]
+    public async Task FailedRefreshHandshakeAsync_RemovesStaleCachedWorker()
+    {
+        var first = CreateHandshake();
+        var incompatible = CreateHandshake(
+            revision: RuntimeProtocol.MinimumSupportedRevision - 1,
+            minimum: RuntimeProtocol.MinimumSupportedRevision - 1,
+            maximum: RuntimeProtocol.MinimumSupportedRevision - 1);
+        var replacement = CreateHandshake();
+        var current = first;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(current),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var transport = new RuntimeClientTransport(() => connection, handler);
+
+        Assert.Equal(first.RuntimeInstanceId, (await transport.NegotiateAsync()).RuntimeInstanceId);
+        current = incompatible;
+        await Assert.ThrowsAsync<RuntimeProtocolException>(() => transport.RefreshHandshakeAsync());
+        current = replacement;
+
+        Assert.Equal(replacement.RuntimeInstanceId, (await transport.NegotiateAsync()).RuntimeInstanceId);
+        Assert.Equal(3, handler.Paths.Count(path => path == "/api/handshake"));
+    }
+
+    [Fact]
     public async Task ResponseHeadersRead_StreamReadRetainsTransportDeadline()
     {
         var blockingBody = new CancellationBlockingStream();
@@ -149,7 +233,9 @@ public sealed class RuntimeClientTransportTests
             [RuntimeProtocolFeatures.VersionedApiV1],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "Development", "Development"));
 
-    private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
+    private sealed class RecordingHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> send,
+        Action<HttpRequestMessage>? observe = null) : HttpMessageHandler
     {
         public List<string> Paths { get; } = [];
         public List<string?> Authorizations { get; } = [];
@@ -158,6 +244,7 @@ public sealed class RuntimeClientTransportTests
         {
             Paths.Add(request.RequestUri!.AbsolutePath);
             Authorizations.Add(request.Headers.Authorization?.ToString());
+            observe?.Invoke(request);
             return Task.FromResult(send(request));
         }
     }

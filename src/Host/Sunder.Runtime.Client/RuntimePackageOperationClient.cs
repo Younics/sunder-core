@@ -84,7 +84,6 @@ public sealed class RuntimePackageOperationClient : IDisposable
         using var lifetime = CreateDeadline(cancellationToken, _policy.StreamLifetimeTimeout);
         var lifetimeToken = lifetime.Token;
         using var request = new HttpRequestMessage(HttpMethod.Post, CreateUri(packageId, "streams", streamId));
-        request.Headers.ConnectionClose = true;
         request.Content = new ReadOnlyMemoryContent(payload);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         using var response = await _httpClient.SendAsync(

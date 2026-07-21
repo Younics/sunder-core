@@ -298,6 +298,16 @@
         "resolved": "0.92.0",
         "contentHash": "h7IMakm0PF2jxiagoysoAjrzzLQ0UBdnSXQL5kb17YW0Fvyo12Tg96A99QkzwktWRrd7H+Uw9EzjasNLUfGYlA=="
       },
+      "sunder.host.client": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Host.Contracts": "[1.0.0, )",
+          "Sunder.Runtime.LocalState": "[1.0.0, )"
+        }
+      },
+      "sunder.host.contracts": {
+        "type": "Project"
+      },
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {

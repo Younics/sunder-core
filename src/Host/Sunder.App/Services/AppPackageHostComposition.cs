@@ -7,7 +7,6 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageHostComposition : IDisposable
 {
-    private readonly OwnedTaskObserver _tasks = new(nameof(AppPackageHostComposition));
     private readonly AppPackageActivator _packageActivator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
@@ -23,6 +22,7 @@ internal sealed class AppPackageHostComposition : IDisposable
         Guid generationId,
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
+        Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
         PackageRuntimeFaultReporter? faultReporter,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry,
         AppPackageExtensionCatalog? extensionCatalog,
@@ -39,11 +39,16 @@ internal sealed class AppPackageHostComposition : IDisposable
         var faultNotificationService = notificationCenter is null
             ? null
             : new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder");
-        FaultNotifier = new AppPackageFaultNotifier(faultReporter, faultNotificationService);
+        FaultNotifier = new AppPackageFaultNotifier(faultNotificationService);
         ViewFacade = new AppPackageHostedViewFacade(
             viewRegistry,
             _state.IsPackageDisabled,
-            (packageId, message, exception) => DisablePackage(packageId, message, PackageFailureOrigin.AppHostedView, exception));
+            (packageId, message, exception) => disablePackage(
+                generationId,
+                packageId,
+                message,
+                PackageFailureOrigin.AppHostedView,
+                exception));
 
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         ExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
@@ -144,18 +149,8 @@ internal sealed class AppPackageHostComposition : IDisposable
         }
     }
 
-    public void DisablePackage(
-        string packageId,
-        string message,
-        PackageFailureOrigin origin,
-        Exception? exception = null)
-        => _tasks.Observe(
-            DisablePackageAndLogAsync(packageId, message, origin, exception),
-            $"disabling package '{packageId}'");
-
     public void Dispose()
     {
-        _tasks.Dispose();
         _ownedBackgroundProcessQueue?.Dispose();
     }
 
@@ -204,19 +199,4 @@ internal sealed class AppPackageHostComposition : IDisposable
 
     public event Action? PackageStateChanged;
 
-    private async Task DisablePackageAndLogAsync(
-        string packageId,
-        string message,
-        PackageFailureOrigin origin,
-        Exception? exception)
-    {
-        try
-        {
-            await DisablePackageAsync(packageId, message, origin, exception).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            AppSessionLog.WriteError($"Failed to complete package disable for '{packageId}'.", ex);
-        }
-    }
 }

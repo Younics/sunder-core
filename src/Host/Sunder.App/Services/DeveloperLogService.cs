@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Logging;
 
@@ -140,12 +141,29 @@ public sealed class DeveloperLogService : IDisposable
     private async Task ConsumePackageLogsAsync(CancellationToken cancellationToken)
     {
         long sequenceId = 0;
+        var runtimeInstanceId = Guid.Empty;
+        var reconnectFailures = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
+            var connectedAt = Stopwatch.GetTimestamp();
             try
             {
                 using var client = _runtimeApiClientFactory!.CreateClient<IRuntimeLogClient>();
                 var snapshot = await client.GetPackageLogSnapshotAsync(sequenceId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (snapshot.RuntimeInstanceId != Guid.Empty
+                    && runtimeInstanceId != Guid.Empty
+                    && snapshot.RuntimeInstanceId != runtimeInstanceId)
+                {
+                    ResetForRuntimeChange();
+                    runtimeInstanceId = snapshot.RuntimeInstanceId;
+                    sequenceId = 0;
+                    continue;
+                }
+
+                if (snapshot.RuntimeInstanceId != Guid.Empty)
+                {
+                    runtimeInstanceId = snapshot.RuntimeInstanceId;
+                }
                 if (snapshot.HistoryGap)
                 {
                     sequenceId = 0;
@@ -165,6 +183,12 @@ public sealed class DeveloperLogService : IDisposable
                 sequenceId = Math.Max(sequenceId, snapshot.SequenceId);
                 await foreach (var entry in client.StreamPackageLogsAsync(sequenceId, cancellationToken).ConfigureAwait(false))
                 {
+                    if (entry.RuntimeInstanceId != Guid.Empty
+                        && entry.RuntimeInstanceId != runtimeInstanceId)
+                    {
+                        sequenceId = 0;
+                        break;
+                    }
                     if (entry.SequenceId <= sequenceId)
                     {
                         continue;
@@ -173,6 +197,11 @@ public sealed class DeveloperLogService : IDisposable
                     sequenceId = entry.SequenceId;
                     AddPackageLog(entry);
                 }
+
+                reconnectFailures = ResetBackoffAfterStableConnection(connectedAt, reconnectFailures);
+                await Task.Delay(
+                    RuntimeReconnectBackoff.GetDelay(reconnectFailures++),
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -181,9 +210,32 @@ public sealed class DeveloperLogService : IDisposable
             catch (Exception ex)
             {
                 AppSessionLog.WriteError("Runtime package-log stream disconnected.", ex, visibleInDeveloperLog: false);
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+                reconnectFailures = ResetBackoffAfterStableConnection(connectedAt, reconnectFailures);
+                await Task.Delay(
+                    RuntimeReconnectBackoff.GetDelay(reconnectFailures++),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
+    }
+
+    private static int ResetBackoffAfterStableConnection(long connectedAt, int failures)
+        => Stopwatch.GetElapsedTime(connectedAt) >= TimeSpan.FromSeconds(30) ? 0 : failures;
+
+    private void ResetForRuntimeChange()
+    {
+        var applicationEntries = AppSessionLog.Snapshot()
+            .Select(CreateMirroredLogEntry)
+            .ToArray();
+        lock (_syncRoot)
+        {
+            _entries.Clear();
+            _entries.AddRange(applicationEntries);
+            if (_entries.Count > MaxEntries)
+            {
+                _entries.RemoveRange(0, _entries.Count - MaxEntries);
+            }
+        }
+        EntriesChanged?.Invoke(this, DeveloperLogEntriesChangedEventArgs.ForReset());
     }
 
     private void AddPackageLog(PackageLogEntryDescriptor entry)

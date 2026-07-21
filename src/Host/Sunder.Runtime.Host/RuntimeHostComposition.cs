@@ -34,7 +34,8 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeContentTransferService>();
         services.AddSingleton<RuntimeEventStreamService>();
         services.AddSingleton(provider => new PackageLogStreamService(
-            provider.GetRequiredService<RuntimePackagePaths>().PackageDataRootPath));
+            provider.GetRequiredService<RuntimePackagePaths>().PackageDataRootPath,
+            provider.GetRequiredService<RuntimeProtocolDescriptor>().RuntimeInstanceId));
         services.AddSingleton(provider => new RuntimeSessionOwner(
             provider.GetRequiredService<ILogger<RuntimeSessionOwner>>(),
             provider.GetRequiredService<RuntimeEventStreamService>(),

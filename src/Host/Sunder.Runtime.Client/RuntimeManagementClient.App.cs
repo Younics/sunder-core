@@ -57,7 +57,7 @@ public sealed partial class RuntimeManagementClient
     }
 
     public Task<RuntimeHandshakeResponse> GetRuntimeHandshakeAsync(CancellationToken token = default)
-        => _transport.NegotiateAsync(token);
+        => _transport.RefreshHandshakeAsync(token);
 
     public Task<DevPackageOwnerLeaseResponse> ReplaceDevPackageOwnerAsync(
         string ownerId,

@@ -1,6 +1,6 @@
 # Sunder App
 
-`Sunder.App` is the Avalonia desktop shell for Sunder. It launches or connects to `Sunder.Runtime.Host`, loads package UI contributions, and presents local package management and Registry browsing UX.
+`Sunder.App` is the Avalonia desktop shell for Sunder. It launches or connects to the current-user `Sunder.Host.Supervisor`, loads package UI contributions, and presents local package management and Registry browsing UX.
 
 ## Responsibilities
 
@@ -18,9 +18,9 @@
 
 `Sunder.App` does not own installed package state, dev-package directory watching, or package-log discovery. Those responsibilities belong to `Sunder.Runtime.Host`.
 
-App-to-Runtime HTTP endpoints are versioned under `/api/v1` and require a per-Runtime-instance bearer token, including health and status. The Runtime generates the token and publishes the matching URL/token through the per-user private connection file only after it owns local Runtime state and has successfully bound its listener. The App passes only the private connection-file path through the launcher environment. Tokens are never command-line arguments, and prelaunch App state is not connection authority.
+App-to-Runtime HTTP endpoints are versioned under `/api/v1` and reached through the authenticated Supervisor gateway. The Supervisor publishes its loopback URL and generated bearer token through the per-user private Host connection file after binding. It gives each nested Runtime worker a separate credential and private IPC endpoint. The App passes only the external connection-file path through the launcher environment; tokens are never command-line arguments.
 
-The managed Runtime is a persistent per-user service rather than an App child lifetime. App uses `launchd` on macOS, a user `systemd` transient service with a detached fallback on Linux, and an independent breakaway process on Windows. Closing App does not stop Runtime. A later App invocation reconnects to the warm Runtime. An unoccupied custom loopback URL can host the managed Runtime; non-loopback URLs are connect-only and require matching authenticated connection information.
+The App stages the bundled Supervisor and Runtime worker under current-user application data and starts the Supervisor independently from the App UI. It uses a transient `launchctl` job on macOS, a user `systemd` transient service with a detached fallback on Linux, and an independent breakaway process on Windows. Closing App does not stop the Host. A later App invocation reconnects to the warm Host; after logout or reboot, opening Sunder starts it again. An unoccupied custom loopback URL can host the managed Runtime during development; non-loopback URLs are connect-only and require matching authenticated connection information.
 
 ## Local State V1
 
@@ -61,7 +61,7 @@ Sunder.App.exe --runtime-url http://127.0.0.1:5276 --dev-package C:\Packages\MyP
 Point the app at a runtime host executable or folder:
 
 ```powershell
-Sunder.App.exe --runtime-host-path C:\Sunder\Sunder.Runtime.Host.exe
+Sunder.App.exe --runtime-host-path C:\Sunder\Sunder.Host.Supervisor.exe
 ```
 
 Argument forms:
@@ -79,7 +79,8 @@ Environment variables:
 | Variable | Meaning |
 | --- | --- |
 | `SUNDER_RUNTIME_URL` | Runtime URL used by the app and CLI |
-| `SUNDER_RUNTIME_HOST_PATH` | Runtime host executable or folder used by the app |
+| `SUNDER_RUNTIME_HOST_PATH` | Host Supervisor executable or folder used by the app |
+| `SUNDER_HOST_PAYLOAD_ROOT` | Release-mode current-user root for versioned Host payloads |
 
 Default runtime URL:
 

@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Sunder.Cli;
+using Sunder.Host.Client;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -270,6 +271,57 @@ public sealed class RuntimeApiClientTransferTests
         await Assert.ThrowsAsync<RuntimeProtocolException>(() => client.GetSystemStatusAsync());
 
         Assert.Equal(["/api/handshake"], paths);
+    }
+
+    [Fact]
+    public async Task Runtime_client_prefers_host_connection_and_reloads_rotated_credential()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-cli-connection-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var runtimeUrl = new Uri("http://runtime.test/");
+            var hostPath = Path.Combine(root, "host.json");
+            var runtimePath = Path.Combine(root, "runtime.json");
+            RuntimeConnectionInfoStore.Save(new RuntimeConnectionInfo(runtimeUrl, "direct-token"), runtimePath);
+            RuntimeConnectionInfoStore.Save(new RuntimeConnectionInfo(runtimeUrl, "host-token-1"), hostPath);
+            var authorizations = new List<string?>();
+            var handler = new DelegateHandler(request =>
+            {
+                authorizations.Add(request.Headers.Authorization?.ToString());
+                return Task.FromResult(request.RequestUri!.AbsolutePath switch
+                {
+                    "/api/handshake" => Json(CreateHandshake()),
+                    "/api/v1/system" => Json(new SystemStatusResponse(
+                        "Sunder.Runtime.Host",
+                        "1.0.0",
+                        true,
+                        DateTimeOffset.UtcNow)),
+                    _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+                });
+            });
+            using var management = new RuntimeManagementClient(
+                () => HostConnectionInfoStore.LoadPreferredFor(runtimeUrl, hostPath, runtimePath),
+                handler);
+
+            await management.GetSystemStatusAsync();
+            RuntimeConnectionInfoStore.Save(new RuntimeConnectionInfo(runtimeUrl, "host-token-2"), hostPath);
+            await management.GetSystemStatusAsync();
+            File.Delete(hostPath);
+            await management.GetSystemStatusAsync();
+
+            Assert.Equal(
+                [
+                    "Bearer host-token-1", "Bearer host-token-1",
+                    "Bearer host-token-2", "Bearer host-token-2",
+                    "Bearer direct-token", "Bearer direct-token",
+                ],
+                authorizations);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

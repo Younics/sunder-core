@@ -1,5 +1,4 @@
 using Velopack;
-using Velopack.Sources;
 
 namespace Sunder.App.Services;
 
@@ -50,7 +49,7 @@ public sealed class SunderUpdateService
                 CanCheckForUpdates: false,
                 CurrentVersion: currentVersion,
                 Source: source,
-                Message: "App updates are available after installing Sunder with the Velopack installer.");
+                Message: "App updates are available from packaged Sunder releases.");
         }
 
         return new SunderUpdateRuntimeStatus(
@@ -106,7 +105,9 @@ public sealed class SunderUpdateService
     {
         var manager = GetUpdateManager() ?? throw new InvalidOperationException("Sunder updates are not configured.");
         await manager.DownloadUpdatesAsync(update.UpdateInfo, progress, cancellationToken);
-        return new SunderUpdateDownloadResult(update, "Update downloaded. It will be applied the next time Sunder starts.");
+        return new SunderUpdateDownloadResult(
+            update,
+            "Update downloaded. It will be applied the next time Sunder starts.");
     }
 
     public async Task DownloadUpdateAndRestartAsync(
@@ -133,7 +134,7 @@ public sealed class SunderUpdateService
                 return _updateManager;
             }
 
-            _updateManager = new UpdateManager(new GithubSource(
+            _updateManager = new UpdateManager(new PaginatedGithubSource(
                 _appSettings.UpdateGitHubRepositoryUrl.Trim(),
                 accessToken: null,
                 prerelease: _appSettings.IncludePrereleaseUpdates == true));
