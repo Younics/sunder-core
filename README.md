@@ -95,8 +95,8 @@ These are the public NuGet packages intended for package authors:
 
 | Package | Purpose |
 | --- | --- |
-| [`Sunder.Sdk`](https://www.nuget.org/packages/Sunder.Sdk) | Headless Runtime package roles, host services, configuration, background services, and extension APIs. |
-| [`Sunder.Sdk.Avalonia`](https://www.nuget.org/packages/Sunder.Sdk.Avalonia) | App package roles, Avalonia views/settings/workspaces, and Sunder theme resources. |
+| [`Sunder.Sdk`](https://www.nuget.org/packages/Sunder.Sdk) | Host-neutral Runtime/App roles, package services, configuration, background work, operations, callbacks, and extension APIs. |
+| [`Sunder.Sdk.Avalonia`](https://www.nuget.org/packages/Sunder.Sdk.Avalonia) | Avalonia views/settings and Sunder theme resources for App roles. |
 | [`Sunder.Sdk.Stacks`](https://www.nuget.org/packages/Sunder.Sdk.Stacks) | Optional Stack import/export models and Stack contributor contracts. |
 | [`Sunder.Package.Build`](https://www.nuget.org/packages/Sunder.Package.Build) | Build-time targets and tasks for Sunder manifests, dev output, and archives. |
 | [`Sunder.Package.Templates`](https://www.nuget.org/packages/Sunder.Package.Templates) | `dotnet new sunder-package` project template. |

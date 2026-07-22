@@ -17,6 +17,10 @@ internal sealed class PackageSecretsSerializer
     internal const string CipherScheme = "aes-gcm";
     internal const int DocumentVersion = 1;
     internal const int CipherVersion = 1;
+    private readonly bool _enforcePackageKeyValidation;
+
+    internal PackageSecretsSerializer(bool enforcePackageKeyValidation = true)
+        => _enforcePackageKeyValidation = enforcePackageKeyValidation;
 
     internal EncryptedPackageSecrets DeserializeEncrypted(byte[] contents, string canonicalPath)
     {
@@ -109,7 +113,8 @@ internal sealed class PackageSecretsSerializer
             PackageStorageJson.ReadStringDictionary(
                 valuesElement,
                 "Stored secrets must be a JSON object.",
-                "Every stored secret must be a string."),
+                "Every stored secret must be a string.",
+                _enforcePackageKeyValidation),
             revision);
     }
 

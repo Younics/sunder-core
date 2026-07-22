@@ -1,7 +1,3 @@
-using System.Reflection;
-using System.Reflection.Metadata;
-using System.Reflection.PortableExecutable;
-
 namespace Sunder.Package.Format;
 
 [Flags]
@@ -14,13 +10,8 @@ internal enum PackageHostRoleMetadataValue
 
 internal static class PackageHostRoleMetadata
 {
-    private const string ModuleNamespace = "Sunder.Sdk.Abstractions";
-    private const string AppModuleName = "ISunderAppPackageModule";
-    private const string RuntimeModuleName = "ISunderRuntimePackageModule";
-
-    public static IReadOnlyList<string> ReadManifestRoles(string assemblyPath)
+    public static IReadOnlyList<string> ToManifestRoles(PackageHostRoleMetadataValue roles)
     {
-        var roles = ReadAssemblyRoles(assemblyPath);
         if (roles == PackageHostRoleMetadataValue.ContractOnly)
         {
             return [SunderPackageFormat.ContractOnlyHostRole];
@@ -30,32 +21,6 @@ internal static class PackageHostRoleMetadata
         if ((roles & PackageHostRoleMetadataValue.App) != 0) values.Add(SunderPackageFormat.AppHostRole);
         if ((roles & PackageHostRoleMetadataValue.Runtime) != 0) values.Add(SunderPackageFormat.RuntimeHostRole);
         return values;
-    }
-
-    public static PackageHostRoleMetadataValue ReadAssemblyRoles(string assemblyPath)
-    {
-        using var stream = new FileStream(assemblyPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var peReader = new PEReader(stream);
-        if (!peReader.HasMetadata)
-        {
-            throw new BadImageFormatException($"Assembly '{assemblyPath}' does not contain managed metadata.");
-        }
-
-        var metadata = peReader.GetMetadataReader();
-        var roles = PackageHostRoleMetadataValue.ContractOnly;
-        foreach (var handle in metadata.TypeDefinitions)
-        {
-            var type = metadata.GetTypeDefinition(handle);
-            var visibility = type.Attributes & TypeAttributes.VisibilityMask;
-            if (visibility is not TypeAttributes.Public and not TypeAttributes.NestedPublic
-                || (type.Attributes & (TypeAttributes.Abstract | TypeAttributes.Interface)) != 0)
-            {
-                continue;
-            }
-
-            roles |= ReadTypeRoles(metadata, handle, new HashSet<TypeDefinitionHandle>());
-        }
-        return roles;
     }
 
     public static bool TryParseManifestRoles(
@@ -108,55 +73,4 @@ internal static class PackageHostRoleMetadata
         return true;
     }
 
-    private static PackageHostRoleMetadataValue ReadTypeRoles(
-        MetadataReader metadata,
-        TypeDefinitionHandle handle,
-        HashSet<TypeDefinitionHandle> visited)
-    {
-        if (!visited.Add(handle)) return PackageHostRoleMetadataValue.ContractOnly;
-        var type = metadata.GetTypeDefinition(handle);
-        var roles = PackageHostRoleMetadataValue.ContractOnly;
-        foreach (var interfaceHandle in type.GetInterfaceImplementations())
-        {
-            var implementation = metadata.GetInterfaceImplementation(interfaceHandle);
-            roles |= ReadInterfaceRole(metadata, implementation.Interface);
-        }
-        if (type.BaseType.Kind == HandleKind.TypeDefinition)
-        {
-            roles |= ReadTypeRoles(metadata, (TypeDefinitionHandle)type.BaseType, visited);
-        }
-        return roles;
-    }
-
-    private static PackageHostRoleMetadataValue ReadInterfaceRole(MetadataReader metadata, EntityHandle handle)
-    {
-        string typeNamespace;
-        string typeName;
-        switch (handle.Kind)
-        {
-            case HandleKind.TypeReference:
-                var reference = metadata.GetTypeReference((TypeReferenceHandle)handle);
-                typeNamespace = metadata.GetString(reference.Namespace);
-                typeName = metadata.GetString(reference.Name);
-                break;
-            case HandleKind.TypeDefinition:
-                var definition = metadata.GetTypeDefinition((TypeDefinitionHandle)handle);
-                typeNamespace = metadata.GetString(definition.Namespace);
-                typeName = metadata.GetString(definition.Name);
-                break;
-            default:
-                return PackageHostRoleMetadataValue.ContractOnly;
-        }
-
-        if (!string.Equals(typeNamespace, ModuleNamespace, StringComparison.Ordinal))
-        {
-            return PackageHostRoleMetadataValue.ContractOnly;
-        }
-        return typeName switch
-        {
-            AppModuleName => PackageHostRoleMetadataValue.App,
-            RuntimeModuleName => PackageHostRoleMetadataValue.Runtime,
-            _ => PackageHostRoleMetadataValue.ContractOnly,
-        };
-    }
 }

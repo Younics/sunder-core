@@ -1,3 +1,5 @@
+using Sunder.Sdk.Packaging;
+
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class PackageLoadPlanner
@@ -41,17 +43,25 @@ internal sealed class PackageLoadPlanner
                 return;
             }
 
-            foreach (var dependencyId in preparedPackage.Dependencies)
+            foreach (var dependency in preparedPackage.Dependencies)
             {
-                if (!packagesById.TryGetValue(dependencyId, out var dependencyPackage))
+                if (!packagesById.TryGetValue(dependency.PackageId, out var dependencyPackage))
                 {
-                    errors.Add($"Package '{preparedPackage.PackageId}' depends on '{dependencyId}', but that package was not supplied.");
+                    errors.Add($"Package '{preparedPackage.PackageId}' depends on '{dependency.PackageId}' {dependency.VersionRange}, but that package was not supplied.");
+                    invalid.Add(preparedPackage.PackageId);
+                    continue;
+                }
+                if (!PackageVersionRange.IsSatisfiedBy(dependencyPackage.Version, dependency.VersionRange))
+                {
+                    errors.Add(
+                        $"Package '{preparedPackage.PackageId}' requires '{dependency.PackageId}' version '{dependency.VersionRange}', "
+                        + $"but session package version '{dependencyPackage.Version}' does not satisfy that range.");
                     invalid.Add(preparedPackage.PackageId);
                     continue;
                 }
 
                 Visit(dependencyPackage);
-                if (invalid.Contains(dependencyId))
+                if (invalid.Contains(dependency.PackageId))
                 {
                     invalid.Add(preparedPackage.PackageId);
                 }

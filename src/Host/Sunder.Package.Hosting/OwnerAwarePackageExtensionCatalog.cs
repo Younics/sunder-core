@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Packaging;
 
@@ -168,9 +169,34 @@ internal class OwnerAwarePackageExtensionCatalog : IPackageExtensionCatalog, IPa
 
     private void RaiseChanged(PackageExtensionCatalogChangedEventArgs? change)
     {
-        if (change is not null)
+        if (change is null)
         {
-            Changed?.Invoke(this, change);
+            return;
+        }
+
+        var handlers = Changed;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<PackageExtensionCatalogChangedEventArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, change);
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    Trace.WriteLine($"Package extension catalog change subscriber failed: {exception}");
+                }
+                catch
+                {
+                    // Diagnostics must not let a subscriber failure escape publication.
+                }
+            }
         }
     }
 

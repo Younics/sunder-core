@@ -42,20 +42,6 @@ public sealed partial class RuntimeManagementClient
     public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken token = default)
         => GetRequiredAsync<IReadOnlyList<SessionPackageDescriptor>>("packages/session", token);
 
-    public async Task<PackageSessionStatus?> GetPackageSessionStatusAsync(
-        string packageId,
-        CancellationToken token = default)
-    {
-        using var response = await _httpClient.GetAsync(
-            CreateUri($"packages/session/{Uri.EscapeDataString(packageId)}/status"),
-            token).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-        return await _responses.ReadRequiredJsonAsync<PackageSessionStatus>(response, token).ConfigureAwait(false);
-    }
-
     public Task<RuntimeHandshakeResponse> GetRuntimeHandshakeAsync(CancellationToken token = default)
         => _transport.RefreshHandshakeAsync(token);
 
@@ -219,25 +205,6 @@ public sealed partial class RuntimeManagementClient
             null,
             token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<PackageAuthStatusResponse>(response, token).ConfigureAwait(false);
-    }
-
-    public async Task ReportPackageFaultAsync(
-        string packageId,
-        PackageFailureOrigin origin,
-        string message,
-        CancellationToken token = default)
-    {
-        var status = await GetPackageSessionStatusAsync(packageId, token).ConfigureAwait(false);
-        if (status is null)
-        {
-            return;
-        }
-
-        using var response = await _httpClient.PostAsJsonAsync(
-            CreateUri($"packages/{Uri.EscapeDataString(packageId)}/fault"),
-            new ReportPackageFaultRequest(origin, message, status.GenerationId),
-            token).ConfigureAwait(false);
-        await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token = default)

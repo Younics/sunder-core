@@ -25,7 +25,7 @@ internal static class RegistryPackageVersionOrdering
                 return 1;
             }
 
-            var precedence = left.CompareTo(right);
+            var precedence = left.ComparePrecedenceTo(right);
             return precedence != 0 ? precedence : string.CompareOrdinal(x, y);
         }
     }

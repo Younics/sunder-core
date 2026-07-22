@@ -677,56 +677,6 @@ public sealed class PackageOperationServiceTests
         public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RegistryPackageStarResponse(true, null, null, []));
 
-        public async Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default)
-        {
-            if (InstallDelay > TimeSpan.Zero)
-            {
-                await Task.Delay(InstallDelay, cancellationToken);
-            }
-
-            var fileName = Path.GetFileNameWithoutExtension(packagePath);
-            var packageId = fileName.Split('.')[0];
-            InstalledPackageIds.Add(packageId);
-            return new PackageOperationResult(true, $"Installed {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
-            {
-                ImpactedPackageIds = [packageId],
-            };
-        }
-
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default)
-            => Task.FromResult(new PackageOperationResult(true, $"Upgraded {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], []));
-
-        public async Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-        {
-            if (EnableDelay > TimeSpan.Zero)
-            {
-                await Task.Delay(EnableDelay, cancellationToken);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            EnabledPackageIds.Add(packageId);
-            return new PackageOperationResult(true, $"Enabled {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
-            {
-                ImpactedPackageIds = [packageId],
-            };
-        }
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            DisabledPackageIds.Add(packageId);
-            return Task.FromResult(new PackageOperationResult(true, $"Disabled {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], [])
-            {
-                ImpactedPackageIds = [packageId],
-            });
-        }
-
-        public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default)
-        {
-            UninstalledPackageIds.Add(packageId);
-            return Task.FromResult(new PackageOperationResult(true, $"Uninstalled {packageId}.", RuntimeSessionApplied, RequiresAppRestart, [], []));
-        }
-
         public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
         {
             if (InstallDelay > TimeSpan.Zero && request.Mutations.Any(mutation => mutation.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade))

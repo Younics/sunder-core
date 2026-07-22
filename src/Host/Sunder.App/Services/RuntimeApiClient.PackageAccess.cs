@@ -33,7 +33,4 @@ public sealed partial class RuntimeApiClient
 
     public async Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
         => await _management.DisconnectPackageAuthAsync(packageId, cancellationToken).ConfigureAwait(false);
-
-    public Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default)
-        => _management.ReportPackageFaultAsync(packageId, origin, message, cancellationToken);
 }

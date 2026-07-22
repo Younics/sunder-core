@@ -1,0 +1,9 @@
+{
+  "packageId": "sunder.package.sample",
+  "installTag": "preview",
+  "createdWithVersion": "2.4.0",
+  "minimumVersion": "2.3.0",
+  "required": false,
+  "name": "Sample",
+  "iconUrl": "/api/v1/packages/sunder.package.sample/versions/2.4.0/icon"
+}

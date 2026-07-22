@@ -6,9 +6,12 @@
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Version>$(SunderDeveloperPackageVersion)</Version>
+    <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk</Title>
+    <Description>Public contracts and abstractions for authoring Sunder packages, including lifecycle, settings, storage, logging, callbacks, authentication, Runtime operations, and package metadata.</Description>
+    <PackageTags>sunder;package;plugin;sdk;extensions</PackageTags>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
     <PackageIcon>icon.png</PackageIcon>
@@ -27,5 +30,14 @@
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="LICENSE" Pack="true" PackagePath="" />
   </ItemGroup>
+
+  <!-- NuGet otherwise turns project references into unbounded lower-minimum dependencies. -->
+  <Target Name="_SetSunderProjectReferencePackageVersion"
+          BeforeTargets="_GetProjectVersion"
+          Condition="'$(BuildProjectReferences)' == 'false'">
+    <PropertyGroup>
+      <PackageVersion>$(SunderDeveloperPackageVersionRange)</PackageVersion>
+    </PropertyGroup>
+  </Target>
 
 </Project>

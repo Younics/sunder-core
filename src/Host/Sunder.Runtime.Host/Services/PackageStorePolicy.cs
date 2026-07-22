@@ -67,9 +67,9 @@ internal static class PackageStorePolicy
         {
             return $"Package version '{replacement.Version}' or installed version '{current.Version}' is invalid.";
         }
-        var comparison = replacementVersion.CompareTo(currentVersion);
-        if (comparison < 0 && !allowDowngrade) return $"Package '{current.PackageId}' cannot be downgraded from {current.Version} to {replacement.Version} without allowing downgrades.";
-        return comparison == 0 && !reinstall ? $"Package '{current.PackageId}' version {replacement.Version} is already installed." : null;
+        var precedence = replacementVersion.ComparePrecedenceTo(currentVersion);
+        if (precedence < 0 && !allowDowngrade) return $"Package '{current.PackageId}' cannot be downgraded from {current.Version} to {replacement.Version} without allowing downgrades.";
+        return replacementVersion == currentVersion && !reinstall ? $"Package '{current.PackageId}' version {replacement.Version} is already installed." : null;
     }
 
     public static IReadOnlyList<string> BuildRemovalSet(string packageId, IEnumerable<InstalledPackageRecord> packages)

@@ -16,6 +16,7 @@ concurrency:
 env:
   DOTNET_VERSION: "10.0.100"
   SDK_VERSION: "1.1.0"
+  SDK_VERSION_RANGE: "[1.1.0,1.2.0)"
 
 jobs:
   build-test-pack:
@@ -23,10 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -75,6 +76,14 @@ jobs:
             test -f "$output/$package"
           done
 
+          for package in Sunder.Sdk.Avalonia Sunder.Sdk.Stacks; do
+            nuspec="$(unzip -p "$output/$package.$SDK_VERSION.nupkg" '*.nuspec')"
+            if ! grep -Eq 'id="Sunder\.Sdk" version="\[1\.1\.0, ?1\.2\.0\)"' <<< "$nuspec"; then
+              echo "$package does not bound its Sunder.Sdk dependency to the 1.1 minor line." >&2
+              exit 1
+            fi
+          done
+
           build_entries="$(unzip -Z1 "$output/Sunder.Package.Build.$SDK_VERSION.nupkg")"
           test "$(printf '%s\n' "$build_entries" | grep -c '^buildTransitive/Sunder.Package.Build.targets$')" -eq 1
           test "$(printf '%s\n' "$build_entries" | grep -c '^tasks/net10.0/.*\.dll$')" -eq 5
@@ -84,7 +93,7 @@ jobs:
           fi
 
       - name: Upload local V1 feed
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: sunder-sdk-v1-feed
           path: artifacts/sdk/*.nupkg
@@ -108,12 +117,12 @@ jobs:
             arguments: "--withAvalonia --withStacks --withContracts"
     steps:
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Download local V1 feed
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@v4
         with:
           name: sunder-sdk-v1-feed
           path: local-feed
@@ -133,6 +142,18 @@ jobs:
             ${{ matrix.arguments }}
 
           project="$sample/Smoke.${{ matrix.variant }}.csproj"
+          sunder_references="$(find "$sample" -type f \( -name '*.csproj' -o -name '*.props' \) -exec grep -Eh 'PackageReference Include="(Sunder\.Sdk(\.Avalonia|\.Stacks)?|Sunder\.Package\.Build)"' {} + || true)"
+          if [[ -z "$sunder_references" ]]; then
+            echo "Generated template did not contain Sunder package references." >&2
+            exit 1
+          fi
+          invalid_references="$(printf '%s\n' "$sunder_references" | grep -Fv "Version=\"$SDK_VERSION_RANGE\"" || true)"
+          if [[ -n "$invalid_references" ]]; then
+            echo "Generated template contained a Sunder reference outside coordinated range '$SDK_VERSION_RANGE':" >&2
+            printf '%s\n' "$invalid_references" >&2
+            exit 1
+          fi
+
           dotnet restore "$project" \
             --source "$PWD/local-feed" \
             --source https://api.nuget.org/v3/index.json

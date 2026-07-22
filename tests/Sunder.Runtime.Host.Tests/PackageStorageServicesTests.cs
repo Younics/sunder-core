@@ -64,7 +64,7 @@ public sealed class PackageStorageServicesTests
         using var copied = new MemoryStream();
         await opened.CopyToAsync(copied);
         Assert.Equal(new byte[] { 4, 5, 6, 7 }, copied.ToArray());
-        Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "nested"), ".value.bin.*.tmp"));
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "nested"), ".sunder-*.tmp"));
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public sealed class PackageStorageServicesTests
             () => store.WriteAsync("value.bin", replacement, cancellation.Token));
 
         Assert.Equal(new byte[] { 1, 2, 3 }, await store.ReadAsync("value.bin"));
-        Assert.Empty(Directory.EnumerateFiles(root, ".value.bin.*.tmp"));
+        Assert.Empty(Directory.EnumerateFiles(root, ".sunder-*.tmp"));
     }
 
     [Fact]

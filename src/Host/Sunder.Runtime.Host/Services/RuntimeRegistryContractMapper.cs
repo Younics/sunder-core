@@ -10,7 +10,9 @@ internal static class RuntimeRegistryContractMapper
         => requests.Select(request => new RegistryPackageChangeRequest(
             request.PackageId,
             request.Version,
-            request.Tag)).ToArray();
+            request.Tag,
+            request.VersionRange,
+            request.Required)).ToArray();
 
     public static RuntimeRegistryResolveInstallPlanResponse ToRuntime(
         RegistryResolveInstallPlanResponse response)
@@ -24,6 +26,7 @@ internal static class RuntimeRegistryContractMapper
                 conflict.CurrentVersion,
                 conflict.RequestedVersionRange,
                 conflict.RequiredByPackageId,
+                conflict.ErrorCode,
                 conflict.Message)).ToArray());
 
     public static IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> ToRuntime(

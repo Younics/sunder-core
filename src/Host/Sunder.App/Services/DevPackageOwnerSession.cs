@@ -15,6 +15,7 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
     private readonly DateTimeOffset _processStartedAtUtc;
     private DevPackageOwnerLeaseResponse? _lease;
     private DevPackageOwnerMutationRequest? _pendingMutation;
+    private IReadOnlyList<DevPackageOwnerFolder>? _desiredFolders;
     private CancellationTokenSource? _heartbeatCancellation;
     private Task _heartbeatTask = Task.CompletedTask;
     private int _disposed;
@@ -77,6 +78,7 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
                     _heartbeatTask = Task.CompletedTask;
                     _lease = null;
                     _pendingMutation = null;
+                    _desiredFolders = null;
                 }
             }
 
@@ -106,6 +108,7 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             {
                 _lease = lease;
                 _pendingMutation = null;
+                _desiredFolders = request.Folders;
                 if (_heartbeatCancellation is null)
                 {
                     _heartbeatCancellation = new CancellationTokenSource();
@@ -133,6 +136,7 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             {
                 lease = _lease;
                 _pendingMutation = null;
+                _desiredFolders = null;
                 heartbeatCancellation = _heartbeatCancellation;
                 _heartbeatCancellation = null;
                 heartbeatTask = _heartbeatTask;
@@ -220,10 +224,20 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                 using var client = _clients.CreateClient<IRuntimeDevPackageOwnerClient>();
+                var handshake = await client.GetRuntimeHandshakeAsync(cancellationToken).ConfigureAwait(false);
+                if (handshake.RuntimeInstanceId != lease.RuntimeInstanceId)
+                {
+                    await ReacquireAfterRuntimeReplacementAsync(
+                        client,
+                        handshake.RuntimeInstanceId,
+                        cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
                 var renewed = await client.HeartbeatDevPackageOwnerAsync(
                     OwnerId,
                     new DevPackageOwnerHeartbeatRequest(lease.RuntimeInstanceId, OwnerToken),
                     cancellationToken).ConfigureAwait(false);
+                ValidateResponse(renewed, lease.RuntimeInstanceId, lease.MutationId, lease.Revision);
                 lock (_syncRoot)
                 {
                     if (_lease?.RuntimeInstanceId == renewed.RuntimeInstanceId
@@ -241,6 +255,61 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             {
                 AppSessionLog.WriteError("The App dev package owner heartbeat failed; the Runtime TTL will fence a lost App session.", exception);
             }
+        }
+    }
+
+    private async Task ReacquireAfterRuntimeReplacementAsync(
+        IRuntimeDevPackageOwnerClient client,
+        Guid runtimeInstanceId,
+        CancellationToken cancellationToken)
+    {
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            DevPackageOwnerLeaseResponse? current;
+            DevPackageOwnerMutationRequest request;
+            lock (_syncRoot)
+            {
+                current = _lease;
+                if (current is null || current.RuntimeInstanceId == runtimeInstanceId)
+                {
+                    return;
+                }
+                var desiredFolders = _desiredFolders
+                    ?? throw new InvalidOperationException("The App dev package owner lease has no desired folder set.");
+                request = _pendingMutation is { } pending
+                          && pending.RuntimeInstanceId == runtimeInstanceId
+                          && FoldersEqual(pending.Folders, desiredFolders)
+                    ? pending
+                    : new DevPackageOwnerMutationRequest(
+                        runtimeInstanceId,
+                        OwnerToken,
+                        Guid.NewGuid().ToString("N"),
+                        1,
+                        desiredFolders,
+                        _connectionState.RuntimeUrl.IsLoopback ? _processId : null,
+                        _connectionState.RuntimeUrl.IsLoopback ? _processStartedAtUtc : null);
+                _pendingMutation = request;
+            }
+
+            var replacement = await client.ReplaceDevPackageOwnerAsync(
+                OwnerId,
+                request,
+                cancellationToken).ConfigureAwait(false);
+            ValidateResponse(replacement, runtimeInstanceId, request.MutationId, request.Revision);
+            lock (_syncRoot)
+            {
+                if (_lease?.RuntimeInstanceId == current.RuntimeInstanceId
+                    && _lease.Revision == current.Revision)
+                {
+                    _lease = replacement;
+                    _pendingMutation = null;
+                }
+            }
+        }
+        finally
+        {
+            _mutationGate.Release();
         }
     }
 

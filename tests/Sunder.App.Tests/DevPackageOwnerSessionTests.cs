@@ -53,6 +53,29 @@ public sealed class DevPackageOwnerSessionTests
         Assert.Equal(client.Mutations[0].Revision, client.Mutations[1].Revision);
     }
 
+    [Fact]
+    public async Task Heartbeat_ReacquiresDesiredSetAfterRuntimeWorkerReplacement()
+    {
+        var firstRuntimeId = Guid.NewGuid();
+        var secondRuntimeId = Guid.NewGuid();
+        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
+        var connection = new RuntimeConnectionState(runtimeUrl);
+        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
+        var client = new OwnerClient(firstRuntimeId) { LeaseLifetime = TimeSpan.FromMilliseconds(30) };
+        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
+        var folders = new[] { Path.Combine(".", "dev-a"), Path.Combine(".", "dev-b") };
+        await session.AcquireAsync(folders, watch: true);
+
+        client.RuntimeId = secondRuntimeId;
+        await client.SecondMutation.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(2, client.Mutations.Count);
+        var replacement = client.Mutations[1];
+        Assert.Equal(secondRuntimeId, replacement.RuntimeInstanceId);
+        Assert.Equal(1, replacement.Revision);
+        Assert.Equal(client.Mutations[0].Folders, replacement.Folders);
+    }
+
     private sealed class OwnerClientFactory(OwnerClient client) : IRuntimeApiClientFactory
     {
         public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
@@ -63,11 +86,20 @@ public sealed class DevPackageOwnerSessionTests
 
     private sealed class OwnerClient(Guid runtimeId) : IRuntimeDevPackageOwnerClient
     {
+        private Guid _runtimeId = runtimeId;
         public List<DevPackageOwnerMutationRequest> Mutations { get; } = [];
         public DevPackageOwnerMutationRequest? Mutation => Mutations.LastOrDefault();
         public string? OwnerId { get; private set; }
         public DevPackageOwnerReleaseRequest? Release { get; private set; }
         public bool FailFirstMutation { get; init; }
+        public TimeSpan LeaseLifetime { get; init; } = TimeSpan.FromMinutes(1);
+        public TaskCompletionSource SecondMutation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Guid RuntimeId
+        {
+            get => _runtimeId;
+            set => _runtimeId = value;
+        }
 
         public Task<RuntimeHandshakeResponse> GetRuntimeHandshakeAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(new RuntimeHandshakeResponse(
@@ -75,7 +107,7 @@ public sealed class DevPackageOwnerSessionTests
                 RuntimeProtocol.CurrentRevision,
                 RuntimeProtocol.MinimumSupportedRevision,
                 RuntimeProtocol.MaximumSupportedRevision,
-                runtimeId,
+                RuntimeId,
                 [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.DevPackageOwnerLeasesV1],
                 new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.1.0", "test")));
 
@@ -86,16 +118,20 @@ public sealed class DevPackageOwnerSessionTests
         {
             OwnerId = ownerId;
             Mutations.Add(request);
+            if (Mutations.Count == 2)
+            {
+                SecondMutation.TrySetResult();
+            }
             if (FailFirstMutation && Mutations.Count == 1)
             {
                 throw new HttpRequestException("response lost");
             }
             return Task.FromResult(new DevPackageOwnerLeaseResponse(
-                runtimeId,
+                RuntimeId,
                 ownerId,
                 request.MutationId,
                 request.Revision,
-                DateTimeOffset.UtcNow.AddMinutes(1),
+                DateTimeOffset.UtcNow.Add(LeaseLifetime),
                 request.Revision,
                 []));
         }
@@ -105,11 +141,11 @@ public sealed class DevPackageOwnerSessionTests
             DevPackageOwnerHeartbeatRequest request,
             CancellationToken cancellationToken = default)
             => Task.FromResult(new DevPackageOwnerLeaseResponse(
-                runtimeId,
+                RuntimeId,
                 ownerId,
                 Mutation!.MutationId,
                 Mutation.Revision,
-                DateTimeOffset.UtcNow.AddMinutes(1),
+                DateTimeOffset.UtcNow.Add(LeaseLifetime),
                 Mutation.Revision,
                 []));
 

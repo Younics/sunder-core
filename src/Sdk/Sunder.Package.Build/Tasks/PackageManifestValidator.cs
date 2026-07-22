@@ -1,6 +1,5 @@
 using Microsoft.Build.Utilities;
 using Sunder.Package.Format;
-using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Packaging;
 
 namespace Sunder.Package.Build.Tasks;
@@ -8,7 +7,6 @@ namespace Sunder.Package.Build.Tasks;
 internal sealed class PackageManifestValidator(
     string packageVersion,
     string entryAssembly,
-    string? sdkApiVersion,
     string? sdkPackageVersion,
     string projectDirectory,
     PackageAssetDiscovery assets,
@@ -32,11 +30,6 @@ internal sealed class PackageManifestValidator(
         else
         {
             ValidateRelativePath(entryAssembly, "package entry assembly");
-        }
-        if (!string.IsNullOrWhiteSpace(sdkApiVersion)
-            && (!int.TryParse(sdkApiVersion, out var parsedSdkApiVersion) || parsedSdkApiVersion != SunderSdkApiVersions.V1))
-        {
-            log.LogError($"Sunder SDK API version '{sdkApiVersion}' must be {SunderSdkApiVersions.V1} for the V1 manifest.");
         }
         if (!string.IsNullOrWhiteSpace(metadata.Icon))
         {

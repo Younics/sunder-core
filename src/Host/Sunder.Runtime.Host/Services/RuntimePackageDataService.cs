@@ -124,18 +124,19 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
     {
         using var lease = sessionState.AcquireLease();
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
-        var filePath = TryGetFilePath(lease, packageId, relativePath);
-        if (filePath is null || !File.Exists(filePath))
+        var files = TryGetFileStore(lease, packageId);
+        if (files is null)
         {
             return null;
         }
 
-        if (new FileInfo(filePath).Length > maxLength)
+        var contents = await files.ReadAsync(relativePath, linked.Token).ConfigureAwait(false);
+        if (contents?.Length > maxLength)
         {
             throw new InvalidDataException("The package file exceeds the Runtime read limit.");
         }
 
-        return await File.ReadAllBytesAsync(filePath, linked.Token);
+        return contents;
     }
 
     public async Task<bool> WriteFileAsync(
@@ -146,40 +147,39 @@ internal sealed class RuntimePackageDataService(PackageSessionState sessionState
     {
         using var lease = sessionState.AcquireLease();
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
-        var filePath = TryGetFilePath(lease, packageId, relativePath);
-        if (filePath is null)
+        var files = TryGetFileStore(lease, packageId);
+        if (files is null)
         {
             return false;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await File.WriteAllBytesAsync(filePath, contents, linked.Token);
+        await files.WriteAsync(relativePath, contents, linked.Token).ConfigureAwait(false);
         return true;
     }
 
-    public Task<bool> DeleteFileAsync(string packageId, string relativePath, CancellationToken cancellationToken)
+    public async Task<bool> DeleteFileAsync(
+        string packageId,
+        string relativePath,
+        CancellationToken cancellationToken)
     {
         using var lease = sessionState.AcquireLease();
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
-        linked.Token.ThrowIfCancellationRequested();
-        var filePath = TryGetFilePath(lease, packageId, relativePath);
-        if (filePath is null)
+        var files = TryGetFileStore(lease, packageId);
+        if (files is null)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        File.Delete(filePath);
-        return Task.FromResult(true);
+        await files.DeleteAsync(relativePath, linked.Token).ConfigureAwait(false);
+        return true;
     }
 
-    private string? TryGetFilePath(PackageSessionLease lease, string packageId, string relativePath)
+    private LocalPackageFileStore? TryGetFileStore(PackageSessionLease lease, string packageId)
     {
         var package = sessionState.GetLoadedPackage(lease, packageId);
         var context = package?.ServiceProvider.GetService(typeof(Sunder.Sdk.Abstractions.IPackageContext))
             as RuntimePackageContext;
-        return context?.LocalStorage is { Files: LocalPackageFileStore files }
-            ? files.ResolvePath(relativePath)
-            : null;
+        return context?.LocalStorage.Files as LocalPackageFileStore;
     }
 
 }

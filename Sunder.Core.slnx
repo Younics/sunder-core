@@ -29,6 +29,10 @@
   </Folder>
   <Folder Name="/Templates/">
     <Project Path="src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />
+    <Project Path="tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Documentation Samples/">
+    <Project Path="docs/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.csproj" />
   </Folder>
   <Folder Name="/Registry Contracts/">
     <Project Path="src/Sunder.Registry.Contracts/Sunder.Registry.Contracts.csproj" />

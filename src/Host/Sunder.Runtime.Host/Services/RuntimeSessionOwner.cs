@@ -135,16 +135,6 @@ internal sealed class RuntimeSessionOwner
     internal void DiscardPublication(PackageSessionState.SessionPublication publication)
         => State.DiscardPublication(publication);
 
-    public bool ReportPackageFault(string packageId, ReportPackageFaultRequest request)
-        => request.Origin is not (PackageFailureOrigin.AppActivation
-                or PackageFailureOrigin.AppHostedView
-                or PackageFailureOrigin.AppUnhandledUi)
-           && CommitPackageFault(
-            packageId,
-            request.GenerationId,
-            request.Message,
-            committed => State.ReportPackageFault(packageId, request, committed));
-
     public void MarkReady(IReadOnlyList<string>? warnings = null, IReadOnlyList<string>? errors = null)
         => SetBootstrapState(RuntimeBootstrapState.Ready, warnings, errors, message: null);
 

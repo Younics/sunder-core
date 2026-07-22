@@ -12,7 +12,6 @@ internal sealed class AppPackageServiceProviderFactory(
     AppPackageExtensionCatalog extensionCatalog,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
-    AppPackageSessionService? packageSessionService,
     NotificationCenterService? notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue,
     AppPackageGenerationPublication publication,
@@ -28,7 +27,6 @@ internal sealed class AppPackageServiceProviderFactory(
         typeof(IPackageExtensionCatalog),
         typeof(IPackageShellViewService),
         typeof(IPackageSettingsNavigationService),
-        typeof(IPackageDevelopmentSessionControl),
         typeof(IBackgroundProcessQueue),
         typeof(IPackageNotificationService),
     ];
@@ -53,10 +51,6 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
         services.AddSingleton<IPackageSettingsNavigationService>(settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
-        services.AddSingleton<IPackageDevelopmentSessionControl>(
-            packageSessionService is null
-                ? UnavailablePackageDevelopmentSessionControl.Instance
-                : packageSessionService);
         services.AddSingleton<IBackgroundProcessQueue>(_ =>
         {
             var packageBackgroundProcessQueue = new AppPackageBackgroundProcessQueue(

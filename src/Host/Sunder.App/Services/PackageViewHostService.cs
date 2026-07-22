@@ -3,7 +3,6 @@ using Sunder.App.Views.Controls;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Stacks;
 
 namespace Sunder.App.Services;
 
@@ -28,7 +27,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
         [],
         [],
         [],
-        faultReporter: null,
         sessionFolder: null,
         backgroundProcessQueue: null);
 
@@ -49,13 +47,11 @@ public sealed class PackageViewHostService : IAsyncDisposable
         HashSet<string> disabledPackageIds,
         IReadOnlyList<object> ownedDisposables,
         IReadOnlyList<AppPackageLoadContext> loadContexts,
-        PackageRuntimeFaultReporter? faultReporter,
         string? sessionFolder,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry = null,
         AppPackageExtensionCatalog? extensionCatalog = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
-        AppPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null,
@@ -102,10 +98,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             _snapshotCache,
             EnsureSessionFolder,
             DisablePackageForGeneration,
-            faultReporter,
             shellViewService,
             settingsNavigationService,
-            packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
             getRuntimeConnectionInfo,
@@ -168,20 +162,16 @@ public sealed class PackageViewHostService : IAsyncDisposable
     public static async Task<PackageViewHostService> CreateForPackagesAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        PackageRuntimeFaultReporter? faultReporter = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
-        AppPackageSessionService? packageSessionService = null,
         NotificationCenterService? notificationCenter = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
         CancellationToken cancellationToken = default)
         => await CreateForPackagesCoreAsync(
             activePackages,
             packageSources,
-            faultReporter,
             shellViewService,
             settingsNavigationService,
-            packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
             resourceAssemblyRegistry: null,
@@ -192,10 +182,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
     internal static async Task<PackageViewHostService> CreateForPackagesWithResourceRegistryAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        PackageRuntimeFaultReporter? faultReporter,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
-        AppPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry resourceAssemblyRegistry,
@@ -205,10 +193,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         => await CreateForPackagesCoreAsync(
             activePackages,
             packageSources,
-            faultReporter,
             shellViewService,
             settingsNavigationService,
-            packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
             resourceAssemblyRegistry,
@@ -219,10 +205,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private static async Task<PackageViewHostService> CreateForPackagesCoreAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        PackageRuntimeFaultReporter? faultReporter,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
-        AppPackageSessionService? packageSessionService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
@@ -237,11 +221,9 @@ public sealed class PackageViewHostService : IAsyncDisposable
             [],
             [],
             [],
-            faultReporter,
             sessionFolder,
             shellViewService: shellViewService,
             settingsNavigationService: settingsNavigationService,
-            packageSessionService: packageSessionService,
             notificationCenter: notificationCenter,
             backgroundProcessQueue: backgroundProcessQueue,
             resourceAssemblyRegistry: resourceAssemblyRegistry,
@@ -574,56 +556,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
     {
         ThrowIfDisposed();
         return CurrentGeneration.Composition.ViewFacade.GetOrCreateSettingsView(packageId);
-    }
-
-    public async Task<IReadOnlyList<string>> NotifyStackImportAppliedAsync(
-        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
-        CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
-        if (appliedContributions.Count == 0)
-        {
-            return [];
-        }
-
-        var warnings = new List<string>();
-        var stackContributions = CurrentGeneration.Composition.ExtensionCatalog.GetExtensionContributions(SunderStackExtensionPoints.StackImportAppliedHandlers);
-        foreach (var applied in appliedContributions)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var handlers = stackContributions
-                .Where(contribution => string.Equals(contribution.PackageId, applied.OwnerPackageId, StringComparison.OrdinalIgnoreCase)
-                                       && string.Equals(contribution.Contribution.ContributorId, applied.ContributorId, StringComparison.OrdinalIgnoreCase))
-                .Select(contribution => contribution.Contribution)
-                .ToArray();
-            if (handlers.Length == 0)
-            {
-                continue;
-            }
-
-            var context = new StackImportAppliedContext(
-                applied.OwnerPackageId,
-                applied.ContributorId,
-                applied.FragmentIds,
-                applied.ImportedItems
-                    .Select(item => new StackImportedItem(item.ItemId, item.DisplayName, item.Kind))
-                    .ToArray());
-            foreach (var handler in handlers)
-            {
-                try
-                {
-                    await handler.OnStackImportAppliedAsync(context, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    var message = $"Package '{applied.OwnerPackageId}' did not refresh imported Stack data: {ex.Message}";
-                    warnings.Add(message);
-                    AppSessionLog.WriteError(message, ex);
-                }
-            }
-        }
-
-        return warnings;
     }
 
     internal Control? CreateHostedViewBoundary(string packageId, string viewId, Control? hostedView)

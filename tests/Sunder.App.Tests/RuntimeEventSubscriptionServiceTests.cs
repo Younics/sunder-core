@@ -153,7 +153,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var factory = new StreamingRuntimeClientFactory(initial);
         factory.Client.SnapshotFailuresRemaining = 1;
         await using var service = new RuntimeEventSubscriptionService(factory, new DeveloperLogService());
-        await service.StartAsync(initial, (_, _, _) => Task.CompletedTask, watchDevPackages: false);
+        await service.StartAsync(initial, (_, _, _) => Task.CompletedTask);
         service.ReleasePresentation();
         await factory.Client.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -263,8 +263,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
             {
                 writerStarted.TrySetResult();
                 return Task.CompletedTask;
-            },
-            watchDevPackages: false);
+            });
         await factory.Client.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         factory.Client.Publish(CreateSnapshot(runtimeInstanceId, 2));
@@ -305,8 +304,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
                 }
 
                 committedGenerations.Add(snapshot.SessionGeneration);
-            },
-            watchDevPackages: false);
+            });
         service.ReleasePresentation();
         await factory.Client.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 

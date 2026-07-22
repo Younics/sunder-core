@@ -1,12 +1,11 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Endpoints;
 
 internal static class PackageSettingsEndpoints
 {
-    private const int MaxValueLength = 1024 * 1024;
-
     public static IEndpointRouteBuilder MapPackageSettingsEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var packages = endpoints.MapGroup("/packages");
@@ -39,9 +38,11 @@ internal static class PackageSettingsEndpoints
         CancellationToken cancellationToken)
     {
         ValidatePackageId(packageId);
-        if (request.Values.Any(pair => pair.Value?.Length > MaxValueLength))
+        if (request.Values.Any(static pair => !PackageStorageValidation.IsValidKey(pair.Key)
+                                              || pair.Value is not null
+                                              && !PackageStorageValidation.IsValidValue(pair.Value)))
         {
-            throw new RuntimeValidationException("A package setting value exceeds the allowed length.");
+            throw new RuntimeValidationException("A package setting key or value is invalid.");
         }
 
         if (!await settings.SaveValuesAsync(packageId, request, cancellationToken).ConfigureAwait(false))
@@ -71,7 +72,7 @@ internal static class PackageSettingsEndpoints
         CancellationToken cancellationToken)
     {
         Validate(packageId, key);
-        if (request.Value is null || request.Value.Length > MaxValueLength)
+        if (!PackageStorageValidation.IsValidValue(request.Value))
         {
             throw new RuntimeValidationException("The package setting value is invalid.");
         }

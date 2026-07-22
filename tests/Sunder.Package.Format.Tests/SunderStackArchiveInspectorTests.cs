@@ -335,6 +335,34 @@ public sealed class SunderStackArchiveInspectorTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValidateExtractedStackAsync_WhenContentIndexPathIsMissingOrNull_ReturnsRequiredError(
+        bool useNull)
+    {
+        var root = CreateTempDirectory();
+        var staging = Path.Combine(root, "staging");
+        SunderStackArchiveInspector.ExtractArchive(CreateStackArchive(root), staging);
+        var indexPath = Path.Combine(staging, "manifest", "content-index.json");
+        var index = JsonNode.Parse(await File.ReadAllTextAsync(indexPath))!.AsObject();
+        var entry = index["files"]![0]!.AsObject();
+        if (useNull)
+        {
+            entry["path"] = null;
+        }
+        else
+        {
+            entry.Remove("path");
+        }
+        await File.WriteAllTextAsync(indexPath, index.ToJsonString());
+
+        var result = await SunderStackArchiveInspector.ValidateExtractedStackAsync(staging);
+
+        Assert.False(result.Success);
+        Assert.Contains("Stack content-index path is required.", result.Errors);
+    }
+
+    [Theory]
     [InlineData("unknownMember")]
     [InlineData("SchemaVersion")]
     public async Task ValidateExtractedStackAsync_WhenSchemaIsOpenOrWrongCase_ReturnsParseError(string propertyName)

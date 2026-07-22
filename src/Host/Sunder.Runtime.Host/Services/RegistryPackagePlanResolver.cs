@@ -1,5 +1,4 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
@@ -67,15 +66,18 @@ internal sealed class RegistryPackagePlanResolver(
             },
             HttpCompletionOption.ResponseContentRead,
             cancellationToken);
-        try
+        if (!response.IsSuccessStatusCode)
         {
-            var result = await registryClient.ReadJsonAsync<RegistryResolveInstallPlanResponse>(response, cancellationToken);
-            if (result is not null) return result;
-        }
-        catch (JsonException) when (!response.IsSuccessStatusCode)
-        {
+            return new RegistryResolveInstallPlanResponse(
+                false,
+                [],
+                [],
+                [await registryClient.ReadErrorAsync(response, cancellationToken)],
+                []);
         }
 
+        var result = await registryClient.ReadJsonAsync<RegistryResolveInstallPlanResponse>(response, cancellationToken);
+        if (result is not null) return result;
         return new RegistryResolveInstallPlanResponse(false, [], [], [await registryClient.ReadErrorAsync(response, cancellationToken)], []);
     }
 }

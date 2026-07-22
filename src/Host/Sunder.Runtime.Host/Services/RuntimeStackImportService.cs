@@ -256,9 +256,46 @@ internal sealed class RuntimeStackImportService : IDisposable
                         StackImportOutcome.Partial => RuntimeStackImportOutcome.Partial,
                         _ => RuntimeStackImportOutcome.Failed,
                     };
-                    var contributorErrors = result.Errors.Count > 0 || contributorOutcome == RuntimeStackImportOutcome.Completed
-                        ? result.Errors
-                        : [$"Stack importer '{contributorId}' reported failure."];
+                    var contributorWarnings = result.Warnings.ToList();
+                    var contributorErrors = result.Errors.ToList();
+                    if (contributorOutcome == RuntimeStackImportOutcome.Failed && mapped.Length > 0)
+                    {
+                        contributorOutcome = RuntimeStackImportOutcome.Partial;
+                        contributorErrors.Add($"Stack importer '{contributorId}' reported Failed with committed items; treating the result as Partial.");
+                    }
+                    else if (contributorErrors.Count == 0 && contributorOutcome != RuntimeStackImportOutcome.Completed)
+                    {
+                        contributorErrors.Add($"Stack importer '{contributorId}' reported failure.");
+                    }
+
+                    if (mapped.Length > 0)
+                    {
+                        var appliedContext = new StackImportAppliedContext(
+                            registration.PackageId,
+                            contributorId,
+                            fragmentIds,
+                            result.ImportedItems);
+                        foreach (var handler in RuntimeStackContributorCatalog.GetImportAppliedHandlers(
+                                     _sessions,
+                                     lease,
+                                     registration.PackageId,
+                                     contributorId))
+                        {
+                            try
+                            {
+                                await handler.OnStackImportAppliedAsync(appliedContext, linked.Token);
+                            }
+                            catch (OperationCanceledException) when (!linked.IsCancellationRequested)
+                            {
+                                contributorWarnings.Add($"Package '{registration.PackageId}' cancelled its imported Stack data refresh.");
+                            }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                contributorWarnings.Add($"Package '{registration.PackageId}' did not refresh imported Stack data: {ex.Message}");
+                            }
+                        }
+                    }
+
                     var resultRemaps = new Dictionary<string, string>(scopedResultRemaps, StringComparer.OrdinalIgnoreCase);
                     contributorResults.Add(new RuntimeStackImportContributorResultDescriptor(
                         registration.PackageId,
@@ -267,9 +304,9 @@ internal sealed class RuntimeStackImportService : IDisposable
                         contributorOutcome,
                         mapped,
                         resultRemaps,
-                        result.Warnings,
+                        contributorWarnings,
                         contributorErrors));
-                    warnings.AddRange(result.Warnings);
+                    warnings.AddRange(contributorWarnings);
                     errors.AddRange(contributorErrors);
                 }
                 catch (Exception) when (!linked.IsCancellationRequested)

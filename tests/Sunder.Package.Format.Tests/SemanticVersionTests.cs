@@ -32,10 +32,24 @@ public sealed class SemanticVersionTests
         var left = SemanticVersion.Parse("1.2.3-beta.1+linux.arm64");
         var right = SemanticVersion.Parse("1.2.3-beta.1+windows.x64");
 
-        Assert.Equal(0, left.CompareTo(right));
+        Assert.Equal(0, left.ComparePrecedenceTo(right));
         Assert.True(left.HasSamePrecedence(right));
         Assert.NotEqual(left, right);
+        Assert.NotEqual(0, left.CompareTo(right));
+        Assert.Equal(left.Equals(right), left.CompareTo(right) == 0);
         Assert.True(PackageVersionRange.IsSatisfiedBy(left.ToString(), "=1.2.3-beta.1+other"));
+    }
+
+    [Fact]
+    public void CompareTo_UsesBuildMetadataAsIdentityTieBreaker()
+    {
+        var withoutMetadata = SemanticVersion.Parse("1.2.3");
+        var first = SemanticVersion.Parse("1.2.3+first");
+        var second = SemanticVersion.Parse("1.2.3+second");
+
+        Assert.True(withoutMetadata < first);
+        Assert.True(first < second);
+        Assert.Equal(3, new SortedSet<SemanticVersion> { second, withoutMetadata, first }.Count);
     }
 
     [Theory]

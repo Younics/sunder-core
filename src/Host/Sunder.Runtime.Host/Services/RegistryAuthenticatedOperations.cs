@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text.Json;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
@@ -192,14 +191,13 @@ internal sealed class RegistryAuthenticatedOperations
         Func<string, T> fallback,
         CancellationToken cancellationToken)
     {
-        try
+        if (!response.IsSuccessStatusCode)
         {
-            var value = await _registryClient.ReadJsonAsync<T>(response, cancellationToken);
-            if (value is not null) return value;
+            return fallback(await _registryClient.ReadErrorAsync(response, cancellationToken));
         }
-        catch (JsonException) when (!response.IsSuccessStatusCode)
-        {
-        }
+
+        var value = await _registryClient.ReadJsonAsync<T>(response, cancellationToken);
+        if (value is not null) return value;
         return fallback(await _registryClient.ReadErrorAsync(response, cancellationToken));
     }
 

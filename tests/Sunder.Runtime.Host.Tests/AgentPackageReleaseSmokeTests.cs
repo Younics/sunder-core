@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -19,7 +20,7 @@ public sealed class AgentPackageReleaseSmokeTests
         var archives = Directory.GetFiles(Path.GetFullPath(archiveDirectory), "*.sunderpkg")
             .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.NotEmpty(archives);
+        Assert.Equal(15, archives.Length);
 
         var root = Path.Combine(Path.GetTempPath(), "sunder-agent-release-smoke", Guid.NewGuid().ToString("N"));
         var paths = new RuntimePackagePaths(root);
@@ -59,6 +60,8 @@ public sealed class AgentPackageReleaseSmokeTests
             }
             Assert.Equal(archives.Length, host.GetActivePackages().Count);
 
+            await ExportAppSnapshotAsync(host);
+
             foreach (var package in installed.OrderBy(static package => package.PackageId, StringComparer.Ordinal))
             {
                 var expectedFileName = $"{package.PackageId}.{package.Version}.sunderpkg";
@@ -75,6 +78,36 @@ public sealed class AgentPackageReleaseSmokeTests
         }
     }
 
+    private static async Task ExportAppSnapshotAsync(RuntimePackageSessionTestHost host)
+    {
+        var outputDirectory = Environment.GetEnvironmentVariable("SUNDER_AGENT_UI_SNAPSHOT_DIR");
+        if (string.IsNullOrWhiteSpace(outputDirectory)) return;
+
+        Directory.CreateDirectory(outputDirectory);
+        var snapshot = Assert.Single(
+            host.GetActivePackageUiSnapshots(),
+            candidate => candidate.PackageId == "sunder.package.agent");
+        var package = Assert.Single(
+            host.GetActivePackages(),
+            candidate => candidate.PackageId == snapshot.PackageId);
+        await using var lease = host.AcquireCurrentUiSnapshot(snapshot.SnapshotId);
+        Assert.NotNull(lease);
+        Assert.Equal(snapshot.ContentHash, lease.ContentHash);
+
+        var snapshotPath = Path.Combine(outputDirectory, "sunder.package.agent.snapshot");
+        await using (var destination = new FileStream(snapshotPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            await lease.Stream.CopyToAsync(destination);
+        }
+
+        var metadataPath = Path.Combine(outputDirectory, "metadata.json");
+        await File.WriteAllTextAsync(
+            metadataPath,
+            JsonSerializer.Serialize(
+                new AgentAppSnapshotMetadata(package, snapshot),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
     private static void TryDelete(string path)
     {
         try
@@ -85,4 +118,8 @@ public sealed class AgentPackageReleaseSmokeTests
         {
         }
     }
+
+    private sealed record AgentAppSnapshotMetadata(
+        ActivePackageDescriptor Package,
+        PackageUiSnapshotDescriptor Snapshot);
 }

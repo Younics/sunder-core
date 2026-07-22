@@ -78,44 +78,6 @@ internal sealed class PackageSessionState(
         }
     }
 
-    public bool ReportPackageFault(
-        string packageId,
-        ReportPackageFaultRequest request,
-        Action<long>? committed = null)
-    {
-        ActiveLoadedPackage? packageToDeactivate;
-        PackageDeactivationWork? deactivation;
-        long generation;
-        lock (_syncRoot)
-        {
-            if (request.GenerationId != _generation || _activeEntry.Draining)
-            {
-                return false;
-            }
-
-            var disabled = _activeEntry.Session.MarkPackageFailed(packageId, request.Origin, request.Message, out packageToDeactivate);
-            if (!disabled)
-            {
-                return false;
-            }
-
-            _generation = checked(_generation + 1);
-            _activeEntry.Generation = _generation;
-            generation = _generation;
-            deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
-        }
-
-        removePackageAuthSessions(packageId);
-        committed?.Invoke(generation);
-        logger.LogError(
-            "Disabled package {PackageId} for the current session after {Origin}: {Message}",
-            packageId,
-            request.Origin,
-            request.Message);
-        QueuePackageDeactivation(deactivation);
-        return true;
-    }
-
     public async Task<IReadOnlyList<string>> ClearActiveSessionAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -482,7 +444,7 @@ internal sealed class PackageSessionState(
         try
         {
             var stopStarted = Stopwatch.GetTimestamp();
-            await entry.Session.StopBackgroundServicesAsync(CancellationToken.None);
+            await entry.Session.StopBackgroundServicesAsync(logger, _sessionDrainTimeout);
             logger.LogInformation(
                 "Stopped retired package background services in {ElapsedMilliseconds} ms",
                 Stopwatch.GetElapsedTime(stopStarted).TotalMilliseconds);
@@ -603,7 +565,20 @@ internal sealed class PackageSessionState(
 
     private async Task DeactivateLoadedPackageAsync(string packageId, ActiveLoadedPackage loadedPackage)
     {
-        await PackageSessionLifecycle.StopBackgroundServicesAsync(loadedPackage.BackgroundServices, packageId, logger);
+        var lifecycleOperations = new List<Task>();
+        await PackageSessionLifecycle.StopBackgroundServicesAsync(
+            loadedPackage.BackgroundServices,
+            packageId,
+            logger,
+            operationStarted: lifecycleOperations.Add);
+        try
+        {
+            await Task.WhenAll(lifecycleOperations);
+        }
+        catch
+        {
+            // Stop failures were logged above; disposal must still wait until package code exits.
+        }
         await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(loadedPackage.ServiceProvider);
         loadedPackage.LoadContext.Unload();
         GC.Collect();

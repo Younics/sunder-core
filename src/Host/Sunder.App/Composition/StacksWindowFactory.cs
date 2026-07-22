@@ -15,8 +15,7 @@ public sealed class StacksWindowFactory(
     ShellState shellState)
 {
     internal StacksWindow Create(
-        Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
-        Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> notifyStackImportAppliedAsync)
+        Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync)
     {
         var window = new StacksWindow(shellStateService, shellState, stackWizardWindowFactory);
         window.DataContext = new StacksWindowViewModel(
@@ -24,8 +23,7 @@ public sealed class StacksWindowFactory(
             new StackArchivePicker(window),
             runtimeApiClientFactory.CreateClient<IRuntimeStacksClient>(),
             registryPackageInstallService,
-            waitUntilPresentationAppliedAsync,
-            notifyStackImportAppliedAsync);
+            waitUntilPresentationAppliedAsync);
         return window;
     }
 }

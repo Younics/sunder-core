@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 
 namespace Sunder.Package.Hosting;
 
@@ -9,6 +11,9 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, Assembly> _hostSharedAssemblies;
     private readonly Dictionary<string, Assembly> _packageSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LoadedSharedAssembly> _loadedCandidates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<SharedAssemblyCandidate>> _probeDirectoryCandidates = new(PathComparer);
+    private readonly List<SharedAssemblyCandidate> _manualCandidates = [];
     private readonly HashSet<string> _optionalHostAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _missingOptionalHostAssemblies = new(StringComparer.OrdinalIgnoreCase);
     private readonly SharedContractLoadContext _sharedAssemblyLoadContext;
@@ -16,7 +21,10 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
     public SharedContractAssemblyRegistryCore(string ownerName, Dictionary<string, Assembly> hostSharedAssemblies)
     {
         _hostSharedAssemblies = hostSharedAssemblies;
-        _sharedAssemblyLoadContext = new SharedContractLoadContext(ownerName, ResolveHostSharedAssembly);
+        _sharedAssemblyLoadContext = new SharedContractLoadContext(
+            ownerName,
+            ResolveHostSharedAssembly,
+            TrackLoadedSharedAssembly);
     }
 
     public Dictionary<string, string> SharedAssemblyPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -30,37 +38,48 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
     {
         lock (_syncRoot)
         {
-            var candidateAssemblies = IndexCandidateAssemblies(probeDirectories);
-            foreach (var candidate in SelectPreferredSharedContractCandidates(candidateAssemblies))
+            var proposedDirectories = new Dictionary<string, IReadOnlyList<SharedAssemblyCandidate>>(
+                _probeDirectoryCandidates,
+                PathComparer);
+            foreach (var probeDirectory in NormalizeProbeDirectories(probeDirectories))
             {
-                RegisterCandidate(candidate);
+                proposedDirectories[probeDirectory] = IndexProbeDirectory(probeDirectory);
             }
 
-            RegisterSharedDependencyClosure(candidateAssemblies);
+            var selection = BuildSelection(proposedDirectories, _manualCandidates);
+            EnsureSelectionCanReplaceCurrent(selection);
+            ReplaceDictionary(_probeDirectoryCandidates, proposedDirectories);
+            ApplySelection(selection);
         }
     }
 
-    public void RemoveProbeDirectories(IEnumerable<string> probeDirectories)
+    public bool TryRemoveProbeDirectories(IEnumerable<string> probeDirectories)
     {
-        var normalizedProbeDirectories = probeDirectories
-            .Where(static probeDirectory => !string.IsNullOrWhiteSpace(probeDirectory))
-            .Select(NormalizeDirectoryPath)
-            .ToArray();
-        if (normalizedProbeDirectories.Length == 0)
-        {
-            return;
-        }
-
         lock (_syncRoot)
         {
-            foreach (var assemblyName in SharedAssemblyPaths
-                         .Where(entry => IsPathInDirectories(entry.Value, normalizedProbeDirectories))
-                         .Select(static entry => entry.Key)
-                         .ToArray())
+            var normalizedDirectories = NormalizeProbeDirectories(probeDirectories);
+            if (normalizedDirectories.Count == 0)
             {
-                SharedAssemblyPaths.Remove(assemblyName);
-                SharedAssemblyNames.Remove(assemblyName);
+                return true;
             }
+
+            var proposedDirectories = new Dictionary<string, IReadOnlyList<SharedAssemblyCandidate>>(
+                _probeDirectoryCandidates,
+                PathComparer);
+            foreach (var probeDirectory in normalizedDirectories)
+            {
+                proposedDirectories.Remove(probeDirectory);
+            }
+
+            var selection = BuildSelection(proposedDirectories, _manualCandidates);
+            if (!CanReplaceLoadedSelection(selection))
+            {
+                return false;
+            }
+
+            ReplaceDictionary(_probeDirectoryCandidates, proposedDirectories);
+            ApplySelection(selection);
+            return true;
         }
     }
 
@@ -96,10 +115,16 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
             {
                 return null;
             }
+            if (!SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(
+                    assemblyName,
+                    SharedAssemblyNames[assemblyName.Name]))
+            {
+                throw new InvalidOperationException(
+                    $"Shared contract assembly '{assemblyName.Name}' requested identity '{assemblyName.FullName}', but selected candidate '{SharedAssemblyNames[assemblyName.Name].FullName}' is incompatible.");
+            }
 
             var loadedAssembly = _sharedAssemblyLoadContext.LoadSharedAssembly(sharedAssemblyPath);
             ValidateSharedContractCompatibility(assemblyName, loadedAssembly);
-            _packageSharedAssemblies[assemblyName.Name] = loadedAssembly;
             return loadedAssembly;
         }
     }
@@ -112,7 +137,6 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
             {
                 return;
             }
-
             if (requestedAssemblyName is not null
                 && !SharedContractAssemblyPolicy.IdentitiesMatch(requestedAssemblyName, candidate.Name)
                 && !SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(requestedAssemblyName, candidate.Name))
@@ -121,38 +145,11 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
                     $"Shared assembly '{candidate.Name.Name}' requested identity '{requestedAssemblyName.FullName}', but candidate '{candidate.Path}' has identity '{candidate.Name.FullName}'.");
             }
 
-            if (SharedAssemblyPaths.TryGetValue(candidate.Name.Name, out var existingPath))
-            {
-                var existingName = SharedAssemblyNames[candidate.Name.Name];
-                if (!FamiliesAndMajorMatch(existingName, candidate.Name))
-                {
-                    throw new InvalidOperationException(
-                        $"Conflicting shared assembly '{candidate.Name.Name}' was found in '{existingPath}' and '{candidate.Path}'. Shared contract dependencies must use a single public key and culture per session.");
-                }
-
-                if (SharedContractAssemblyPolicy.IdentitiesMatch(existingName, candidate.Name)
-                    && !SharedContractAssemblyPolicy.FilesRepresentSameDefinition(existingPath, candidate.Path))
-                {
-                    throw new InvalidOperationException(
-                        $"Conflicting shared assembly '{candidate.Name.Name}' uses the same unsigned identity for different binary definitions in '{existingPath}' and '{candidate.Path}'.");
-                }
-
-                if (SharedContractAssemblyPolicy.CompareVersions(candidate.Name.Version, existingName.Version) <= 0)
-                {
-                    return;
-                }
-
-                if (_packageSharedAssemblies.TryGetValue(candidate.Name.Name, out var loadedAssembly)
-                    && !SharedContractAssemblyPolicy.IdentitiesMatch(loadedAssembly.GetName(), candidate.Name))
-                {
-                    throw new InvalidOperationException(
-                        $"Shared assembly '{candidate.Name.Name}' cannot be upgraded from '{loadedAssembly.GetName().FullName}' to '{candidate.Name.FullName}' after it has been loaded for this session.");
-                }
-            }
-
-            SharedAssemblyPaths[candidate.Name.Name] = candidate.Path;
-            SharedAssemblyNames[candidate.Name.Name] = candidate.Name;
-            _sharedAssemblyLoadContext.Register(candidate.Name.Name, candidate.Path);
+            var proposedCandidates = _manualCandidates.Append(candidate).ToArray();
+            var selection = BuildSelection(_probeDirectoryCandidates, proposedCandidates);
+            EnsureSelectionCanReplaceCurrent(selection);
+            _manualCandidates.Add(candidate);
+            ApplySelection(selection);
         }
     }
 
@@ -163,71 +160,216 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
             SharedAssemblyPaths.Clear();
             SharedAssemblyNames.Clear();
             _packageSharedAssemblies.Clear();
+            _loadedCandidates.Clear();
+            _probeDirectoryCandidates.Clear();
+            _manualCandidates.Clear();
             _sharedAssemblyLoadContext.Unload();
         }
     }
 
-    private static Dictionary<string, List<SharedAssemblyCandidate>> IndexCandidateAssemblies(
-        IEnumerable<string> probeDirectories)
+    private Dictionary<string, SharedAssemblyCandidate> BuildSelection(
+        IReadOnlyDictionary<string, IReadOnlyList<SharedAssemblyCandidate>> probeDirectories,
+        IReadOnlyCollection<SharedAssemblyCandidate> manualCandidates)
     {
-        var candidates = new Dictionary<string, List<SharedAssemblyCandidate>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var probeDirectory in probeDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+        var allCandidates = probeDirectories.Values
+            .SelectMany(static candidates => candidates)
+            .Concat(manualCandidates)
+            .GroupBy(static candidate => candidate.Name.Name!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var rootNames = allCandidates
+            .Where(static entry => entry.Value.Any(candidate =>
+                SharedContractAssemblyPolicy.IsSharedContract(candidate.Name.Name)))
+            .Select(static entry => entry.Key)
+            .Concat(manualCandidates.Select(static candidate => candidate.Name.Name!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var selected = new Dictionary<string, SharedAssemblyCandidate>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rootName in rootNames)
         {
-            if (!Directory.Exists(probeDirectory))
+            selected[rootName] = SelectPreferredSharedAssemblyCandidate(allCandidates[rootName]);
+        }
+
+        var pending = new Queue<string>(rootNames);
+        var processed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (pending.TryDequeue(out var assemblyName))
+        {
+            if (!processed.Add(assemblyName)
+                || !selected.TryGetValue(assemblyName, out var selectedAssembly)
+                || !File.Exists(selectedAssembly.Path))
             {
                 continue;
             }
 
-            foreach (var assemblyPath in Directory.EnumerateFiles(probeDirectory, "*.dll", SearchOption.TopDirectoryOnly))
+            foreach (var reference in ReadAssemblyReferences(selectedAssembly.Path))
             {
-                AssemblyName assemblyName;
-                try
-                {
-                    assemblyName = AssemblyName.GetAssemblyName(assemblyPath);
-                }
-                catch
+                if (reference.Name is null
+                    || _hostSharedAssemblies.ContainsKey(reference.Name)
+                    || _optionalHostAssemblies.Contains(reference.Name))
                 {
                     continue;
                 }
 
-                if (string.IsNullOrWhiteSpace(assemblyName.Name))
+                if (selected.TryGetValue(reference.Name, out var existing))
+                {
+                    if (!SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(reference, existing.Name))
+                    {
+                        throw new InvalidOperationException(
+                            $"Shared assembly '{selectedAssembly.Name.Name}' requires '{reference.FullName}', but selected candidate '{existing.Name.FullName}' is incompatible.");
+                    }
+                    pending.Enqueue(reference.Name);
+                    continue;
+                }
+
+                var candidate = FindCandidate(reference, allCandidates);
+                if (candidate is null)
                 {
                     continue;
                 }
 
-                if (!candidates.TryGetValue(assemblyName.Name, out var namedCandidates))
-                {
-                    namedCandidates = [];
-                    candidates[assemblyName.Name] = namedCandidates;
-                }
-
-                namedCandidates.Add(new SharedAssemblyCandidate(assemblyPath, assemblyName));
+                selected[reference.Name] = candidate.Value;
+                pending.Enqueue(reference.Name);
             }
         }
 
-        return candidates;
+        return selected;
     }
 
-    private static IEnumerable<SharedAssemblyCandidate> SelectPreferredSharedContractCandidates(
-        IReadOnlyDictionary<string, List<SharedAssemblyCandidate>> candidateAssemblies)
+    private void EnsureSelectionCanReplaceCurrent(
+        IReadOnlyDictionary<string, SharedAssemblyCandidate> selection)
     {
-        foreach (var candidates in candidateAssemblies.Values)
+        if (!CanReplaceLoadedSelection(selection))
         {
-            var contractCandidates = candidates
-                .Where(candidate => SharedContractAssemblyPolicy.IsSharedContract(candidate.Name.Name))
-                .ToArray();
-            if (contractCandidates.Length > 0)
+            throw new InvalidOperationException(
+                "Shared contract candidates cannot be changed after a different assembly definition has been loaded for this session.");
+        }
+    }
+
+    private bool CanReplaceLoadedSelection(
+        IReadOnlyDictionary<string, SharedAssemblyCandidate> selection)
+    {
+        foreach (var pinnedAssemblyName in GetPinnedAssemblyNames())
+        {
+            if (!selection.TryGetValue(pinnedAssemblyName, out var replacement))
             {
-                yield return SelectPreferredSharedAssemblyCandidate(contractCandidates);
+                return false;
+            }
+            if (!_loadedCandidates.TryGetValue(pinnedAssemblyName, out var loaded))
+            {
+                continue;
+            }
+            if (!SharedContractAssemblyPolicy.IdentitiesMatch(loaded.Name, replacement.Name))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!SharedContractAssemblyPolicy.FileMatchesDefinition(
+                        replacement.Path,
+                        loaded.DefinitionHash))
+                {
+                    return false;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return false;
             }
         }
+        return true;
+    }
+
+    private IReadOnlySet<string> GetPinnedAssemblyNames()
+    {
+        var pinned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Queue<string>(_loadedCandidates.Keys);
+        while (pending.TryDequeue(out var assemblyName))
+        {
+            if (!pinned.Add(assemblyName))
+            {
+                continue;
+            }
+            if (!SharedAssemblyPaths.TryGetValue(assemblyName, out var path)
+                || !File.Exists(path))
+            {
+                pinned.UnionWith(SharedAssemblyPaths.Keys);
+                return pinned;
+            }
+
+            IReadOnlyList<AssemblyName> references;
+            try
+            {
+                references = ReadAssemblyReferences(path);
+            }
+            catch (Exception exception) when (exception is BadImageFormatException or IOException or UnauthorizedAccessException)
+            {
+                pinned.UnionWith(SharedAssemblyPaths.Keys);
+                return pinned;
+            }
+            foreach (var reference in references)
+            {
+                if (reference.Name is not null && SharedAssemblyPaths.ContainsKey(reference.Name))
+                {
+                    pending.Enqueue(reference.Name);
+                }
+            }
+        }
+        return pinned;
+    }
+
+    private void ApplySelection(IReadOnlyDictionary<string, SharedAssemblyCandidate> selection)
+    {
+        SharedAssemblyPaths.Clear();
+        SharedAssemblyNames.Clear();
+        foreach (var candidate in selection.Values.OrderBy(
+                     static candidate => candidate.Name.Name,
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            SharedAssemblyPaths[candidate.Name.Name!] = candidate.Path;
+            SharedAssemblyNames[candidate.Name.Name!] = candidate.Name;
+        }
+        _sharedAssemblyLoadContext.ReplaceMappings(SharedAssemblyPaths);
+    }
+
+    private static IReadOnlyList<SharedAssemblyCandidate> IndexProbeDirectory(string probeDirectory)
+    {
+        if (!Directory.Exists(probeDirectory))
+        {
+            return [];
+        }
+
+        var candidates = new List<SharedAssemblyCandidate>();
+        foreach (var assemblyPath in Directory.EnumerateFiles(probeDirectory, "*.dll", SearchOption.TopDirectoryOnly)
+                     .OrderBy(static path => path, PathComparer))
+        {
+            try
+            {
+                var assemblyName = AssemblyName.GetAssemblyName(assemblyPath);
+                if (!string.IsNullOrWhiteSpace(assemblyName.Name))
+                {
+                    candidates.Add(new SharedAssemblyCandidate(assemblyPath, assemblyName));
+                }
+            }
+            catch (Exception exception) when (exception is BadImageFormatException or FileLoadException or IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        return candidates;
     }
 
     private static SharedAssemblyCandidate SelectPreferredSharedAssemblyCandidate(
         IReadOnlyList<SharedAssemblyCandidate> candidates)
     {
-        var selected = candidates[0];
-        foreach (var candidate in candidates.Skip(1))
+        var ordered = candidates
+            .OrderByDescending(static candidate => candidate.Name.Version, VersionComparer.Instance)
+            .ThenBy(static candidate => candidate.Path, PathComparer)
+            .ToArray();
+        var selected = ordered[0];
+        foreach (var candidate in ordered.Skip(1))
         {
             if (!FamiliesAndMajorMatch(selected.Name, candidate.Name))
             {
@@ -240,76 +382,13 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
                 throw new InvalidOperationException(
                     $"Conflicting shared assembly '{candidate.Name.Name}' uses the same unsigned identity for different binary definitions in '{selected.Path}' and '{candidate.Path}'.");
             }
-
-            if (SharedContractAssemblyPolicy.CompareVersions(candidate.Name.Version, selected.Name.Version) > 0)
-            {
-                selected = candidate;
-            }
         }
-
         return selected;
-    }
-
-    private void RegisterSharedDependencyClosure(
-        IReadOnlyDictionary<string, List<SharedAssemblyCandidate>> candidateAssemblies)
-    {
-        var pending = new Queue<string>(SharedAssemblyPaths.Keys);
-        var processed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        while (pending.TryDequeue(out var assemblyName))
-        {
-            if (!processed.Add(assemblyName))
-            {
-                continue;
-            }
-
-            var assembly = LoadSharedAssembly(assemblyName);
-            foreach (var reference in assembly.GetReferencedAssemblies())
-            {
-                if (reference.Name is null || _hostSharedAssemblies.ContainsKey(reference.Name))
-                {
-                    continue;
-                }
-
-                if (SharedAssemblyPaths.ContainsKey(reference.Name))
-                {
-                    pending.Enqueue(reference.Name);
-                    continue;
-                }
-
-                var candidate = FindCandidate(reference, candidateAssemblies);
-                if (candidate is null)
-                {
-                    continue;
-                }
-
-                RegisterCandidate(candidate.Value, reference);
-                pending.Enqueue(candidate.Value.Name.Name!);
-            }
-        }
-    }
-
-    private Assembly LoadSharedAssembly(string assemblyName)
-    {
-        if (_hostSharedAssemblies.TryGetValue(assemblyName, out var hostAssembly))
-        {
-            return hostAssembly;
-        }
-
-        if (_packageSharedAssemblies.TryGetValue(assemblyName, out var packageAssembly))
-        {
-            return packageAssembly;
-        }
-
-        var requestedAssemblyName = SharedAssemblyNames[assemblyName];
-        var loadedAssembly = _sharedAssemblyLoadContext.LoadSharedAssembly(SharedAssemblyPaths[assemblyName]);
-        ValidateSharedContractCompatibility(requestedAssemblyName, loadedAssembly);
-        _packageSharedAssemblies[assemblyName] = loadedAssembly;
-        return loadedAssembly;
     }
 
     private static SharedAssemblyCandidate? FindCandidate(
         AssemblyName requestedAssemblyName,
-        IReadOnlyDictionary<string, List<SharedAssemblyCandidate>> candidateAssemblies)
+        IReadOnlyDictionary<string, SharedAssemblyCandidate[]> candidateAssemblies)
     {
         if (requestedAssemblyName.Name is null
             || !candidateAssemblies.TryGetValue(requestedAssemblyName.Name, out var candidates))
@@ -317,18 +396,54 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
             return null;
         }
 
-        SharedAssemblyCandidate? selected = null;
-        foreach (var candidate in candidates.Where(candidate =>
-                     SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(requestedAssemblyName, candidate.Name)))
+        var compatible = candidates
+            .Where(candidate => SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(
+                requestedAssemblyName,
+                candidate.Name))
+            .ToArray();
+        return compatible.Length == 0
+            ? null
+            : SelectPreferredSharedAssemblyCandidate(compatible);
+    }
+
+    private static IReadOnlyList<AssemblyName> ReadAssemblyReferences(string assemblyPath)
+    {
+        using var stream = new FileStream(
+            assemblyPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var peReader = new PEReader(stream);
+        if (!peReader.HasMetadata)
         {
-            if (selected is null
-                || SharedContractAssemblyPolicy.CompareVersions(candidate.Name.Version, selected.Value.Name.Version) > 0)
-            {
-                selected = candidate;
-            }
+            return [];
         }
 
-        return selected;
+        var metadata = peReader.GetMetadataReader();
+        var references = new List<AssemblyName>();
+        foreach (var handle in metadata.AssemblyReferences)
+        {
+            var reference = metadata.GetAssemblyReference(handle);
+            var assemblyName = new AssemblyName
+            {
+                Name = metadata.GetString(reference.Name),
+                Version = reference.Version,
+                CultureName = reference.Culture.IsNil ? null : metadata.GetString(reference.Culture),
+            };
+            var keyOrToken = reference.PublicKeyOrToken.IsNil
+                ? []
+                : metadata.GetBlobBytes(reference.PublicKeyOrToken);
+            if ((reference.Flags & AssemblyFlags.PublicKey) != 0)
+            {
+                assemblyName.SetPublicKey(keyOrToken);
+            }
+            else
+            {
+                assemblyName.SetPublicKeyToken(keyOrToken);
+            }
+            references.Add(assemblyName);
+        }
+        return references;
     }
 
     private bool TryLoadOptionalHostAssembly(string assemblyName, out Assembly assembly)
@@ -358,6 +473,22 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
             ? assembly
             : null;
 
+    private void TrackLoadedSharedAssembly(string path, Assembly assembly)
+    {
+        lock (_syncRoot)
+        {
+            var assemblyName = assembly.GetName();
+            if (assemblyName.Name is null)
+            {
+                return;
+            }
+            _packageSharedAssemblies[assemblyName.Name] = assembly;
+            _loadedCandidates[assemblyName.Name] = new LoadedSharedAssembly(
+                assemblyName,
+                SharedContractAssemblyPolicy.ComputeDefinitionHash(path));
+        }
+    }
+
     private static void ValidateSharedContractCompatibility(AssemblyName requestedAssemblyName, Assembly loadedAssembly)
     {
         var loadedAssemblyName = loadedAssembly.GetName();
@@ -381,17 +512,36 @@ internal sealed class SharedContractAssemblyRegistryCore : IDisposable
                 Math.Max(version.Build, 0),
                 Math.Max(version.Revision, 0));
 
-    private static bool IsPathInDirectories(string path, IReadOnlyList<string> normalizedDirectories)
+    private static IReadOnlyList<string> NormalizeProbeDirectories(IEnumerable<string> probeDirectories)
+        => probeDirectories
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(static path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)))
+            .Distinct(PathComparer)
+            .ToArray();
+
+    private static void ReplaceDictionary<TValue>(
+        IDictionary<string, TValue> destination,
+        IReadOnlyDictionary<string, TValue> source)
     {
-        var normalizedPath = Path.GetFullPath(path);
-        return normalizedDirectories.Any(directory => normalizedPath.StartsWith(directory, StringComparison.OrdinalIgnoreCase));
+        destination.Clear();
+        foreach (var entry in source)
+        {
+            destination.Add(entry.Key, entry.Value);
+        }
     }
 
-    private static string NormalizeDirectoryPath(string path)
+    private static StringComparer PathComparer
+        => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private sealed class VersionComparer : IComparer<Version?>
     {
-        var fullPath = Path.GetFullPath(path);
-        return fullPath.EndsWith(Path.DirectorySeparatorChar) || fullPath.EndsWith(Path.AltDirectorySeparatorChar)
-            ? fullPath
-            : fullPath + Path.DirectorySeparatorChar;
+        public static VersionComparer Instance { get; } = new();
+
+        public int Compare(Version? left, Version? right)
+            => SharedContractAssemblyPolicy.CompareVersions(left, right);
     }
+
+    private sealed record LoadedSharedAssembly(
+        AssemblyName Name,
+        byte[] DefinitionHash);
 }

@@ -6,6 +6,8 @@
         <AnalysisLevel>latest</AnalysisLevel>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
         <SunderDeveloperPackageVersion>1.1.0</SunderDeveloperPackageVersion>
+        <SunderDeveloperPackageVersionRange>[1.1.0,1.2.0)</SunderDeveloperPackageVersionRange>
+        <SunderSdkAssemblyVersion>1.1.0.0</SunderSdkAssemblyVersion>
         <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
         <RestoreLockedMode Condition="'$(CI)' == 'true' or '$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
     </PropertyGroup>

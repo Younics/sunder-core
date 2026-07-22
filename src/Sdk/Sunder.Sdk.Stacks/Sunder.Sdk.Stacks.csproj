@@ -7,10 +7,12 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
     <Version>$(SunderDeveloperPackageVersion)</Version>
+    <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk.Stacks</Title>
-    <Description>Public Sunder Stack import, export, and package contribution contracts.</Description>
+    <Description>Public contracts for contributing package data to Sunder Stack discovery, export, preview, and import operations.</Description>
+    <PackageTags>sunder;package;plugin;sdk;stacks;import;export</PackageTags>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
     <PackageIcon>icon.png</PackageIcon>

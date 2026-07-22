@@ -67,7 +67,6 @@ internal static class RuntimeHostComposition
         services.AddSingleton<PackageCallbackAccessService>();
         services.AddSingleton<PackageAuthAccessService>();
         services.AddHostedService<PackageCallbackSessionCleanupService>();
-        services.AddSingleton<PackageFaultService>();
         services.AddSingleton<RuntimeStackExportService>();
         services.AddSingleton<RuntimeStackImportService>();
         services.AddHostedService<RuntimeStackImportPlanCleanupService>();

@@ -23,7 +23,7 @@ internal sealed partial class JsonPackageKeyValueStore : IPackageKeyValueStore
 
     public Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        PackageStorageGuards.Key(key, nameof(key));
         return _document.ExecuteAsync(transaction =>
         {
             var state = Load(transaction);
@@ -33,8 +33,8 @@ internal sealed partial class JsonPackageKeyValueStore : IPackageKeyValueStore
 
     public Task SetValueAsync(string key, string value, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
-        ArgumentNullException.ThrowIfNull(value);
+        PackageStorageGuards.Key(key, nameof(key));
+        PackageStorageGuards.Value(value, nameof(value));
         return _document.ExecuteAsync(transaction =>
         {
             var state = Load(transaction);
@@ -52,7 +52,7 @@ internal sealed partial class JsonPackageKeyValueStore : IPackageKeyValueStore
 
     public Task<bool> ContainsKeyAsync(string key, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        PackageStorageGuards.Key(key, nameof(key));
         return _document.ExecuteAsync(
             transaction => Load(transaction).Values.ContainsKey(key),
             cancellationToken);
@@ -60,7 +60,7 @@ internal sealed partial class JsonPackageKeyValueStore : IPackageKeyValueStore
 
     public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        PackageStorageGuards.Key(key, nameof(key));
         return _document.ExecuteAsync(transaction =>
         {
             var state = Load(transaction);
@@ -77,15 +77,18 @@ internal sealed partial class JsonPackageKeyValueStore : IPackageKeyValueStore
 
     public Task<IReadOnlyList<string>> ListKeysAsync(
         string? prefix = null,
-        CancellationToken cancellationToken = default) =>
-        _document.ExecuteAsync<IReadOnlyList<string>>(transaction =>
+        CancellationToken cancellationToken = default)
+    {
+        PackageStorageGuards.KeyPrefix(prefix, nameof(prefix));
+        return _document.ExecuteAsync<IReadOnlyList<string>>(transaction =>
         {
             return Load(transaction).Values.Keys
-                .Where(key => string.IsNullOrWhiteSpace(prefix)
+                .Where(key => string.IsNullOrEmpty(prefix)
                     || key.StartsWith(prefix, StringComparison.Ordinal))
                 .OrderBy(key => key, StringComparer.Ordinal)
                 .ToArray();
         }, cancellationToken);
+    }
 
     public void ResetAfterFailure() => _document.Execute(transaction => transaction.ResetFailureMarker());
 

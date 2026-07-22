@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Security.Cryptography;
+using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
@@ -86,7 +87,8 @@ internal static class PackageStorageJson
     internal static Dictionary<string, string> ReadStringDictionary(
         JsonElement element,
         string objectError,
-        string valueError)
+        string valueError,
+        bool enforcePackageKeyValidation = true)
     {
         if (element.ValueKind != JsonValueKind.Object)
         {
@@ -96,6 +98,14 @@ internal static class PackageStorageJson
         if (!TryReadStringDictionary(element, out var values))
         {
             throw new InvalidDataException(valueError);
+        }
+
+        if (values.Any(pair =>
+                (enforcePackageKeyValidation && !PackageStorageValidation.IsValidKey(pair.Key))
+                || !PackageStorageValidation.IsValidValue(pair.Value)))
+        {
+            throw new InvalidDataException(
+                "Stored package keys or values violate the portable package storage contract.");
         }
 
         return values;

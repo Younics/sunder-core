@@ -16,15 +16,17 @@ The unreleased 1.1 App and Runtime use clean-break protocol revision `3`. Dev se
 - `sdkApiVersion`: broad SDK activation generation. Current value is `1`.
 - `sdkPackageVersion`: required strict SemVer 2.0 `Sunder.Sdk` package/build version used by `Sunder.Package.Build`.
 - `requiredSdkCapabilities`: granular Host-required SDK features inferred from SDK contract usage.
-- `sdkVersion`: optional SDK version metadata when supplied by build properties. Compatibility decisions use `sdkApiVersion` and `requiredSdkCapabilities`.
 
-V1 is a clean format boundary: `sdkApiVersion` must be exactly `1`, `sdkPackageVersion` must be valid SemVer 2.0, and `requiredSdkCapabilities` must contain distinct V1-form ids. The shipped 1.1 baseline additionally requires `sdkPackageVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing or mixed 1.0/1.1 compatibility metadata is rejected before assembly load.
+V1 is a clean format boundary: build tooling emits `sdkApiVersion` exactly `1`, `sdkPackageVersion` must be valid SemVer 2.0, and `requiredSdkCapabilities` must contain distinct V1-form ids. The shipped 1.1 baseline additionally requires `sdkPackageVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing or mixed 1.0/1.1 compatibility metadata is rejected before assembly load.
+
+Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`, and generated runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
 
 ## Compatibility Rules
 
 - The immutable 1.1 API snapshots are the compatibility baseline. Future 1.1 patches may extend but must not break them.
 - Current `Sunder.Sdk.*` contracts are SDK API `1`.
 - An old Host must reject unsupported package SDK requirements before assembly load.
+- Runtime/Registry projection records are structurally ratcheted and their current JSON plus representative N-1 JSON remain test gates. Additive optional fields are permitted; silent projection drift is not.
 
 ## Shared Contract Assemblies
 
@@ -63,7 +65,6 @@ Current SDK capabilities are:
 | `logging.v1` | package logging abstractions |
 | `notifications.v1` | package notifications |
 | `shell-view.v1` | shell view/hotbar/navigation services |
-| `development-package-sessions.v1` | optional development session control, availability, and structured outcomes |
 | `runtime-operations.v1` | package-scoped typed App-to-Runtime operations and streams |
 | `stacks.v1` | `Sunder.Sdk.Stacks` Stack import/export data contracts |
 | `stacks.contributions.v1` | `Sunder.Sdk.Stacks` Stack contributor extension contracts |
@@ -94,6 +95,6 @@ Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one
 
 ## Extension Catalog Changes
 
-Use `IPackageExtensionCatalogMonitor` for structured extension catalog changes. It exposes `Changed` with `PackageExtensionCatalogChangedEventArgs` including revision, reason, and per-extension-point additions/removals.
+Use `IPackageExtensionCatalogMonitor` for structured extension catalog changes. It exposes `Changed` with `PackageExtensionCatalogChangedEventArgs` including revision, active-lifecycle reason, and per-extension-point additions/removals. The Host isolates subscriber exceptions so one package cannot interrupt another package's activation or prevent later subscribers from receiving the revision.
 
 `IPackageExtensionCatalog.GetExtensionContributions` is mandatory. Hosts and test catalogs must supply the canonical non-empty id of the package that registered each contribution. The extension-point definition or contracts assembly does not own contributions from other packages; explicit ownership prevents Stack and other dependency-producing consumers from silently omitting package requirements.

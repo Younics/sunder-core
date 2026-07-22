@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reflection;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
@@ -20,6 +21,29 @@ public sealed class PublicApiBaselineTests
         typeof(RegistryPackageArtifact).Assembly,
         typeof(SunderPackageManifest).Assembly,
     };
+
+    public static TheoryData<Assembly> SdkContractAssemblies => new()
+    {
+        typeof(IPackageContext).Assembly,
+        typeof(IAvaloniaPackageContributionRegistry).Assembly,
+        typeof(IPackageStackExporter).Assembly,
+    };
+
+    [Theory]
+    [MemberData(nameof(SdkContractAssemblies))]
+    public void Sdk11ContractAssembliesUseStableBinaryVersion(Assembly assembly)
+        => Assert.Equal(new Version(1, 1, 0, 0), assembly.GetName().Version);
+
+    [Fact]
+    public void AvaloniaGeneratedImplementationTypesAreNotSupportedApi()
+    {
+        var generatedTypes = typeof(IAvaloniaPackageContributionRegistry).Assembly
+            .GetExportedTypes()
+            .Where(static type => type.Namespace == "CompiledAvaloniaXaml");
+
+        Assert.DoesNotContain(generatedTypes, static type =>
+            type.GetCustomAttribute<EditorBrowsableAttribute>()?.State != EditorBrowsableState.Never);
+    }
 
     [Theory]
     [MemberData(nameof(SdkAssemblies))]
@@ -48,11 +72,16 @@ public sealed class PublicApiBaselineTests
         public static string Format(Assembly assembly)
         {
             var lines = assembly.GetExportedTypes()
+                .Where(IsSupportedPublicApiType)
                 .OrderBy(static type => type.FullName, StringComparer.Ordinal)
                 .SelectMany(FormatType)
                 .ToArray();
             return string.Join('\n', lines) + "\n";
         }
+
+        private static bool IsSupportedPublicApiType(Type type)
+            => type.Namespace != "CompiledAvaloniaXaml"
+               || type.GetCustomAttribute<EditorBrowsableAttribute>()?.State != EditorBrowsableState.Never;
 
         private static IEnumerable<string> FormatType(Type type)
         {

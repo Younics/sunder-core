@@ -8,7 +8,8 @@ using Sunder.Sdk.Packaging;
 
 namespace Sunder.Package.Build.Tasks;
 
-internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
+/// <summary>MSBuild task for V1 package manifest generation.</summary>
+public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilities.Task
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -24,8 +25,6 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
     [Required] public string PackageVersion { get; set; } = string.Empty;
     [Required] public string ProjectDirectory { get; set; } = string.Empty;
     public string? TargetFramework { get; set; }
-    public string? SdkVersion { get; set; }
-    public string? SdkApiVersion { get; set; }
     public string? SdkPackageVersion { get; set; }
     public ITaskItem[] SdkCapabilities { get; set; } = [];
     public ITaskItem[] ReferencePaths { get; set; } = [];
@@ -76,7 +75,6 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
         if (!new PackageManifestValidator(
                 PackageVersion,
                 EntryAssembly,
-                SdkApiVersion,
                 sdkPackageVersion,
                 ProjectDirectory,
                 assets,
@@ -96,10 +94,9 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
             HostRoles = metadata.HostRoles,
             Icon = string.IsNullOrWhiteSpace(metadata.Icon) ? null : PackageAssetDiscovery.NormalizePath(metadata.Icon),
             DependsOn = metadata.Dependencies.Count == 0 ? null : metadata.Dependencies,
-            SdkApiVersion = ResolveSdkApiVersion(),
+            SdkApiVersion = SunderSdkApiVersions.Current,
             SdkPackageVersion = sdkPackageVersion,
             RequiredSdkCapabilities = metadata.RequiredSdkCapabilities.Count == 0 ? null : metadata.RequiredSdkCapabilities,
-            SdkVersion = string.IsNullOrWhiteSpace(SdkVersion) ? null : SdkVersion,
             TargetFramework = string.IsNullOrWhiteSpace(TargetFramework) ? null : TargetFramework,
         };
 
@@ -112,19 +109,4 @@ internal sealed class PackageManifestGenerator : Microsoft.Build.Utilities.Task
         Log.LogMessage(MessageImportance.High, $"Generated Sunder package manifest at {ManifestOutputPath}");
         return !Log.HasLoggedErrors;
     }
-
-    private int ResolveSdkApiVersion()
-    {
-        if (string.IsNullOrWhiteSpace(SdkApiVersion))
-        {
-            return SunderSdkApiVersions.Current;
-        }
-        if (int.TryParse(SdkApiVersion, out var apiVersion) && apiVersion == SunderSdkApiVersions.V1)
-        {
-            return apiVersion;
-        }
-        Log.LogError($"Sunder SDK API version '{SdkApiVersion}' must be {SunderSdkApiVersions.V1} for the V1 manifest.");
-        return SunderSdkApiVersions.Current;
-    }
-
 }

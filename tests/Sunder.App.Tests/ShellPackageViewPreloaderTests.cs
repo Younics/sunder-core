@@ -30,7 +30,6 @@ public sealed class ShellPackageViewPreloaderTests
             [],
             [services],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
         var state = new ShellState
@@ -100,7 +99,6 @@ public sealed class ShellPackageViewPreloaderTests
             [],
             [services],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
         var views = new Dictionary<string, ShellPackageView>(StringComparer.OrdinalIgnoreCase)

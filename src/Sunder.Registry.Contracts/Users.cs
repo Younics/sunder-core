@@ -15,11 +15,7 @@ public sealed record RegistryCurrentUserResponse(
     string? AvatarUrl = null,
     bool RequiresUsername = false);
 
-public sealed record RegistryUpdateCurrentUserProfileRequest(
-    string? Username,
-    string? DisplayName,
-    string? Email,
-    string? AvatarUrl);
+public sealed record RegistryUpdateCurrentUserProfileRequest(string? Username);
 
 public sealed record RegistryUserProfileSummary(
     string UserId,
@@ -57,4 +53,5 @@ public sealed record RegistryUserPackageDetails(
     IReadOnlyList<RegistryPackageMaintainer> Maintainers,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
-    RegistryPackageProfile? Profile = null);
+    RegistryPackageProfile? Profile = null,
+    int? TotalVersionCount = null);

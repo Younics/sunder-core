@@ -21,7 +21,12 @@ internal sealed class RegistryPackageChangeOrchestrator(
         => ExecuteAsync(
             new RuntimeRegistryPackageBatchRequest(
                 request.RegistryOrigin,
-                [new RuntimeRegistryPackageChangeRequest(request.PackageId, request.Version, request.Version is null ? request.Tag : null)],
+                [new RuntimeRegistryPackageChangeRequest(
+                    request.PackageId,
+                    request.Version,
+                    request.Version is null ? request.Tag : null,
+                    request.VersionRange,
+                    request.Required)],
                 request.IncludePrerelease,
                 request.AllowDowngrade,
                 request.Reinstall),

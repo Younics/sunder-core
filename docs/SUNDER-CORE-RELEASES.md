@@ -11,7 +11,7 @@ The Sunder Core repository has separate version streams:
 - `host/vX.Y.Z` publishes the standalone current-user Host: the `Sunder.Host.Supervisor` public gateway and its nested `Sunder.Runtime.Host` Runtime worker.
 - `sdk/vX.Y.Z` publishes the coordinated public SDK, build-tooling, and template NuGet packages.
 
-Prerelease tags such as `app/v0.1.0-beta.1`, `cli/v0.1.0-beta.1`, `host/v0.1.0-beta.1`, and `sdk/v1.1.0-beta.1` are supported and are published as GitHub prereleases.
+Prerelease tags such as `app/v0.1.0-beta.1`, `cli/v0.1.0-beta.1`, `host/v0.1.0-beta.1`, and `sdk/v1.1.1-beta.1` are supported and are published as GitHub prereleases. `sdk/v1.1.0-*` is explicitly rejected because the 1.1 dependency and Host baseline starts at stable `1.1.0`.
 
 ## Existing Workflow Checks
 
@@ -19,7 +19,7 @@ The PR and `main` SDK CI workflow restores, builds, and runs `dotnet test Sunder
 
 The App packaging CI runs on macOS when its packaging files change. It syntax-checks the release/install scripts and creates and inspects an unsigned fixture DMG. It does not build, sign, or release the App.
 
-The `sdk/v*` release workflow runs `Sunder.Runtime.Host.Tests` on Linux, Windows, and macOS, with external keystore tests enabled only on macOS. It also runs `Sunder.Package.Build.Tests`, `Sunder.Sdk.PublicApi.Tests`, and generated-template validation before publishing the five NuGet packages.
+The `sdk/v*` release workflow runs `Sunder.Runtime.Host.Tests` on Linux, Windows, and macOS, with external keystore tests enabled only on macOS. A second three-OS gate runs focused `Sunder.Package.Format` tests, consumes the packed `Sunder.Package.Build` and `Sunder.Sdk` NuGet artifacts in a clean sample, and validates the resulting exact archive through the CLI/Format path. Release MSBuild invocations set only the coordinated Sunder package version and computed minor-line range, using MSBuild's `%2C` command-line escape for the range comma, so project-specific fixture versions remain intact and project-reference dependencies pack with bounded ranges. The workflow also runs `Sunder.Package.Build.Tests`, `Sunder.Sdk.PublicApi.Tests`, bounded dependency inspection, and generated-template validation before publishing the five NuGet packages.
 
 The `app/v*` and `host/v*` tag workflows run `Sunder.Host.Supervisor.Tests` and `Sunder.Runtime.Host.Tests` on Linux, Windows, and macOS before packaging their release assets. The `cli/v*` workflow validates its release archives but does not run `dotnet test`. Do not treat a tag release as a replacement for the PR/main SDK CI coverage.
 

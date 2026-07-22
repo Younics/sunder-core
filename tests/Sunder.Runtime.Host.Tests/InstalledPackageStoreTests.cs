@@ -82,6 +82,32 @@ public sealed class InstalledPackageStoreTests
         Assert.DoesNotContain(".tmp-", await File.ReadAllTextAsync(paths.StateFilePath), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReplacementPolicy_UsesPrecedenceForDowngradesAndFullIdentityForReinstalls()
+    {
+        var paths = CreateRuntimePackagePaths();
+        var current = CreatePackage(paths, "test.package", "1.2.3+first");
+
+        Assert.Null(PackageStorePolicy.ValidateReplacementVersion(
+            current,
+            CreatePackage(paths, "test.package", "1.2.3+second"),
+            allowDowngrade: false,
+            reinstall: false));
+        var sameIdentityError = PackageStorePolicy.ValidateReplacementVersion(
+            current,
+            current,
+            allowDowngrade: false,
+            reinstall: false);
+        var downgradeError = PackageStorePolicy.ValidateReplacementVersion(
+            current,
+            CreatePackage(paths, "test.package", "1.2.2+later-build"),
+            allowDowngrade: false,
+            reinstall: false);
+
+        Assert.Contains("already installed", Assert.IsType<string>(sameIdentityError), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cannot be downgraded", Assert.IsType<string>(downgradeError), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static readonly JsonSerializerOptions TestJsonOptions = new() { WriteIndented = true };
 
     private static RuntimePackagePaths CreateRuntimePackagePaths()

@@ -6,6 +6,7 @@ namespace Sunder.Cli;
 internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri RuntimeUrl, TimeSpan RequestTimeout, bool Json)
 {
     public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(15);
+    public static readonly Uri DefaultRuntimeUrl = new("http://127.0.0.1:5275/");
 
     public static CliOptions Parse(List<string> args)
     {
@@ -17,7 +18,7 @@ internal sealed record CliOptions(Uri RegistryApiUrl, Uri RegistryWebUrl, Uri Ru
             ?? registryApiUrl;
         var runtimeUrl = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_URL")
             ?? settings.RuntimeUrl
-            ?? "http://127.0.0.1:5275/";
+            ?? DefaultRuntimeUrl.AbsoluteUri;
 
         registryApiUrl = ConsumeOption(args, "--registry-api-url") ?? registryApiUrl;
         registryWebUrl = ConsumeOption(args, "--registry-web-url") ?? registryWebUrl;

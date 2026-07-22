@@ -67,7 +67,7 @@ The nested Runtime worker (`Sunder.Runtime.Host`) owns:
 - app-side package view activation
 - package workspace view caching
 - settings views and view placement
-- desktop notifications and app-side fault reporting
+- desktop notifications and client-local app-side fault containment
 - visual theme resources and app branding
 
 App and CLI Runtime-worker requests normally pass through the public current-user Host gateway. The Host remains reachable while the worker is stopped or replaced and returns typed unavailability responses instead of exposing the private worker endpoint. A standalone Runtime uses direct loopback only as a development fallback.

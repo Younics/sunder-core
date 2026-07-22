@@ -1,0 +1,13 @@
+{
+  "packages": [
+    {
+      "packageId": "sunder.package.sample",
+      "version": null,
+      "tag": "latest"
+    }
+  ],
+  "installedPackages": [],
+  "includePrerelease": false,
+  "allowDowngrade": false,
+  "reinstall": false
+}

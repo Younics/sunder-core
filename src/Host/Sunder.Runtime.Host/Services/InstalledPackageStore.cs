@@ -111,7 +111,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             package.PackageId,
             package.Name,
             package.Version,
-            PackageSessionPreparer.ResolveInstalledHostRoles(package, manifest),
+            PackageSessionPreparer.ToHostRoles(manifest.HostRoles ?? []),
             package.Summary,
             icon,
             package.IsEnabled,

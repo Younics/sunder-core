@@ -73,6 +73,9 @@ try
         supervisorLifetimeHandle,
         app.Lifetime,
         app.Logger);
+    using var shutdownDeadline = new RuntimeShutdownDeadline(
+        app.Lifetime.ApplicationStopping,
+        RuntimeShutdownDeadline.DefaultTimeout);
     app.UseMiddleware<RuntimeProblemDetailsMiddleware>();
     app.UseMiddleware<RuntimeBearerAuthenticationMiddleware>();
 
@@ -87,7 +90,6 @@ try
         .MapPackageSettingsEndpoints()
         .MapPackageCallbackEndpoints()
         .MapPackageAuthEndpoints()
-        .MapPackageFaultEndpoints()
         .MapDevPackageOwnerEndpoints()
         .MapInstalledPackageEndpoints()
         .MapStackEndpoints()
@@ -154,38 +156,53 @@ try
             }
         });
 
-        await app.WaitForShutdownAsync();
+        await WaitForApplicationStoppingAsync(app.Lifetime.ApplicationStopping);
     }
     finally
     {
+        shutdownDeadline.Start();
+        app.Lifetime.StopApplication();
         runtimeSessionOwner.MarkShuttingDown();
         await RunCleanupStepAsync(
+            "stop the Runtime web host",
+            cancellationToken => app.StopAsync(cancellationToken),
+            shutdownDeadline.Token,
+            shutdownLogger);
+        await RunCleanupStepAsync(
             "finish package log discovery",
-            () => packageLogStartupTask,
+            _ => packageLogStartupTask,
+            shutdownDeadline.Token,
             shutdownLogger);
         await RunCleanupStepAsync(
             "stop package callbacks",
-            runtimeSessionOwner.Callbacks.ShutdownAsync,
+            _ => runtimeSessionOwner.Callbacks.ShutdownAsync(),
+            shutdownDeadline.Token,
             shutdownLogger);
         await RunCleanupStepAsync(
             "stop dev package watching",
-            () => devPackageWatchService.DisposeAsync().AsTask(),
+            _ => devPackageWatchService.DisposeAsync().AsTask(),
+            shutdownDeadline.Token,
             shutdownLogger);
         await RunCleanupStepAsync(
             "retire package sessions",
-            () => installedPackageService.ShutdownAsync(packageSessionService),
-            shutdownLogger);
+            cancellationToken => installedPackageService.ShutdownAsync(packageSessionService, cancellationToken),
+            shutdownDeadline.Token,
+            shutdownLogger,
+            startWhenDeadlineElapsed: true);
         await RunCleanupStepAsync(
             "stop package log streaming",
-            () => packageLogStreamService.DisposeAsync().AsTask(),
+            _ => packageLogStreamService.DisposeAsync().AsTask(),
+            shutdownDeadline.Token,
             shutdownLogger);
         await RunCleanupStepAsync(
             "clean content transfers",
-            () => Task.Run(transferStore.Dispose),
+            _ => Task.Run(transferStore.Dispose),
+            shutdownDeadline.Token,
             shutdownLogger);
         await RunCleanupStepAsync(
             "clean package UI snapshots",
-            () => Task.Run(snapshotStore.Dispose),
+            _ => Task.Run(snapshotStore.Dispose),
+            shutdownDeadline.Token,
             shutdownLogger);
         try
         {
@@ -208,16 +225,34 @@ finally
 
 static async Task RunCleanupStepAsync(
     string operation,
-    Func<Task> cleanup,
-    ILogger logger)
+    Func<CancellationToken, Task> cleanup,
+    CancellationToken cancellationToken,
+    ILogger logger,
+    bool startWhenDeadlineElapsed = false)
 {
+    if (cancellationToken.IsCancellationRequested && !startWhenDeadlineElapsed)
+    {
+        logger.LogWarning("Skipped {ShutdownOperation} because the Runtime shutdown deadline elapsed", operation);
+        return;
+    }
     try
     {
-        await cleanup().WaitAsync(TimeSpan.FromSeconds(15));
+        await cleanup(cancellationToken).WaitAsync(cancellationToken);
     }
     catch (Exception exception)
     {
         logger.LogWarning(exception, "Failed to {ShutdownOperation} during Runtime shutdown", operation);
+    }
+}
+
+static async Task WaitForApplicationStoppingAsync(CancellationToken applicationStopping)
+{
+    try
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, applicationStopping);
+    }
+    catch (OperationCanceledException) when (applicationStopping.IsCancellationRequested)
+    {
     }
 }
 

@@ -419,7 +419,7 @@ internal sealed partial class InstalledPackageLifecycleService
             }
 
             _faultInjector?.Hit(InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication);
-            var committed = await _publisher.CommitAsync(publication);
+            var committed = await _publisher.CommitAsync(publication, operationToken);
             publication = null;
             var result = storeResult with
             {
@@ -448,7 +448,7 @@ internal sealed partial class InstalledPackageLifecycleService
         }
         catch (OperationCanceledException) when (!storeCommitted)
         {
-            if (publication is not null)
+            if (publication is not null && !publication.Publication.Completed)
             {
                 await _publisher.DiscardAsync(publication);
             }
@@ -462,7 +462,7 @@ internal sealed partial class InstalledPackageLifecycleService
         }
         catch (Exception exception)
         {
-            if (publication is not null)
+            if (publication is not null && !publication.Publication.Completed)
             {
                 if (storeCommitted)
                 {

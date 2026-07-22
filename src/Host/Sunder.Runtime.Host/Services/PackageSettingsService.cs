@@ -1,6 +1,7 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Storage;
 using CanonicalSettingsField = Sunder.Sdk.Settings.PackageSettingsField;
 using CanonicalSettingsFieldKind = Sunder.Sdk.Settings.PackageSettingsFieldKind;
 using StoredPackageSettings = Sunder.Runtime.Host.Infrastructure.Storage.PackageSettings;
@@ -205,6 +206,12 @@ internal sealed class PackageSettingsService
 
     private static void ValidateValue(CanonicalSettingsField field, string? value)
     {
+        if (value is not null && !PackageStorageValidation.IsValidValue(value))
+        {
+            throw new RuntimeValidationException(
+                $"Setting '{field.Key}' cannot exceed {PackageStorageValidation.MaximumValueUtf8Bytes} UTF-8 bytes.");
+        }
+
         if (field.Kind == CanonicalSettingsFieldKind.Secret)
         {
             if (field.IsRequired && string.IsNullOrWhiteSpace(value))

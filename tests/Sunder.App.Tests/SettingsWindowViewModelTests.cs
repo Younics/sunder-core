@@ -422,7 +422,6 @@ public sealed class SettingsWindowViewModelTests
             [],
             [services],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
     }

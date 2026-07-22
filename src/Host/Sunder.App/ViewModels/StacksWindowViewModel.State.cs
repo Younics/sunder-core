@@ -28,7 +28,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly StackPublishingController _publishing;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task> _waitUntilPresentationAppliedAsync;
-    private readonly Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> _notifyStackImportAppliedAsync;
     private readonly MarketplaceSearchScheduler _registrySearchScheduler;
     private readonly TimeSpan _registryDetailSpinnerDelay;
     private readonly MarketplacePackageProfileViewModel _selectedLocalProfile = new();
@@ -57,7 +56,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         IRuntimeStacksClient runtimeApiClient,
         RegistryPackageInstallService? registryInstallService = null,
         Func<RuntimePackageStamp, CancellationToken, Task>? waitUntilPresentationAppliedAsync = null,
-        Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>>? notifyStackImportAppliedAsync = null,
         Func<Uri, IRegistryApiClient>? registryClientFactory = null,
         TimeSpan? registrySearchThrottleDelay = null,
         TimeSpan? registryDetailSpinnerDelay = null)
@@ -70,7 +68,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         _registryInstallService = registryInstallService ?? new RegistryPackageInstallService();
         _publishing = new StackPublishingController(library, runtimeApiClient);
         _waitUntilPresentationAppliedAsync = waitUntilPresentationAppliedAsync ?? ((_, _) => Task.CompletedTask);
-        _notifyStackImportAppliedAsync = notifyStackImportAppliedAsync ?? ((_, _) => Task.FromResult<IReadOnlyList<string>>([]));
         Local = new LocalStacksViewModel(library, LocalSelectionChanged);
         Registry = new RegistryStacksViewModel(
             registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl)),
@@ -461,7 +458,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 _runtimeApiClient,
                 _registryInstallService,
                 _waitUntilPresentationAppliedAsync,
-                _notifyStackImportAppliedAsync,
                 Registry.CreateClient,
                 Registry.RegistryUrlText);
 

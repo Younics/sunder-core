@@ -10,6 +10,7 @@ public sealed record RegistryPublishStackResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }
 
 public sealed record RegistryStackManagementOperationResponse(
@@ -18,6 +19,7 @@ public sealed record RegistryStackManagementOperationResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }
 
 public sealed record RegistryStackStarResponse(
@@ -27,6 +29,7 @@ public sealed record RegistryStackStarResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }
 
 public sealed record RegistryStackMaintainer(
@@ -50,4 +53,5 @@ public sealed record RegistryStackMaintainerOperationResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }

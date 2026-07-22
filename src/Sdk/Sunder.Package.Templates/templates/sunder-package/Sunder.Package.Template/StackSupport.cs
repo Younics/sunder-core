@@ -15,9 +15,9 @@ public sealed partial class PackageModule
 
 public sealed class PackageStackContributor : IPackageStackExporter, IPackageStackImporter
 {
-    public string ContributorId => "sunder.package.template.stacks";
+    public string ContributorId => "SUNDER_PACKAGE_ID_CSHARP.stacks";
 
-    public string DisplayName => "Sunder Package Template";
+    public string DisplayName => "SUNDER_PACKAGE_NAME_CSHARP";
 
     public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
         StackExportDiscoveryContext context,

@@ -1,13 +1,3 @@
-attribute System.ComponentModel.EditorBrowsableAttribute(Never)
-type class CompiledAvaloniaXaml.!AvaloniaResources
-  method static Avalonia.Controls.ResourceDictionary Build:/Themes/SunderThemeResources.axaml(System.IServiceProvider )
-  method static Avalonia.Styling.Styles Build:/Themes/SunderPackageStyles.axaml(System.IServiceProvider )
-  method static System.Void Populate:/Themes/SunderPackageStyles.axaml(System.IServiceProvider , Avalonia.Styling.Styles )
-  method static System.Void Populate:/Themes/SunderThemeResources.axaml(System.IServiceProvider , Avalonia.Controls.ResourceDictionary )
-attribute System.ComponentModel.EditorBrowsableAttribute(Never)
-type class CompiledAvaloniaXaml.!XamlLoader
-  method static System.Object TryLoad(System.IServiceProvider , System.String )
-  method static System.Object TryLoad(System.String )
 type sealed class Sunder.Sdk.Avalonia.AvaloniaPackageContributionRegistryExtensions
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("views.v1")
   method static System.Void RegisterPackageView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, Sunder.Sdk.Abstractions.PackageViewRegistration registration) where TView : Avalonia.Controls.Control

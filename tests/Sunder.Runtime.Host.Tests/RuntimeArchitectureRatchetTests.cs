@@ -35,6 +35,7 @@ public sealed class RuntimeArchitectureRatchetTests
 
     [Theory]
     [InlineData("1.0.0")]
+    [InlineData("1.1.0-beta.1")]
     [InlineData("1.2.0")]
     public void RuntimeCompatibilityProfile_RejectsPackagesOutsideCoordinated11Baseline(string sdkVersion)
     {
@@ -46,7 +47,24 @@ public sealed class RuntimeArchitectureRatchetTests
             RequiredSdkCapabilities = [SunderSdkCapabilities.Baseline11V1],
         });
 
-        Assert.Contains(errors, error => error.Contains("1.0 and 1.1 packages cannot be mixed", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("incompatible SDK baseline families cannot be mixed", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("1.1.0")]
+    [InlineData("1.1.7")]
+    [InlineData("1.1.7+build.42")]
+    public void RuntimeCompatibilityProfile_AcceptsCompatible11PackageVersions(string sdkVersion)
+    {
+        var errors = SunderSdkCompatibilityProfile.Validate(new SunderPackageManifest
+        {
+            Id = "test.package",
+            SdkApiVersion = SunderSdkApiVersions.V1,
+            SdkPackageVersion = sdkVersion,
+            RequiredSdkCapabilities = [SunderSdkCapabilities.Baseline11V1],
+        });
+
+        Assert.Empty(errors);
     }
 
     [Fact]
@@ -161,7 +179,6 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.Contains(nameof(RuntimeStackImportService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(PackageSettingsAccessService), source, StringComparison.Ordinal);
         Assert.Contains(nameof(PackageAuthAccessService), source, StringComparison.Ordinal);
-        Assert.Contains(nameof(PackageFaultService), source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -284,7 +301,9 @@ public sealed class RuntimeArchitectureRatchetTests
                      "SUNDER_REGISTRY_URL", "--registry-url", "DisposeLegacyOwnedInstances",
                      "SnapshotLegacyResources", "config/values", "data/configuration",
                      "PackageLifecycleLoadRequest", "InstalledPackageSessionReloadRequest",
-                     "load-batch", "reload-installed",
+                     "load-batch", "reload-installed", "PackageRuntimeFaultReporter",
+                     "ReportPackageFaultAsync", "ReportPackageFaultRequest", "PackageFaultService",
+                     "MapPackageFaultEndpoints",
                  })
         {
             Assert.DoesNotContain(removed, source, StringComparison.Ordinal);

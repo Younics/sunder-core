@@ -34,7 +34,6 @@ internal static class RuntimeStackContractMapper
             item.DisplayName,
             item.Kind,
             item.DefaultSelected,
-            item.Sensitivities?.Select(value => value.ToString()).ToArray() ?? [],
             item.Description,
             item.Details?.Select(detail => new RuntimeStackExportItemDetail(
                 detail.Label,
@@ -136,7 +135,7 @@ internal static class RuntimeStackContractMapper
                         throw new InvalidDataException(
                             $"Stack package '{first.PackageId}' declares invalid minimum version '{candidate}'.");
                     }
-                    if (strongestMinimum is null || parsed > strongestMinimum.Value)
+                    if (strongestMinimum is null || parsed.ComparePrecedenceTo(strongestMinimum.Value) > 0)
                     {
                         strongestMinimum = parsed;
                         minimumVersion = candidate;

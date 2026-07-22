@@ -26,8 +26,11 @@ internal sealed record PackageSessionPublicationResult(
 internal sealed class PackageSessionPublisher(
     RuntimeSessionOwner sessions,
     RuntimePackageUiService ui,
-    ILogger<PackageSessionPublisher> logger)
+    ILogger<PackageSessionPublisher> logger,
+    RuntimeLifecyclePolicyOptions? lifecyclePolicy = null)
 {
+    private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
+
     public PreparedPackageSession Prepare(
         ActivePackageSession session,
         PackageSessionSourceSnapshot sources,
@@ -77,7 +80,7 @@ internal sealed class PackageSessionPublisher(
         }
 
         var publication = await BeginPublishAsync(candidate, cancellationToken);
-        return await CommitAsync(publication);
+        return await CommitAsync(publication, cancellationToken);
     }
 
     public async Task<PendingPackageSessionPublication> BeginPublishAsync(
@@ -103,13 +106,21 @@ internal sealed class PackageSessionPublisher(
         }
     }
 
-    public async Task<PackageSessionPublicationResult> CommitAsync(PendingPackageSessionPublication pending)
+    public async Task<PackageSessionPublicationResult> CommitAsync(
+        PendingPackageSessionPublication pending,
+        CancellationToken cancellationToken = default)
     {
         var started = Stopwatch.GetTimestamp();
         var candidate = pending.Candidate;
         var snapshots = candidate.UiSnapshots;
         try
         {
+            await candidate.Session.StartBackgroundServicesAsync(
+                logger,
+                _lifecyclePolicy.PackageBackgroundServiceStartupTimeout,
+                _lifecyclePolicy.PackageBackgroundServiceCleanupTimeout,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (candidate.StageId is not null)
             {
                 snapshots = ui.PromoteStage(candidate.StageId, candidate.UiSnapshots);
@@ -120,24 +131,11 @@ internal sealed class PackageSessionPublisher(
                 snapshots,
                 candidate.Warnings,
                 candidate.Errors);
-            try
-            {
-                await candidate.Session.StartBackgroundServicesAsync(logger, CancellationToken.None);
-                ui.ScheduleCacheGarbageCollection();
-                logger.LogInformation(
-                    "Committed the package session and started background services in {ElapsedMilliseconds} ms",
-                    Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-                return new PackageSessionPublicationResult(publication.Stamp, publication.Warnings, snapshots);
-            }
-            catch (Exception exception)
-            {
-                const string warning = "The package session was published, but one or more package background services failed to start.";
-                logger.LogError(exception, "Package background service startup failed after session publication");
-                return new PackageSessionPublicationResult(
-                    publication.Stamp,
-                    publication.Warnings.Append(warning).ToArray(),
-                    snapshots);
-            }
+            ui.ScheduleCacheGarbageCollection();
+            logger.LogInformation(
+                "Started background services and committed the package session in {ElapsedMilliseconds} ms",
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            return new PackageSessionPublicationResult(publication.Stamp, publication.Warnings, snapshots);
         }
         catch (Exception exception)
         {
@@ -185,9 +183,25 @@ internal sealed class PackageSessionPublisher(
         await DisposeSessionAsync(candidate.Session);
     }
 
-    private static async Task DisposeSessionAsync(ActivePackageSession session)
+    private async Task DisposeSessionAsync(ActivePackageSession session)
     {
-        await session.StopBackgroundServicesAsync(CancellationToken.None);
-        await session.DisposeAsync();
+        try
+        {
+            await session.StopBackgroundServicesAsync(
+                logger,
+                _lifecyclePolicy.PackageBackgroundServiceCleanupTimeout);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Failed to stop package background services while discarding a session");
+        }
+        try
+        {
+            await session.DisposeAsync(_lifecyclePolicy.PackageBackgroundServiceCleanupTimeout);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Failed to dispose a discarded package session within the cleanup deadline");
+        }
     }
 }

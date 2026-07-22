@@ -26,7 +26,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder: root,
             downloadPackageUiSnapshotAsync: (_, _, _) =>
             {
@@ -71,7 +70,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder: null,
             notificationCenter: notificationCenter,
             uiDispatcher: TestUiDispatcher);
@@ -111,7 +109,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         var warmup = hostService.PreloadViewAsync(
@@ -150,7 +147,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder: null,
             backgroundProcessQueue: backgroundProcesses,
             uiDispatcher: TestUiDispatcher);
@@ -214,7 +210,6 @@ public sealed class PackageViewHostServiceTests
                 [],
                 [],
                 [],
-                faultReporter: null,
                 sessionFolder,
                 uiDispatcher: TestUiDispatcher);
 
@@ -290,7 +285,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: dispatcher);
 
@@ -337,7 +331,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: dispatcher);
         var attachmentBarrierReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -387,7 +380,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
 
@@ -433,7 +425,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         var warmup = hostService.PreloadViewAsync(
@@ -467,7 +458,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
 
@@ -504,7 +494,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         var warmup = hostService.PreloadViewAsync(
@@ -547,7 +536,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         probe.OnNavigateAsync = async cancellationToken =>
@@ -584,7 +572,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         var releaseEscapedOperation = new TaskCompletionSource(
@@ -644,7 +631,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         Task? successor = null;
@@ -687,7 +673,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         var warmup = hostService.PreloadViewAsync(
@@ -735,7 +720,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
 
@@ -765,7 +749,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: TestUiDispatcher);
         var warmup = hostService.PreloadViewAsync(
@@ -909,7 +892,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder,
             downloadPackageUiSnapshotAsync: async (snapshot, destination, cancellationToken) =>
             {
@@ -945,7 +927,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var firstSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
 
@@ -988,7 +970,7 @@ public sealed class PackageViewHostServiceTests
         var firstSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var resourceAssemblies = new AppPackageResourceAssemblyRegistry();
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             resourceAssemblyRegistry: resourceAssemblies,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1042,7 +1024,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var retirementCount = 0;
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
             retireGenerationAsync: generation => ++retirementCount == 2
@@ -1103,7 +1085,7 @@ public sealed class PackageViewHostServiceTests
         }
 
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher,
             retireGenerationAsync: RetireAsync,
@@ -1153,7 +1135,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1193,7 +1174,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1234,7 +1214,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1274,7 +1253,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
         var candidateReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1330,7 +1309,6 @@ public sealed class PackageViewHostServiceTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
@@ -1371,7 +1349,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             notificationCenter: notificationCenter,
             backgroundProcessQueue: backgroundProcesses,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
@@ -1415,7 +1393,7 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
 
@@ -1453,7 +1431,7 @@ public sealed class PackageViewHostServiceTests
         var blockedHash = string.Empty;
         var downloadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: async (snapshot, destination, cancellationToken) =>
             {
                 if (string.Equals(snapshot.ContentHash, blockedHash, StringComparison.OrdinalIgnoreCase))
@@ -1504,7 +1482,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var images = new Queue<TrackedImage>([new TrackedImage(), new TrackedImage()]);
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             loadPackageIconImageAsync: (_, _) =>
                 Task.FromResult(PackageIconImageLoadResult.Success(images.Dequeue())),
@@ -1560,7 +1538,7 @@ public sealed class PackageViewHostServiceTests
         var loadCount = 0;
         var firstImage = new TrackedImage();
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             loadPackageIconImageAsync: (_, _) =>
             {
@@ -1607,7 +1585,7 @@ public sealed class PackageViewHostServiceTests
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
         var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(), [], [], [], null, sessionFolder,
+            new AppPackageViewRegistry(), [], [], [], sessionFolder,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
 
@@ -1619,39 +1597,6 @@ public sealed class PackageViewHostServiceTests
 
         Assert.False(loadContext.IsAlive);
         TryDeleteDirectoryBestEffort(rootPath);
-    }
-
-    [Fact]
-    public async Task ApplyPackageDeltaAsync_ProvidesDevelopmentSessionControlToPackageModules()
-    {
-        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        var sessionFolder = Path.Combine(rootPath, "session");
-        Directory.CreateDirectory(sessionFolder);
-        var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
-        File.WriteAllText(Path.Combine(packageSourceFolder, ShellLifecycleTestPackageModule.ResolveDevelopmentSessionControlMarkerFileName), string.Empty);
-        var package = CreateActiveAgentPackage();
-        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder);
-        var hostService = new PackageViewHostService(
-            new AppPackageViewRegistry(),
-            [],
-            [],
-            [],
-            faultReporter: null,
-            sessionFolder,
-            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
-            uiDispatcher: TestUiDispatcher);
-
-        try
-        {
-            await hostService.ApplyPackageDeltaAsync([package], [source]);
-
-            Assert.NotEmpty(Directory.EnumerateFiles(sessionFolder, ShellLifecycleTestPackageModule.DevelopmentSessionControlResolvedFileName, SearchOption.AllDirectories));
-        }
-        finally
-        {
-            await hostService.DisposeAsync();
-            TryDeleteDirectoryBestEffort(rootPath);
-        }
     }
 
     private static async Task<AppPreparedPackageSource?> PrepareSnapshotAsync(

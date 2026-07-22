@@ -1,0 +1,15 @@
+{
+  "success": false,
+  "items": [],
+  "warnings": [],
+  "errors": [],
+  "conflicts": [
+    {
+      "packageId": "sunder.package.sample",
+      "currentVersion": "1.0.0",
+      "requestedVersionRange": ">=1.1.0 <1.2.0",
+      "requiredByPackageId": null,
+      "message": "Version conflict."
+    }
+  ]
+}

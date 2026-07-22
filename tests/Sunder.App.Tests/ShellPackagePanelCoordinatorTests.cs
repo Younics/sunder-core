@@ -84,7 +84,6 @@ public sealed class ShellPackagePanelCoordinatorTests
                 [],
                 [serviceProvider],
                 [],
-                faultReporter: null,
                 sessionFolder: null,
                 uiDispatcher: new ImmediateUiDispatcher()
             );

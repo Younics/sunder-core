@@ -275,7 +275,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private StacksWindow CreateStacksWindow()
     {
-        var window = _stacksWindowFactory.Create(_waitUntilPackagePresentationAppliedAsync, NotifyStackImportAppliedAsync);
+        var window = _stacksWindowFactory.Create(_waitUntilPackagePresentationAppliedAsync);
 
         window.Closed += (_, _) =>
         {
@@ -354,11 +354,6 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
         await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
     }
-
-    internal async Task<IReadOnlyList<string>> NotifyStackImportAppliedAsync(
-        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
-        CancellationToken cancellationToken)
-        => await _packageViewHostService.NotifyStackImportAppliedAsync(appliedContributions, cancellationToken).ConfigureAwait(false);
 
     private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)
     {

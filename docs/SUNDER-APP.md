@@ -12,7 +12,7 @@
 - package view caching
 - package icon loading and fallback rendering
 - shell notifications
-- app-side package fault reporting to the runtime
+- client-local app-side package fault containment
 - observation of Runtime package/session generations and package logs through authenticated bounded streams
 - visual theme resources and app branding
 

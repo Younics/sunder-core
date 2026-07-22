@@ -4,13 +4,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <PackageType>Template</PackageType>
     <PackageId>Sunder.Package.Templates</PackageId>
-    <Description>dotnet new templates for creating Sunder package projects.</Description>
+    <Description>dotnet new template for creating Sunder package projects with coordinated SDK and package-build references.</Description>
+    <PackageTags>sunder;package;plugin;sdk;dotnet-new;template</PackageTags>
     <EnableDefaultItems>false</EnableDefaultItems>
     <NoDefaultExcludes>true</NoDefaultExcludes>
     <NoWarn>$(NoWarn);NU5110;NU5111</NoWarn>
 
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Version>$(SunderDeveloperPackageVersion)</Version>
+    <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Title>Sunder.Package.Templates</Title>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
@@ -27,11 +29,103 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="templates\**\*" Pack="true" PackagePath="content" />
+    <Content Include="templates\**\*"
+             Exclude="templates\sunder-package\.template.config\template.json"
+             Pack="true"
+             PackagePath="content" />
   </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="templates\sunder-package\Sunder.Package.Template\Assets\icon.png" />
   </ItemGroup>
+
+  <UsingTask TaskName="ReplaceSunderTemplateToken"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <SourceFile ParameterType="System.String" Required="true" />
+      <DestinationFile ParameterType="System.String" Required="true" />
+      <Token ParameterType="System.String" Required="true" />
+      <Value ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Text" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var content = File.ReadAllText(SourceFile);
+        var tokenIndex = content.IndexOf(Token, StringComparison.Ordinal);
+        if (tokenIndex < 0 || content.IndexOf(Token, tokenIndex + Token.Length, StringComparison.Ordinal) >= 0)
+        {
+            Log.LogError($"Template configuration must contain exactly one '{Token}' token.");
+            return false;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(DestinationFile)!);
+        var output = content.Substring(0, tokenIndex) + Value + content.Substring(tokenIndex + Token.Length);
+        File.WriteAllText(DestinationFile, output, new UTF8Encoding(false));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <UsingTask TaskName="GetSunderMinorVersionRange"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Version ParameterType="System.String" Required="true" />
+      <VersionRange ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Numerics" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var match = Regex.Match(Version, @"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:[-+].*)?$");
+        if (!match.Success)
+        {
+            Log.LogError($"PackageVersion '{Version}' is not a supported semantic version.");
+            return false;
+        }
+
+        var major = match.Groups[1].Value;
+        var minor = match.Groups[2].Value;
+        var nextMinor = BigInteger.Parse(minor) + BigInteger.One;
+        VersionRange = $"[{major}.{minor}.0,{major}.{nextMinor}.0)";
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="_PrepareSunderPackageTemplateConfiguration" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_SunderTemplateConfigurationSource>$(MSBuildProjectDirectory)\templates\sunder-package\.template.config\template.json</_SunderTemplateConfigurationSource>
+      <_SunderTemplateConfigurationDirectory>$(IntermediateOutputPath)sunder-template-content\sunder-package\.template.config</_SunderTemplateConfigurationDirectory>
+      <_SunderTemplateConfigurationVersioned>$(_SunderTemplateConfigurationDirectory)\template.versioned.json</_SunderTemplateConfigurationVersioned>
+      <_SunderTemplateConfigurationRanged>$(_SunderTemplateConfigurationDirectory)\template.ranged.json</_SunderTemplateConfigurationRanged>
+      <_SunderTemplateConfigurationOutput>$(_SunderTemplateConfigurationDirectory)\template.json</_SunderTemplateConfigurationOutput>
+    </PropertyGroup>
+
+    <Error Condition="'$(PackageVersion)' == ''"
+           Text="PackageVersion is required to prepare the Sunder package template." />
+    <GetSunderMinorVersionRange Version="$(PackageVersion)">
+      <Output TaskParameter="VersionRange" PropertyName="_SunderTemplatePackageVersionRange" />
+    </GetSunderMinorVersionRange>
+    <ReplaceSunderTemplateToken SourceFile="$(_SunderTemplateConfigurationSource)"
+                                DestinationFile="$(_SunderTemplateConfigurationVersioned)"
+                                Token="__SUNDER_COORDINATED_PACKAGE_VERSION__"
+                                Value="$(PackageVersion)" />
+    <ReplaceSunderTemplateToken SourceFile="$(_SunderTemplateConfigurationVersioned)"
+                                DestinationFile="$(_SunderTemplateConfigurationRanged)"
+                                Token="__SUNDER_COORDINATED_PACKAGE_VERSION_RANGE__"
+                                Value="$(_SunderTemplatePackageVersionRange)" />
+    <ReplaceSunderTemplateToken SourceFile="$(_SunderTemplateConfigurationRanged)"
+                                DestinationFile="$(_SunderTemplateConfigurationOutput)"
+                                Token="__SUNDER_DEFAULT_HOST_CONTRACTS_VERSION_RANGE__"
+                                Value="$(_SunderTemplatePackageVersionRange)" />
+    <ItemGroup>
+      <Content Include="$(_SunderTemplateConfigurationOutput)"
+               Pack="true"
+               PackagePath="content\sunder-package\.template.config\template.json" />
+    </ItemGroup>
+  </Target>
 
 </Project>

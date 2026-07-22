@@ -6,9 +6,12 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
     <Version>$(SunderDeveloperPackageVersion)</Version>
+    <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk.Avalonia</Title>
+    <Description>Avalonia-specific public contracts and Sunder theme resources for package App views and settings UI.</Description>
+    <PackageTags>sunder;package;plugin;sdk;avalonia;ui;theme</PackageTags>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
     <PackageIcon>icon.png</PackageIcon>
@@ -20,7 +23,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" />
     <PackageReference Include="Avalonia" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

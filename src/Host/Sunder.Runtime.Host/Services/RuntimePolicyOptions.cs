@@ -57,7 +57,9 @@ internal sealed record RuntimeLifecyclePolicyOptions
     public TimeSpan StageSweepInterval { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan TerminalStageRetention { get; init; } = TimeSpan.FromMinutes(15);
     public int MaximumTerminalStageStatuses { get; init; } = 256;
-    public TimeSpan ShutdownCleanupStepTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan PackageBackgroundServiceStartupTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan PackageBackgroundServiceCleanupTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan ShutdownTimeout { get; init; } = RuntimeShutdownDeadline.DefaultTimeout;
     public TimeSpan DevPackageOwnerLeaseLifetime { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan DevPackageOwnerSweepInterval { get; init; } = TimeSpan.FromSeconds(5);
 }

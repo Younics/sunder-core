@@ -2,7 +2,7 @@
 
 `Sunder.Package.Build` contains the MSBuild targets and tasks that turn a Sunder package project into local development output and distributable `.sunderpkg` archives.
 
-Reference this package from Sunder runtime package projects together with `Sunder.Sdk`.
+Reference this package from Sunder package projects together with `Sunder.Sdk`.
 
 ## Install
 
@@ -14,8 +14,8 @@ Typical package project reference:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk" Version="1.1.0" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.1.0" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Sdk" Version="[1.1.0,1.2.0)" />
+  <PackageReference Include="Sunder.Package.Build" Version="[1.1.0,1.2.0)" PrivateAssets="all" />
 </ItemGroup>
 ```
 
@@ -106,7 +106,7 @@ Publish the package project:
 dotnet publish .\MyPackage\MyPackage.csproj -c Release
 ```
 
-The publish target writes a `.sunderpkg` archive to the publish directory:
+The publish target validates the indexed staging tree, writes a deterministic `.sunderpkg`, then re-extracts and validates that exact archive before reporting success. The archive is written to the publish directory:
 
 ```text
 bin/Release/net10.0/publish/MyPackage.1.0.0.sunderpkg
@@ -176,7 +176,7 @@ Compatibility metadata is inferred automatically from authored assemblies, inclu
 </ItemGroup>
 ```
 
-Advanced compatibility metadata properties are also supported: `SunderSdkApiVersion`, `SunderSdkPackageVersion`, and `SunderSdkVersion`. `SunderSdkPackageVersion` is verification-only: it must match the informational/package version on the resolved `Sunder.Sdk` reference.
+`SunderSdkPackageVersion` is available as a verification-only override: it must match the informational/package version on the resolved `Sunder.Sdk` reference. The V1 build task always emits SDK API version `1`.
 
 ## Validate Before Publishing
 
@@ -191,5 +191,6 @@ Validation checks archive safety, manifest shape, required files, package id for
 ## More Documentation
 
 - Package author manual: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
+- Build, validate, publish, and version: https://github.com/Younics/sunder-core/blob/main/docs/package-development/BUILD-PUBLISH-VERSIONING.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
 - Sunder SDK: https://www.nuget.org/packages/Sunder.Sdk

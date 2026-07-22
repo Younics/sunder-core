@@ -1,4 +1,5 @@
 using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Storage;
 
 namespace Sunder.Sdk.Settings;
 
@@ -25,6 +26,12 @@ public sealed record PackageSettingsOption
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        if (!PackageStorageValidation.IsValidValue(value))
+        {
+            throw new ArgumentException(
+                $"Settings option values cannot exceed {PackageStorageValidation.MaximumValueUtf8Bytes} UTF-8 bytes.",
+                nameof(value));
+        }
         Value = value;
         Label = label;
     }
@@ -52,6 +59,12 @@ public sealed record PackageSettingsField
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        if (!PackageStorageValidation.IsValidKey(key))
+        {
+            throw new ArgumentException(
+                $"Settings keys must be portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+                nameof(key));
+        }
         if (!Enum.IsDefined(kind))
         {
             throw new ArgumentOutOfRangeException(nameof(kind), kind, "The settings field kind is invalid.");
@@ -64,6 +77,12 @@ public sealed record PackageSettingsField
         if (kind == PackageSettingsFieldKind.Secret && defaultValue is not null)
         {
             throw new ArgumentException($"Secret setting '{key}' must not declare a default value.", nameof(defaultValue));
+        }
+        if (defaultValue is not null && !PackageStorageValidation.IsValidValue(defaultValue))
+        {
+            throw new ArgumentException(
+                $"Setting '{key}' default cannot exceed {PackageStorageValidation.MaximumValueUtf8Bytes} UTF-8 bytes.",
+                nameof(defaultValue));
         }
         if (kind == PackageSettingsFieldKind.Boolean
             && defaultValue is not null
@@ -99,7 +118,7 @@ public sealed record PackageSettingsField
         Options = copiedOptions;
     }
 
-    /// <summary>Gets the case-sensitive settings key.</summary>
+    /// <summary>Gets the case-sensitive portable ASCII settings key.</summary>
     public string Key { get; }
     /// <summary>Gets the user-facing label.</summary>
     public string Label { get; }
@@ -142,6 +161,12 @@ public sealed record PackageSettingsSection
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sectionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        if (!PackageStorageValidation.IsValidKey(sectionId))
+        {
+            throw new ArgumentException(
+                $"Settings section ids must be portable ASCII tokens of at most {PackageStorageValidation.MaximumKeyLength} characters.",
+                nameof(sectionId));
+        }
         ArgumentNullException.ThrowIfNull(fields);
         var copiedFields = Array.AsReadOnly(fields.ToArray());
         if (copiedFields.Count == 0)
@@ -160,7 +185,7 @@ public sealed record PackageSettingsSection
         Fields = copiedFields;
     }
 
-    /// <summary>Gets the stable package-scoped section id.</summary>
+    /// <summary>Gets the stable package-scoped portable ASCII section id.</summary>
     public string SectionId { get; }
     /// <summary>Gets the user-facing title.</summary>
     public string Title { get; }

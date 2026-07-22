@@ -1,6 +1,6 @@
-# Sunder Package Template
+# SUNDER_PACKAGE_NAME_TEXT
 
-Creates a Sunder runtime package project that can be built into a `sunder-dev` folder and loaded into an installed `Sunder.App` instance.
+Creates a Sunder package project that can be built into a `sunder-dev` folder and loaded into an installed `Sunder.App` instance.
 
 ## Common commands
 
@@ -10,8 +10,8 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withAvalonia
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withStacks
-dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.0.0 <2.0.0"
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.0.0 <2.0.0" --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersion <host-contracts-version>
+dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0"
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0" --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersionRange "SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE"
 ```
 
 Generated package projects reference:
@@ -19,7 +19,7 @@ Generated package projects reference:
 - `Sunder.Sdk`
 - `Sunder.Package.Build`
 
-All Sunder references use exact version `1.1.0`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are added only by their matching opt-ins. Stack support registers its exporter and importer separately even when one class implements both interfaces.
+All Sunder references use bounded minor range `SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are added only by their matching opt-ins. Stack support registers its exporter and importer separately even when one class implements both interfaces.
 
 You can build the generated package with:
 
@@ -37,7 +37,7 @@ Use `Sunder.Sdk.Packaging.PackageId`, `SemanticVersion`, and `PackageVersionRang
 
 Use `--withHostDependency` when the generated package should declare a dependency on another package and scaffold integration notes.
 
-Use `--withHostContracts` together with `--hostPackageId`, `--hostContractsPackageId`, and `--hostContractsVersion` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately. This also adds runtime host dependency metadata.
+Use `--withHostContracts` together with `--hostPackageId` and `--hostContractsPackageId` when the host package already publishes a `*.Contracts` package and you want the generated project to restore it immediately. The contracts range defaults to `SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE`; override it with `--hostContractsVersionRange` when necessary. This also adds runtime host dependency metadata.
 
 Use `--createInPlace` when the specified output folder should be the package project folder itself.
 
@@ -45,4 +45,9 @@ Use `--noDefaultView` with `--withAvalonia` when the package needs Avalonia sett
 
 `--packageId` and `--packageName` are required so generated packages do not keep template runtime identity metadata.
 
-Development output is normally supplied at Runtime startup with `--dev-package`. Package UI that integrates development loading must resolve optional `IPackageDevelopmentSessionControl`, check `Availability`, and keep Load/Watch controls disabled with `UnavailableReason` when App-local paths cannot reach Runtime.
+Development output is supplied to Runtime through its development-package startup and owner-lease options; package App code does not load or watch development output.
+
+## Documentation
+
+- Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
+- Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md

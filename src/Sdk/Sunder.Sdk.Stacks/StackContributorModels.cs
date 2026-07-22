@@ -14,7 +14,6 @@ public sealed record StackExportDiscoveryContext(
 /// <param name="Kind">Contributor-defined category used for display and result reporting.</param>
 /// <param name="Description">Optional explanatory text.</param>
 /// <param name="DefaultSelected">Whether export UI selects the item initially; defaults to true.</param>
-/// <param name="Sensitivities">Optional sensitivities present in the item for disclosure UI.</param>
 /// <param name="Details">Optional independently selectable or editable item details.</param>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackExportItemDescriptor(
@@ -23,13 +22,17 @@ public sealed record StackExportItemDescriptor(
     string Kind,
     string? Description = null,
     bool DefaultSelected = true,
-    IReadOnlyList<StackValueSensitivity>? Sensitivities = null,
-    IReadOnlyList<StackExportItemDetail>? Details = null);
+    IReadOnlyList<StackExportItemDetail>? Details = null)
+{
+    /// <summary>Gets an immutable snapshot of the independently selectable or editable details.</summary>
+    public IReadOnlyList<StackExportItemDetail>? Details { get; }
+        = StackContractCollections.FreezeListNullable(Details);
+}
 
 /// <summary>Describes one independently selectable value within an export item.</summary>
 /// <param name="Label">User-facing value label.</param>
 /// <param name="Value">Current export value.</param>
-/// <param name="Sensitivity">Optional sensitivity; <see langword="null"/> means contributor-defined.</param>
+/// <param name="Sensitivity">Optional explicit sensitivity used for disclosure; <see langword="null"/> means no sensitivity classification is disclosed.</param>
 /// <param name="Description">Optional value explanation.</param>
 /// <param name="ValueWhenExcluded">Optional safe replacement used when the detail is excluded.</param>
 /// <param name="DetailId">Stable id required for per-detail selection; <see langword="null"/> makes the detail informational.</param>
@@ -48,13 +51,16 @@ public sealed record StackExportItemDetail(
     bool IsEditable = true,
     bool SupportsAskOnImport = false);
 
-/// <summary>Specifies selected items and optional detail-level export choices.</summary>
-/// <param name="ItemIds">Stable ids selected for export.</param>
-/// <param name="ItemSelections">Optional detail choices; <see langword="null"/> accepts descriptor defaults.</param>
+/// <summary>Specifies selected items and their optional detail-level export choices.</summary>
+/// <param name="ItemSelections">Selected items; a selection with <see langword="null"/> details accepts descriptor defaults.</param>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackExportRequest(
-    IReadOnlyList<string> ItemIds,
-    IReadOnlyList<StackExportItemSelection>? ItemSelections = null);
+    IReadOnlyList<StackExportItemSelection> ItemSelections)
+{
+    /// <summary>Gets an immutable snapshot of the selected items.</summary>
+    public IReadOnlyList<StackExportItemSelection> ItemSelections { get; }
+        = StackContractCollections.FreezeList(ItemSelections);
+}
 
 /// <summary>Associates one selected export item with detail choices.</summary>
 /// <param name="ItemId">Selected item id.</param>
@@ -62,7 +68,12 @@ public sealed record StackExportRequest(
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackExportItemSelection(
     string ItemId,
-    IReadOnlyList<StackExportDetailSelection>? Details = null);
+    IReadOnlyList<StackExportDetailSelection>? Details = null)
+{
+    /// <summary>Gets an immutable snapshot of the detail choices, or <see langword="null"/> when descriptor defaults apply.</summary>
+    public IReadOnlyList<StackExportDetailSelection>? Details { get; }
+        = StackContractCollections.FreezeListNullable(Details);
+}
 
 /// <summary>Overrides inclusion, value, or sensitivity for one export detail.</summary>
 /// <param name="DetailId">Stable detail id from discovery.</param>
@@ -82,11 +93,11 @@ public static class StackExportSelectionExtensions
 {
     /// <summary>Determines whether an item is selected for export.</summary>
     public static bool IsItemSelected(this StackExportRequest request, string itemId)
-        => request.ItemIds.Any(selectedId => string.Equals(selectedId, itemId, StringComparison.OrdinalIgnoreCase));
+        => request.GetItemSelection(itemId) is not null;
 
-    /// <summary>Gets an item's explicit selection using case-insensitive ids, or <see langword="null"/> when defaults apply.</summary>
+    /// <summary>Gets an item's selection using case-insensitive ids, or <see langword="null"/> when the item is not selected.</summary>
     public static StackExportItemSelection? GetItemSelection(this StackExportRequest request, string itemId)
-        => request.ItemSelections?.FirstOrDefault(selection => string.Equals(selection.ItemId, itemId, StringComparison.OrdinalIgnoreCase));
+        => request.ItemSelections.FirstOrDefault(selection => string.Equals(selection.ItemId, itemId, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Determines whether a detail is selected; absent detail choices default to selected.</summary>
     public static bool IsDetailSelected(this StackExportRequest request, string itemId, string detailId)
@@ -109,8 +120,13 @@ public static class StackExportSelectionExtensions
     /// <summary>Gets a nonblank value override or the supplied fallback.</summary>
     public static string GetDetailValue(this StackExportRequest request, string itemId, string detailId, string fallback)
     {
+        if (!request.IsDetailSelected(itemId, detailId))
+        {
+            return fallback;
+        }
+
         var selected = request.GetItemSelection(itemId)?.Details?.FirstOrDefault(detail => string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
-        return selected is { IsSelected: true } && !string.IsNullOrWhiteSpace(selected.ValueOverride)
+        return !string.IsNullOrWhiteSpace(selected?.ValueOverride)
             ? selected.ValueOverride!.Trim()
             : fallback;
     }
@@ -118,6 +134,11 @@ public static class StackExportSelectionExtensions
     /// <summary>Gets a sensitivity override or the supplied fallback.</summary>
     public static StackValueSensitivity GetDetailSensitivity(this StackExportRequest request, string itemId, string detailId, StackValueSensitivity fallback)
     {
+        if (!request.IsDetailSelected(itemId, detailId))
+        {
+            return fallback;
+        }
+
         var selected = request.GetItemSelection(itemId)?.Details?.FirstOrDefault(detail => string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
         return selected?.SensitivityOverride ?? fallback;
     }
@@ -131,7 +152,20 @@ public static class StackExportSelectionExtensions
 public sealed record StackExportContribution(
     IReadOnlyList<StackFragmentExport> Fragments,
     IReadOnlyList<StackPackageRequirement> PackageRequirements,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>Gets an immutable snapshot of the exported fragments.</summary>
+    public IReadOnlyList<StackFragmentExport> Fragments { get; }
+        = StackContractCollections.FreezeList(Fragments);
+
+    /// <summary>Gets an immutable snapshot of the package requirements.</summary>
+    public IReadOnlyList<StackPackageRequirement> PackageRequirements { get; }
+        = StackContractCollections.FreezeList(PackageRequirements);
+
+    /// <summary>Gets an immutable snapshot of the nonfatal warnings.</summary>
+    public IReadOnlyList<string> Warnings { get; }
+        = StackContractCollections.FreezeList(Warnings);
+}
 
 /// <summary>Defines one contributor-owned versioned JSON fragment and optional payload files.</summary>
 /// <param name="FragmentId">Stable id unique within the Stack archive.</param>
@@ -155,7 +189,16 @@ public sealed record StackFragmentExport(
     bool DefaultSelected = true,
     IReadOnlyList<StackRequiredInputDescriptor>? RequiredInputs = null,
     IReadOnlyList<StackExportPayloadHandle>? Files = null,
-    string? SourceItemId = null);
+    string? SourceItemId = null)
+{
+    /// <summary>Gets an immutable snapshot of the required inputs.</summary>
+    public IReadOnlyList<StackRequiredInputDescriptor>? RequiredInputs { get; }
+        = StackContractCollections.FreezeListNullable(RequiredInputs);
+
+    /// <summary>Gets an immutable snapshot of the payload files.</summary>
+    public IReadOnlyList<StackExportPayloadHandle>? Files { get; }
+        = StackContractCollections.FreezeListNullable(Files);
+}
 
 /// <summary>Provides a validated Stack fragment and extracted payload files to an importer.</summary>
 /// <param name="FragmentId">Stable archive fragment id.</param>
@@ -177,7 +220,12 @@ public sealed record StackFragmentImport(
     string DisplayName,
     string JsonPayload,
     string? Description = null,
-    IReadOnlyList<StackImportPayloadHandle>? Files = null);
+    IReadOnlyList<StackImportPayloadHandle>? Files = null)
+{
+    /// <summary>Gets an immutable snapshot of the payload files.</summary>
+    public IReadOnlyList<StackImportPayloadHandle>? Files { get; }
+        = StackContractCollections.FreezeListNullable(Files);
+}
 
 /// <summary>Declares a package needed to apply exported Stack content.</summary>
 /// <param name="PackageId">Required runtime package id.</param>
@@ -215,7 +263,20 @@ public sealed record StackRequiredInputDescriptor(
 public sealed record StackImportPreviewRequest(
     IReadOnlyList<StackFragmentImport> Fragments,
     IReadOnlyDictionary<string, string> InputValues,
-    IReadOnlyDictionary<string, string> IdRemaps);
+    IReadOnlyDictionary<string, string> IdRemaps)
+{
+    /// <summary>Gets an immutable snapshot of the fragments.</summary>
+    public IReadOnlyList<StackFragmentImport> Fragments { get; }
+        = StackContractCollections.FreezeList(Fragments);
+
+    /// <summary>Gets an immutable snapshot of the resolved input values.</summary>
+    public IReadOnlyDictionary<string, string> InputValues { get; }
+        = StackContractCollections.FreezeDictionary(InputValues);
+
+    /// <summary>Gets an immutable snapshot of the approved identity mappings.</summary>
+    public IReadOnlyDictionary<string, string> IdRemaps { get; }
+        = StackContractCollections.FreezeDictionary(IdRemaps);
+}
 
 /// <summary>Describes proposed import actions, unresolved inputs, conflicts, and warnings without applying changes.</summary>
 /// <param name="Actions">Selectable side effects that import can perform.</param>
@@ -227,7 +288,24 @@ public sealed record StackImportPreview(
     IReadOnlyList<StackImportAction> Actions,
     IReadOnlyList<StackRequiredInputDescriptor> RequiredInputs,
     IReadOnlyList<StackImportConflict> Conflicts,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>Gets an immutable snapshot of the proposed actions.</summary>
+    public IReadOnlyList<StackImportAction> Actions { get; }
+        = StackContractCollections.FreezeList(Actions);
+
+    /// <summary>Gets an immutable snapshot of the unresolved inputs.</summary>
+    public IReadOnlyList<StackRequiredInputDescriptor> RequiredInputs { get; }
+        = StackContractCollections.FreezeList(RequiredInputs);
+
+    /// <summary>Gets an immutable snapshot of the conflicts.</summary>
+    public IReadOnlyList<StackImportConflict> Conflicts { get; }
+        = StackContractCollections.FreezeList(Conflicts);
+
+    /// <summary>Gets an immutable snapshot of the warnings.</summary>
+    public IReadOnlyList<string> Warnings { get; }
+        = StackContractCollections.FreezeList(Warnings);
+}
 
 /// <summary>Describes one independently selectable import side effect.</summary>
 /// <param name="ActionId">Stable id echoed in the import request.</param>
@@ -265,10 +343,27 @@ public sealed record StackImportRequest(
     IReadOnlyList<StackFragmentImport> Fragments,
     IReadOnlyDictionary<string, string> InputValues,
     IReadOnlyDictionary<string, string> IdRemaps,
-    IReadOnlyList<string> SelectedActionIds);
+    IReadOnlyList<string> SelectedActionIds)
+{
+    /// <summary>Gets an immutable snapshot of the fragments.</summary>
+    public IReadOnlyList<StackFragmentImport> Fragments { get; }
+        = StackContractCollections.FreezeList(Fragments);
 
-/// <summary>Reports committed import effects and diagnostics for this contributor. A failed result may follow successful mutations and must describe them in <paramref name="ImportedItems"/> because the host cannot provide cross-contributor rollback.</summary>
-/// <param name="Outcome">Whether the contributor completed, partially applied, or failed.</param>
+    /// <summary>Gets an immutable snapshot of the resolved input values.</summary>
+    public IReadOnlyDictionary<string, string> InputValues { get; }
+        = StackContractCollections.FreezeDictionary(InputValues);
+
+    /// <summary>Gets an immutable snapshot of the approved identity mappings.</summary>
+    public IReadOnlyDictionary<string, string> IdRemaps { get; }
+        = StackContractCollections.FreezeDictionary(IdRemaps);
+
+    /// <summary>Gets an immutable snapshot of the selected action ids.</summary>
+    public IReadOnlyList<string> SelectedActionIds { get; }
+        = StackContractCollections.FreezeList(SelectedActionIds);
+}
+
+/// <summary>Reports committed import effects and diagnostics for this contributor. A contributor that commits any selected action before another action fails must return <see cref="StackImportOutcome.Partial"/> because the host cannot provide cross-contributor rollback.</summary>
+/// <param name="Outcome">Whether all, some, or none of the selected actions committed.</param>
 /// <param name="ImportedItems">Items created, updated, replaced, or reused.</param>
 /// <param name="IdRemaps">Final source-to-target identity mappings.</param>
 /// <param name="Warnings">Nonfatal diagnostics.</param>
@@ -279,17 +374,34 @@ public sealed record StackImportResult(
     IReadOnlyList<StackImportedItem> ImportedItems,
     IReadOnlyDictionary<string, string> IdRemaps,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors)
+{
+    /// <summary>Gets an immutable snapshot of the imported items.</summary>
+    public IReadOnlyList<StackImportedItem> ImportedItems { get; }
+        = StackContractCollections.FreezeList(ImportedItems);
+
+    /// <summary>Gets an immutable snapshot of the final identity mappings.</summary>
+    public IReadOnlyDictionary<string, string> IdRemaps { get; }
+        = StackContractCollections.FreezeDictionary(IdRemaps);
+
+    /// <summary>Gets an immutable snapshot of the nonfatal diagnostics.</summary>
+    public IReadOnlyList<string> Warnings { get; }
+        = StackContractCollections.FreezeList(Warnings);
+
+    /// <summary>Gets an immutable snapshot of the failure diagnostics.</summary>
+    public IReadOnlyList<string> Errors { get; }
+        = StackContractCollections.FreezeList(Errors);
+}
 
 /// <summary>Describes the committed outcome of one contributor import.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public enum StackImportOutcome
 {
-    /// <summary>All selected contributor actions completed.</summary>
+    /// <summary>All selected contributor actions committed.</summary>
     Completed,
-    /// <summary>Some selected actions committed and some did not complete.</summary>
+    /// <summary>At least one selected contributor action committed and at least one did not.</summary>
     Partial,
-    /// <summary>No selected contributor actions completed.</summary>
+    /// <summary>No selected contributor actions committed.</summary>
     Failed,
 }
 
@@ -313,7 +425,16 @@ public sealed record StackImportAppliedContext(
     string OwnerPackageId,
     string ContributorId,
     IReadOnlyList<string> FragmentIds,
-    IReadOnlyList<StackImportedItem> ImportedItems);
+    IReadOnlyList<StackImportedItem> ImportedItems)
+{
+    /// <summary>Gets an immutable snapshot of the applied fragment ids.</summary>
+    public IReadOnlyList<string> FragmentIds { get; }
+        = StackContractCollections.FreezeList(FragmentIds);
+
+    /// <summary>Gets an immutable snapshot of the imported items.</summary>
+    public IReadOnlyList<StackImportedItem> ImportedItems { get; }
+        = StackContractCollections.FreezeList(ImportedItems);
+}
 
 /// <summary>Classifies whether an exported value may be disclosed in a Stack archive.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]

@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Sunder.Package.Quickstart.QuickstartView">
+  <Border Classes="workspace-surface"
+          Padding="{DynamicResource Sunder.Padding.Panel}">
+    <StackPanel Spacing="{DynamicResource Sunder.Spacing.Medium}">
+      <TextBlock Classes="page-title"
+                 Text="Sunder Quickstart"
+                 Foreground="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+      <TextBlock Classes="muted"
+                 Text="This view calls its package's Runtime role through a typed operation."
+                 TextWrapping="Wrap" />
+      <TextBox x:Name="NameInput" PlaceholderText="Name" />
+      <Button Classes="primary-action"
+              Content="Create greeting"
+              HorizontalAlignment="Left"
+              Click="GreetOnClick" />
+      <TextBlock x:Name="StatusText"
+                 Text="Ready"
+                 TextWrapping="Wrap"
+                 Foreground="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    </StackPanel>
+  </Border>
+</UserControl>

@@ -1,8 +1,6 @@
-using System.Reflection;
-using System.Reflection.Metadata;
-using System.Reflection.PortableExecutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Format;
 using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -42,13 +40,17 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             cancellationToken.ThrowIfCancellationRequested();
             loadContext = new RuntimePackageLoadContext(package.PackageId, package.EntryAssemblyPath, sharedAssemblies);
             var entryAssembly = loadContext.LoadPackageEntryAssembly();
-            var moduleType = ResolvePackageModuleType(entryAssembly, out var moduleResolutionError);
-            if (moduleType is null && moduleResolutionError is not null)
+            var moduleResolution = PackageModuleShapeReader.Read(entryAssembly.Location)
+                .Resolve(PackageHostRoleMetadataValue.Runtime);
+            if (moduleResolution.Error is not null)
             {
-                errors.Add($"Package '{package.PackageId}' {moduleResolutionError}");
+                errors.Add($"Package '{package.PackageId}' {moduleResolution.Error}");
                 loadContext.Unload();
-                return Failed(package, moduleResolutionError);
+                return Failed(package, moduleResolution.Error);
             }
+            var moduleType = moduleResolution.TypeName is null
+                ? null
+                : entryAssembly.GetType(moduleResolution.TypeName, throwOnError: true);
 
             var moduleInstance = moduleType is null ? null : Activator.CreateInstance(moduleType);
             if (moduleType is not null && moduleInstance is not ISunderRuntimePackageModule)
@@ -112,7 +114,20 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
         }
         catch (Exception exception)
         {
-            if (serviceProvider is not null) await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
+            if (serviceProvider is not null)
+            {
+                try
+                {
+                    await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
+                }
+                catch (Exception cleanupException)
+                {
+                    logger.LogWarning(
+                        cleanupException,
+                        "Failed to dispose services after package {PackageId} activation failed",
+                        package.PackageId);
+                }
+            }
             loadContext?.Unload();
             extensionCatalog.RemovePackage(package.PackageId, PackageExtensionCatalogChangeReason.PackageFaulted);
             if (exception is OperationCanceledException && cancellationToken.IsCancellationRequested) throw;
@@ -143,58 +158,4 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
         return handlers;
     }
 
-    private static Type? ResolvePackageModuleType(Assembly entryAssembly, out string? error)
-    {
-        var moduleTypes = FindRuntimeModuleTypeNames(entryAssembly.Location)
-            .Select(typeName => entryAssembly.GetType(typeName, throwOnError: true)!)
-            .ToArray();
-        if (moduleTypes.Length == 0)
-        {
-            error = null;
-            return null;
-        }
-        if (moduleTypes.Length > 1)
-        {
-            error = "contains multiple public ISunderRuntimePackageModule implementations: "
-                + string.Join(", ", moduleTypes.Select(type => type.FullName));
-            return null;
-        }
-        var moduleType = moduleTypes[0];
-        if (moduleType.GetConstructor(Type.EmptyTypes) is null)
-        {
-            error = $"module '{moduleType.FullName}' must declare a public parameterless constructor.";
-            return null;
-        }
-        error = null;
-        return moduleType;
-    }
-
-    private static IEnumerable<string> FindRuntimeModuleTypeNames(string assemblyPath)
-    {
-        using var stream = File.OpenRead(assemblyPath);
-        using var peReader = new PEReader(stream);
-        var metadata = peReader.GetMetadataReader();
-        foreach (var typeHandle in metadata.TypeDefinitions)
-        {
-            var type = metadata.GetTypeDefinition(typeHandle);
-            if ((type.Attributes & TypeAttributes.VisibilityMask) != TypeAttributes.Public
-                || (type.Attributes & TypeAttributes.Abstract) != 0
-                || (type.Attributes & TypeAttributes.Interface) != 0)
-            {
-                continue;
-            }
-            var implementsRuntimeRole = type.GetInterfaceImplementations().Any(interfaceHandle =>
-            {
-                var implementation = metadata.GetInterfaceImplementation(interfaceHandle);
-                if (implementation.Interface.Kind != HandleKind.TypeReference) return false;
-                var interfaceType = metadata.GetTypeReference((TypeReferenceHandle)implementation.Interface);
-                return metadata.GetString(interfaceType.Namespace) == "Sunder.Sdk.Abstractions"
-                       && metadata.GetString(interfaceType.Name) == nameof(ISunderRuntimePackageModule);
-            });
-            if (!implementsRuntimeRole) continue;
-            var typeNamespace = metadata.GetString(type.Namespace);
-            var typeName = metadata.GetString(type.Name);
-            yield return string.IsNullOrEmpty(typeNamespace) ? typeName : $"{typeNamespace}.{typeName}";
-        }
-    }
 }

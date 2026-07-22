@@ -113,7 +113,7 @@ internal sealed partial class PackageSessionLoadService
             foreach (var preparedPackage in orderedPackages)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!preparedPackage.Dependencies.All(readyPackageIds.Contains))
+                if (!preparedPackage.Dependencies.All(dependency => readyPackageIds.Contains(dependency.PackageId)))
                 {
                     var message = $"Skipped '{preparedPackage.PackageId}' because one of its dependencies did not load successfully.";
                     errors.Add(message);
@@ -157,7 +157,7 @@ internal sealed partial class PackageSessionLoadService
                 sharedAssemblyRegistry,
                 false,
                 readySources);
-            await partialSession.StopBackgroundServicesAsync();
+            await partialSession.StopBackgroundServicesAsync(_logger, TimeSpan.FromSeconds(5));
             await partialSession.DisposeAsync();
             throw;
         }

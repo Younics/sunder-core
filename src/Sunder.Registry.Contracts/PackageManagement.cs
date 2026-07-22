@@ -37,6 +37,7 @@ public sealed record RegistryPackageMaintainerOperationResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }
 
 public sealed record RegistryPackageStarResponse(
@@ -46,6 +47,7 @@ public sealed record RegistryPackageStarResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }
 
 public sealed record RegistrySetPackageVersionYankRequest(bool IsYanked = true);
@@ -69,4 +71,5 @@ public sealed record RegistryPackageManagementOperationResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }

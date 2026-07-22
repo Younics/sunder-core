@@ -531,6 +531,76 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
+    public async Task OperationGate_ShutdownIsBoundedWhenActiveOperationIgnoresCancellation()
+    {
+        var gate = new RuntimeOperationGate(
+            lifecyclePolicy: new RuntimeLifecyclePolicyOptions
+            {
+                ShutdownTimeout = TimeSpan.FromMilliseconds(50),
+            });
+        var operation = await gate.EnterAsync();
+        var cleanupCalled = false;
+
+        var shutdown = gate.ShutdownAsync(() =>
+        {
+            cleanupCalled = true;
+            return Task.CompletedTask;
+        });
+
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => shutdown.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(operation.CancellationToken.IsCancellationRequested);
+        Assert.False(cleanupCalled);
+
+        await operation.DisposeAsync();
+        await gate.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task OperationGate_ShutdownIsBoundedWhenCleanupIgnoresCancellation()
+    {
+        var gate = new RuntimeOperationGate(
+            lifecyclePolicy: new RuntimeLifecyclePolicyOptions
+            {
+                ShutdownTimeout = TimeSpan.FromMilliseconds(50),
+            });
+        var cleanupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var shutdown = gate.ShutdownAsync(async _ =>
+        {
+            cleanupStarted.TrySetResult();
+            await releaseCleanup.Task;
+        });
+
+        await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => shutdown.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        releaseCleanup.TrySetResult();
+        await gate.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task OperationGate_CanceledShutdownDeadlineDoesNotRestartBudgetDuringDispose()
+    {
+        var gate = new RuntimeOperationGate(
+            lifecyclePolicy: new RuntimeLifecyclePolicyOptions
+            {
+                ShutdownTimeout = TimeSpan.FromSeconds(5),
+            });
+        var operation = await gate.EnterAsync();
+        using var deadline = new CancellationTokenSource();
+        deadline.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => gate.ShutdownAsync(static _ => Task.CompletedTask, deadline.Token));
+        await gate.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromMilliseconds(200));
+
+        await operation.DisposeAsync();
+    }
+
+    [Fact]
     public async Task OperationGate_ShutdownPhaseIsNotOverwrittenByLeaseRelease()
     {
         var events = new RuntimeEventStreamService();
@@ -574,7 +644,7 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
-    public async Task PackageFault_WhenGenerationIsStale_CannotFaultReplacementSession()
+    public async Task RuntimePackageFault_WhenGenerationIsStale_CannotFaultReplacementSession()
     {
         var state = new PackageSessionState(
             NullLogger.Instance,
@@ -606,9 +676,12 @@ public sealed class PackageStoreCoordinatorTests
         var publication = await state.PublishSessionAsync(session);
         Assert.Equal(2, publication.Generation);
 
-        var stale = state.ReportPackageFault(
+        var stale = state.HandlePackageFault(
             "test.package",
-            new ReportPackageFaultRequest(PackageFailureOrigin.AppHostedView, "old view failed", GenerationId: 1));
+            generation: 1,
+            PackageFailureOrigin.RuntimeAuthentication,
+            new InvalidOperationException("old authentication failed"),
+            "read package auth status");
 
         Assert.False(stale);
         Assert.True(Assert.Single(state.GetSessionPackages()).IsEnabled);

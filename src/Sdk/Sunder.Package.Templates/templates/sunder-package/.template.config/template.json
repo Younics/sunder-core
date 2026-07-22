@@ -12,15 +12,48 @@
       "type": "parameter",
       "datatype": "text",
       "isRequired": true,
-      "description": "The runtime package id written into generated package metadata.",
-      "replaces": "sunder.package.template"
+      "description": "The lowercase dot-separated runtime package id written into generated package metadata."
     },
     "packageName": {
       "type": "parameter",
       "datatype": "text",
       "isRequired": true,
       "description": "The package name shown in Sunder.",
-      "replaces": "Sunder Package Template"
+      "replaces": "SUNDER_PACKAGE_NAME_TEXT"
+    },
+    "coordinatedPackageVersion": {
+      "type": "generated",
+      "generator": "constant",
+      "parameters": {
+        "value": "__SUNDER_COORDINATED_PACKAGE_VERSION__"
+      },
+      "replaces": "SUNDER_TEMPLATE_PACKAGE_VERSION"
+    },
+    "coordinatedPackageVersionRange": {
+      "type": "generated",
+      "generator": "constant",
+      "parameters": {
+        "value": "__SUNDER_COORDINATED_PACKAGE_VERSION_RANGE__"
+      },
+      "replaces": "SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE"
+    },
+    "packageIdCSharp": {
+      "type": "derived",
+      "valueSource": "packageId",
+      "valueTransform": "csharpString",
+      "replaces": "SUNDER_PACKAGE_ID_CSHARP"
+    },
+    "packageNameCSharp": {
+      "type": "derived",
+      "valueSource": "packageName",
+      "valueTransform": "csharpString",
+      "replaces": "SUNDER_PACKAGE_NAME_CSHARP"
+    },
+    "packageNameXml": {
+      "type": "derived",
+      "valueSource": "packageName",
+      "valueTransform": "xmlAttribute",
+      "replaces": "SUNDER_PACKAGE_NAME_XML"
     },
     "withAvalonia": {
       "type": "parameter",
@@ -60,31 +93,52 @@
       "isRequired": "withHostDependency || withHostContracts == true",
       "isEnabled": "withHostDependency || withHostContracts == true",
       "description": "The package id of the host package this package extends.",
-      "replaces": "sunder.host.package"
+      "replaces": "SUNDER_HOST_PACKAGE_ID_TEXT"
+    },
+    "hostPackageIdCSharp": {
+      "type": "derived",
+      "valueSource": "hostPackageId",
+      "valueTransform": "csharpString",
+      "replaces": "SUNDER_HOST_PACKAGE_ID_CSHARP"
     },
     "hostContractsPackageId": {
       "type": "parameter",
       "datatype": "text",
       "isRequired": "withHostContracts == true",
       "isEnabled": "withHostContracts == true",
-      "description": "The NuGet package id of the host package's published contracts package.",
-      "replaces": "Sunder.Host.Package.Contracts"
+      "description": "The NuGet package id of the host package's published contracts package."
+    },
+    "hostContractsPackageIdXml": {
+      "type": "derived",
+      "valueSource": "hostContractsPackageId",
+      "valueTransform": "xmlAttribute",
+      "replaces": "SUNDER_HOST_CONTRACTS_PACKAGE_ID_XML"
     },
     "hostPackageVersionRange": {
       "type": "parameter",
       "datatype": "text",
-      "defaultValue": ">=1.0.0 <2.0.0",
+      "defaultValue": ">=1.1.0 <1.2.0",
       "isEnabled": "withHostDependency || withHostContracts == true",
-      "description": "The runtime SemVer range accepted for the host package.",
-      "replaces": ">=1.0.0 <2.0.0"
+      "description": "The runtime SemVer range accepted for the host package."
     },
-    "hostContractsVersion": {
+    "hostPackageVersionRangeCSharp": {
+      "type": "derived",
+      "valueSource": "hostPackageVersionRange",
+      "valueTransform": "csharpString",
+      "replaces": "SUNDER_HOST_PACKAGE_VERSION_RANGE_CSHARP"
+    },
+    "hostContractsVersionRange": {
       "type": "parameter",
       "datatype": "text",
-      "isRequired": "withHostContracts == true",
+      "defaultValue": "__SUNDER_DEFAULT_HOST_CONTRACTS_VERSION_RANGE__",
       "isEnabled": "withHostContracts == true",
-      "description": "The version of the host package's published contracts package.",
-      "replaces": "1.0.0-HOST-CONTRACTS"
+      "description": "The bounded NuGet version range for the host package's published contracts package."
+    },
+    "hostContractsVersionRangeXml": {
+      "type": "derived",
+      "valueSource": "hostContractsVersionRange",
+      "valueTransform": "xmlAttribute",
+      "replaces": "SUNDER_HOST_CONTRACTS_VERSION_RANGE_XML"
     },
     "createInPlace": {
       "type": "parameter",
@@ -97,6 +151,58 @@
       "datatype": "bool",
       "defaultValue": false,
       "description": "With --withAvalonia, omit the default shell-visible view while retaining Avalonia SDK references."
+    }
+  },
+  "forms": {
+    "csharpBackslash": {
+      "identifier": "replace",
+      "pattern": "\\\\",
+      "replacement": "\\\\"
+    },
+    "csharpQuote": {
+      "identifier": "replace",
+      "pattern": "\"",
+      "replacement": "\\\""
+    },
+    "csharpCarriageReturn": {
+      "identifier": "replace",
+      "pattern": "\\r",
+      "replacement": "\\r"
+    },
+    "csharpLineFeed": {
+      "identifier": "replace",
+      "pattern": "\\n",
+      "replacement": "\\n"
+    },
+    "csharpTab": {
+      "identifier": "replace",
+      "pattern": "\\t",
+      "replacement": "\\t"
+    },
+    "csharpString": {
+      "identifier": "chain",
+      "steps": [
+        "csharpBackslash",
+        "csharpQuote",
+        "csharpCarriageReturn",
+        "csharpLineFeed",
+        "csharpTab"
+      ]
+    },
+    "xml": {
+      "identifier": "xmlEncode"
+    },
+    "xmlQuote": {
+      "identifier": "replace",
+      "pattern": "\"",
+      "replacement": "&quot;"
+    },
+    "xmlAttribute": {
+      "identifier": "chain",
+      "steps": [
+        "xml",
+        "xmlQuote"
+      ]
     }
   },
   "primaryOutputs": [

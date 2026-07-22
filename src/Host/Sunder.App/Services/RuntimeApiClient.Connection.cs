@@ -68,9 +68,6 @@ public sealed partial class RuntimeApiClient
     public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
         => _management.GetInstalledPackagesAsync(cancellationToken);
 
-    public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
-        => _management.GetPackageSessionStatusAsync(packageId, cancellationToken);
-
     public Uri CreatePackageAssetUri(string packageId, string assetPath)
         => _management.CreatePackageAssetUri(packageId, assetPath);
 

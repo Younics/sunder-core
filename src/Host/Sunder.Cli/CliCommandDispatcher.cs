@@ -22,7 +22,7 @@ internal sealed class CliCommandDispatcher
     {
         var archives = new ArchiveValidationService();
         _system = new(runtime, output);
-        _runtimeReset = new(runtime, output);
+        _runtimeReset = new(runtime, output, options.RuntimeUrl);
         _packages = new(runtime, output, progress, options, archives);
         _browse = new(registry, output);
         _auth = new(runtime, output, browser, options);

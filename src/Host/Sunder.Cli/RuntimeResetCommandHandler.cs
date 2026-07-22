@@ -4,13 +4,22 @@ using Sunder.Runtime.LocalState;
 
 namespace Sunder.Cli;
 
-internal sealed class RuntimeResetCommandHandler(ICliRuntimeResetClient runtime, CliOutput output)
+internal sealed class RuntimeResetCommandHandler(
+    ICliRuntimeResetClient runtime,
+    CliOutput output,
+    Uri runtimeUrl)
 {
     public async Task<int> ExecuteAsync(RuntimeResetCommand command, CancellationToken token)
     {
         if (!command.Yes)
         {
             throw new CliUsageException("Runtime reset requires --yes.");
+        }
+
+        if (runtimeUrl != CliOptions.DefaultRuntimeUrl)
+        {
+            throw new CliUsageException(
+                $"Runtime reset only supports the default local Host at '{CliOptions.DefaultRuntimeUrl}'. Remove the custom Runtime URL before resetting local state.");
         }
 
         RuntimeResetChallengeResponse? challenge = null;

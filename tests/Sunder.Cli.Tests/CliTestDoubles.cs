@@ -110,7 +110,8 @@ internal static class CliTestHost
         FakeRuntimeClient? runtime = null,
         FakeRegistryClient? registry = null,
         IBrowserLauncher? browser = null,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        string runtimeUrl = "http://127.0.0.1:5275/")
     {
         runtime ??= new();
         registry ??= new();
@@ -121,7 +122,7 @@ internal static class CliTestHost
         {
             "--registry-api-url", "https://registry.test/",
             "--registry-web-url", "https://registry.test/",
-            "--runtime-url", "http://127.0.0.1:5275/",
+            "--runtime-url", runtimeUrl,
         };
         var exit = await app.RunAsync([.. args, .. globals], token);
         return (exit, stdout.ToString().Replace("\r\n", "\n"), stderr.ToString().Replace("\r\n", "\n"));

@@ -89,7 +89,7 @@ internal sealed class RuntimeStackExportService
                 {
                     continue;
                 }
-                var contribution = await registration.Exporter.ExportAsync(new StackExportRequest(selections.Select(item => item.ItemId).ToArray(), selections), linked.Token);
+                var contribution = await registration.Exporter.ExportAsync(new StackExportRequest(selections), linked.Token);
                 packageRequirements.Add(BuildPackageRequirement(lease, registration.PackageId));
                 foreach (var fragment in contribution.Fragments)
                 {

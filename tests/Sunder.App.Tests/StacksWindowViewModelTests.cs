@@ -485,7 +485,6 @@ public sealed class StacksWindowViewModelTests
                     "sunder.package.agent",
                     "profile",
                     "Agent profile",
-                    ["Public", "Secret"],
                     [
                         new RuntimeStackExportItemDetail("Custom instructions", "Use a concise tone.", "Public", ValueWhenExcluded: "Not exported"),
                         new RuntimeStackExportItemDetail("Provider connections", "OpenAI", "Secret", ValueWhenExcluded: "Not exported", SupportsAskOnImport: true),
@@ -517,6 +516,12 @@ public sealed class StacksWindowViewModelTests
         provider.IsSelected = false;
         Assert.False(provider.IsSelected);
         Assert.Equal(1, item.SelectedDetailCount);
+        Assert.Single(viewModel.PackageGroups).IsSelected = true;
+        var projectedItem = Assert.Single(CreateStackExportSelectionProjector.Project(viewModel.PackageGroups).Items);
+        var excludedSelection = Assert.Single(
+            projectedItem.Details!,
+            detail => string.Equals(detail.DetailId, provider.DetailId, StringComparison.Ordinal));
+        Assert.False(excludedSelection.IsSelected);
         provider.IsSelected = true;
         Assert.Contains("Ask on import", provider.AvailableExportBehaviors);
         provider.SelectedExportBehavior = "Ask on import";
@@ -529,6 +534,33 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal("OpenAI shared endpoint", provider.ValueOverride);
         Assert.Equal("Public", provider.SensitivityOverride);
         Assert.DoesNotContain("contributor", item.SummaryText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CreateStackWizard_UnclassifiedDetailDoesNotDiscloseSecretSensitivity()
+    {
+        var root = CreateTempDirectory();
+        var runtimeApiClient = new FakeRuntimeApiClient
+        {
+            ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
+                [CreateExportItem(
+                    "sunder.package.agent",
+                    "profile",
+                    "Agent profile",
+                    [new RuntimeStackExportItemDetail("Unclassified value", "Value")])],
+                [],
+                []),
+        };
+        var viewModel = new CreateStackWizardViewModel(
+            new LocalStackLibraryService(Path.Combine(root, "library")),
+            runtimeApiClient);
+
+        await viewModel.InitializeAsync();
+
+        var item = Assert.Single(Assert.Single(viewModel.PackageGroups).Items);
+        Assert.False(item.HasSecretValues);
+        Assert.Empty(item.SecretChips);
+        Assert.Equal("Include value", Assert.Single(item.Details).SelectedExportBehavior);
     }
 
     [Fact]
@@ -662,7 +694,6 @@ public sealed class StacksWindowViewModelTests
                     "sunder.package.agent",
                     "profile",
                     "Agent profile",
-                    ["Public", "Secret"],
                     [
                         new RuntimeStackExportItemDetail("Custom instructions", "Use a concise tone.", "Public"),
                         new RuntimeStackExportItemDetail("Provider connections", "OpenAI", "Secret", SupportsAskOnImport: true),
@@ -774,7 +805,6 @@ public sealed class StacksWindowViewModelTests
             new FakeRuntimeApiClient(),
             new RegistryPackageInstallService(),
             (_, _) => Task.CompletedTask,
-            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
 
@@ -934,7 +964,6 @@ public sealed class StacksWindowViewModelTests
             runtimeApiClient,
             new RegistryPackageInstallService(),
             (_, _) => Task.CompletedTask,
-            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
 
@@ -979,7 +1008,6 @@ public sealed class StacksWindowViewModelTests
             new FakeRuntimeApiClient(),
             new RegistryPackageInstallService(),
             (_, _) => Task.CompletedTask,
-            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
 
@@ -1018,7 +1046,6 @@ public sealed class StacksWindowViewModelTests
             new FakeRuntimeApiClient(),
             new RegistryPackageInstallService(),
             (_, _) => Task.CompletedTask,
-            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => new FakeRegistryApiClient(),
             "https://registry.example/");
 
@@ -1038,7 +1065,10 @@ public sealed class StacksWindowViewModelTests
             "Team Stack",
             includeFragment: true,
             includePackage: true,
-            fragmentDefaultSelected: true);
+            fragmentDefaultSelected: true,
+            installTag: "preview",
+            minimumVersion: "2.3.0",
+            packageRequired: false);
         var library = new LocalStackLibraryService(Path.Combine(root, "library"));
         var stack = await library.ImportAsync(stackPath);
         var installPlan = new RegistryResolveInstallPlanResponse(
@@ -1106,7 +1136,6 @@ public sealed class StacksWindowViewModelTests
                 runtimeApiClient.Events.Add("presentation:" + stamp.SessionGeneration);
                 return Task.CompletedTask;
             },
-            (_, _) => Task.FromResult<IReadOnlyList<string>>([]),
             _ => registryClient,
             "https://registry.example/");
 
@@ -1115,10 +1144,18 @@ public sealed class StacksWindowViewModelTests
         var packageRow = Assert.Single(viewModel.PackageRows);
         Assert.Equal("Will install 1.2.0", packageRow.StatusText);
         Assert.True(viewModel.CanApply);
+        var resolveRequirement = Assert.Single(runtimeApiClient.LastRegistryPlanRequest!.Packages);
+        Assert.Equal("preview", resolveRequirement.Tag);
+        Assert.Equal(">=2.3.0", resolveRequirement.VersionRange);
+        Assert.False(resolveRequirement.Required);
 
         await viewModel.ApplyCommand.ExecuteAsync(null);
 
         Assert.Equal(["install", "presentation:1", "preview", "import"], runtimeApiClient.Events);
+        var appliedRequirement = Assert.Single(runtimeApiClient.LastRegistryApplyRequest!.Packages);
+        Assert.Equal("preview", appliedRequirement.Tag);
+        Assert.Equal(">=2.3.0", appliedRequirement.VersionRange);
+        Assert.False(appliedRequirement.Required);
         Assert.Equal(["agent-profile"], runtimeApiClient.LastImportRequest?.SelectedFragmentIds);
         Assert.Equal(["action-key"], runtimeApiClient.LastImportRequest?.SelectedActionIds);
     }
@@ -1178,7 +1215,6 @@ public sealed class StacksWindowViewModelTests
         string ownerPackageId,
         string itemId,
         string displayName,
-        IReadOnlyList<string>? sensitivities = null,
         IReadOnlyList<RuntimeStackExportItemDetail>? details = null,
         string kind = "Configuration",
         string? contributorId = null,
@@ -1190,9 +1226,8 @@ public sealed class StacksWindowViewModelTests
             displayName,
             kind,
             DefaultSelected: defaultSelected,
-            sensitivities ?? [],
-            "Exportable setup item.",
-            details ?? []);
+            Description: "Exportable setup item.",
+            Details: details ?? []);
 
     private static ActivePackageDescriptor CreateActivePackage(string packageId, string displayName)
         => new(packageId, displayName, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []);
@@ -1206,7 +1241,10 @@ public sealed class StacksWindowViewModelTests
         bool includeRequiredInput = false,
         bool includeDisplayDetails = false,
         bool fragmentDefaultSelected = false,
-        IReadOnlyList<string>? requiredFeatures = null)
+        IReadOnlyList<string>? requiredFeatures = null,
+        string installTag = "latest",
+        string? minimumVersion = "1.0.0",
+        bool packageRequired = true)
     {
         var path = Path.Combine(root, stackId + ".sunderstack");
         var payloadFiles = new Dictionary<string, string>();
@@ -1274,9 +1312,9 @@ public sealed class StacksWindowViewModelTests
                     new SunderStackPackageRequirement
                     {
                         PackageId = "sunder.package.agent",
-                        InstallTag = "latest",
-                        MinimumVersion = "1.0.0",
-                        Required = true,
+                        InstallTag = installTag,
+                        MinimumVersion = minimumVersion,
+                        Required = packageRequired,
                     },
                 ]
                 : [],
@@ -1480,6 +1518,10 @@ public sealed class StacksWindowViewModelTests
 
         public RuntimeStackImportPreviewRequest? LastPreviewRequest { get; private set; }
 
+        public RuntimeRegistryPackageBatchRequest? LastRegistryPlanRequest { get; private set; }
+
+        public RuntimeRegistryPackageBatchRequest? LastRegistryApplyRequest { get; private set; }
+
         public PackageStoreStageRequest? LastPackageStoreStageRequest { get; private set; }
 
         public RuntimeRegistryPublishRequest? LastPublishRequest { get; private set; }
@@ -1498,37 +1540,20 @@ public sealed class StacksWindowViewModelTests
 
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
 
-        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => Task.FromResult<PackageSessionStatus?>(null);
-
-        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
-
-        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
-
-        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
-            => Task.FromResult(Success() with { ImpactedPackageIds = impactedPackageIds });
-
-        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
-
-        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
-
-        public Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
         public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default) => Task.FromResult(InstalledPackages);
 
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(RegistryPlan);
+        {
+            LastRegistryPlanRequest = request;
+            return Task.FromResult(RegistryPlan);
+        }
 
         public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
         {
+            LastRegistryApplyRequest = request;
             Events.Add("install");
             return Task.FromResult(new RuntimeRegistryPackageChangeResult(
                 true,
@@ -1587,8 +1612,6 @@ public sealed class StacksWindowViewModelTests
                 Path.GetFileName(mediaPath),
                 contentType));
 
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(string packagePath, CancellationToken cancellationToken = default) => Task.FromResult(Success());
-
         public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
         {
             LastPackageStoreStageRequest = request;
@@ -1624,14 +1647,6 @@ public sealed class StacksWindowViewModelTests
 
         public Task DiscardPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(string packageId, string packagePath, bool allowDowngrade = false, bool reinstall = false, CancellationToken cancellationToken = default) => Task.FromResult(Success());
-
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult(Success());
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult(Success());
-
-        public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult(Success());
-
         public Task<IReadOnlyList<PackageSettingsSchemaDescriptor>> GetPackageSettingsSchemasAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageSettingsSchemaDescriptor>>([]);
 
         public Task<PackageSettingsValuesResponse?> GetPackageSettingsValuesAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult<PackageSettingsValuesResponse?>(null);
@@ -1645,8 +1660,6 @@ public sealed class StacksWindowViewModelTests
         public Task<PackageAuthSessionStatusResponse?> GetPackageAuthSessionStatusAsync(string packageId, string authSessionId, CancellationToken cancellationToken = default) => Task.FromResult<PackageAuthSessionStatusResponse?>(null);
 
         public Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default) => Task.FromResult<PackageAuthStatusResponse?>(null);
-
-        public Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task ShutdownAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 

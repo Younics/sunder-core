@@ -1128,27 +1128,6 @@ public sealed class PackagesWindowViewModelTests
             CancellationToken cancellationToken = default
         ) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
 
-        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default)
-            => Task.FromResult<PackageSessionStatus?>(null);
-
-        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(PackageSessionLoadRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
-
-        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(string packageId, PackageSourceKind sourceKind, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
-
-        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(IReadOnlyList<string> impactedPackageIds, CancellationToken cancellationToken = default)
-            => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
-
-        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(PackageLifecycleStageRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
-
-        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageLifecycleOperationResult.Failed("Not configured for this test."));
-
-        public Task DiscardPackageLifecycleStageAsync(string stageId, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
         public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
@@ -1178,76 +1157,6 @@ public sealed class PackagesWindowViewModelTests
 
         public Task DownloadContentAsync(ContentDownloadDescriptor download, string destinationPath, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
-
-        public Task<PackageOperationResult> InstallPackageFromPathAsync(
-            string packagePath,
-            CancellationToken cancellationToken = default
-        )
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var packageId = RegistryInstallPackageId ?? Path.GetFileNameWithoutExtension(packagePath);
-            if (!_installedPackages.Any(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase)))
-            {
-                _installedPackages.Add(CreateInstalledPackage(packageId, isEnabled: true));
-            }
-
-            return Task.FromResult(
-                new PackageOperationResult(
-                    true,
-                    $"Installed package '{ToDisplayName(packageId)}'.",
-                    true,
-                    false,
-                    [],
-                    [])
-                {
-                    ImpactedPackageIds = [packageId],
-                });
-        }
-
-        public Task<PackageOperationResult> UpgradePackageFromPathAsync(
-            string packageId,
-            string packagePath,
-            bool allowDowngrade = false,
-            bool reinstall = false,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(new PackageOperationResult(true, $"Upgraded {packageId}.", true, false, [], []));
-
-        public Task<PackageOperationResult> EnableInstalledPackageAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        )
-        {
-            if (EnableResult is not null)
-            {
-                return Task.FromResult(EnableResult);
-            }
-
-            EnabledPackageIds.Add(packageId);
-            SetPackageEnabled(packageId, isEnabled: true);
-            return Task.FromResult(
-                new PackageOperationResult(
-                    true,
-                    $"Enabled package '{ToDisplayName(packageId)}'.",
-                    true,
-                    false,
-                    [],
-                    []
-                )
-                {
-                    ImpactedPackageIds = [packageId],
-                }
-            );
-        }
-
-        public Task<PackageOperationResult> DisableInstalledPackageAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(new PackageOperationResult(true, $"Disabled {packageId}.", true, false, [], []));
-
-        public Task<PackageOperationResult> UninstallPackageAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(new PackageOperationResult(true, $"Uninstalled {packageId}.", true, false, [], []));
 
         public Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
             PackageStoreStageRequest request,
@@ -1337,13 +1246,6 @@ public sealed class PackagesWindowViewModelTests
 
         public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Updated packages.", true, false, [], [], [], []));
-
-        public Task ReportPackageFaultAsync(
-            string packageId,
-            PackageFailureOrigin origin,
-            string message,
-            CancellationToken cancellationToken = default
-        ) => Task.CompletedTask;
 
         public void Dispose() { }
 

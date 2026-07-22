@@ -10,20 +10,6 @@ public enum PackageAuthFlowKind
     Browser = 0,
 }
 
-/// <summary>Describes authorization-session lifecycle state.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
-public enum PackageAuthSessionState
-{
-    /// <summary>The user or provider has not completed authorization.</summary>
-    Pending = 0,
-    /// <summary>Credentials were accepted and stored by the package.</summary>
-    Connected = 1,
-    /// <summary>Authorization ended unsuccessfully.</summary>
-    Failed = 2,
-    /// <summary>The user or host cancelled authorization.</summary>
-    Cancelled = 3,
-}
-
 /// <summary>Supplies host-created identity and callback URI when authorization starts.</summary>
 /// <param name="AuthSessionId">Opaque session id that must be echoed in subsequent results.</param>
 /// <param name="CallbackUri">Absolute host-owned callback URI registered with the provider.</param>
@@ -53,17 +39,3 @@ public sealed record PackageAuthSessionStartResult(
 public sealed record PackageAuthSessionCompletionContext(
     string AuthSessionId,
     IReadOnlyDictionary<string, string?> QueryValues);
-
-/// <summary>Provides an immutable authorization-session status snapshot.</summary>
-/// <param name="PackageId">Package that owns the session.</param>
-/// <param name="AuthSessionId">Opaque session id.</param>
-/// <param name="State">Current lifecycle state.</param>
-/// <param name="Message">User-facing state explanation.</param>
-/// <param name="LaunchUrl">Optional URL while user action remains necessary.</param>
-[SunderSdkCapability(SunderSdkCapabilities.AuthV1)]
-public sealed record PackageAuthSessionStatus(
-    string PackageId,
-    string AuthSessionId,
-    PackageAuthSessionState State,
-    string Message,
-    string? LaunchUrl = null);

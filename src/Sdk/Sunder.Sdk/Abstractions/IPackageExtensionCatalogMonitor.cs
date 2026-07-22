@@ -7,5 +7,6 @@ namespace Sunder.Sdk.Abstractions;
 public interface IPackageExtensionCatalogMonitor
 {
     /// <summary>Occurs after an atomic catalog revision; handlers should return promptly.</summary>
+    /// <remarks>The host isolates exceptions thrown by one handler so remaining subscribers still receive the revision.</remarks>
     event EventHandler<PackageExtensionCatalogChangedEventArgs>? Changed;
 }

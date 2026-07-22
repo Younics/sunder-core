@@ -63,18 +63,15 @@ public sealed class RuntimeEventSubscriptionService(
     public Task StartAsync(
         WindowLauncher windowLauncher,
         RuntimePackageSnapshot initialSnapshot,
-        bool watchDevPackages,
         CancellationToken cancellationToken = default)
         => StartAsync(
             initialSnapshot,
             windowLauncher.ApplyPackageLifecycleSnapshotAsync,
-            watchDevPackages,
             cancellationToken);
 
     internal async Task StartAsync(
         RuntimePackageSnapshot initialSnapshot,
         Func<RuntimePackageSnapshot, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync,
-        bool watchDevPackages,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(writePresentationAsync);

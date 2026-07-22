@@ -21,7 +21,9 @@ internal sealed class RegistryCredentialStore
     public RegistryCredentialStore(RuntimePackagePaths paths)
     {
         Directory.CreateDirectory(paths.RegistryCredentialRootPath);
-        _secrets = new JsonPackageSecretsStore(paths.RegistryCredentialFilePath);
+        _secrets = new JsonPackageSecretsStore(
+            paths.RegistryCredentialFilePath,
+            enforcePackageKeyValidation: false);
     }
 
     public async Task<RegistryCredential?> GetAsync(Uri registryOrigin, CancellationToken cancellationToken = default)

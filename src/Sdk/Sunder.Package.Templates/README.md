@@ -1,6 +1,6 @@
 # Sunder.Package.Templates
 
-`Sunder.Package.Templates` provides the `dotnet new sunder-package` template for creating Sunder runtime package projects.
+`Sunder.Package.Templates` provides the `dotnet new sunder-package` template for creating Sunder package projects.
 
 The template scaffolds a headless package project with exact V1 SDK/build references, package metadata, separate Runtime/App role examples, and async package storage usage. Avalonia, Stacks, public contracts, runtime host dependencies, and typed host contracts are explicit opt-ins.
 
@@ -47,13 +47,13 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 Create an extension package that depends on a host package:
 
 ```powershell
-dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.host --hostPackageVersionRange ">=1.0.0 <2.0.0"
+dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0"
 ```
 
 Create an extension package that also references a host contracts NuGet package:
 
 ```powershell
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.host --hostPackageVersionRange ">=1.0.0 <2.0.0" --hostContractsPackageId Sunder.Host.Package.Contracts --hostContractsVersion <host-contracts-version>
+dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0" --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersionRange "[1.1.0,1.2.0)"
 ```
 
 ## Template Options
@@ -69,10 +69,10 @@ dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedex
 | `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder. |
 | `--withHostDependency` | Adds runtime dependency metadata for another package. |
 | `--hostPackageId <id>` | Required with `--withHostDependency` or `--withHostContracts`; runtime package id that this package depends on. |
-| `--hostPackageVersionRange <range>` | Runtime SemVer range for the host dependency; defaults to `>=1.0.0 <2.0.0`. |
+| `--hostPackageVersionRange <range>` | Runtime SemVer range for the host dependency; defaults to `>=1.1.0 <1.2.0`. |
 | `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub. |
 | `--hostContractsPackageId <id>` | Required with `--withHostContracts`; NuGet package id for host contracts. |
-| `--hostContractsVersion <version>` | Required with `--withHostContracts`; NuGet package version for host contracts. |
+| `--hostContractsVersionRange <range>` | Bounded NuGet range for host contracts; defaults to the generated Sunder SDK minor range. |
 
 ## Generated Project
 
@@ -97,7 +97,7 @@ Generated package projects reference:
 - `Sunder.Sdk.Avalonia` and Avalonia only with `--withAvalonia`
 - `Sunder.Sdk.Stacks` only with `--withStacks`
 
-Generated projects use exact `1.1.0` versions for all Sunder SDK and build packages.
+Generated projects use a bounded minor range derived from the template package version for all coordinated Sunder SDK and build packages. A 1.1 template emits `[1.1.0,1.2.0)`.
 
 With `--withContracts`, the sibling `*.Contracts` project is packable, carries a public `Sunder.Sdk` dependency because its API exposes `PackageExtensionPoint<T>`, and starts at contracts package version `1.0.0`. Version and publish that contracts package independently when other packages consume it.
 
@@ -138,5 +138,6 @@ sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.
 ## More Documentation
 
 - Package author manual: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
+- Getting started: https://github.com/Younics/sunder-core/blob/main/docs/package-development/GETTING-STARTED.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
 - Sunder SDK: https://www.nuget.org/packages/Sunder.Sdk

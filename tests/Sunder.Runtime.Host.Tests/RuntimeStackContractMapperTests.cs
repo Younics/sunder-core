@@ -1,4 +1,5 @@
 using Sunder.Package.Format;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Stacks;
@@ -27,6 +28,30 @@ public sealed class RuntimeStackContractMapperTests
     }
 
     [Fact]
+    public void ExportItemMapping_PreservesOnlyExplicitDetailSensitivity()
+    {
+        var mapped = RuntimeStackContractMapper.ToExportItem(
+            "test.package",
+            "test.contributor",
+            new StackExportItemDescriptor(
+                "profile",
+                "Profile",
+                "test",
+                Details:
+                [
+                    new StackExportItemDetail("Public value", "value", StackValueSensitivity.Public),
+                    new StackExportItemDetail("Secret value", "secret", StackValueSensitivity.Secret),
+                    new StackExportItemDetail("Unclassified value", "other"),
+                ]));
+
+        Assert.Collection(
+            mapped.Details!,
+            detail => Assert.Equal("Public", detail.Sensitivity),
+            detail => Assert.Equal("Secret", detail.Sensitivity),
+            detail => Assert.Null(detail.Sensitivity));
+    }
+
+    [Fact]
     public void PackageRequirements_UseStrongestSemanticMinimum()
     {
         var mapped = RuntimeStackContractMapper.ToPackageRequirements(
@@ -52,6 +77,41 @@ public sealed class RuntimeStackContractMapperTests
             ]));
 
         Assert.Contains("conflicting install tags", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RegistryInstallPlanMapping_PreservesRequirementPolicyAndFailureCode()
+    {
+        var registryRequest = Assert.Single(RuntimeRegistryContractMapper.ToRegistry(
+        [
+            new RuntimeRegistryPackageChangeRequest(
+                "test.package",
+                Version: null,
+                Tag: "preview",
+                VersionRange: ">=2.3.0",
+                Required: false),
+        ]));
+
+        Assert.Equal("preview", registryRequest.Tag);
+        Assert.Equal(">=2.3.0", registryRequest.VersionRange);
+        Assert.False(registryRequest.Required);
+
+        var runtimeResponse = RuntimeRegistryContractMapper.ToRuntime(new RegistryResolveInstallPlanResponse(
+            false,
+            [],
+            [],
+            [],
+            [new RegistryPackageInstallPlanConflict(
+                "test.package",
+                "1.0.0",
+                ">=2.3.0",
+                null,
+                RegistryV1ErrorCodes.PackageRequirementUnsatisfied,
+                "The selected version is too old.")]));
+
+        var conflict = Assert.Single(runtimeResponse.Conflicts);
+        Assert.Equal(RegistryV1ErrorCodes.PackageRequirementUnsatisfied, conflict.ErrorCode);
+        Assert.Equal(">=2.3.0", conflict.RequestedVersionRange);
     }
 
     [Fact]

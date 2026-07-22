@@ -58,14 +58,10 @@ internal static class SunderAppComposition
             provider.GetRequiredService<IBackgroundProcessQueue>(),
             provider.GetRequiredService<IRuntimeApiClientFactory>(),
             provider.GetRequiredService<IPackageNotificationService>()));
-        services.AddSingleton<PackageRuntimeFaultReporter>();
-
         services.AddSingleton<AppPackageShellViewService>();
         services.AddSingleton<IPackageShellViewService>(provider => provider.GetRequiredService<AppPackageShellViewService>());
         services.AddSingleton<AppPackageSettingsNavigationService>();
         services.AddSingleton<IPackageSettingsNavigationService>(provider => provider.GetRequiredService<AppPackageSettingsNavigationService>());
-        services.AddSingleton<AppPackageSessionService>();
-        services.AddSingleton<IPackageDevelopmentSessionControl>(provider => provider.GetRequiredService<AppPackageSessionService>());
 
         services.AddSingleton<ThemeManager>();
         services.AddSingleton<IThemeManager>(provider => provider.GetRequiredService<ThemeManager>());

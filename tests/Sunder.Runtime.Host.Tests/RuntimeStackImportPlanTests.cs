@@ -84,6 +84,73 @@ public sealed class RuntimeStackImportPlanTests
     }
 
     [Fact]
+    public async Task ImportAsync_WhenContributorCommitsItems_InvokesRuntimeAppliedHandler()
+    {
+        await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one"));
+        var preview = await fixture.PreviewAsync(["one-fragment"]);
+
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(
+            preview.PlanId!,
+            ["one-fragment"],
+            ActionIds(preview)));
+
+        Assert.Equal(RuntimeStackImportOutcome.Completed, result.Outcome);
+        var contributor = fixture.Contributors[0];
+        Assert.Equal(1, contributor.AppliedCount);
+        var context = Assert.IsType<StackImportAppliedContext>(contributor.LastAppliedContext);
+        Assert.Equal(contributor.PackageId, context.OwnerPackageId);
+        Assert.Equal(contributor.ContributorId, context.ContributorId);
+        Assert.Equal(["one-fragment"], context.FragmentIds);
+        Assert.Equal(["one-item"], context.ImportedItems.Select(item => item.ItemId));
+    }
+
+    [Fact]
+    public async Task ImportAsync_WhenAppliedHandlerCancelsIndependently_KeepsCommittedImportAndWarns()
+    {
+        var contributor = new TestContributor(
+            "one",
+            appliedAction: static _ => Task.FromException(new OperationCanceledException("Refresh cancelled.")));
+        await using var fixture = await StackImportFixture.CreateAsync(contributor);
+        var preview = await fixture.PreviewAsync(["one-fragment"]);
+
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(
+            preview.PlanId!,
+            ["one-fragment"],
+            ActionIds(preview)));
+
+        Assert.Equal(RuntimeStackImportOutcome.Completed, result.Outcome);
+        Assert.Single(result.ImportedItems);
+        Assert.Empty(result.Errors);
+        Assert.Contains(result.Warnings, warning => warning.Contains("cancelled", StringComparison.OrdinalIgnoreCase));
+        var contributorResult = Assert.Single(result.ContributorResults);
+        Assert.Contains(contributorResult.Warnings, warning => warning.Contains("cancelled", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ImportAsync_WhenHostCancelsAppliedHandler_PropagatesCancellation()
+    {
+        var appliedEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contributor = new TestContributor(
+            "one",
+            appliedAction: async cancellationToken =>
+            {
+                appliedEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            });
+        await using var fixture = await StackImportFixture.CreateAsync(contributor);
+        var preview = await fixture.PreviewAsync(["one-fragment"]);
+        using var cancellation = new CancellationTokenSource();
+
+        var import = fixture.Service.ImportAsync(
+            new RuntimeStackImportRequest(preview.PlanId!, ["one-fragment"], ActionIds(preview)),
+            cancellation.Token);
+        await appliedEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => import);
+    }
+
+    [Fact]
     public async Task PreviewAsync_WhenFragmentIdUnknown_RejectsSelectionAndReleasesUpload()
     {
         await using var fixture = await StackImportFixture.CreateAsync(new TestContributor("one"));
@@ -154,6 +221,27 @@ public sealed class RuntimeStackImportPlanTests
             });
         Assert.Single(result.ContributorResults, contributor => contributor.ImportedItems.Count > 0);
         Assert.All(fixture.Contributors, contributor => Assert.Equal(1, contributor.ImportCount));
+        Assert.Equal(1, fixture.Contributors[0].AppliedCount);
+        Assert.Equal(0, fixture.Contributors[1].AppliedCount);
+    }
+
+    [Fact]
+    public async Task ImportAsync_WhenFailedContributorReportsCommittedItems_NormalizesOutcomeToPartial()
+    {
+        await using var fixture = await StackImportFixture.CreateAsync(
+            new TestContributor("one", succeeds: false, reportsCommittedItemOnFailure: true));
+        var preview = await fixture.PreviewAsync(["one-fragment"]);
+
+        var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(
+            preview.PlanId!,
+            ["one-fragment"],
+            ActionIds(preview)));
+
+        Assert.Equal(RuntimeStackImportOutcome.Partial, result.Outcome);
+        var contributor = Assert.Single(result.ContributorResults);
+        Assert.Equal(RuntimeStackImportOutcome.Partial, contributor.Outcome);
+        Assert.Single(contributor.ImportedItems);
+        Assert.Contains(contributor.Errors, error => error.Contains("committed items", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -244,6 +332,7 @@ public sealed class RuntimeStackImportPlanTests
             foreach (var contributor in contributors)
             {
                 catalog.Add(contributor.PackageId, SunderStackExtensionPoints.StackImporters, contributor);
+                catalog.Add(contributor.PackageId, SunderStackExtensionPoints.StackImportAppliedHandlers, contributor);
             }
 
             var session = new ActivePackageSession(
@@ -352,12 +441,18 @@ public sealed class RuntimeStackImportPlanTests
         string? actionId = null,
         string? inputId = null,
         bool duplicateAction = false,
-        bool duplicateInput = false) : IPackageStackImporter
+        bool duplicateInput = false,
+        bool reportsCommittedItemOnFailure = false,
+        Func<CancellationToken, Task>? appliedAction = null) : IPackageStackImporter, IPackageStackImportAppliedHandler
     {
+        private readonly Func<CancellationToken, Task>? _appliedAction = appliedAction;
+
         public string PackageId => "test.package." + contributorId;
         public string ContributorId => contributorId;
         public string DisplayName => contributorId;
         public int ImportCount { get; private set; }
+        public int AppliedCount { get; private set; }
+        public StackImportAppliedContext? LastAppliedContext { get; private set; }
         public string ActionId { get; } = actionId ?? contributorId + "-action";
         public string InputId { get; } = inputId ?? "input";
         public IReadOnlyList<string> LastSelectedActionIds { get; private set; } = [];
@@ -398,10 +493,25 @@ public sealed class RuntimeStackImportPlanTests
                     [])
                 : new StackImportResult(
                     StackImportOutcome.Failed,
-                    [],
+                    reportsCommittedItemOnFailure
+                        ? [new StackImportedItem(ContributorId + "-item", ContributorId, "test")]
+                        : [],
                     new Dictionary<string, string>(),
                     [],
                     ["Contributor failed."]));
+        }
+
+        public async ValueTask OnStackImportAppliedAsync(
+            StackImportAppliedContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AppliedCount++;
+            LastAppliedContext = context;
+            if (_appliedAction is not null)
+            {
+                await _appliedAction(cancellationToken);
+            }
         }
     }
 

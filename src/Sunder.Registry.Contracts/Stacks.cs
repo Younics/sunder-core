@@ -124,4 +124,5 @@ public sealed record RegistryStackProfileOperationResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }

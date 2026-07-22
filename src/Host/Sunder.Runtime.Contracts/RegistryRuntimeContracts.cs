@@ -68,12 +68,16 @@ public sealed record RuntimeRegistryPackageRequest(
     string? Tag = "latest",
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
-    bool Reinstall = false);
+    bool Reinstall = false,
+    string? VersionRange = null,
+    bool Required = true);
 
 public sealed record RuntimeRegistryPackageChangeRequest(
     string PackageId,
     string? Version,
-    string? Tag = null);
+    string? Tag = null,
+    string? VersionRange = null,
+    bool Required = true);
 
 public sealed record RuntimeRegistryPackageBatchRequest(
     string RegistryOrigin,
@@ -131,7 +135,8 @@ public sealed record RuntimeRegistryPackageInstallPlanConflict(
     string? CurrentVersion,
     string? RequestedVersionRange,
     string? RequiredByPackageId,
-    string Message);
+    string ErrorCode = "registry.v1.resource.conflict",
+    string Message = "");
 
 public sealed record RuntimeRegistryResolveInstallPlanResponse(
     bool Success,

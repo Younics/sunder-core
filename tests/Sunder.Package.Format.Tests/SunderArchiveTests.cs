@@ -77,6 +77,22 @@ public sealed class SunderArchiveTests
         Assert.False(Directory.Exists(destination));
     }
 
+    [Theory]
+    [InlineData("payload/A.dll", "payload/a.dll")]
+    [InlineData("payload/A/one.dll", "payload/a/two.dll")]
+    [InlineData("payload/a", "payload/a/file.dll")]
+    [InlineData("payload/a/file.dll", "payload/a")]
+    public void DeterministicWriter_RejectsPortablePathCollisions(string first, string second)
+    {
+        var paths = new[]
+        {
+            ArchiveRelativePath.Parse(first),
+            ArchiveRelativePath.Parse(second),
+        };
+
+        Assert.Throws<InvalidDataException>(() => SunderArchiveDeterministicWriter.ValidatePortablePaths(paths));
+    }
+
     [Fact]
     public async Task ExtractAtomicAsync_GeneratedCaseCollisionsNeverPublishDestination()
     {

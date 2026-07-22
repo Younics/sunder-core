@@ -126,12 +126,6 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         }
     }
 
-    internal void NotifyChangedForTest(string packageId)
-        => ScheduleReload(packageId, refreshWatcher: false);
-
-    internal void NotifyParentReplacementForTest(string packageId)
-        => ScheduleReload(packageId, refreshWatcher: true);
-
     private void ReplaceRegistrations(IReadOnlyList<DevPackageWatchTarget> targets)
     {
         foreach (var packageId in _registrations.Keys.Except(targets.Select(target => target.PackageId), StringComparer.OrdinalIgnoreCase).ToArray())

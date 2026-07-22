@@ -30,7 +30,6 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.LoggingV1,
         SunderSdkCapabilities.NotificationsV1,
         SunderSdkCapabilities.ShellViewV1,
-        SunderSdkCapabilities.DevelopmentPackageSessionsV1,
         SunderSdkCapabilities.RuntimeOperationsV1,
         SunderSdkCapabilities.StacksV1,
         SunderSdkCapabilities.StackContributionsV1,
@@ -68,7 +67,7 @@ internal static class SunderSdkCompatibilityProfile
         if (!SemanticVersion.TryParse(sdkPackageVersion, out _)
             || !PackageVersionRange.IsSatisfiedBy(sdkPackageVersion!, SupportedSdkRange))
         {
-            errors.Add($"Package '{packageLabel}' was built with Sunder.Sdk '{sdkPackageVersion ?? "unknown"}', but this Host requires {SupportedSdkRange}. Rebuild all packages against the coordinated Sunder 1.1 SDK; 1.0 and 1.1 packages cannot be mixed.");
+            errors.Add($"Package '{packageLabel}' was built with Sunder.Sdk '{sdkPackageVersion ?? "unknown"}', but this Host requires {SupportedSdkRange}. Rebuild all packages against the coordinated Sunder 1.1 SDK; incompatible SDK baseline families cannot be mixed.");
         }
 
         if (requiredSdkCapabilities?.Contains(SunderSdkCapabilities.Baseline11V1, StringComparer.Ordinal) != true)

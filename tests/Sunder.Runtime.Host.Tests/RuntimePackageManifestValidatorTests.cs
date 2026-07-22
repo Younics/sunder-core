@@ -16,6 +16,7 @@ public sealed class RuntimePackageManifestValidatorTests
         Assert.Contains(errors, error => error.Contains("missing name", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("SemVer 2.0", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("missing entryAssembly", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("must declare hostRoles", StringComparison.Ordinal));
     }
 
     [Fact]

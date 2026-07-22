@@ -19,6 +19,7 @@ public sealed class PackageVersionRangeTests
     [InlineData("1.2.3", "2.0.0")]
     [InlineData("1.2.3", ">=2.0.0")]
     [InlineData("1.2.3", ">=1.0.0 <1.2.0")]
+    [InlineData("1.1.0-beta.1", ">=1.1.0 <1.2.0")]
     [InlineData("not-a-version", ">=1.0.0")]
     [InlineData("1.2.3", "")]
     public void IsSatisfiedBy_WhenRangeDoesNotMatch_ReturnsFalse(string version, string range)

@@ -5,10 +5,50 @@ namespace Sunder.Package.Format;
 internal static class ImageFileInspector
 {
     public static bool TryRead(string path, out ImageFileInfo image, out string error)
+        => TryRead(File.ReadAllBytes(path), out image, out error);
+
+    public static bool TryRead(Stream stream, out ImageFileInfo image, out string error)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead)
+        {
+            image = default;
+            error = "the image stream is not readable";
+            return false;
+        }
+
+        var startPosition = stream.CanSeek ? stream.Position : (long?)null;
+        try
+        {
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            return TryRead(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)), out image, out error);
+        }
+        finally
+        {
+            if (startPosition is not null)
+            {
+                stream.Position = startPosition.Value;
+            }
+        }
+    }
+
+    public static string CanonicalExtension(string contentType)
+        => contentType.ToLowerInvariant() switch
+        {
+            "image/png" => ".png",
+            "image/gif" => ".gif",
+            "image/jpeg" => ".jpg",
+            "image/webp" => ".webp",
+            "image/bmp" => ".bmp",
+            "image/x-icon" => ".ico",
+            _ => throw new ArgumentException($"Unsupported image content type '{contentType}'.", nameof(contentType)),
+        };
+
+    private static bool TryRead(ReadOnlySpan<byte> bytes, out ImageFileInfo image, out string error)
     {
         image = default;
         error = "the file signature is not a supported image type";
-        var bytes = File.ReadAllBytes(path);
         if (TryReadPng(bytes, out image)
             || TryReadGif(bytes, out image)
             || TryReadJpeg(bytes, out image)
@@ -28,16 +68,11 @@ internal static class ImageFileInspector
     }
 
     public static bool ExtensionMatches(string path, string contentType)
-        => (Path.GetExtension(path).ToLowerInvariant(), contentType) switch
-        {
-            (".png", "image/png") => true,
-            (".gif", "image/gif") => true,
-            (".jpg" or ".jpeg", "image/jpeg") => true,
-            (".webp", "image/webp") => true,
-            (".bmp", "image/bmp") => true,
-            (".ico", "image/x-icon") => true,
-            _ => false,
-        };
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        return extension == CanonicalExtension(contentType)
+               || (extension == ".jpeg" && string.Equals(contentType, "image/jpeg", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static bool TryReadPng(ReadOnlySpan<byte> bytes, out ImageFileInfo image)
     {

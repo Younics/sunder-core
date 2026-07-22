@@ -13,7 +13,6 @@ internal sealed class RuntimePackageSessionTestHost
     private readonly RuntimePackageDataService _data;
     private readonly PackageSettingsAccessService _settings;
     private readonly PackageAuthAccessService _auth;
-    private readonly PackageFaultService _faults;
     private readonly RuntimeStackExportService _stackExport;
     private readonly RuntimeStackImportService _stackImport;
     private readonly DevPackageWatchService _devWatcher;
@@ -33,13 +32,13 @@ internal sealed class RuntimePackageSessionTestHost
         RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
         TimeProvider? timeProvider = null)
     {
-        var gate = operationGate ?? new RuntimeOperationGate();
+        lifecyclePolicy ??= new RuntimeLifecyclePolicyOptions();
+        var gate = operationGate ?? new RuntimeOperationGate(lifecyclePolicy: lifecyclePolicy);
         var events = eventStream ?? new RuntimeEventStreamService();
         var transfers = transferStore ?? new RuntimeContentTransferStore(packageArchiveInstaller.Paths);
         var snapshots = snapshotStore ?? new PackageUiSnapshotStore(packageArchiveInstaller.Paths);
         var storeCoordinator = packageStoreCoordinator
             ?? new PackageStoreCoordinator(packageArchiveInstaller.Paths, installedPackageStore, packageArchiveInstaller);
-        lifecyclePolicy ??= new RuntimeLifecyclePolicyOptions();
         timeProvider ??= TimeProvider.System;
         _owner = new RuntimeSessionOwner(
             NullLogger<RuntimeSessionOwner>.Instance,
@@ -50,7 +49,11 @@ internal sealed class RuntimePackageSessionTestHost
         _ui = new RuntimePackageUiService(_owner, snapshots, installedPackageStore);
         var loader = new PackageSessionLoadService(logger, packageArchiveInstaller.Paths);
         var reconciler = new PackageSessionReconciler(installedPackageStore, loader);
-        var publisher = new PackageSessionPublisher(_owner, _ui, NullLogger<PackageSessionPublisher>.Instance);
+        var publisher = new PackageSessionPublisher(
+            _owner,
+            _ui,
+            NullLogger<PackageSessionPublisher>.Instance,
+            lifecyclePolicy);
         _sessions = new PackageSessionLifecycleService(
             _owner,
             gate,
@@ -91,7 +94,6 @@ internal sealed class RuntimePackageSessionTestHost
         _data = new RuntimePackageDataService(_owner.State);
         _settings = new PackageSettingsAccessService(_owner);
         _auth = new PackageAuthAccessService(_owner);
-        _faults = new PackageFaultService(_owner);
         _stackExport = new RuntimeStackExportService(_owner, transfers, packageArchiveInstaller.Paths);
         _stackImport = new RuntimeStackImportService(_owner, transfers);
     }
@@ -134,7 +136,6 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageAuthSessionStartResponse?> StartPackageAuthAsync(string packageId, PackageCallbackServer server, CancellationToken token = default) => _auth.StartAsync(packageId, server, token);
     public PackageAuthSessionStatusResponse? GetPackageAuthSessionStatus(string packageId, string sessionId) => _auth.GetSessionStatus(packageId, sessionId);
     public Task<PackageAuthStatusResponse?> DisconnectPackageAsync(string packageId, CancellationToken token = default) => _auth.DisconnectAsync(packageId, token);
-    public bool ReportPackageFault(string packageId, ReportPackageFaultRequest request) => _faults.Report(packageId, request);
     public Task<PackageLifecycleOperationResult> LoadInstalledPackagesAsync(CancellationToken token = default) => _installed.LoadInstalledPackagesAsync(token);
     public Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken token = default) => _installed.SetEnabledAsync(packageId, isEnabled, token);
     public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken token = default) => _installed.UninstallAsync(packageId, token);

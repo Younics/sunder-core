@@ -29,12 +29,16 @@ internal static class PackageHostRoleValidator
 
         try
         {
-            var actual = PackageHostRoleMetadata.ReadAssemblyRoles(assemblyPath);
-            if (actual != declared)
+            var shape = PackageModuleShapeReader.Read(assemblyPath);
+            foreach (var shapeError in shape.Validate())
+            {
+                errors.Add($"Package entry assembly '{manifest.EntryAssembly}' has an invalid module shape: {shapeError}");
+            }
+            if (shape.Roles != declared)
             {
                 errors.Add(
                     $"Package manifest for '{manifest.Id ?? rootPath}' declares hostRoles [{string.Join(", ", manifest.HostRoles!)}], "
-                    + $"but entry assembly metadata requires [{string.Join(", ", PackageHostRoleMetadata.ReadManifestRoles(assemblyPath))}].");
+                    + $"but entry assembly metadata requires [{string.Join(", ", PackageHostRoleMetadata.ToManifestRoles(shape.Roles))}].");
             }
         }
         catch (Exception exception) when (exception is BadImageFormatException or IOException or UnauthorizedAccessException)

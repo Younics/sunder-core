@@ -39,11 +39,10 @@ public sealed class ShellStartupResult : IAsyncDisposable
 
     internal Task StartRuntimeSubscriptionAsync(
         RuntimePackageSnapshot initialSnapshot,
-        bool watchDevPackages,
         CancellationToken cancellationToken
     ) =>
         GetSession()
-            .StartRuntimeSubscriptionAsync(initialSnapshot, watchDevPackages, cancellationToken);
+            .StartRuntimeSubscriptionAsync(initialSnapshot, cancellationToken);
 
     internal ShellSession TransferOwnership(ServiceProvider serviceProvider)
     {
@@ -434,8 +433,6 @@ public sealed class ShellStartupCoordinator
                 await result
                     .StartRuntimeSubscriptionAsync(
                         runtimePackageSnapshot,
-                        startupOptions.DevPackageFolders.Count > 0
-                            && startupOptions.WatchDevPackages,
                         cancellationToken
                     )
                     .ConfigureAwait(false);

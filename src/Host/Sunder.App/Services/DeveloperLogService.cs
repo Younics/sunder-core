@@ -39,6 +39,7 @@ public sealed class DeveloperLogEntriesChangedEventArgs : EventArgs
 public sealed class DeveloperLogService : IDisposable
 {
     private const int MaxEntries = 50000;
+    private const int PackageLogReplayBatchSize = 1000;
 
     private readonly object _syncRoot = new();
     private readonly List<DeveloperLogEntry> _entries = [];
@@ -149,38 +150,53 @@ public sealed class DeveloperLogService : IDisposable
             try
             {
                 using var client = _runtimeApiClientFactory!.CreateClient<IRuntimeLogClient>();
-                var snapshot = await client.GetPackageLogSnapshotAsync(sequenceId, cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (snapshot.RuntimeInstanceId != Guid.Empty
-                    && runtimeInstanceId != Guid.Empty
-                    && snapshot.RuntimeInstanceId != runtimeInstanceId)
+                var restartForRuntimeChange = false;
+                while (true)
                 {
-                    ResetForRuntimeChange();
-                    runtimeInstanceId = snapshot.RuntimeInstanceId;
-                    sequenceId = 0;
+                    var snapshot = await client.GetPackageLogSnapshotAsync(
+                        sequenceId,
+                        PackageLogReplayBatchSize,
+                        cancellationToken).ConfigureAwait(false);
+                    if (snapshot.RuntimeInstanceId != Guid.Empty
+                        && runtimeInstanceId != Guid.Empty
+                        && snapshot.RuntimeInstanceId != runtimeInstanceId)
+                    {
+                        ResetForRuntimeChange();
+                        runtimeInstanceId = snapshot.RuntimeInstanceId;
+                        sequenceId = 0;
+                        restartForRuntimeChange = true;
+                        break;
+                    }
+
+                    if (snapshot.RuntimeInstanceId != Guid.Empty)
+                    {
+                        runtimeInstanceId = snapshot.RuntimeInstanceId;
+                    }
+
+                    var previousSequenceId = sequenceId;
+                    foreach (var entry in snapshot.Entries)
+                    {
+                        if (entry.SequenceId <= sequenceId)
+                        {
+                            continue;
+                        }
+
+                        sequenceId = entry.SequenceId;
+                        AddPackageLog(entry);
+                    }
+
+                    sequenceId = Math.Max(sequenceId, snapshot.SequenceId);
+                    if (snapshot.Entries.Count < PackageLogReplayBatchSize
+                        || sequenceId <= previousSequenceId)
+                    {
+                        break;
+                    }
+                }
+                if (restartForRuntimeChange)
+                {
                     continue;
                 }
 
-                if (snapshot.RuntimeInstanceId != Guid.Empty)
-                {
-                    runtimeInstanceId = snapshot.RuntimeInstanceId;
-                }
-                if (snapshot.HistoryGap)
-                {
-                    sequenceId = 0;
-                }
-
-                foreach (var entry in snapshot.Entries)
-                {
-                    if (entry.SequenceId <= sequenceId)
-                    {
-                        continue;
-                    }
-
-                    sequenceId = entry.SequenceId;
-                    AddPackageLog(entry);
-                }
-
-                sequenceId = Math.Max(sequenceId, snapshot.SequenceId);
                 await foreach (var entry in client.StreamPackageLogsAsync(sequenceId, cancellationToken).ConfigureAwait(false))
                 {
                     if (entry.RuntimeInstanceId != Guid.Empty

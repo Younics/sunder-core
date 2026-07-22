@@ -17,10 +17,9 @@ internal static class CreateStackExportSelectionProjector
                     item.ContributorId,
                     item.ItemId,
                     item.Details
-                        .Where(detail => detail.IsSelected)
                         .Select(detail => new RuntimeStackExportDetailSelection(
                             detail.DetailId,
-                            IsSelected: true,
+                            detail.IsSelected,
                             detail.ValueOverride,
                             detail.SensitivityOverride))
                         .ToArray()))

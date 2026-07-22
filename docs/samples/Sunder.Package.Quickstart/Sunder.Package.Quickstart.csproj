@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>1.0.0</Version>
+    <IsPackable>false</IsPackable>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <ProjectReference Include="../../../src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj" />
+    <ProjectReference Include="../../../src/Sdk/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj" />
+  </ItemGroup>
+</Project>

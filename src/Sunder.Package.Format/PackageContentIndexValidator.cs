@@ -32,7 +32,12 @@ internal static class PackageContentIndexValidator
                 errors.Add("Package content index contains a null file entry.");
                 continue;
             }
-            if (!PackageArchivePathValidator.TryParse(entry.Path, "content-index path", errors, out var path))
+            if (!PackageArchivePathValidator.TryParse(
+                    entry.Path,
+                    "content-index path",
+                    errors,
+                    out var path,
+                    required: true))
             {
                 continue;
             }

@@ -1,0 +1,26 @@
+{
+  "packages": [
+    {
+      "packageId": "sunder.package.sample",
+      "version": null,
+      "tag": "preview",
+      "versionRange": "\u003E=2.3.0",
+      "required": false
+    }
+  ],
+  "installedPackages": [
+    {
+      "packageId": "sunder.package.base",
+      "version": "1.5.0",
+      "dependsOn": [
+        {
+          "packageId": "sunder.package.shared",
+          "versionRange": "\u003E=1.0.0"
+        }
+      ]
+    }
+  ],
+  "includePrerelease": true,
+  "allowDowngrade": false,
+  "reinstall": false
+}

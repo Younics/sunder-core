@@ -6,14 +6,17 @@ internal static class StackArchivePathValidator
         string? value,
         string label,
         ICollection<string> errors,
-        out ArchiveRelativePath path)
+        out ArchiveRelativePath path,
+        bool required = false)
     {
         if (ArchiveRelativePath.TryParse(value, int.MaxValue, int.MaxValue, out path, out var error))
         {
             return true;
         }
 
-        errors.Add($"Stack {label} '{value}' is unsafe: {error}.");
+        errors.Add(required && string.IsNullOrWhiteSpace(value)
+            ? $"Stack {label} is required."
+            : $"Stack {label} '{value}' is unsafe: {error}.");
         return false;
     }
 }

@@ -8,9 +8,15 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
     private readonly AtomicFileDocument _document;
     private readonly PackageSecretsSerializer _serializer;
     private readonly PackageSecretsEncryption _encryption;
+    private readonly bool _enforcePackageKeyValidation;
 
     internal JsonPackageSecretsStore(string filePath)
-        : this(filePath, null, null, null)
+        : this(filePath, null, null, null, enforcePackageKeyValidation: true)
+    {
+    }
+
+    internal JsonPackageSecretsStore(string filePath, bool enforcePackageKeyValidation)
+        : this(filePath, null, null, null, enforcePackageKeyValidation)
     {
     }
 
@@ -18,9 +24,11 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
         string filePath,
         AtomicFileSystem? fileSystem,
         ISecretCipher? cipher,
-        IMasterKeyProtection? masterKeyProtection)
+        IMasterKeyProtection? masterKeyProtection,
+        bool enforcePackageKeyValidation = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        _enforcePackageKeyValidation = enforcePackageKeyValidation;
         fileSystem ??= new AtomicFileSystem();
         var canonicalPath = Path.GetFullPath(filePath);
         _document = new AtomicFileDocument(
@@ -32,7 +40,7 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
             $"{canonicalPath}.key",
             fileSystem,
             masterKeyProtection ?? new PlatformMasterKeyProtection());
-        _serializer = new PackageSecretsSerializer();
+        _serializer = new PackageSecretsSerializer(enforcePackageKeyValidation);
         _encryption = new PackageSecretsEncryption(
             masterKeyStore,
             cipher ?? new AesGcmSecretCipher(),
@@ -42,7 +50,7 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
 
     public Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        ValidateKey(key);
         return _document.ExecuteAsync(transaction =>
         {
             var secrets = Load(transaction);
@@ -57,8 +65,8 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
 
     public Task SetSecretAsync(string key, string value, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
-        ArgumentNullException.ThrowIfNull(value);
+        ValidateKey(key);
+        PackageStorageGuards.Value(value, nameof(value));
         return _document.ExecuteAsync(transaction =>
         {
             var secrets = Load(transaction);
@@ -76,7 +84,7 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
 
     public Task DeleteSecretAsync(string key, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        ValidateKey(key);
         return _document.ExecuteAsync(transaction =>
         {
             var secrets = Load(transaction);
@@ -90,6 +98,17 @@ internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
     }
 
     public void ResetAfterFailure() => _document.Execute(transaction => transaction.ResetFailureMarker());
+
+    private void ValidateKey(string key)
+    {
+        if (_enforcePackageKeyValidation)
+        {
+            PackageStorageGuards.Key(key, nameof(key));
+            return;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+    }
 
     private void Activate() => _document.Execute(_ => true);
 

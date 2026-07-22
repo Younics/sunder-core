@@ -443,7 +443,6 @@ type sealed class Sunder.Runtime.Contracts.PackageSessionStatus : System.IEquata
   property Sunder.Runtime.Contracts.PackageSourceKind ActiveSourceKind { get; init; }
   property System.String? DisplayName { get; init; }
   property System.String? ErrorMessage { get; init; }
-  property System.Int64 GenerationId { get; init; }
   property System.Boolean IsLoaded { get; init; }
   property System.Boolean OverridesInstalledPackage { get; init; }
   property System.String PackageId { get; init; }
@@ -622,17 +621,6 @@ type sealed class Sunder.Runtime.Contracts.PackageViewDescriptor : System.IEquat
   method Sunder.Runtime.Contracts.PackageViewDescriptor <Clone>$()
   method System.Void Deconstruct(out System.String ViewId, out System.String PackageId, out System.String Title, out Sunder.Runtime.Contracts.PackageIconDescriptor? Icon, out System.String? DefaultPlacement, out System.Boolean ShowInHotbarByDefault)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageViewDescriptor? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Runtime.Contracts.ReportPackageFaultRequest : System.IEquatable<Sunder.Runtime.Contracts.ReportPackageFaultRequest>
-  method .ctor(Sunder.Runtime.Contracts.PackageFailureOrigin Origin, System.String Message, System.Int64 GenerationId)
-  property System.Int64 GenerationId { get; init; }
-  property System.String Message { get; init; }
-  property Sunder.Runtime.Contracts.PackageFailureOrigin Origin { get; init; }
-  method Sunder.Runtime.Contracts.ReportPackageFaultRequest <Clone>$()
-  method System.Void Deconstruct(out Sunder.Runtime.Contracts.PackageFailureOrigin Origin, out System.String Message, out System.Int64 GenerationId)
-  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.ReportPackageFaultRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
@@ -934,12 +922,14 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageBatchRequest : 
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeRequest>
-  method .ctor(System.String PackageId, System.String? Version, System.String? Tag = null)
+  method .ctor(System.String PackageId, System.String? Version, System.String? Tag = null, System.String? VersionRange = null, System.Boolean Required = true)
   property System.String PackageId { get; init; }
+  property System.Boolean Required { get; init; }
   property System.String? Tag { get; init; }
   property System.String? Version { get; init; }
+  property System.String? VersionRange { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeRequest <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag)
+  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.String? VersionRange, out System.Boolean Required)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -987,14 +977,15 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageDependency : Sy
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageInstallPlanConflict : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistryPackageInstallPlanConflict>
-  method .ctor(System.String PackageId, System.String? CurrentVersion, System.String? RequestedVersionRange, System.String? RequiredByPackageId, System.String Message)
+  method .ctor(System.String PackageId, System.String? CurrentVersion, System.String? RequestedVersionRange, System.String? RequiredByPackageId, System.String ErrorCode = "registry.v1.resource.conflict", System.String Message = "")
   property System.String? CurrentVersion { get; init; }
+  property System.String ErrorCode { get; init; }
   property System.String Message { get; init; }
   property System.String PackageId { get; init; }
   property System.String? RequestedVersionRange { get; init; }
   property System.String? RequiredByPackageId { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRegistryPackageInstallPlanConflict <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? CurrentVersion, out System.String? RequestedVersionRange, out System.String? RequiredByPackageId, out System.String Message)
+  method System.Void Deconstruct(out System.String PackageId, out System.String? CurrentVersion, out System.String? RequestedVersionRange, out System.String? RequiredByPackageId, out System.String ErrorCode, out System.String Message)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRegistryPackageInstallPlanConflict? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1016,16 +1007,18 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageInstallPlanItem
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest>
-  method .ctor(System.String RegistryOrigin, System.String PackageId, System.String? Version = null, System.String? Tag = "latest", System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
+  method .ctor(System.String RegistryOrigin, System.String PackageId, System.String? Version = null, System.String? Tag = "latest", System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false, System.String? VersionRange = null, System.Boolean Required = true)
   property System.Boolean AllowDowngrade { get; init; }
   property System.Boolean IncludePrerelease { get; init; }
   property System.String PackageId { get; init; }
   property System.String RegistryOrigin { get; init; }
   property System.Boolean Reinstall { get; init; }
+  property System.Boolean Required { get; init; }
   property System.String? Tag { get; init; }
   property System.String? Version { get; init; }
+  property System.String? VersionRange { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest <Clone>$()
-  method System.Void Deconstruct(out System.String RegistryOrigin, out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
+  method System.Void Deconstruct(out System.String RegistryOrigin, out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall, out System.String? VersionRange, out System.Boolean Required)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1154,7 +1147,7 @@ type sealed class Sunder.Runtime.Contracts.RuntimeStackExportDiscoveryResponse :
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeStackExportItemDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeStackExportItemDescriptor>
-  method .ctor(System.String ContributorId, System.String OwnerPackageId, System.String ItemId, System.String DisplayName, System.String Kind, System.Boolean DefaultSelected, System.Collections.Generic.IReadOnlyList<System.String> Sensitivities, System.String? Description = null, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackExportItemDetail>? Details = null)
+  method .ctor(System.String ContributorId, System.String OwnerPackageId, System.String ItemId, System.String DisplayName, System.String Kind, System.Boolean DefaultSelected, System.String? Description = null, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackExportItemDetail>? Details = null)
   property System.String ContributorId { get; init; }
   property System.Boolean DefaultSelected { get; init; }
   property System.String? Description { get; init; }
@@ -1163,9 +1156,8 @@ type sealed class Sunder.Runtime.Contracts.RuntimeStackExportItemDescriptor : Sy
   property System.String ItemId { get; init; }
   property System.String Kind { get; init; }
   property System.String OwnerPackageId { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> Sensitivities { get; }
   method Sunder.Runtime.Contracts.RuntimeStackExportItemDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String ContributorId, out System.String OwnerPackageId, out System.String ItemId, out System.String DisplayName, out System.String Kind, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<System.String> Sensitivities, out System.String? Description, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackExportItemDetail>? Details)
+  method System.Void Deconstruct(out System.String ContributorId, out System.String OwnerPackageId, out System.String ItemId, out System.String DisplayName, out System.String Kind, out System.Boolean DefaultSelected, out System.String? Description, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackExportItemDetail>? Details)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeStackExportItemDescriptor? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1239,18 +1231,6 @@ type sealed class Sunder.Runtime.Contracts.RuntimeStackImportActionDescriptor : 
   method Sunder.Runtime.Contracts.RuntimeStackImportActionDescriptor <Clone>$()
   method System.Void Deconstruct(out System.String ActionId, out System.String OwnerPackageId, out System.String ContributorId, out System.String LocalActionId, out System.String DisplayName, out System.String Kind, out System.Boolean DefaultSelected, out System.String? Description)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeStackImportActionDescriptor? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Runtime.Contracts.RuntimeStackImportAppliedContributionDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeStackImportAppliedContributionDescriptor>
-  method .ctor(System.String OwnerPackageId, System.String ContributorId, System.Collections.Generic.IReadOnlyList<System.String> FragmentIds, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackImportedItemDescriptor> ImportedItems)
-  property System.String ContributorId { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> FragmentIds { get; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackImportedItemDescriptor> ImportedItems { get; }
-  property System.String OwnerPackageId { get; init; }
-  method Sunder.Runtime.Contracts.RuntimeStackImportAppliedContributionDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String OwnerPackageId, out System.String ContributorId, out System.Collections.Generic.IReadOnlyList<System.String> FragmentIds, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeStackImportedItemDescriptor> ImportedItems)
-  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeStackImportAppliedContributionDescriptor? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()

@@ -1,3 +1,4 @@
+using Sunder.Sdk.Storage;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -65,13 +66,29 @@ public sealed class PackageStorageArchitectureTests
         => Assert.Equal(expected, Endpoints.PackageDataInputValidator.IsPackageId(packageId));
 
     [Theory]
+    [InlineData("state.key", true)]
+    [InlineData("State-Key_1", true)]
+    [InlineData("state key", false)]
+    [InlineData("caf\u00E9", false)]
+    public void PackageDataValidation_MatchesSdkKeyContract(string key, bool expected)
+    {
+        Assert.Equal(expected, PackageStorageValidation.IsValidKey(key));
+        Assert.Equal(expected, Endpoints.PackageDataInputValidator.IsKey(key));
+    }
+
+    [Theory]
     [InlineData("folder/file.db", true)]
-    [InlineData("folder\\file.db", true)]
+    [InlineData("folder\\file.db", false)]
     [InlineData("../file.db", false)]
     [InlineData("folder/../../file.db", false)]
     [InlineData("/absolute/file.db", false)]
-    public void PackageDataValidation_ConstrainsRelativePaths(string path, bool expected)
-        => Assert.Equal(expected, Endpoints.PackageDataInputValidator.IsRelativePath(path));
+    [InlineData("folder/CON", false)]
+    [InlineData("folder/caf\u00E9.db", false)]
+    public void PackageDataValidation_MatchesSdkRelativePathContract(string path, bool expected)
+    {
+        Assert.Equal(expected, PackageStorageValidation.IsValidRelativePath(path));
+        Assert.Equal(expected, Endpoints.PackageDataInputValidator.IsRelativePath(path));
+    }
 
     private static string ReadSources(string root)
         => string.Join('\n', Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)

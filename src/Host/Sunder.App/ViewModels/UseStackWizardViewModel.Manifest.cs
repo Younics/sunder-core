@@ -34,33 +34,6 @@ public sealed partial class UseStackWizardViewModel
         NotifyWizardStateChanged();
     }
 
-    private async Task NotifyStackImportAppliedAsync(
-        IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> appliedContributions,
-        CancellationToken cancellationToken)
-    {
-        if (appliedContributions.Count == 0)
-        {
-            return;
-        }
-
-        var warnings = await notifyStackImportAppliedAsync(appliedContributions, cancellationToken);
-        foreach (var warning in warnings)
-        {
-            ImportWarnings.Add(warning);
-        }
-    }
-
-    private static IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor> ToAppliedContributions(
-        IReadOnlyList<RuntimeStackImportContributorResultDescriptor> results)
-        => results
-            .Where(result => result.ImportedItems.Count > 0)
-            .Select(result => new RuntimeStackImportAppliedContributionDescriptor(
-                result.OwnerPackageId,
-                result.ContributorId,
-                result.FragmentIds,
-                result.ImportedItems))
-            .ToArray();
-
     private void BuildSetupPackageGroups(
         SunderStackManifest manifest,
         IReadOnlyDictionary<string, StackPackageInfo> packageInfo)

@@ -57,10 +57,16 @@ internal sealed class BoundedReplayFeed<T>(int replayCapacity, int subscriberCap
         lock (_gate)
         {
             var historyGap = HasHistoryGap(afterSequenceId);
-            var items = historyGap
-                ? _replay.TakeLast(limit).Select(entry => entry.Item).ToArray()
-                : _replay.Where(entry => entry.SequenceId > afterSequenceId).TakeLast(limit).Select(entry => entry.Item).ToArray();
-            return new ReplayFeedSnapshot<T>(_sequenceId, items, historyGap);
+            var entries = (historyGap
+                    ? _replay
+                    : _replay.Where(entry => entry.SequenceId > afterSequenceId))
+                .Take(limit)
+                .ToArray();
+            var sequenceId = entries.Length == 0 ? _sequenceId : entries[^1].SequenceId;
+            return new ReplayFeedSnapshot<T>(
+                sequenceId,
+                entries.Select(static entry => entry.Item).ToArray(),
+                historyGap);
         }
     }
 

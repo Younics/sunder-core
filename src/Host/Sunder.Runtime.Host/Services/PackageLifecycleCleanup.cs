@@ -2,10 +2,11 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed partial class PackageSessionLifecycleService
 {
-    public async Task ShutdownStagesAsync()
+    public async Task ShutdownStagesAsync(CancellationToken cancellationToken = default)
     {
         foreach (var stage in _stages.TakeAll())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await _publisher.DiscardAsync(stage.Candidate);
             if (stage.Candidate.StageId is { } stageId) _sessions.MarkStageDiscarded(stageId);
         }
@@ -34,24 +35,37 @@ internal sealed partial class PackageSessionLifecycleService
 
 internal sealed partial class InstalledPackageLifecycleService
 {
-    public Task ShutdownAsync(PackageSessionLifecycleService sessionLifecycle)
-        => _gate.ShutdownAsync(async () =>
+    public Task ShutdownAsync(
+        PackageSessionLifecycleService sessionLifecycle,
+        CancellationToken cancellationToken = default)
+        => _gate.ShutdownAsync(async shutdownToken =>
         {
-            await RunShutdownStepAsync("discard lifecycle stages", sessionLifecycle.ShutdownStagesAsync);
+            await RunShutdownStepAsync(
+                "discard lifecycle stages",
+                token => sessionLifecycle.ShutdownStagesAsync(token),
+                shutdownToken);
             var storeStages = _stages.ToArray();
             _stages.Clear();
             foreach (var (stageId, stage) in storeStages)
             {
+                if (shutdownToken.IsCancellationRequested)
+                {
+                    break;
+                }
                 if (stage.Candidate is not null)
                 {
                     await RunShutdownStepAsync(
                         $"discard package store stage '{stageId}'",
-                        () => _publisher.DiscardAsync(stage.Candidate));
+                        _ => _publisher.DiscardAsync(stage.Candidate),
+                        shutdownToken);
                 }
             }
             _reconciliationPendingStages.Clear();
             _sessions.ClearStages();
-            await RunShutdownStepAsync("discard durable package store stages", _storeCoordinator.DiscardAllStagesAsync);
+            await RunShutdownStepAsync(
+                "discard durable package store stages",
+                _ => _storeCoordinator.DiscardAllStagesAsync(),
+                shutdownToken);
             try
             {
                 _sessions.Callbacks.Clear();
@@ -60,7 +74,10 @@ internal sealed partial class InstalledPackageLifecycleService
             {
                 _logger.LogWarning(exception, "Failed to clear package callback sessions during Runtime shutdown");
             }
-            await RunShutdownStepAsync("retire the active package session", () => _sessions.State.ClearActiveSessionAsync());
+            await RunShutdownStepAsync(
+                "retire the active package session",
+                token => _sessions.State.ClearActiveSessionAsync(token),
+                shutdownToken);
             try
             {
                 RuntimePackageSessionDirectories.CleanupStaleSessions();
@@ -69,13 +86,20 @@ internal sealed partial class InstalledPackageLifecycleService
             {
                 _logger.LogWarning(exception, "Failed to clean stale package session directories during Runtime shutdown");
             }
-        });
+        }, cancellationToken);
 
-    private async Task RunShutdownStepAsync(string operation, Func<Task> action)
+    private async Task RunShutdownStepAsync(
+        string operation,
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
         try
         {
-            await action().WaitAsync(_lifecyclePolicy.ShutdownCleanupStepTimeout);
+            await action(cancellationToken).WaitAsync(cancellationToken);
         }
         catch (Exception exception)
         {

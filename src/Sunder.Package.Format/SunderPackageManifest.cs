@@ -40,9 +40,6 @@ public sealed class SunderPackageManifest
     [JsonPropertyName("requiredSdkCapabilities")]
     public IReadOnlyList<string>? RequiredSdkCapabilities { get; init; }
 
-    [JsonPropertyName("sdkVersion")]
-    public string? SdkVersion { get; init; }
-
     [JsonPropertyName("targetFramework")]
     public string? TargetFramework { get; init; }
 }

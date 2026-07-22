@@ -15,9 +15,10 @@ internal interface IRuntimeWorkerConnectionSource
 internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource, IAsyncDisposable
 {
     private const int MaximumOperationMessageLength = 2048;
+    // The worker owns one 15-second cleanup deadline; keep grace outside that bound.
     private static readonly TimeSpan DefaultWorkerShutdownTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan DefaultTerminationWaitTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan FastWorkerShutdownTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan FastWorkerShutdownTimeout = DefaultWorkerShutdownTimeout;
     private static readonly TimeSpan FastTerminationWaitTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan FastRuntimeLeaseTimeout = TimeSpan.FromSeconds(2);
     private readonly object _stateGate = new();

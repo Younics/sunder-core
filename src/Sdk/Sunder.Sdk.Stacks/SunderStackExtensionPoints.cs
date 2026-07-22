@@ -15,7 +15,7 @@ public static class SunderStackExtensionPoints
     public static readonly PackageExtensionPoint<IPackageStackImporter> StackImporters =
         new("sunder:stack-importers");
 
-    /// <summary>Gets the App extension point for post-import synchronization handlers.</summary>
+    /// <summary>Gets the Runtime extension point for post-import synchronization handlers.</summary>
     public static readonly PackageExtensionPoint<IPackageStackImportAppliedHandler> StackImportAppliedHandlers =
         new("sunder:stack-import-applied-handlers");
 }

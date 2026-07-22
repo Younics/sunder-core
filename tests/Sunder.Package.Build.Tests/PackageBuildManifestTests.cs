@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Microsoft.Build.Framework;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Package.Build.Tasks;
+using Sunder.Package.Format;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
 using Sunder.Sdk.Avalonia.Theming;
@@ -35,6 +36,10 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed class PackageBuildManifestTests
 {
+    [Fact]
+    public void BuildTaskAssembly_UsesStable11BinaryVersion()
+        => Assert.Equal(new Version(1, 1, 0, 0), typeof(GenerateSunderPackageManifestTask).Assembly.GetName().Version);
+
     [Fact]
     public void GenerateManifest_InfersSdkCompatibilityMetadata()
     {
@@ -73,7 +78,6 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.LoggingV1,
             SunderSdkCapabilities.NotificationsV1,
             SunderSdkCapabilities.ShellViewV1,
-            SunderSdkCapabilities.DevelopmentPackageSessionsV1,
             SunderSdkCapabilities.CallbacksV1,
             SunderSdkCapabilities.AuthV1,
             SunderSdkCapabilities.ExtensionChangesV1,
@@ -502,14 +506,13 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public void PackPackage_IndexesAssetNamedContentIndexJson()
+    public async Task PackPackage_IndexesAssetNamedContentIndexJson()
     {
         var root = CreateTempDirectory();
         var devPackage = Path.Combine(root, "sunder-dev");
-        Directory.CreateDirectory(Path.Combine(devPackage, "lib"));
+        var manifestEngine = new TestBuildEngine();
+        CreateValidDevPackage(devPackage, manifestEngine);
         Directory.CreateDirectory(Path.Combine(devPackage, "assets"));
-        File.WriteAllText(Path.Combine(devPackage, "sunder-package.json"), "{}");
-        File.WriteAllText(Path.Combine(devPackage, "lib", "Package.dll"), "assembly");
         File.WriteAllText(Path.Combine(devPackage, "assets", "content-index.json"), "asset");
         var output = Path.Combine(root, "package.sunderpkg");
         var buildEngine = new TestBuildEngine();
@@ -528,6 +531,50 @@ public sealed class PackageBuildManifestTests
         using var document = JsonDocument.Parse(reader.ReadToEnd());
         Assert.Contains(document.RootElement.GetProperty("files").EnumerateArray(), entry =>
             entry.GetProperty("path").GetString() == "payload/assets/content-index.json");
+
+        var validation = await SunderPackageArchiveInspector
+            .ExtractAndValidateAsync(output, Path.Combine(root, "validated"));
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+    }
+
+    [Fact]
+    public void PackPackage_RejectsPackageThatFailsConsumerFormatValidation()
+    {
+        var root = CreateTempDirectory();
+        var devPackage = Path.Combine(root, "sunder-dev");
+        Directory.CreateDirectory(Path.Combine(devPackage, "lib"));
+        File.WriteAllText(Path.Combine(devPackage, "sunder-package.json"), "{}");
+        File.WriteAllText(Path.Combine(devPackage, "lib", "Package.dll"), "assembly");
+        var output = Path.Combine(root, "package.sunderpkg");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new PackSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            DevPackagePath = devPackage,
+            PackageOutputPath = output,
+        }.Execute());
+
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("manifestVersion", StringComparison.OrdinalIgnoreCase));
+        Assert.False(File.Exists(output));
+    }
+
+    [Fact]
+    public void PackTask_ValidatesTheWrittenArchiveAfterDeterministicCreation()
+    {
+        var source = File.ReadAllText(Path.Combine(FindTaskDirectory(), "PackSunderPackageTask.cs"));
+        var writeIndex = source.IndexOf(
+            "DeterministicPackageArchiveWriter.Write(stagingPath, PackageOutputPath)",
+            StringComparison.Ordinal);
+        var archiveValidationIndex = source.IndexOf(
+            "ExtractAndValidateAsync(PackageOutputPath, archiveValidationPath)",
+            StringComparison.Ordinal);
+
+        Assert.True(writeIndex >= 0, "The deterministic package archive write was not found.");
+        Assert.True(
+            archiveValidationIndex > writeIndex,
+            "The exact written archive must be consumer-validated after deterministic creation.");
     }
 
     [Fact]
@@ -549,6 +596,8 @@ public sealed class PackageBuildManifestTests
     public void ManifestGeneration_UsesFocusedCollaboratorsAndSizeRatchets()
     {
         var taskDirectory = FindTaskDirectory();
+        var taskPath = Path.Combine(taskDirectory, "GenerateSunderPackageManifestTask.cs");
+        var taskSource = File.ReadAllText(taskPath);
         var expectedFiles = new[]
         {
             "PackageMetadataDecoder.cs",
@@ -562,7 +611,10 @@ public sealed class PackageBuildManifestTests
             "PackageManifestValidator.cs",
         };
 
-        Assert.True(File.ReadLines(Path.Combine(taskDirectory, "GenerateSunderPackageManifestTask.cs")).Count() < 150);
+        Assert.True(File.ReadLines(taskPath).Count() < 150);
+        Assert.False(File.Exists(Path.Combine(taskDirectory, "GenerateSunderPackageManifestTaskAdapter.cs")));
+        Assert.DoesNotContain("SdkApiVersion { get; set; }", taskSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("SdkVersion { get; set; }", taskSource, StringComparison.Ordinal);
         foreach (var file in expectedFiles)
         {
             Assert.True(File.Exists(Path.Combine(taskDirectory, file)), $"Missing manifest-generation collaborator {file}.");
@@ -583,6 +635,18 @@ public sealed class PackageBuildManifestTests
             SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)],
             ReferencePaths = SdkReferencePaths(includeAvalonia: true),
         };
+
+    private static void CreateValidDevPackage(string devPackage, TestBuildEngine buildEngine)
+    {
+        Directory.CreateDirectory(Path.Combine(devPackage, "lib"));
+        var manifestPath = Path.Combine(devPackage, "sunder-package.json");
+        Assert.True(
+            CreateTask(manifestPath, buildEngine).Execute(),
+            string.Join(Environment.NewLine, buildEngine.Errors));
+        File.Copy(
+            Assembly.GetExecutingAssembly().Location,
+            Path.Combine(devPackage, "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location)));
+    }
 
     private static GenerateSunderPackageManifestTask CreateFixtureTask(
         string assemblyPath,
@@ -901,11 +965,7 @@ public sealed class FixtureShellViewConsumer(IPackageShellViewService shellViewS
     public IReadOnlyList<string> ThemeKeys => SunderThemeKeys.BrushKeys;
 }
 
-public sealed class FixturePackageActivationCapabilities(
-    IPackageRoleLocalWorkspace roleLocalWorkspace,
-    IPackageDevelopmentSessionControl developmentSessions)
+public sealed class FixturePackageActivationCapabilities(IPackageRoleLocalWorkspace roleLocalWorkspace)
 {
     public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; } = roleLocalWorkspace;
-
-    public IPackageDevelopmentSessionControl DevelopmentSessions { get; } = developmentSessions;
 }

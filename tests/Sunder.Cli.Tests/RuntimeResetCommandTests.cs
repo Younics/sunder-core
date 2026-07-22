@@ -53,6 +53,41 @@ public sealed class RuntimeResetCommandTests
         Assert.DoesNotContain("\\", result.Output, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("http://127.0.0.1:6123/")]
+    [InlineData("https://runtime.example.test/")]
+    public async Task Custom_runtime_url_is_rejected_before_drain_or_local_deletion(string runtimeUrl)
+    {
+        var calls = new List<string>();
+        var runtime = new FakeRuntimeClient
+        {
+            ResetPrepare = _ =>
+            {
+                calls.Add("prepare");
+                throw new InvalidOperationException("A custom Runtime must not be contacted for local reset.");
+            },
+            ResetDrain = (_, _) =>
+            {
+                calls.Add("drain");
+                throw new InvalidOperationException("A custom Runtime must not be drained for local reset.");
+            },
+            LocalReset = _ =>
+            {
+                calls.Add("delete");
+                throw new InvalidOperationException("Default local state must not be deleted for a custom Runtime.");
+            },
+        };
+
+        var result = await CliTestHost.RunAsync(
+            ["runtime", "reset", "--yes"],
+            runtime,
+            runtimeUrl: runtimeUrl);
+
+        Assert.Equal(CliExitCodes.Usage, result.ExitCode);
+        Assert.Empty(calls);
+        Assert.Contains("default local Host", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Partial_reset_is_reported_and_can_be_retried()
     {

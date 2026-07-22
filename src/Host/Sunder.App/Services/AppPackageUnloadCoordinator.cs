@@ -20,6 +20,7 @@ internal sealed class AppPackageUnloadCoordinator(
         AppPackageLoadContext? loadContext,
         bool stopRuntimeWork = true)
     {
+        var canDeletePackageFolder = true;
         await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
         extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
         if (stopRuntimeWork)
@@ -32,7 +33,7 @@ internal sealed class AppPackageUnloadCoordinator(
 
         if (packageInfo is not null)
         {
-            sharedAssemblyRegistry.RemoveProbeDirectories([packageInfo.LibraryFolder]);
+            canDeletePackageFolder = sharedAssemblyRegistry.TryRemoveProbeDirectories([packageInfo.LibraryFolder]);
         }
 
         if (serviceProvider is not null)
@@ -47,7 +48,7 @@ internal sealed class AppPackageUnloadCoordinator(
             AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId);
         }
 
-        if (packageInfo is not null)
+        if (packageInfo is not null && canDeletePackageFolder)
         {
             AppPackageSourcePreparer.TryDeleteDirectory(packageInfo.Folder);
         }
@@ -67,9 +68,12 @@ internal sealed class AppPackageUnloadCoordinator(
         removeLoadContext(handle.LoadContext);
         assemblyTracker.RemovePackage(packageId);
         removePackageResourceAssemblies?.Invoke(packageId);
-        sharedAssemblyRegistry.RemoveProbeDirectories([Path.Combine(handle.Folder, "lib")]);
+        var canDeletePackageFolder = sharedAssemblyRegistry.TryRemoveProbeDirectories([Path.Combine(handle.Folder, "lib")]);
         AppPackageResourceDisposer.TryUnloadLoadContext(handle.LoadContext, packageId);
-        AppPackageSourcePreparer.TryDeleteDirectory(handle.Folder);
+        if (canDeletePackageFolder)
+        {
+            AppPackageSourcePreparer.TryDeleteDirectory(handle.Folder);
+        }
     }
 
     public async Task DisposeOwnedResourcesAsync(

@@ -105,6 +105,18 @@
           "Sunder.Runtime.LocalState": "[1.0.0, )"
         }
       },
+      "sunder.package.format": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Sdk": "[1.1.0, )"
+        }
+      },
+      "sunder.package.hosting": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Sdk": "[1.1.0, )"
+        }
+      },
       "sunder.registry.contracts": {
         "type": "Project"
       },
@@ -119,10 +131,32 @@
       "sunder.runtime.contracts": {
         "type": "Project"
       },
+      "sunder.runtime.host": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Package.Format": "[1.0.0, )",
+          "Sunder.Package.Hosting": "[1.0.0, )",
+          "Sunder.Registry.Contracts": "[1.0.0, )",
+          "Sunder.Runtime.Contracts": "[1.0.0, )",
+          "Sunder.Runtime.LocalState": "[1.0.0, )",
+          "Sunder.Sdk": "[1.1.0, )",
+          "Sunder.Sdk.Stacks": "[1.1.0, )",
+          "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
+        }
+      },
       "sunder.runtime.localstate": {
         "type": "Project",
         "dependencies": {
           "System.Security.Cryptography.ProtectedData": "[10.0.8, )"
+        }
+      },
+      "sunder.sdk": {
+        "type": "Project"
+      },
+      "sunder.sdk.stacks": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Sdk": "[1.1.0, )"
         }
       },
       "System.Security.Cryptography.ProtectedData": {

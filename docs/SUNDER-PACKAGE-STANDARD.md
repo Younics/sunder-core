@@ -145,7 +145,6 @@ Additional generated fields:
 - `dependsOn`: runtime package dependency list, omitted when no dependencies are declared.
 - `hostRoles`: inferred from public module interfaces in compiled entry-assembly metadata. Package authors do not declare it manually.
 - `requiredSdkCapabilities`: Host-required SDK capabilities inferred by `Sunder.Package.Build`. Current build tooling always seeds `sdk-baseline-1-1.v1`, `core.v1`, `packaging.v1`, and `contributions.v1`.
-- `sdkVersion`: SDK version metadata when supplied by build properties.
 - `targetFramework`: package target framework, emitted when available.
 
 Fields not used by the current generated manifest:
@@ -170,9 +169,9 @@ Contract-only packages declare no App or Runtime module. They can carry shared c
 Host discovery rules:
 
 - The package entry assembly is loaded from package `lib` output.
-- Runtime finds at most one public, non-abstract `ISunderRuntimePackageModule`; App finds at most one `ISunderAppPackageModule`.
+- Runtime finds at most one top-level public, non-abstract, non-generic `ISunderRuntimePackageModule`; App finds at most one module with the same shape implementing `ISunderAppPackageModule`.
 - A single module class may implement both roles, but each host invokes only its own role.
-- The module type must have a public parameterless constructor.
+- The module type must be non-generic and have a public parameterless constructor.
 - A missing role is valid; multiple implementations of the same role fail activation in that host.
 - Each host constructs its role module directly, configures services, builds an isolated role-specific provider, and then registers contributions. The module itself is not composed from that provider.
 

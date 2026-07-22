@@ -162,68 +162,6 @@ public sealed class RuntimeLifecycleSnapshotTests
     }
 
     [Fact]
-    public async Task RuntimePackageFault_AdvancesGenerationAndPublishesFailedSessionSnapshot()
-    {
-        var events = new RuntimeEventStreamService();
-        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, events);
-        await owner.PublishAsync(
-            CreateSession("test.package"),
-            owner.Sources.Snapshot(),
-            [],
-            [],
-            [],
-            expectedGeneration: 0);
-
-        var reported = owner.ReportPackageFault(
-            "test.package",
-            new ReportPackageFaultRequest(
-                PackageFailureOrigin.RuntimeActivation,
-                "runtime activation failed",
-                GenerationId: 1));
-
-        Assert.True(reported);
-        var snapshot = owner.GetSnapshot();
-        Assert.Equal(2, snapshot.SessionGeneration);
-        Assert.Empty(snapshot.ActivePackages);
-        var package = Assert.Single(snapshot.SessionPackages);
-        Assert.False(package.IsEnabled);
-        Assert.Equal(PackageReadinessState.Failed, package.Readiness);
-        Assert.Contains(snapshot.Errors, error => error.Contains("runtime activation failed", StringComparison.Ordinal));
-        var generationEvent = events.GetSnapshot().Events.Last(item => item.Kind == RuntimeEventKind.SessionGenerationChanged);
-        Assert.Equal(2, generationEvent.SessionGeneration);
-        Assert.Equal(snapshot.RuntimeInstanceId, generationEvent.RuntimeInstanceId);
-        await owner.State.ClearActiveSessionAsync();
-    }
-
-    [Fact]
-    public async Task AppPackageFault_DoesNotChangeSharedRuntimeSession()
-    {
-        var events = new RuntimeEventStreamService();
-        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, events);
-        await owner.PublishAsync(
-            CreateSession("test.package"),
-            owner.Sources.Snapshot(),
-            [],
-            [],
-            [],
-            expectedGeneration: 0);
-
-        var reported = owner.ReportPackageFault(
-            "test.package",
-            new ReportPackageFaultRequest(
-                PackageFailureOrigin.AppHostedView,
-                "one client view failed",
-                GenerationId: 1));
-
-        Assert.False(reported);
-        var snapshot = owner.GetSnapshot();
-        Assert.Equal(1, snapshot.SessionGeneration);
-        Assert.Single(snapshot.ActivePackages);
-        Assert.True(Assert.Single(snapshot.SessionPackages).IsEnabled);
-        await owner.State.ClearActiveSessionAsync();
-    }
-
-    [Fact]
     public async Task CleanupWarning_ChangesSnapshotOnlyWithANewEventSequence()
     {
         var events = new RuntimeEventStreamService();

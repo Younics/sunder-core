@@ -1,0 +1,16 @@
+{
+  "success": false,
+  "items": [],
+  "warnings": [],
+  "errors": [],
+  "conflicts": [
+    {
+      "packageId": "sunder.package.sample",
+      "currentVersion": "1.0.0",
+      "requestedVersionRange": "\u003E=2.3.0",
+      "requiredByPackageId": null,
+      "errorCode": "registry.v1.package.requirement_unsatisfied",
+      "message": "Selected package version does not satisfy the Stack requirement."
+    }
+  ]
+}

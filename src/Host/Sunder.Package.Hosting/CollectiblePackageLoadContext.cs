@@ -6,7 +6,6 @@ namespace Sunder.Package.Hosting;
 internal abstract class CollectiblePackageLoadContext : AssemblyLoadContext
 {
     private readonly string _entryAssemblyPath;
-    private readonly string[] _probeDirectories;
     private readonly AssemblyDependencyResolver _dependencyResolver;
     private readonly Func<AssemblyName, Assembly?> _resolveSharedAssembly;
     private readonly Action<Assembly>? _assemblyLoaded;
@@ -19,7 +18,6 @@ internal abstract class CollectiblePackageLoadContext : AssemblyLoadContext
         : base(name, isCollectible: true)
     {
         _entryAssemblyPath = entryAssemblyPath;
-        _probeDirectories = [Path.GetDirectoryName(entryAssemblyPath)!];
         _dependencyResolver = new AssemblyDependencyResolver(entryAssemblyPath);
         _resolveSharedAssembly = resolveSharedAssembly;
         _assemblyLoaded = assemblyLoaded;
@@ -52,27 +50,10 @@ internal abstract class CollectiblePackageLoadContext : AssemblyLoadContext
             return LoadUnmanagedDllFromPath(candidatePath);
         }
 
-        var nativeLibraryFileName = OperatingSystem.IsWindows()
-            ? unmanagedDllName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? unmanagedDllName : $"{unmanagedDllName}.dll"
-            : OperatingSystem.IsMacOS()
-                ? unmanagedDllName.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase) ? unmanagedDllName : $"lib{unmanagedDllName}.dylib"
-                : unmanagedDllName.EndsWith(".so", StringComparison.OrdinalIgnoreCase) ? unmanagedDllName : $"lib{unmanagedDllName}.so";
-
-        foreach (var probeDirectory in _probeDirectories)
+        var runtimeCandidatePath = NativeLibraryFallbackResolver.Resolve(_entryAssemblyPath, unmanagedDllName);
+        if (runtimeCandidatePath is not null)
         {
-            var runtimesDirectory = Path.Combine(probeDirectory, "runtimes");
-            if (!Directory.Exists(runtimesDirectory))
-            {
-                continue;
-            }
-
-            foreach (var runtimeCandidatePath in Directory.EnumerateFiles(
-                         runtimesDirectory,
-                         nativeLibraryFileName,
-                         SearchOption.AllDirectories))
-            {
-                return LoadUnmanagedDllFromPath(runtimeCandidatePath);
-            }
+            return LoadUnmanagedDllFromPath(runtimeCandidatePath);
         }
 
         return base.LoadUnmanagedDll(unmanagedDllName);

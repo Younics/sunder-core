@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Microsoft.Extensions.DependencyInjection;
-using System.Diagnostics;
 using Sunder.App.Features.Shell.Layout;
 using Sunder.App.Features.Shell.Lifecycle;
 using Sunder.App.Features.Shell.Menus;
@@ -160,7 +159,6 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
         using var harness = CreateHarness(
@@ -408,9 +406,11 @@ public sealed class MainWindowViewModelShellViewTests
             packageViewHostService);
         var preloadStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancellationCompleted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         var waitCount = 0;
+        CancellationToken preloadCancellation = default;
+        var reloadThreadId = 0;
+        var reloadCallInProgress = 0;
+        var callbackRanInline = 0;
         harness.ViewModel.StartPackageViewPreloading(
             async (work, cancellationToken) =>
             {
@@ -420,10 +420,16 @@ public sealed class MainWindowViewModelShellViewTests
                     return;
                 }
 
+                preloadCancellation = cancellationToken;
                 using var registration = cancellationToken.Register(() =>
                 {
-                    Thread.Sleep(TimeSpan.FromSeconds(1));
-                    cancellationCompleted.TrySetResult();
+                    if (
+                        Environment.CurrentManagedThreadId == Volatile.Read(ref reloadThreadId)
+                        && Volatile.Read(ref reloadCallInProgress) != 0
+                    )
+                    {
+                        Interlocked.Exchange(ref callbackRanInline, 1);
+                    }
                 });
                 preloadStarted.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -431,13 +437,21 @@ public sealed class MainWindowViewModelShellViewTests
             static (work, cancellationToken) => work(cancellationToken));
         await preloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        var startedAt = Stopwatch.GetTimestamp();
-        var reload = harness.ViewModel.ReloadPackageViewAsync("agent.workspaces").AsTask();
-        var synchronousElapsed = Stopwatch.GetElapsedTime(startedAt);
+        Volatile.Write(ref reloadThreadId, Environment.CurrentManagedThreadId);
+        Volatile.Write(ref reloadCallInProgress, 1);
+        Task<bool> reload;
+        try
+        {
+            reload = harness.ViewModel.ReloadPackageViewAsync("agent.workspaces").AsTask();
+        }
+        finally
+        {
+            Volatile.Write(ref reloadCallInProgress, 0);
+        }
 
-        Assert.True(synchronousElapsed < TimeSpan.FromMilliseconds(500));
+        Assert.True(preloadCancellation.IsCancellationRequested);
+        Assert.Equal(0, Volatile.Read(ref callbackRanInline));
         Assert.True(await reload.WaitAsync(TimeSpan.FromSeconds(2)));
-        await cancellationCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
@@ -456,7 +470,6 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
         using var harness = CreateHarness(
@@ -676,7 +689,6 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
         using var harness = CreateHarness(
@@ -2130,7 +2142,6 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder: null,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: new ImmediateUiDispatcher()
@@ -2161,7 +2172,6 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher()
         );
@@ -2183,7 +2193,6 @@ public sealed class MainWindowViewModelShellViewTests
             [],
             [serviceProvider],
             [],
-            faultReporter: null,
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher()
         );
@@ -2409,52 +2418,6 @@ public sealed class MainWindowViewModelShellViewTests
             getActivePackageSourcesAsync?.Invoke(cancellationToken)
             ?? Task.FromResult(packageSources);
 
-        public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(
-            string packageId,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult<PackageSessionStatus?>(null);
-
-        public Task<PackageSessionOperationResult> LoadPackageSessionAsync(
-            PackageSessionLoadRequest request,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
-
-        public Task<PackageSessionOperationResult> UnloadPackageSessionAsync(
-            string packageId,
-            PackageSourceKind sourceKind,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(PackageSessionOperationResult.Failed("Not configured for this test."));
-
-        public Task<PackageOperationResult> ReloadInstalledPackageSessionAsync(
-            IReadOnlyList<string> impactedPackageIds,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(new PackageOperationResult(true, null, true, false, [], []));
-
-        public Task<PackageLifecycleStageResult> StagePackageLifecycleAsync(
-            PackageLifecycleStageRequest request,
-            CancellationToken cancellationToken = default
-        ) => Task.FromResult(PackageLifecycleStageResult.Failed("Not configured for this test."));
-
-        public Task<PackageLifecycleOperationResult> CommitPackageLifecycleStageAsync(
-            string stageId,
-            CancellationToken cancellationToken = default
-        ) =>
-            Task.FromResult(
-                PackageLifecycleOperationResult.Failed("Not configured for this test.")
-            );
-
-        public Task DiscardPackageLifecycleStageAsync(
-            string stageId,
-            CancellationToken cancellationToken = default
-        ) => Task.CompletedTask;
-
-        public Task ReportPackageFaultAsync(
-            string packageId,
-            PackageFailureOrigin origin,
-            string message,
-            CancellationToken cancellationToken = default
-        ) => Task.CompletedTask;
-
         public Task DownloadPackageUiSnapshotAsync(
             PackageUiSnapshotDescriptor snapshot,
             Stream destination,
@@ -2678,12 +2641,6 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 
     public const string ThrowAfterViewMarkerFileName = "throw-after-view";
 
-    public const string ResolveDevelopmentSessionControlMarkerFileName =
-        "resolve-development-session-control";
-
-    public const string DevelopmentSessionControlResolvedFileName =
-        "development-session-control-resolved";
-
     public const string RegisterReservedHostCapabilityMarkerFileName =
         "register-reserved-host-capability";
 
@@ -2770,17 +2727,6 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
             throw new InvalidOperationException(
                 "Test package requested activation failure after registering contributions."
             );
-        }
-
-        if (HasMarker(ResolveDevelopmentSessionControlMarkerFileName))
-        {
-            if (services.GetService<IPackageDevelopmentSessionControl>() is not null)
-            {
-                File.WriteAllText(
-                    Path.Combine(_packageFolder!, DevelopmentSessionControlResolvedFileName),
-                    string.Empty
-                );
-            }
         }
     }
 

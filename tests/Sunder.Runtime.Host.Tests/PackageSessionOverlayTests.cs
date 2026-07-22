@@ -51,6 +51,54 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
+    public async Task LoadInstalledWithDevOverlays_EnforcesDependencyRangeAgainstEffectiveDevVersion()
+    {
+        var rootPath = CreateTempDirectory();
+        var dependent = CreatePackageLayout(
+            rootPath,
+            "installed",
+            "dependent.package",
+            "1.0.0",
+            PackageSourceKind.Installed,
+            ["core.package"],
+            ">=1.0.0 <2.0.0");
+        var installedCore = CreatePackageLayout(
+            rootPath,
+            "installed",
+            "core.package",
+            "1.5.0",
+            PackageSourceKind.Installed);
+        var devCoreFolder = CreatePackageLayout(
+            rootPath,
+            "dev",
+            "core.package",
+            "2.0.0",
+            PackageSourceKind.Dev).InstallPath;
+        var loadService = new PackageSessionLoadService(NullLogger.Instance);
+
+        try
+        {
+            var result = await loadService.LoadInstalledWithDevOverlaysAsync(
+                [dependent, installedCore],
+                [devCoreFolder]);
+
+            Assert.Contains(result.Errors, error =>
+                error.Contains("dependent.package", StringComparison.Ordinal)
+                && error.Contains(">=1.0.0 <2.0.0", StringComparison.Ordinal)
+                && error.Contains("2.0.0", StringComparison.Ordinal));
+            Assert.NotNull(result.Session);
+            var active = Assert.Single(result.Session.GetActivePackages());
+            Assert.Equal("core.package", active.PackageId);
+            Assert.Equal("2.0.0", active.Version);
+            await result.Session.DisposeAsync();
+        }
+        finally
+        {
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task LoadInstalledAsync_ExposesActivePackagesInDependencyLoadOrder()
     {
         var rootPath = CreateTempDirectory();
@@ -718,14 +766,15 @@ public sealed class PackageSessionOverlayTests
         string packageId,
         string version,
         PackageSourceKind sourceKind,
-        IReadOnlyList<string>? dependencies = null)
+        IReadOnlyList<string>? dependencies = null,
+        string dependencyVersionRange = ">=0.0.0-0")
     {
         var packageFolder = Path.Combine(rootPath, folderName, packageId, version);
         var libraryFolder = Path.Combine(packageFolder, "lib");
         Directory.CreateDirectory(libraryFolder);
         var assemblyPath = typeof(PackageSessionOverlayTestPackageModule).Assembly.Location;
         var entryAssemblyFileName = Path.GetFileName(assemblyPath);
-        WritePackageManifest(packageFolder, packageId, version, dependencies);
+        WritePackageManifest(packageFolder, packageId, version, dependencies, dependencyVersionRange);
 
         foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
         {
@@ -746,7 +795,7 @@ public sealed class PackageSessionOverlayTests
             entryAssemblyFileName,
             Icon: null,
             DependsOn: (dependencies ?? [])
-                .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, ">=0.0.0"))
+                .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, dependencyVersionRange))
                 .ToArray(),
             packageFolder,
             IsEnabled: true,
@@ -757,11 +806,12 @@ public sealed class PackageSessionOverlayTests
         string packageFolder,
         string packageId,
         string version,
-        IReadOnlyList<string>? dependencies = null)
+        IReadOnlyList<string>? dependencies = null,
+        string dependencyVersionRange = ">=0.0.0-0")
     {
         var entryAssemblyFileName = Path.GetFileName(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
         var dependencyJson = dependencies is { Count: > 0 }
-            ? ",\n  \"dependsOn\": [\n" + string.Join(",\n", dependencies.Select(dependencyId => $"    {{ \"packageId\": \"{dependencyId}\", \"versionRange\": \">=0.0.0\" }}")) + "\n  ]"
+            ? ",\n  \"dependsOn\": [\n" + string.Join(",\n", dependencies.Select(dependencyId => $"    {{ \"packageId\": \"{dependencyId}\", \"versionRange\": \"{dependencyVersionRange}\" }}")) + "\n  ]"
             : string.Empty;
         File.WriteAllText(Path.Combine(packageFolder, "sunder-package.json"), $$"""
             {
@@ -823,13 +873,24 @@ public sealed class PackageSessionOverlayTests
     }
 }
 
-public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePackageModule, ISunderAppPackageModule
+public abstract class PackageSessionOverlayTestPackageModuleBase : ISunderRuntimePackageModule, ISunderAppPackageModule
+{
+    public abstract void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context);
+
+    public abstract void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services);
+
+    public abstract void ConfigureAppServices(IServiceCollection services, IPackageContext context);
+
+    public abstract void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services);
+}
+
+public sealed class PackageSessionOverlayTestPackageModule : PackageSessionOverlayTestPackageModuleBase
 {
     public static bool RegisterStackContributor { get; set; }
 
     public static bool StackContributorContainsSecrets { get; set; }
 
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public override void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
     {
         if (string.Equals(context.PackageId, "reserved.package", StringComparison.Ordinal))
         {
@@ -841,7 +902,7 @@ public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePacka
         }
     }
 
-    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
+    public override void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
     {
         var context = services.GetRequiredService<IPackageContext>();
         if (RuntimeActivationCounter.TryRecord(context, "register"))
@@ -861,11 +922,11 @@ public sealed class PackageSessionOverlayTestPackageModule : ISunderRuntimePacka
         registry.RegisterExtension(SunderStackExtensionPoints.StackImporters, stackContributor);
     }
 
-    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
+    public override void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
+    public override void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
     }
 }
@@ -919,13 +980,19 @@ internal sealed class PackageSessionOverlayTestStackContributor(
                 "Test Profile",
                 "test-profile",
                 "A test profile export.",
-                Sensitivities: containsSecrets ? [StackValueSensitivity.Secret] : [StackValueSensitivity.Public])]);
+                Details:
+                [
+                    new StackExportItemDetail(
+                        "Profile data",
+                        "Test Profile",
+                        containsSecrets ? StackValueSensitivity.Secret : StackValueSensitivity.Public),
+                ])]);
 
     public ValueTask<StackExportContribution> ExportAsync(
         StackExportRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (!request.ItemIds.Contains("test.profile", StringComparer.OrdinalIgnoreCase))
+        if (!request.IsItemSelected("test.profile"))
         {
             return ValueTask.FromResult(new StackExportContribution([], [], []));
         }

@@ -58,6 +58,18 @@ internal static class RuntimeStackContributorCatalog
         return result;
     }
 
+    public static IReadOnlyList<IPackageStackImportAppliedHandler> GetImportAppliedHandlers(
+        RuntimeSessionOwner sessions,
+        PackageSessionLease lease,
+        string packageId,
+        string contributorId)
+        => sessions.State
+            .GetExtensionContributions(lease, SunderStackExtensionPoints.StackImportAppliedHandlers)
+            .Where(value => string.Equals(value.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(value.Contribution.ContributorId, contributorId, StringComparison.OrdinalIgnoreCase))
+            .Select(value => value.Contribution)
+            .ToArray();
+
     public static void ValidateScopedValues(
         IReadOnlyDictionary<string, string> values,
         string kind,

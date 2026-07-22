@@ -36,7 +36,12 @@ internal static class StackContentIndexValidator
                 errors.Add("Stack content index contains a null file entry.");
                 continue;
             }
-            if (!StackArchivePathValidator.TryParse(entry.Path, "content-index path", errors, out var path))
+            if (!StackArchivePathValidator.TryParse(
+                    entry.Path,
+                    "content-index path",
+                    errors,
+                    out var path,
+                    required: true))
             {
                 continue;
             }

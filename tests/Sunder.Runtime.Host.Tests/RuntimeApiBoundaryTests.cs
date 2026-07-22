@@ -225,8 +225,8 @@ public sealed class RuntimeApiBoundaryTests
         var sources = new[]
         {
             new RuntimePackageSource("contracts", PackageSourceKind.Installed, SourceFolder: "/contracts", HostRoles: PackageHostRoles.ContractOnly),
-            new RuntimePackageSource("runtime.dependency", PackageSourceKind.Installed, SourceFolder: "/runtime-dependency", HostRoles: PackageHostRoles.Runtime, Dependencies: ["contracts"]),
-            new RuntimePackageSource("app", PackageSourceKind.Installed, SourceFolder: "/app", HostRoles: PackageHostRoles.App, Dependencies: ["runtime.dependency"]),
+            new RuntimePackageSource("runtime.dependency", PackageSourceKind.Installed, SourceFolder: "/runtime-dependency", HostRoles: PackageHostRoles.Runtime, Dependencies: [new PackageDependencyDescriptor("contracts", ">=0.0.0-0")]),
+            new RuntimePackageSource("app", PackageSourceKind.Installed, SourceFolder: "/app", HostRoles: PackageHostRoles.App, Dependencies: [new PackageDependencyDescriptor("runtime.dependency", ">=0.0.0-0")]),
             new RuntimePackageSource("runtime.independent", PackageSourceKind.Installed, SourceFolder: "/runtime-independent", HostRoles: PackageHostRoles.Runtime),
         };
         var descriptors = sources.ToDictionary(

@@ -26,15 +26,25 @@ internal static class SharedContractAssemblyPolicy
 
     public static bool FilesRepresentSameDefinition(string leftPath, string rightPath)
     {
-        if (string.Equals(Path.GetFullPath(leftPath), Path.GetFullPath(rightPath), StringComparison.OrdinalIgnoreCase))
+        if (PathsEqual(leftPath, rightPath))
         {
             return true;
         }
 
-        using var left = File.OpenRead(leftPath);
-        using var right = File.OpenRead(rightPath);
-        return CryptographicOperations.FixedTimeEquals(SHA256.HashData(left), SHA256.HashData(right));
+        return FileMatchesDefinition(rightPath, ComputeDefinitionHash(leftPath));
     }
+
+    public static bool PathsEqual(string leftPath, string rightPath)
+        => string.Equals(Path.GetFullPath(leftPath), Path.GetFullPath(rightPath), PathComparison);
+
+    public static byte[] ComputeDefinitionHash(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return SHA256.HashData(stream);
+    }
+
+    public static bool FileMatchesDefinition(string path, ReadOnlySpan<byte> definitionHash)
+        => CryptographicOperations.FixedTimeEquals(ComputeDefinitionHash(path), definitionHash);
 
     private static Version NormalizeVersion(Version? version)
         => version is null
@@ -44,4 +54,7 @@ internal static class SharedContractAssemblyPolicy
                 Math.Max(version.Minor, 0),
                 Math.Max(version.Build, 0),
                 Math.Max(version.Revision, 0));
+
+    private static StringComparison PathComparison
+        => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 }

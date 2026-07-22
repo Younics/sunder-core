@@ -10,7 +10,10 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
     <Version>$(SunderDeveloperPackageVersion)</Version>
+    <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Title>Sunder.Package.Build</Title>
+    <Description>MSBuild targets and tasks that generate Sunder package manifests, development output, and distributable .sunderpkg archives.</Description>
+    <PackageTags>sunder;package;plugin;msbuild;build;tooling</PackageTags>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
     <PackageIcon>icon.png</PackageIcon>

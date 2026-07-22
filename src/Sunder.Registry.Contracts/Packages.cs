@@ -38,7 +38,9 @@ public sealed record RegistryPackageDetails(
     RegistryPackageStats? Stats = null,
     IReadOnlyList<RegistryPackageDependent>? Dependents = null,
     RegistryUserAttribution? Creator = null,
-    IReadOnlyList<RegistryUserAttribution>? Maintainers = null);
+    IReadOnlyList<RegistryUserAttribution>? Maintainers = null,
+    int? TotalVersionCount = null,
+    int? TotalDependentCount = null);
 
 public sealed record RegistryPackageVersionSummary(
     string Version,
@@ -136,6 +138,7 @@ public sealed record RegistryPackageProfileOperationResponse(
     IReadOnlyList<string> Errors)
 {
     public bool Forbidden { get; init; }
+    public bool NotFound { get; init; }
 }
 
 public sealed record RegistryPackageResolveResponse(
@@ -169,12 +172,16 @@ public sealed record RegistryResolveInstallPlanRequest(
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
-    bool Reinstall = false);
+    bool Reinstall = false,
+    string? VersionRange = null,
+    bool Required = true);
 
 public sealed record RegistryPackageChangeRequest(
     string PackageId,
     string? Version,
-    string? Tag = null);
+    string? Tag = null,
+    string? VersionRange = null,
+    bool Required = true);
 
 public sealed record RegistryResolvePackageChangesRequest(
     IReadOnlyList<RegistryPackageChangeRequest> Packages,
@@ -203,7 +210,8 @@ public sealed record RegistryPackageInstallPlanConflict(
     string? CurrentVersion,
     string? RequestedVersionRange,
     string? RequiredByPackageId,
-    string Message);
+    string ErrorCode = RegistryV1ErrorCodes.Conflict,
+    string Message = "");
 
 public sealed record RegistryResolveInstallPlanResponse(
     bool Success,

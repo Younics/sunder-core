@@ -63,11 +63,11 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
 
     public bool IsIncludedInReview => IsSelected && HasSelectedDetails;
 
-    public IReadOnlyList<string> SecretChips { get; } = BuildSecretChips(item.Sensitivities);
+    public IReadOnlyList<string> SecretChips { get; } = BuildSecretChips(item.Details);
 
     public bool HasSecretChips => SecretChips.Count > 0;
 
-    public bool HasSecretValues { get; } = item.Sensitivities.Any(sensitivity => string.Equals(sensitivity, "Secret", StringComparison.OrdinalIgnoreCase));
+    public bool HasSecretValues { get; } = HasSecretSensitivity(item.Details);
 
     public string SummaryText { get; } = BuildSummaryText(item);
 
@@ -180,16 +180,19 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
 
         return [new CreateStackExportDetailViewModel(new RuntimeStackExportItemDetail(
             "Setup item",
-            string.IsNullOrWhiteSpace(item.Description) ? $"{StackContentKindLabels.HumanizeToken(item.Kind)} configuration" : item.Description,
-            item.Sensitivities.FirstOrDefault()), changed)];
+            string.IsNullOrWhiteSpace(item.Description) ? $"{StackContentKindLabels.HumanizeToken(item.Kind)} configuration" : item.Description), changed)];
     }
 
-    private static IReadOnlyList<string> BuildSecretChips(IReadOnlyList<string> sensitivities)
+    private static IReadOnlyList<string> BuildSecretChips(IReadOnlyList<RuntimeStackExportItemDetail>? details)
     {
-        return sensitivities.Any(sensitivity => string.Equals(sensitivity, "Secret", StringComparison.OrdinalIgnoreCase))
+        return HasSecretSensitivity(details)
             ? ["secret prompt"]
             : [];
     }
+
+    private static bool HasSecretSensitivity(IReadOnlyList<RuntimeStackExportItemDetail>? details)
+        => details?.Any(detail => detail.Sensitivity is not null
+                                  && string.Equals(detail.Sensitivity, "Secret", StringComparison.OrdinalIgnoreCase)) == true;
 
     private static string BuildSummaryText(RuntimeStackExportItemDescriptor item)
     {

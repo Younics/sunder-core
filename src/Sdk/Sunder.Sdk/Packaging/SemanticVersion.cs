@@ -3,6 +3,10 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Packaging;
 
 /// <summary>Represents a strict Semantic Versioning 2.0.0 version.</summary>
+/// <remarks>
+/// Build metadata is part of version identity, equality, and total value ordering, but it does not affect Semantic
+/// Versioning precedence. Use <see cref="ComparePrecedenceTo"/> or <see cref="HasSamePrecedence"/> for precedence.
+/// </remarks>
 [SunderSdkCapability(SunderSdkCapabilities.PackagingV1)]
 public readonly struct SemanticVersion : IComparable<SemanticVersion>, IEquatable<SemanticVersion>
 {
@@ -84,8 +88,21 @@ public readonly struct SemanticVersion : IComparable<SemanticVersion>, IEquatabl
         return true;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Compares semantic precedence and then build metadata ordinally, producing a total ordering consistent with
+    /// <see cref="Equals(SemanticVersion)"/>.
+    /// </summary>
+    /// <remarks>Use <see cref="ComparePrecedenceTo"/> when build metadata must not affect the result.</remarks>
     public int CompareTo(SemanticVersion other)
+    {
+        var comparison = ComparePrecedenceTo(other);
+        return comparison != 0
+            ? comparison
+            : string.Compare(BuildMetadata, other.BuildMetadata, StringComparison.Ordinal);
+    }
+
+    /// <summary>Compares Semantic Versioning precedence, ignoring build metadata.</summary>
+    public int ComparePrecedenceTo(SemanticVersion other)
     {
         EnsureInitialized();
         other.EnsureInitialized();
@@ -119,12 +136,12 @@ public readonly struct SemanticVersion : IComparable<SemanticVersion>, IEquatabl
     }
 
     /// <summary>Returns whether this version has the same precedence as <paramref name="other"/>, ignoring build metadata.</summary>
-    public bool HasSamePrecedence(SemanticVersion other) => CompareTo(other) == 0;
+    public bool HasSamePrecedence(SemanticVersion other) => ComparePrecedenceTo(other) == 0;
 
     /// <summary>Returns the next major version with minor and patch reset to zero.</summary>
     public SemanticVersion NextMajor() => new(IncrementDecimal(Major), "0", "0", null, null);
 
-    /// <inheritdoc />
+    /// <summary>Returns whether every version identifier, including build metadata, is equal.</summary>
     public bool Equals(SemanticVersion other)
         => string.Equals(_major, other._major, StringComparison.Ordinal)
            && string.Equals(_minor, other._minor, StringComparison.Ordinal)
@@ -147,16 +164,16 @@ public readonly struct SemanticVersion : IComparable<SemanticVersion>, IEquatabl
                + (BuildMetadata is null ? string.Empty : $"+{BuildMetadata}");
     }
 
-    /// <summary>Returns whether <paramref name="left"/> has lower precedence than <paramref name="right"/>.</summary>
+    /// <summary>Returns whether <paramref name="left"/> sorts before <paramref name="right"/> in total value ordering.</summary>
     public static bool operator <(SemanticVersion left, SemanticVersion right) => left.CompareTo(right) < 0;
 
-    /// <summary>Returns whether <paramref name="left"/> has lower or equal precedence to <paramref name="right"/>.</summary>
+    /// <summary>Returns whether <paramref name="left"/> sorts before or equals <paramref name="right"/> in total value ordering.</summary>
     public static bool operator <=(SemanticVersion left, SemanticVersion right) => left.CompareTo(right) <= 0;
 
-    /// <summary>Returns whether <paramref name="left"/> has higher precedence than <paramref name="right"/>.</summary>
+    /// <summary>Returns whether <paramref name="left"/> sorts after <paramref name="right"/> in total value ordering.</summary>
     public static bool operator >(SemanticVersion left, SemanticVersion right) => left.CompareTo(right) > 0;
 
-    /// <summary>Returns whether <paramref name="left"/> has higher or equal precedence to <paramref name="right"/>.</summary>
+    /// <summary>Returns whether <paramref name="left"/> sorts after or equals <paramref name="right"/> in total value ordering.</summary>
     public static bool operator >=(SemanticVersion left, SemanticVersion right) => left.CompareTo(right) >= 0;
 
     /// <summary>Returns whether the versions are equal, including build metadata.</summary>

@@ -37,12 +37,22 @@ internal sealed class PackageMetadataDecoder(
             }
 
             var packageAttribute = packageAttributes[0];
+            var moduleShape = PackageModuleShapeReader.Read(assemblyPath);
+            var moduleShapeErrors = moduleShape.Validate();
+            if (moduleShapeErrors.Count > 0)
+            {
+                foreach (var error in moduleShapeErrors)
+                {
+                    log.LogError(error);
+                }
+                return null;
+            }
             return new PackageManifestMetadata(
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Id)) ?? string.Empty,
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Name)) ?? string.Empty,
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Summary)),
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Icon)),
-                PackageHostRoleMetadata.ReadManifestRoles(assemblyPath),
+                PackageHostRoleMetadata.ToManifestRoles(moduleShape.Roles),
                 dependencyExtractor.Extract(attributes),
                 capabilityInference.Infer(assemblyPath));
         }
@@ -104,7 +114,7 @@ internal sealed class PackageMetadataDecoder(
                 return LoadFromAssemblyPath(Path.GetFullPath(candidatePath));
             }
 
-            var taskDirectory = Path.GetDirectoryName(typeof(PackageManifestGenerator).Assembly.Location);
+            var taskDirectory = Path.GetDirectoryName(typeof(GenerateSunderPackageManifestTask).Assembly.Location);
             if (!string.IsNullOrWhiteSpace(taskDirectory))
             {
                 candidatePath = Path.Combine(taskDirectory, assemblyName.Name + ".dll");
@@ -137,7 +147,7 @@ internal sealed class PackageMetadataDecoder(
                 }
             }
 
-            var taskDirectory = Path.GetDirectoryName(typeof(PackageManifestGenerator).Assembly.Location);
+            var taskDirectory = Path.GetDirectoryName(typeof(GenerateSunderPackageManifestTask).Assembly.Location);
             if (!string.IsNullOrWhiteSpace(taskDirectory))
             {
                 var candidatePath = Path.Combine(taskDirectory, assemblyName.Name + ".dll");

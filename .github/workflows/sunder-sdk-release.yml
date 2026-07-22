@@ -49,9 +49,113 @@ jobs:
               fi
             done
           fi
+          if [[ "$version" == 1.1.0-* ]]; then
+            echo "The 1.1 baseline starts at stable 1.1.0; sdk/v1.1.0 prerelease tags cannot satisfy the supported [1.1.0,1.2.0) dependency range." >&2
+            exit 1
+          fi
 
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  package-format-build-smoke:
+    name: Package Format and packaged Build smoke (${{ matrix.os }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Run focused Package Format tests
+        run: |
+          dotnet restore tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --locked-mode
+          dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj -c Release --no-restore
+
+      - name: Build validator and pack release Build tooling
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $feed = Join-Path $PWD "artifacts/packaged-build-feed"
+          New-Item -ItemType Directory -Force $feed | Out-Null
+          $releaseCore = ($env:VERSION -split '[-+]')[0]
+          $releaseParts = $releaseCore.Split('.')
+          $nextMinor = [System.Numerics.BigInteger]::Parse($releaseParts[1]) + [System.Numerics.BigInteger]::One
+          $sdkVersionRange = "[$($releaseParts[0]).$($releaseParts[1]).0,$($releaseParts[0]).$($nextMinor).0)"
+          $sdkVersionRangeMsbuild = $sdkVersionRange.Replace(",", "%2C")
+          $releaseProperties = @(
+            "-p:SunderDeveloperPackageVersion=$env:VERSION"
+            "-p:SunderDeveloperPackageVersionRange=$sdkVersionRangeMsbuild"
+            "-p:ContinuousIntegrationBuild=true"
+            "-p:GeneratePackageOnBuild=false"
+          )
+
+          dotnet restore src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj --locked-mode
+          dotnet pack src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj -c Release --no-restore -o $feed @releaseProperties
+          dotnet pack src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj -c Release --no-restore -o $feed @releaseProperties
+
+          dotnet restore src/Host/Sunder.Cli/Sunder.Cli.csproj --locked-mode
+          dotnet build src/Host/Sunder.Cli/Sunder.Cli.csproj -c Release --no-restore
+
+      - name: Consume packaged Build tooling and validate its exact archive
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $feed = Join-Path $PWD "artifacts/packaged-build-feed"
+          $sample = Join-Path $env:RUNNER_TEMP "sunder-packaged-build-smoke"
+          New-Item -ItemType Directory -Force $sample | Out-Null
+          $project = Join-Path $sample "PackagedBuildSmoke.csproj"
+          $source = Join-Path $sample "Package.cs"
+          $projectContent = @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <Version>1.0.0</Version>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Sunder.Sdk" Version="RELEASE_VERSION" />
+              <PackageReference Include="Sunder.Package.Build" Version="RELEASE_VERSION" PrivateAssets="all" />
+            </ItemGroup>
+          </Project>
+          '@
+          $projectContent.Replace("RELEASE_VERSION", $env:VERSION) | Set-Content -Encoding utf8 $project
+          @'
+          using Sunder.Sdk.Packaging;
+
+          [assembly: SunderPackage(Id = "test.packaged-build", Name = "Packaged Build Smoke")]
+
+          namespace PackagedBuildSmoke;
+
+          public sealed class Marker { }
+          '@ | Set-Content -Encoding utf8 $source
+
+          dotnet restore $project --source $feed --source https://api.nuget.org/v3/index.json
+          dotnet publish $project -c Release --no-restore
+          $archives = @(Get-ChildItem $sample -Recurse -Filter *.sunderpkg)
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one packaged-Build smoke archive, found $($archives.Count)."
+          }
+          dotnet src/Host/Sunder.Cli/bin/Release/net10.0/sunder.dll package validate $archives[0].FullName
 
   storage-tests:
     name: Package storage tests (${{ matrix.os }})
@@ -68,10 +172,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -87,16 +191,17 @@ jobs:
     name: Build and pack NuGet packages
     needs:
       - prepare
+      - package-format-build-smoke
       - storage-tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -111,14 +216,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          release_core="${VERSION%%[-+]*}"
+          IFS='.' read -r release_major release_minor _ <<< "$release_core"
+          sdk_version_range="[$release_major.$release_minor.0,$release_major.$((10#$release_minor + 1)).0)"
+          sdk_version_range_msbuild="${sdk_version_range/,/%2C}"
           common_args=(
             -c Release
             --no-restore
             -m:1
-            -p:Version="$VERSION"
-            -p:PackageVersion="$VERSION"
-            -p:InformationalVersion="$VERSION"
+            -p:SunderDeveloperPackageVersion="$VERSION"
+            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild"
             -p:ContinuousIntegrationBuild=true
+            -p:GeneratePackageOnBuild=false
           )
 
           dotnet build src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj "${common_args[@]}"
@@ -134,13 +243,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          release_core="${VERSION%%[-+]*}"
+          IFS='.' read -r release_major release_minor _ <<< "$release_core"
+          sdk_version_range="[$release_major.$release_minor.0,$release_major.$((10#$release_minor + 1)).0)"
+          sdk_version_range_msbuild="${sdk_version_range/,/%2C}"
           dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj \
             -c Release \
             --no-restore \
-            -p:Version="$VERSION" \
-            -p:PackageVersion="$VERSION" \
-            -p:InformationalVersion="$VERSION" \
-           -p:ContinuousIntegrationBuild=true
+            -p:SunderDeveloperPackageVersion="$VERSION" \
+            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild" \
+            -p:ContinuousIntegrationBuild=true \
+            -p:GeneratePackageOnBuild=false
 
       - name: Verify V1 public API baselines
         run: dotnet test tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj -c Release --no-restore -p:GeneratePackageOnBuild=false
@@ -155,14 +268,18 @@ jobs:
           output_dir="$PWD/artifacts/release/sdk"
           mkdir -p "$output_dir"
 
+          release_core="${VERSION%%[-+]*}"
+          IFS='.' read -r release_major release_minor _ <<< "$release_core"
+          sdk_version_range="[$release_major.$release_minor.0,$release_major.$((10#$release_minor + 1)).0)"
+          sdk_version_range_msbuild="${sdk_version_range/,/%2C}"
           common_args=(
             -c Release
             --no-restore
             -o "$output_dir"
-            -p:Version="$VERSION"
-            -p:PackageVersion="$VERSION"
-            -p:InformationalVersion="$VERSION"
+            -p:SunderDeveloperPackageVersion="$VERSION"
+            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild"
             -p:ContinuousIntegrationBuild=true
+            -p:GeneratePackageOnBuild=false
           )
 
           dotnet pack src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj "${common_args[@]}"
@@ -188,6 +305,17 @@ jobs:
             test -f "$output_dir/$package" || { echo "Missing exact release artifact: $package" >&2; exit 1; }
           done
 
+          dependency_range="$sdk_version_range"
+          dependency_range_with_space="[$release_major.$release_minor.0, $release_major.$((10#$release_minor + 1)).0)"
+          for package in Sunder.Sdk.Avalonia Sunder.Sdk.Stacks; do
+            nuspec="$(unzip -p "$output_dir/$package.$VERSION.nupkg" '*.nuspec')"
+            if [[ "$nuspec" != *"id=\"Sunder.Sdk\" version=\"$dependency_range\""* \
+                && "$nuspec" != *"id=\"Sunder.Sdk\" version=\"$dependency_range_with_space\""* ]]; then
+              echo "$package does not bound its Sunder.Sdk dependency to '$dependency_range'." >&2
+              exit 1
+            fi
+          done
+
       - name: Validate generated template variants
         shell: bash
         env:
@@ -198,11 +326,16 @@ jobs:
           package_dir="$PWD/artifacts/release/sdk"
           nuget_config="$RUNNER_TEMP/sunder-template-sample.nuget.config"
           host_contracts_version="$(sed -n 's/.*PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="\([^"]*\)".*/\1/p' Directory.Packages.props)"
+          release_core="${VERSION%%[-+]*}"
+          IFS='.' read -r release_major release_minor _ <<< "$release_core"
+          sdk_version_range="[$release_major.$release_minor.0,$release_major.$((10#$release_minor + 1)).0)"
 
           if [[ -z "$host_contracts_version" ]]; then
             echo "Could not resolve Microsoft.Extensions.Logging.Abstractions version from Directory.Packages.props." >&2
             exit 1
           fi
+          host_contracts_major="${host_contracts_version%%.*}"
+          host_contracts_range="[$host_contracts_version,$((10#$host_contracts_major + 1)).0.0)"
 
           dotnet new install "$package_dir/Sunder.Package.Templates.$VERSION.nupkg"
 
@@ -232,7 +365,7 @@ jobs:
 
           expect_template_failure "missing-identity" --name MissingIdentity
           expect_template_failure "missing-host-package" --name MissingHostPackage --packageId sample.missinghost --packageName "Missing Host" --withHostDependency
-          expect_template_failure "host-contracts-without-host" --name HostContractsWithoutHost --packageId sample.badcontracts --packageName "Bad Contracts" --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion "$host_contracts_version"
+          expect_template_failure "host-contracts-without-host" --name HostContractsWithoutHost --packageId sample.badcontracts --packageName "Bad Contracts" --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersionRange "$host_contracts_range"
           expect_template_failure "missing-host-contracts-package" --name MissingHostContractsPackage --packageId sample.missingcontracts --packageName "Missing Contracts" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts
 
           validate_template() {
@@ -258,6 +391,20 @@ jobs:
               exit 1
             fi
 
+            local sunder_references
+            sunder_references="$(find "$sample_dir" -type f \( -name '*.csproj' -o -name '*.props' \) -exec grep -Eh 'PackageReference Include="(Sunder\.Sdk(\.Avalonia|\.Stacks)?|Sunder\.Package\.Build)"' {} + || true)"
+            if [[ -z "$sunder_references" ]]; then
+              echo "Generated sample '$name' did not contain Sunder package references." >&2
+              exit 1
+            fi
+            local invalid_references
+            invalid_references="$(printf '%s\n' "$sunder_references" | grep -Fv "Version=\"$sdk_version_range\"" || true)"
+            if [[ -n "$invalid_references" ]]; then
+              echo "Generated sample '$name' contained a Sunder reference outside release range '$sdk_version_range':" >&2
+              printf '%s\n' "$invalid_references" >&2
+              exit 1
+            fi
+
             dotnet restore "$project_path" --configfile "$nuget_config"
             dotnet build "$project_path" -c Release --no-restore -m:1
             dotnet publish "$project_path" -c Release --no-restore -m:1
@@ -275,10 +422,10 @@ jobs:
           validate_template "Sample.Stacks" "sample.stacks" "Sample Stacks" --withStacks
           validate_template "Sample.Contracts" "sample.contracts" "Sample Contracts" --withContracts
           validate_template "Sample.Extension" "sample.extension" "Sample Extension" --withHostDependency --hostPackageId sunder.package.agent
-          validate_template "Sample.TypedExtension" "sample.typedextension" "Sample Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersion "$host_contracts_version"
+          validate_template "Sample.TypedExtension" "sample.typedextension" "Sample Typed Extension" --withHostDependency --hostPackageId sunder.package.agent --withHostContracts --hostContractsPackageId Microsoft.Extensions.Logging.Abstractions --hostContractsVersionRange "$host_contracts_range"
 
       - name: Upload NuGet package artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: sunder-sdk-nuget-packages
           path: artifacts/release/sdk/*.nupkg
@@ -295,15 +442,15 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Download NuGet package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@v4
         with:
           name: sunder-sdk-nuget-packages
           path: release-assets
@@ -456,18 +603,14 @@ jobs:
             local package_path="$2"
             local package_id_lower="${package_id,,}"
             local version_lower="${VERSION,,}"
-            local package_name="$(basename "$package_path")"
-            local expected_sha="$(sha256sum "$package_path" | cut -d ' ' -f 1)"
+            local package_name
+            package_name="$(basename "$package_path")"
             local remote_path="$RUNNER_TEMP/$package_name"
-            local actual_sha
-            for attempt in {1..30}; do
+            for _ in {1..30}; do
               if curl -fsSL "$NUGET_FLAT_CONTAINER/$package_id_lower/$version_lower/$package_id_lower.$version_lower.nupkg" \
                 -o "$remote_path" 2>/dev/null; then
-                actual_sha="$(sha256sum "$remote_path" | cut -d ' ' -f 1)"
-                if [[ "$actual_sha" != "$expected_sha" ]]; then
-                  echo "NuGet.org package '$package_name' does not match the release artifact." >&2
-                  exit 1
-                fi
+                bash scripts/release/verify-nuget-package.sh "$package_path" "$remote_path" \
+                  || { echo "NuGet.org package '$package_name' failed canonical content or signature verification." >&2; exit 1; }
                 return
               fi
               sleep 10
@@ -486,7 +629,8 @@ jobs:
               -o "$remote_package" 2>/dev/null; then
               if ! dotnet nuget push "$package" \
                 --source "$NUGET_SOURCE" \
-                --api-key "$NUGET_API_KEY"; then
+                --api-key "$NUGET_API_KEY" \
+                --skip-duplicate; then
                 verify_published_package "$package_id" "$package"
               fi
             fi

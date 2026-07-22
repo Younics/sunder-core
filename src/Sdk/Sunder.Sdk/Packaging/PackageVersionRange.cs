@@ -2,7 +2,8 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Packaging;
 
-/// <summary>Represents an exact SemVer or space-conjoined SemVer comparisons using &lt;, &lt;=, &gt;, &gt;=, or =.</summary>
+/// <summary>Represents an exact SemVer constraint or space-conjoined SemVer precedence comparisons using &lt;, &lt;=, &gt;, &gt;=, or =.</summary>
+/// <remarks>All constraints compare SemVer precedence and therefore ignore build metadata.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.PackagingV1)]
 public readonly struct PackageVersionRange : IEquatable<PackageVersionRange>
 {
@@ -54,7 +55,7 @@ public readonly struct PackageVersionRange : IEquatable<PackageVersionRange>
         if (_constraints is null) return false;
         foreach (var constraint in _constraints)
         {
-            var comparison = version.CompareTo(constraint.Version);
+            var comparison = version.ComparePrecedenceTo(constraint.Version);
             if (constraint.Operator switch
             {
                 ComparisonOperator.Exact or ComparisonOperator.Equal => comparison != 0,
@@ -78,7 +79,7 @@ public readonly struct PackageVersionRange : IEquatable<PackageVersionRange>
            && TryParse(range, out var parsedRange)
            && parsedRange.IsSatisfiedBy(parsedVersion);
 
-    /// <summary>Attempts to compare two strict semantic versions.</summary>
+    /// <summary>Attempts to compare the precedence of two strict semantic versions, ignoring build metadata.</summary>
     public static bool TryCompare(string left, string right, out int comparison)
     {
         comparison = 0;
@@ -88,7 +89,7 @@ public readonly struct PackageVersionRange : IEquatable<PackageVersionRange>
             return false;
         }
 
-        comparison = leftVersion.CompareTo(rightVersion);
+        comparison = leftVersion.ComparePrecedenceTo(rightVersion);
         return true;
     }
 

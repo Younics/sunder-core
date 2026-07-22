@@ -95,8 +95,6 @@ type sealed class Sunder.Package.Format.SunderPackageFormat
   method static System.Boolean IsContentIndexPath(System.String path)
   method static System.Boolean IsSdkCapabilityId(System.String? value)
   method static System.String? GetContentRole(System.String path)
-type sealed class Sunder.Package.Format.SunderPackageHostRoleInspector
-  method static System.Collections.Generic.IReadOnlyList<System.String> ReadManifestRoles(System.String assemblyPath)
 type sealed class Sunder.Package.Format.SunderPackageManifest
   method .ctor()
   property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageDependencyManifest>? DependsOn { get; init; }
@@ -109,7 +107,6 @@ type sealed class Sunder.Package.Format.SunderPackageManifest
   property System.Collections.Generic.IReadOnlyList<System.String>? RequiredSdkCapabilities { get; init; }
   property System.Int32? SdkApiVersion { get; init; }
   property System.String? SdkPackageVersion { get; init; }
-  property System.String? SdkVersion { get; init; }
   property System.String? Summary { get; init; }
   property System.String? TargetFramework { get; init; }
   property System.String? Version { get; init; }

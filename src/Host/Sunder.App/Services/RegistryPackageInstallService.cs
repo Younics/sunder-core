@@ -32,6 +32,8 @@ public sealed record RegistryPackageInstallProgress(string StatusText, double? P
 
 public sealed class RegistryPackageInstallService
 {
+    private const string AnySemanticVersionRange = ">=0.0.0-0";
+
     public async Task<RegistryPackageInstallExecutionResult> InstallPackageAsync(
         string packageId,
         string? version,
@@ -105,7 +107,11 @@ public sealed class RegistryPackageInstallService
                 .Select(package => new RuntimeRegistryPackageChangeRequest(
                     package.PackageId!,
                     null,
-                    string.IsNullOrWhiteSpace(package.InstallTag) ? "latest" : package.InstallTag))
+                    string.IsNullOrWhiteSpace(package.InstallTag) ? "latest" : package.InstallTag,
+                    string.IsNullOrWhiteSpace(package.MinimumVersion)
+                        ? AnySemanticVersionRange
+                        : $">={package.MinimumVersion}",
+                    package.Required != false))
                 .ToArray());
 
     private static RegistryPackageInstallExecutionResult ToAppResult(RuntimeRegistryPackageChangeResult result)

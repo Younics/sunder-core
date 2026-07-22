@@ -253,6 +253,35 @@ public sealed class RegistryRuntimeArchitectureTests
     }
 
     [Fact]
+    public async Task AuthenticatedOperation_DoesNotDeserializeTypedFailureResponse()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var origin = RegistryOrigin.Normalize("https://registry.example/");
+            var store = new RegistryCredentialStore(new RuntimePackagePaths(root));
+            await store.SetAsync(origin, new RegistryCredential("credential", "user-1", DateTimeOffset.UtcNow.AddHours(1), null, null, null, null, false));
+            var handler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = JsonContent.Create(new RegistryPackageStarResponse(true, "Starred.", null, [])),
+            });
+            var operations = new RegistryAuthenticatedOperations(new FakeHttpClientFactory(handler), store);
+
+            var result = await operations.SetPackageStarAsync(
+                new RuntimeRegistryStarRequest(origin.AbsoluteUri, "agent", true),
+                CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal(["Registry request failed with HTTP 500."], result.Errors);
+            Assert.NotNull(await store.GetAsync(origin));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RuntimeUpload_CancellationRemovesPartialArtifact()
     {
         var root = CreateTempDirectory();
@@ -376,6 +405,41 @@ public sealed class RegistryRuntimeArchitectureTests
             var execution = await orchestrator.ExecuteAsync(request, CancellationToken.None);
             Assert.False(execution.Success);
             Assert.Equal(RuntimeRegistryErrorCode.RegistryUnavailable, execution.ErrorCode);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RegistryPackagePlan_DoesNotDeserializeTypedFailureResponse()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var handler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(true, [], [], [], [])),
+            });
+            var services = new ServiceCollection();
+            services.AddRuntimeHostServices(
+                new RuntimePackagePaths(root),
+                new RuntimeBearerTokenValidator("test-runtime-token"));
+            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
+
+            await using var provider = services.BuildServiceProvider();
+            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
+            var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
+            var plan = await orchestrator.ResolveAsync(
+                new RuntimeRegistryPackageBatchRequest(
+                    "https://registry.example/",
+                    [new RuntimeRegistryPackageChangeRequest("agent", null, "latest")]),
+                CancellationToken.None);
+
+            Assert.False(plan.Success);
+            Assert.Empty(plan.Items);
+            Assert.Equal(["Registry rejected the request."], plan.Errors);
         }
         finally
         {

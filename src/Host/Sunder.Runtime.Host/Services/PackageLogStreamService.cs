@@ -21,6 +21,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     private readonly Guid _runtimeInstanceId;
     private readonly BoundedReplayFeed<PackageLogEntryDescriptor> _feed = new(ReplayCapacity, SubscriberCapacity);
     private readonly Dictionary<string, FileTailState> _files = new(PathComparer);
+    private readonly HashSet<string> _pendingContinuations = new(PathComparer);
     private FileSystemWatcher? _watcher;
     private bool _starting;
     private bool _disposed;
@@ -54,17 +55,6 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         try
         {
             Directory.CreateDirectory(_packageRootPath);
-            foreach (var file in SelectInitialReplayFiles(cancellationToken))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                lock (_gate)
-                {
-                    ObjectDisposedException.ThrowIf(_disposed, this);
-                    ReadFile(file.Path, initialRead: true, file.MaxBytes, cancellationToken);
-                }
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
@@ -80,6 +70,25 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
                 _watcher.Error += OnError;
                 _watcher.EnableRaisingEvents = true;
             }
+
+            foreach (var file in SelectInitialReplayFiles(cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                lock (_gate)
+                {
+                    ObjectDisposedException.ThrowIf(_disposed, this);
+                    ReadFile(file.Path, initialRead: true, file.MaxBytes, cancellationToken);
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                DisposeWatcher();
+            }
+            throw;
         }
         finally
         {
@@ -102,17 +111,6 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     public BoundedReplayFeed<PackageLogEntryDescriptor>.ReplayFeedSubscription<PackageLogEntryDescriptor> Subscribe(long afterSequenceId)
         => _feed.Subscribe(afterSequenceId);
 
-    internal void ProcessLineForTest(string packageId, string line)
-        => PublishLine(packageId, Encoding.UTF8.GetBytes(line), oversized: false);
-
-    internal void ProcessFileForTest(string filePath)
-    {
-        lock (_gate)
-        {
-            ReadFile(filePath, initialRead: false);
-        }
-    }
-
     public ValueTask DisposeAsync()
     {
         lock (_gate)
@@ -123,19 +121,10 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             }
 
             _disposed = true;
-            if (_watcher is not null)
-            {
-                _watcher.EnableRaisingEvents = false;
-                _watcher.Created -= OnChanged;
-                _watcher.Changed -= OnChanged;
-                _watcher.Renamed -= OnRenamed;
-                _watcher.Deleted -= OnDeleted;
-                _watcher.Error -= OnError;
-                _watcher.Dispose();
-                _watcher = null;
-            }
+            DisposeWatcher();
 
             _files.Clear();
+            _pendingContinuations.Clear();
             _feed.Complete();
         }
 
@@ -143,26 +132,18 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     }
 
     private void OnChanged(object sender, FileSystemEventArgs e)
-    {
-        lock (_gate)
-        {
-            if (!_disposed)
-            {
-                ReadFile(e.FullPath, initialRead: false);
-            }
-        }
-    }
+        => ReadChangedFile(e.FullPath);
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
         lock (_gate)
         {
-            _files.Remove(e.OldFullPath);
-            if (!_disposed)
+            if (_files.Remove(e.OldFullPath, out var state) && IsLogPath(e.FullPath))
             {
-                ReadFile(e.FullPath, initialRead: false);
+                _files[e.FullPath] = state;
             }
         }
+        ReadChangedFile(e.FullPath);
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
@@ -184,14 +165,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         {
             foreach (var filePath in Directory.EnumerateFiles(_packageRootPath, "*.log", SearchOption.AllDirectories))
             {
-                lock (_gate)
-                {
-                    if (_disposed)
-                    {
-                        return;
-                    }
-                    ReadFile(filePath, initialRead: false);
-                }
+                ReadChangedFile(filePath);
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -263,11 +237,18 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _files[file.Path] = new FileTailState { Offset = file.Length };
+            if (_files.TryGetValue(file.Path, out var state))
+            {
+                state.Offset = Math.Max(state.Offset, file.Length);
+            }
+            else
+            {
+                _files[file.Path] = new FileTailState { Offset = file.Length };
+            }
         }
     }
 
-    private long ReadFile(
+    private FileReadResult ReadFile(
         string filePath,
         bool initialRead,
         long maxReadBytes = MaxReadBytesPerChange,
@@ -276,7 +257,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsLogPath(filePath))
         {
-            return 0;
+            return default;
         }
 
         try
@@ -293,7 +274,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
                 : Math.Min(MaxReadBytesPerChange, maxReadBytes);
             if (readLimit <= 0)
             {
-                return 0;
+                return default;
             }
 
             if (initialRead && state.Offset == 0 && stream.Length > readLimit)
@@ -303,7 +284,6 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             }
 
             stream.Position = state.Offset;
-            var initialOffset = state.Offset;
             var remaining = Math.Min(stream.Length - state.Offset, readLimit);
             var buffer = new byte[8192];
             while (remaining > 0)
@@ -319,7 +299,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
                 state.Offset += read;
                 remaining -= read;
             }
-            return state.Offset - initialOffset;
+            return new FileReadResult(state.Offset < stream.Length);
         }
         catch (IOException)
         {
@@ -328,7 +308,59 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         {
         }
 
-        return 0;
+        return default;
+    }
+
+    private void ReadChangedFile(string filePath)
+    {
+        var scheduleContinuation = false;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            scheduleContinuation = ReadFile(filePath, initialRead: false).HasMore
+                                   && _pendingContinuations.Add(filePath);
+        }
+        if (scheduleContinuation)
+        {
+            ThreadPool.QueueUserWorkItem(_ => DrainFileContinuation(filePath));
+        }
+    }
+
+    private void DrainFileContinuation(string filePath)
+    {
+        while (true)
+        {
+            lock (_gate)
+            {
+                if (_disposed || !ReadFile(filePath, initialRead: false).HasMore)
+                {
+                    _pendingContinuations.Remove(filePath);
+                    return;
+                }
+            }
+            Thread.Yield();
+        }
+    }
+
+    private void DisposeWatcher()
+    {
+        if (_watcher is null)
+        {
+            return;
+        }
+
+        _watcher.EnableRaisingEvents = false;
+        _watcher.Created -= OnChanged;
+        _watcher.Changed -= OnChanged;
+        _watcher.Renamed -= OnRenamed;
+        _watcher.Deleted -= OnDeleted;
+        _watcher.Error -= OnError;
+        _watcher.Dispose();
+        _watcher = null;
     }
 
     private void ConsumeBytes(string packageId, FileTailState state, ReadOnlySpan<byte> bytes)
@@ -554,4 +586,6 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     private sealed record InitialReplayFile(string Path, long MaxBytes);
 
     private sealed record InitialReplayCandidate(string Path, DateTime LastWriteTimeUtc, long Length);
+
+    private readonly record struct FileReadResult(bool HasMore);
 }

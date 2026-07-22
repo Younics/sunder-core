@@ -15,7 +15,6 @@ public sealed partial class UseStackWizardViewModel(
     IRuntimeStacksClient runtimeApiClient,
     RegistryPackageInstallService registryInstallService,
     Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
-    Func<IReadOnlyList<RuntimeStackImportAppliedContributionDescriptor>, CancellationToken, Task<IReadOnlyList<string>>> notifyStackImportAppliedAsync,
     Func<Uri, IRegistryApiClient> registryClientFactory,
     string registryUrlText) : ViewModelBase, IDisposable
 {
@@ -302,8 +301,6 @@ public sealed partial class UseStackWizardViewModel(
             {
                 ImportedItems.Add($"{imported.DisplayName} ({imported.Kind})");
             }
-
-            await NotifyStackImportAppliedAsync(ToAppliedContributions(result.ContributorResults), cancellationToken);
 
             StatusText = result.Outcome switch
             {

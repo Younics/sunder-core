@@ -26,8 +26,8 @@ public sealed partial class PackageModule : ISunderRuntimePackageModule, ISunder
     public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
         registry.RegisterPackageView<DefaultPackageView>(new PackageViewRegistration(
-            "sunder.package.template.default",
-            "Sunder Package Template",
+            "SUNDER_PACKAGE_ID_CSHARP.default",
+            "SUNDER_PACKAGE_NAME_CSHARP",
             iconAssetPath: "assets/icon.png"));
     }
 

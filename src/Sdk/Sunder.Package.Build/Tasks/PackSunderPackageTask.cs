@@ -1,5 +1,6 @@
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
+using Sunder.Package.Format;
 
 namespace Sunder.Package.Build.Tasks;
 
@@ -41,10 +42,20 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
             }
 
             var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Package.Build", "pack", Guid.NewGuid().ToString("N"));
+            var archiveValidationPath = stagingPath + "-archive-validation";
             try
             {
                 PackageContentLayoutBuilder.Build(DevPackagePath, stagingPath, manifestPath);
                 PackageContentIndexer.Write(stagingPath);
+
+                var stagingValidation = SunderPackageArchiveInspector
+                    .ValidateExtractedPackageAsync(stagingPath)
+                    .GetAwaiter()
+                    .GetResult();
+                if (!LogValidation(stagingValidation, logWarnings: false))
+                {
+                    return false;
+                }
 
                 var packageOutputDirectory = Path.GetDirectoryName(PackageOutputPath);
                 if (!string.IsNullOrWhiteSpace(packageOutputDirectory))
@@ -53,11 +64,29 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 }
 
                 DeterministicPackageArchiveWriter.Write(stagingPath, PackageOutputPath);
+                try
+                {
+                    var archiveValidation = SunderPackageArchiveInspector
+                        .ExtractAndValidateAsync(PackageOutputPath, archiveValidationPath)
+                        .GetAwaiter()
+                        .GetResult();
+                    if (!LogValidation(archiveValidation))
+                    {
+                        TryDeleteFile(PackageOutputPath);
+                        return false;
+                    }
+                }
+                catch
+                {
+                    TryDeleteFile(PackageOutputPath);
+                    throw;
+                }
                 Log.LogMessage(MessageImportance.High, $"Packed Sunder package to {PackageOutputPath}");
                 return true;
             }
             finally
             {
+                TryDeleteDirectory(archiveValidationPath);
                 TryDeleteDirectory(stagingPath);
             }
         }
@@ -66,6 +95,22 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
             Log.LogErrorFromException(ex, showStackTrace: false);
             return false;
         }
+    }
+
+    private bool LogValidation(SunderPackageArchiveValidationResult validation, bool logWarnings = true)
+    {
+        if (logWarnings)
+        {
+            foreach (var warning in validation.Warnings)
+            {
+                Log.LogWarning(warning);
+            }
+        }
+        foreach (var error in validation.Errors)
+        {
+            Log.LogError(error);
+        }
+        return validation.Success;
     }
 
     private static void TryDeleteDirectory(string path)
@@ -80,6 +125,21 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
         catch
         {
             // Best effort cleanup for temporary package staging.
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Best effort cleanup for a package archive that failed final validation.
         }
     }
 }

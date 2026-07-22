@@ -5,13 +5,16 @@ internal sealed partial class JsonPackageKeyValueStore
     internal Task ReplaceValuesAsync(
         IReadOnlyDictionary<string, string> values,
         CancellationToken cancellationToken = default)
-        => _document.ExecuteAsync(transaction =>
+    {
+        PackageStorageGuards.Values(values, nameof(values));
+        return _document.ExecuteAsync(transaction =>
         {
             var state = Load(transaction);
             if (PackageValueDictionary.Equals(state.Values, values)) return true;
             Save(transaction, new(values, StringComparer.Ordinal), checked(state.Revision + 1));
             return true;
         }, cancellationToken);
+    }
 }
 
 internal sealed partial class JsonPackageSecretsStore
@@ -19,13 +22,16 @@ internal sealed partial class JsonPackageSecretsStore
     internal Task ReplaceValuesAsync(
         IReadOnlyDictionary<string, string> values,
         CancellationToken cancellationToken = default)
-        => _document.ExecuteAsync(transaction =>
+    {
+        PackageStorageGuards.Values(values, nameof(values));
+        return _document.ExecuteAsync(transaction =>
         {
             var secrets = Load(transaction);
             if (PackageValueDictionary.Equals(secrets.Values, values)) return true;
             Save(transaction, new(values, StringComparer.Ordinal), checked(secrets.Revision + 1));
             return true;
         }, cancellationToken);
+    }
 }
 
 internal static class PackageValueDictionary

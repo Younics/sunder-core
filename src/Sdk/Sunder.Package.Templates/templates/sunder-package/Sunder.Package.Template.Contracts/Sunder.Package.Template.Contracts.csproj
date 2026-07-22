@@ -7,11 +7,11 @@
     <IsPackable>true</IsPackable>
     <PackageId>Sunder.Package.Template.Contracts</PackageId>
     <Version>1.0.0</Version>
-    <Description>Public extension contracts for Sunder Package Template.</Description>
+    <Description>Public extension contracts for SUNDER_PACKAGE_NAME_XML.</Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk" Version="1.1.0" />
+    <PackageReference Include="Sunder.Sdk" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
   </ItemGroup>
 
 </Project>

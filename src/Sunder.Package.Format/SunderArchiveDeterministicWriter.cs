@@ -99,10 +99,19 @@ internal static class SunderArchiveDeterministicWriter
             throw new InvalidDataException($"Archive source contains {files.Count} files; the limit is {options.MaxEntries}.");
         }
 
+        var paths = files
+            .Select(file => ArchiveRelativePath.Parse(
+                file.Path.ToString(),
+                options.MaxPathLength,
+                options.MaxPathDepth))
+            .ToArray();
+        ValidatePortablePaths(paths);
+
         long totalBytes = 0;
-        foreach (var file in files)
+        for (var index = 0; index < files.Count; index++)
         {
-            var path = ArchiveRelativePath.Parse(file.Path.ToString(), options.MaxPathLength, options.MaxPathDepth);
+            var file = files[index];
+            var path = paths[index];
             var length = file.ObservedLength;
             if (length > options.MaxEntryUncompressedBytes)
             {
@@ -120,6 +129,15 @@ internal static class SunderArchiveDeterministicWriter
             }
 
             totalBytes += length;
+        }
+    }
+
+    internal static void ValidatePortablePaths(IEnumerable<ArchiveRelativePath> paths)
+    {
+        var registry = new ArchivePathRegistry();
+        foreach (var path in paths)
+        {
+            registry.Register(path, isDirectory: false);
         }
     }
 

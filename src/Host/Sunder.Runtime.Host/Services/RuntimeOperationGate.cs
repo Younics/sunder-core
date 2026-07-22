@@ -9,10 +9,15 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     private bool _stopped;
     private readonly TaskCompletionSource _shutdownCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly RuntimeEventStreamService? _eventStream;
+    private readonly TimeSpan _shutdownTimeout;
+    private bool _gateDrained;
 
-    public RuntimeOperationGate(RuntimeEventStreamService? eventStream = null)
+    public RuntimeOperationGate(
+        RuntimeEventStreamService? eventStream = null,
+        RuntimeLifecyclePolicyOptions? lifecyclePolicy = null)
     {
         _eventStream = eventStream;
+        _shutdownTimeout = (lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions()).ShutdownTimeout;
     }
 
     public async ValueTask<Lease> EnterAsync(CancellationToken cancellationToken = default)
@@ -56,6 +61,11 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     }
 
     public async Task ShutdownAsync(Func<Task> cleanup)
+        => await ShutdownAsync(_ => cleanup(), CancellationToken.None);
+
+    public async Task ShutdownAsync(
+        Func<CancellationToken, Task> cleanup,
+        CancellationToken cancellationToken = default)
     {
         Task? existingShutdown = null;
         lock (_syncRoot)
@@ -80,21 +90,63 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
             return;
         }
 
-        _shutdown.Cancel();
-        _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
-        await _gate.WaitAsync(CancellationToken.None);
+        using var timeout = new CancellationTokenSource(_shutdownTimeout);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeout.Token);
+        var gateEntered = false;
         try
         {
-            await cleanup();
+            _shutdown.Cancel();
+            _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.ShuttingDown);
+            try
+            {
+                await _gate.WaitAsync(deadline.Token);
+                gateEntered = true;
+            }
+            catch (OperationCanceledException exception) when (
+                timeout.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"The Runtime operation gate did not drain within {_shutdownTimeout.TotalSeconds:0.###} seconds.",
+                    exception);
+            }
+
+            var cleanupTask = Task.Run(
+                () => cleanup(deadline.Token),
+                CancellationToken.None);
+            try
+            {
+                await cleanupTask.WaitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException exception) when (
+                timeout.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+            {
+                _ = ObserveCleanupAsync(cleanupTask);
+                throw new TimeoutException(
+                    $"Runtime operation cleanup did not finish within {_shutdownTimeout.TotalSeconds:0.###} seconds.",
+                    exception);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                _ = ObserveCleanupAsync(cleanupTask);
+                throw;
+            }
         }
         finally
         {
             lock (_syncRoot)
             {
                 _stopped = true;
+                _gateDrained = gateEntered;
             }
             _shutdownCompletion.TrySetResult();
-            _gate.Release();
+            if (gateEntered)
+            {
+                _gate.Release();
+            }
         }
     }
 
@@ -102,7 +154,21 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
     {
         await ShutdownAsync(static () => Task.CompletedTask);
         _shutdown.Dispose();
-        _gate.Dispose();
+        if (_gateDrained)
+        {
+            _gate.Dispose();
+        }
+    }
+
+    private static async Task ObserveCleanupAsync(Task cleanup)
+    {
+        try
+        {
+            await cleanup;
+        }
+        catch
+        {
+        }
     }
 
     private void ReleaseLease(CancellationTokenSource cancellation)

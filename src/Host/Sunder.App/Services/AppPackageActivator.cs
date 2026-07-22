@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Package.Format;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -76,13 +77,15 @@ internal sealed class AppPackageActivator(
 
     private static ISunderAppPackageModule? CreatePackageModule(Assembly entryAssembly)
     {
-        var moduleType = AppPackageModuleResolver.Resolve(entryAssembly, out var moduleResolutionError);
-        if (moduleType is null)
+        var moduleResolution = PackageModuleShapeReader.Read(entryAssembly.Location)
+            .Resolve(PackageHostRoleMetadataValue.App);
+        if (moduleResolution.Error is not null)
         {
-            return moduleResolutionError is null
-                ? null
-                : throw new InvalidOperationException(moduleResolutionError);
+            throw new InvalidOperationException(moduleResolution.Error);
         }
+        if (moduleResolution.TypeName is null) return null;
+
+        var moduleType = entryAssembly.GetType(moduleResolution.TypeName, throwOnError: true)!;
 
         if (Activator.CreateInstance(moduleType) is ISunderAppPackageModule module)
         {

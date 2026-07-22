@@ -1,14 +1,12 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Packaging;
+using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Endpoints;
 
 internal static class PackageDataEndpoints
 {
-    private const int MaxValueLength = 1024 * 1024;
-    private const int MaxFileLength = 16 * 1024 * 1024;
-
     public static IEndpointRouteBuilder MapPackageDataEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/packages/{packageId}/data");
@@ -56,7 +54,7 @@ internal static class PackageDataEndpoints
         RuntimePackageDataService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key)
-            || request.Value is null || request.Value.Length > MaxValueLength)
+            || !PackageStorageValidation.IsValidValue(request.Value))
         {
             throw new RuntimeValidationException("The package id, state key, or value is invalid.");
         }
@@ -104,7 +102,7 @@ internal static class PackageDataEndpoints
         RuntimePackageDataService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key)
-            || request.Value is null || request.Value.Length > MaxValueLength)
+            || !PackageStorageValidation.IsValidValue(request.Value))
         {
             throw new RuntimeValidationException("The package id, secret key, or value is invalid.");
         }
@@ -141,12 +139,17 @@ internal static class PackageDataEndpoints
 
         try
         {
-            var contents = await service.ReadFileAsync(packageId, relativePath, MaxFileLength, cancellationToken);
+            var contents = await service.ReadFileAsync(
+                packageId,
+                relativePath,
+                PackageStorageValidation.MaximumFileBytes,
+                cancellationToken);
             return Results.File(RuntimeEndpointErrors.Required(contents, "Package file"), "application/octet-stream");
         }
         catch (InvalidDataException)
         {
-            throw new RuntimeUploadLimitException($"Package file exceeds the {MaxFileLength} byte limit.");
+            throw new RuntimeUploadLimitException(
+                $"Package file exceeds the {PackageStorageValidation.MaximumFileBytes} byte limit.");
         }
     }
 
@@ -155,11 +158,14 @@ internal static class PackageDataEndpoints
         RuntimePackageDataService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsRelativePath(relativePath)
-            || request.ContentLength is > MaxFileLength)
+            || request.ContentLength is long contentLength
+               && !PackageStorageValidation.IsValidFileLength(contentLength))
         {
-            if (request.ContentLength is > MaxFileLength)
+            if (request.ContentLength is long invalidLength
+                && !PackageStorageValidation.IsValidFileLength(invalidLength))
             {
-                throw new RuntimeUploadLimitException($"Package file exceeds the {MaxFileLength} byte limit.");
+                throw new RuntimeUploadLimitException(
+                    $"Package file exceeds the {PackageStorageValidation.MaximumFileBytes} byte limit.");
             }
             throw new RuntimeValidationException("The package id or relative file path is invalid.");
         }
@@ -169,9 +175,10 @@ internal static class PackageDataEndpoints
         int bytesRead;
         while ((bytesRead = await request.Body.ReadAsync(chunk, cancellationToken)) > 0)
         {
-            if (buffer.Length + bytesRead > MaxFileLength)
+            if (buffer.Length + bytesRead > PackageStorageValidation.MaximumFileBytes)
             {
-                throw new RuntimeUploadLimitException($"Package file exceeds the {MaxFileLength} byte limit.");
+                throw new RuntimeUploadLimitException(
+                    $"Package file exceeds the {PackageStorageValidation.MaximumFileBytes} byte limit.");
             }
 
             await buffer.WriteAsync(chunk.AsMemory(0, bytesRead), cancellationToken);
@@ -207,28 +214,15 @@ internal static class PackageDataInputValidator
         => PackageId.TryParse(value, out _);
 
     internal static bool IsKey(string value)
-        => IsToken(value, 256, allowDot: true);
+        => PackageStorageValidation.IsValidKey(value);
 
     internal static bool IsKeyPrefix(string value)
         => value.Length == 0 || IsKey(value);
 
     internal static bool IsRelativePath(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Length > 1024 || Path.IsPathRooted(value))
-        {
-            return false;
-        }
-
-        return value.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
-            .All(segment => segment is not "." and not ".." && segment.Length <= 255);
-    }
+        => PackageStorageValidation.IsValidRelativePath(value);
 
     internal static bool IsLeaseId(string value)
         => value.Length == 32 && value.All(Uri.IsHexDigit);
 
-    private static bool IsToken(string value, int maxLength, bool allowDot)
-        => !string.IsNullOrWhiteSpace(value)
-            && value.Length <= maxLength
-            && value.All(character => char.IsAsciiLetterOrDigit(character)
-                || character is '-' or '_' || (allowDot && character == '.'));
 }

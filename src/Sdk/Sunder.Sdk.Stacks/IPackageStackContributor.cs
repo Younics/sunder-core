@@ -38,7 +38,7 @@ public interface IPackageStackImporter
         StackImportPreviewRequest request,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Applies selected actions and reports committed effects; cancellation should stop before additional mutations where safe.</summary>
+    /// <summary>Applies selected actions and reports committed effects; a result is failed only when no action committed, and cancellation should stop before additional mutations where safe.</summary>
     ValueTask<StackImportResult> ImportAsync(
         StackImportRequest request,
         CancellationToken cancellationToken = default);

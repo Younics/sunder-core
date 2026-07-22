@@ -33,10 +33,14 @@ internal sealed record ActiveLoadedPackage(
 
 internal sealed class ActivePackageSession
 {
+    private static readonly TimeSpan DefaultCleanupTimeout = TimeSpan.FromSeconds(10);
     private readonly Dictionary<string, ActiveLoadedPackage> _loadedPackageMap;
     private readonly Dictionary<string, SessionPackageDescriptor> _sessionPackageMap;
     private readonly Dictionary<string, RuntimePackageSource> _packageSourceMap;
     private readonly RuntimePackageExtensionCatalog _extensionCatalog;
+    private readonly object _lifecycleSync = new();
+    private readonly List<Task> _lifecycleOperations = [];
+    private Task? _disposalTask;
 
     public ActivePackageSession(
         string? sessionFolder,
@@ -69,38 +73,70 @@ internal sealed class ActivePackageSession
 
     private RuntimeSharedAssemblyRegistry? SharedAssemblyRegistry { get; }
 
-    public async Task StartBackgroundServicesAsync(ILogger logger, CancellationToken cancellationToken = default)
+    public async Task StartBackgroundServicesAsync(
+        ILogger logger,
+        TimeSpan startupTimeout,
+        TimeSpan cleanupTimeout,
+        CancellationToken cancellationToken = default)
     {
         if (_backgroundServicesStarted)
         {
             return;
         }
 
-        var startedServices = new List<(string PackageId, IPackageBackgroundService BackgroundService)>();
+        var attemptedServices = new List<(string PackageId, IPackageBackgroundService Service)>();
+        using var startupTimeoutCancellation = new CancellationTokenSource(startupTimeout);
+        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            startupTimeoutCancellation.Token);
+        Task? startTask = null;
         try
         {
             foreach (var package in _loadedPackageMap.Values)
             {
                 foreach (var backgroundService in package.BackgroundServices)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await backgroundService.StartAsync(cancellationToken);
-                    startedServices.Add((package.Descriptor.PackageId, backgroundService));
+                    startupDeadline.Token.ThrowIfCancellationRequested();
+                    attemptedServices.Add((package.Descriptor.PackageId, backgroundService));
+                    startTask = Task.Run(
+                        () => backgroundService.StartAsync(startupDeadline.Token),
+                        CancellationToken.None);
+                    TrackLifecycleOperation(startTask);
+                    await startTask.WaitAsync(startupDeadline.Token);
+                    startTask = null;
                 }
             }
 
             _backgroundServicesStarted = true;
         }
+        catch (OperationCanceledException exception) when (
+            startupTimeoutCancellation.IsCancellationRequested
+            && !cancellationToken.IsCancellationRequested)
+        {
+            if (startTask is not null && !startTask.IsCompleted)
+            {
+                _ = ObserveAsync(startTask);
+            }
+            await PackageSessionLifecycle.StopBackgroundServicesAsync(
+                attemptedServices.AsEnumerable().Reverse().ToArray(),
+                logger,
+                cleanupTimeout,
+                operationStarted: TrackLifecycleOperation);
+            throw new TimeoutException(
+                $"Package background services did not start within {startupTimeout.TotalSeconds:0.###} seconds.",
+                exception);
+        }
         catch
         {
-            foreach (var group in startedServices
-                         .AsEnumerable()
-                         .Reverse()
-                         .GroupBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase))
+            if (startTask is not null && !startTask.IsCompleted)
             {
-                await PackageSessionLifecycle.StopBackgroundServicesAsync(group.Select(x => x.BackgroundService).ToArray(), group.Key, logger);
+                _ = ObserveAsync(startTask);
             }
-
+            await PackageSessionLifecycle.StopBackgroundServicesAsync(
+                attemptedServices.AsEnumerable().Reverse().ToArray(),
+                logger,
+                cleanupTimeout,
+                operationStarted: TrackLifecycleOperation);
             throw;
         }
     }
@@ -131,7 +167,7 @@ internal sealed class ActivePackageSession
         while (pending.TryPop(out var packageId))
         {
             if (!required.Add(packageId) || !_packageSourceMap.TryGetValue(packageId, out var source)) continue;
-            foreach (var dependency in source.PackageDependencies) pending.Push(dependency);
+            foreach (var dependency in source.PackageDependencies) pending.Push(dependency.PackageId);
         }
 
         return _packageSourceMap.Values
@@ -252,32 +288,80 @@ internal sealed class ActivePackageSession
         return false;
     }
 
-    public async Task StopBackgroundServicesAsync(CancellationToken cancellationToken = default)
+    public async Task StopBackgroundServicesAsync(
+        ILogger logger,
+        TimeSpan cleanupTimeout,
+        CancellationToken cancellationToken = default)
     {
         if (!_backgroundServicesStarted)
         {
             return;
         }
 
-        foreach (var package in _loadedPackageMap.Values.Reverse())
-        {
-            foreach (var backgroundService in package.BackgroundServices.Reverse())
-            {
-                try
-                {
-                    await backgroundService.StopAsync(cancellationToken);
-                }
-                catch
-                {
-                    // Best effort package shutdown. Remaining resources are still disposed.
-                }
-            }
-        }
-
         _backgroundServicesStarted = false;
+        var backgroundServices = _loadedPackageMap.Values
+            .Reverse()
+            .SelectMany(package => package.BackgroundServices
+                .Reverse()
+                .Select(service => (package.Descriptor.PackageId, service)))
+            .ToArray();
+        await PackageSessionLifecycle.StopBackgroundServicesAsync(
+            backgroundServices,
+            logger,
+            cleanupTimeout,
+            cancellationToken,
+            TrackLifecycleOperation);
     }
 
-    public async Task DisposeAsync()
+    public Task DisposeAsync()
+        => DisposeAsync(DefaultCleanupTimeout);
+
+    public async Task DisposeAsync(TimeSpan cleanupTimeout, CancellationToken cancellationToken = default)
+    {
+        var cleanup = GetOrStartDisposal();
+        try
+        {
+            await cleanup.WaitAsync(cleanupTimeout, cancellationToken);
+        }
+        catch
+        {
+            if (!cleanup.IsCompleted)
+            {
+                _ = ObserveAsync(cleanup);
+            }
+            throw;
+        }
+    }
+
+    private Task GetOrStartDisposal()
+    {
+        lock (_lifecycleSync)
+        {
+            return _disposalTask ??= Task.Run(DisposeAfterLifecycleOperationsAsync, CancellationToken.None);
+        }
+    }
+
+    private async Task DisposeAfterLifecycleOperationsAsync()
+    {
+        Task[] lifecycleOperations;
+        lock (_lifecycleSync)
+        {
+            lifecycleOperations = _lifecycleOperations.ToArray();
+        }
+
+        await Task.WhenAll(lifecycleOperations.Select(ObserveAsync));
+        await DisposeCoreAsync();
+    }
+
+    private void TrackLifecycleOperation(Task operation)
+    {
+        lock (_lifecycleSync)
+        {
+            _lifecycleOperations.Add(operation);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
     {
         List<Exception>? disposeErrors = null;
 
@@ -350,6 +434,17 @@ internal sealed class ActivePackageSession
         if (serviceProvider is IDisposable disposable)
         {
             disposable.Dispose();
+        }
+    }
+
+    private static async Task ObserveAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch
+        {
         }
     }
 

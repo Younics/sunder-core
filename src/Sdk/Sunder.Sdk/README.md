@@ -5,11 +5,13 @@ settings, encrypted secrets, storage allocation, platform credential integration
 package logs. App activation receives Runtime-backed package capabilities and never creates those
 resources locally.
 
-Package storage keys are opaque, case-sensitive tokens. Missing values are represented by `null`, and
-key lists are stable ordinally sorted snapshots. Package file paths are relative capability paths;
-absolute paths and parent traversal are rejected by Runtime.
+`PackageStorageValidation` defines the shared storage/settings contract: case-sensitive portable ASCII
+keys are limited to 256 characters, string values to 1 MiB of UTF-8, portable `/`-separated relative
+paths to 1024 characters with 255-character segments, and files to 16 MiB. Missing values are represented
+by `null`, and key lists are stable ordinally sorted snapshots. File-name casing follows the host filesystem;
+Runtime contains file-store paths beneath their package root and rejects symbolic-link/reparse-point traversal.
 
-`Sunder.Sdk` contains the public contracts used to build Sunder runtime packages.
+`Sunder.Sdk` contains the public contracts used to build Sunder packages.
 
 Avalonia view/settings contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`.
 
@@ -35,7 +37,7 @@ Stack-contributing packages also install the coordinated Stack contracts package
 dotnet add package Sunder.Sdk.Stacks
 ```
 
-Most runtime packages should also reference `Sunder.Package.Build` so builds generate the Sunder manifest, development output, and distributable archive:
+Most package projects should also reference `Sunder.Package.Build` so builds generate the Sunder manifest, development output, and distributable archive:
 
 ```powershell
 dotnet add package Sunder.Package.Build --private-assets all
@@ -102,7 +104,7 @@ The package version comes from normal MSBuild properties such as `Version`, not 
 
 ## Package Module
 
-Every runtime package exposes one public, non-abstract module with a public parameterless constructor.
+A package may expose one public Runtime module and one public App module, or one class implementing both roles. Every module must be non-abstract and have a public parameterless constructor.
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
@@ -157,7 +159,7 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 - `Secrets`
 - `Logging`
 
-Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, `IPackageSettingsNavigationService` for opening settings, and optional `IPackageDevelopmentSessionControl` for host-local development output.
+Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, and `IPackageSettingsNavigationService` for opening settings.
 
 Use `Settings` for schema-declared user preferences, `Storage.State` for opaque operational state, and `Secrets` for sensitive values. Settings are writable and persisted independently from state. `GetValueAsync` returns a stored setting or its schema default; `GetStoredValueAsync` returns only a stored value. Setting writes reject undeclared keys, secret fields, and values that do not satisfy the schema.
 
@@ -228,7 +230,7 @@ Requests may run concurrently and are cancelled when the caller disconnects, Run
 
 For ordered updates, define `PackageRuntimeStream<TRequest, TEvent>`, implement `IPackageRuntimeStreamHandler<TRequest, TEvent>`, register it with `RegisterRuntimeStream`, and consume it with `IPackageRuntimeClient.SubscribeAsync`. Each subscription is independent, retains its Runtime package activation until the stream completes, and must observe cancellation. The wire stream uses bounded newline-terminated `event`, `completed`, and `error` JSON envelopes. EOF without a terminal envelope and a trailing partial record are transport failures; reconnect and replay semantics remain package-defined.
 
-## Settings And Package Sessions
+## Settings Navigation
 
 Use `IPackageSettingsNavigationService` when a package needs to open global Sunder settings or another package's settings page:
 
@@ -237,23 +239,6 @@ var opened = await settingsNavigation.OpenPackageSettingsAsync(
     "my.company.package",
     cancellationToken: cancellationToken);
 ```
-
-Development loading is an optional capability because a remote Runtime cannot consume an App-local path. Check `IPackageDevelopmentSessionControl.Availability` before enabling development UI and handle its structured outcome:
-
-```csharp
-if (developmentSessions.Availability.IsAvailable)
-{
-    var result = await developmentSessions.LoadDevelopmentPackageAsync(
-        new PackageDevelopmentSessionLoadRequest(devOutputPath, Watch: true),
-        cancellationToken);
-    if (!result.IsSuccess)
-    {
-        ShowMessage(result.Message);
-    }
-}
-```
-
-Development session control may be absent or report an explicit unavailable reason. Unsupported operations return `PackageDevelopmentSessionOperationOutcome.Unsupported`; they do not claim that an arbitrary absolute path can cross the App/Runtime boundary.
 
 ## Background Processes
 
@@ -290,7 +275,7 @@ var providers = extensionCatalog.GetExtensions(MyExtensionPoints.Providers);
 
 Use `GetExtensionContributions` whenever package ownership affects exported dependencies, settings navigation, attribution, or lifecycle decisions. Every contribution has a canonical non-empty owner id; catalogs cannot fall back to ownerless entries.
 
-When a package needs to update open UI or cached capability lists as other packages activate/deactivate, inject `IPackageExtensionCatalog` and cast to `IPackageExtensionCatalogMonitor`. `Changed` provides a revision, lifecycle reason, and extension-point changes including package id and contribution type.
+When a package needs to update open UI or cached capability lists as other packages activate/deactivate, inject `IPackageExtensionCatalog` and cast to `IPackageExtensionCatalogMonitor`. `Changed` provides a revision, active-lifecycle reason, and extension-point additions/removals including package id and contribution type. Subscriber exceptions are isolated by the Host so later subscribers still receive the revision.
 
 Use the change details to refresh only affected state, for example execution-target UI when `sunder.package.agent:execution-targets` changes.
 
@@ -300,7 +285,7 @@ Use the change details to refresh only affected state, for example execution-tar
 
 The host owns the callback listener, redirect path, leases, expiry, duplicate completion, and unload/shutdown cancellation. Package callback handlers must not create listeners. Implement `CancelCallbackAsync` when a provider task or delegate can remain in flight after `StartCallbackAsync` returns. `IPackageAuthHandler` remains the auth-specific status/disconnect surface projected over generic sessions.
 
-Register callback handlers in `ConfigureServices`. Auth-capable packages can register the same implementation as both `IPackageAuthHandler` and `IPackageCallbackHandler`.
+Register generic callback handlers as `IPackageCallbackHandler` in `ConfigureRuntimeServices`. Register an auth implementation as `IPackageAuthHandler`; Runtime also exposes that handler through its reserved `auth` callback route.
 
 ## Theme Resources
 
@@ -367,5 +352,8 @@ sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.
 ## More Documentation
 
 - Package author manual: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
+- Callbacks and auth: https://github.com/Younics/sunder-core/blob/main/docs/package-development/CALLBACKS-AND-AUTH.md
+- Runtime operations: https://github.com/Younics/sunder-core/blob/main/docs/package-development/RUNTIME-OPERATIONS.md
+- Data and logging: https://github.com/Younics/sunder-core/blob/main/docs/package-development/DATA-AND-LOGGING.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
 - Sunder overview: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER.md

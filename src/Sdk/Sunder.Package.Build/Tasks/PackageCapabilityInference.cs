@@ -781,15 +781,6 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
                 capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
                 break;
-            case ("Sunder.Sdk.Abstractions", "IPackageDevelopmentSessionControl"):
-            case ("Sunder.Sdk.Abstractions", "PackageDevelopmentSessionAvailability"):
-            case ("Sunder.Sdk.Abstractions", "PackageDevelopmentSessionLoadRequest"):
-            case ("Sunder.Sdk.Abstractions", "PackageDevelopmentSessionOperationResult"):
-            case ("Sunder.Sdk.Abstractions", "PackageDevelopmentSessionOperationOutcome"):
-            case ("Sunder.Sdk.Abstractions", "PackageDevelopmentSessionStatus"):
-            case ("Sunder.Sdk.Abstractions", "UnavailablePackageDevelopmentSessionControl"):
-                capabilities.Add(SunderSdkCapabilities.DevelopmentPackageSessionsV1);
-                break;
             case ("Sunder.Sdk.Runtime", _):
                 capabilities.Add(SunderSdkCapabilities.RuntimeOperationsV1);
                 break;

@@ -50,8 +50,8 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
     public void AddProbeDirectories(IEnumerable<string> probeDirectories)
         => _core.AddProbeDirectories(probeDirectories);
 
-    public void RemoveProbeDirectories(IEnumerable<string> probeDirectories)
-        => _core.RemoveProbeDirectories(probeDirectories);
+    public bool TryRemoveProbeDirectories(IEnumerable<string> probeDirectories)
+        => _core.TryRemoveProbeDirectories(probeDirectories);
 
     public Assembly? ResolveSharedAssembly(AssemblyName assemblyName)
         => _core.ResolveSharedAssembly(assemblyName);

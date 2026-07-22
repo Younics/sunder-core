@@ -1,5 +1,6 @@
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Settings;
+using Sunder.Sdk.Storage;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
@@ -99,7 +100,7 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
 
     private PackageSettingsField GetField(string key)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        PackageStorageGuards.Key(key, nameof(key));
         var field = Schema?.Sections
             .SelectMany(section => section.Fields)
             .FirstOrDefault(candidate => string.Equals(candidate.Key, key, StringComparison.Ordinal));
@@ -129,6 +130,8 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
             return;
         }
 
+        PackageStorageGuards.Value(effectiveValue, nameof(value));
+
         if (field.Kind == PackageSettingsFieldKind.Boolean && !bool.TryParse(effectiveValue, out _))
         {
             throw new ArgumentException($"Setting '{field.Key}' must be 'true' or 'false'.", nameof(value));
@@ -148,13 +151,15 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
 
     public async Task<byte[]?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
     {
-        var path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
-        if (!File.Exists(path))
+        await using var stream = await OpenReadAsync(relativePath, cancellationToken).ConfigureAwait(false);
+        if (stream is null)
         {
             return null;
         }
 
-        return await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        using var contents = new MemoryStream(stream.CanSeek ? checked((int)stream.Length) : 0);
+        await CopyReadAsync(stream, contents, cancellationToken).ConfigureAwait(false);
+        return contents.ToArray();
     }
 
     public ValueTask<Stream?> OpenReadAsync(
@@ -163,16 +168,41 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
-        Stream? stream = File.Exists(path)
-            ? new FileStream(
+        FileStream stream;
+        try
+        {
+            stream = new FileStream(
                 path,
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read | FileShare.Delete,
                 64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan)
-            : null;
-        return ValueTask.FromResult(stream);
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+        catch (FileNotFoundException)
+        {
+            return ValueTask.FromResult<Stream?>(null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ValueTask.FromResult<Stream?>(null);
+        }
+
+        try
+        {
+            if (!PackageStorageValidation.IsValidFileLength(stream.Length))
+            {
+                throw new InvalidDataException(
+                    $"The package file exceeds the {PackageStorageValidation.MaximumFileBytes} byte limit.");
+            }
+
+            return ValueTask.FromResult<Stream?>(stream);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
     }
 
     public async Task WriteAsync(
@@ -180,6 +210,8 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
         ReadOnlyMemory<byte> contents,
         CancellationToken cancellationToken = default)
     {
+        PackageStorageGuards.RelativePath(relativePath, nameof(relativePath));
+        PackageStorageGuards.FileLength(contents.Length, nameof(contents));
         await ReplaceAsync(
             relativePath,
             (stream, token) => stream.WriteAsync(contents, token).AsTask(),
@@ -192,14 +224,22 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(contents);
+        PackageStorageGuards.RelativePath(relativePath, nameof(relativePath));
         if (!contents.CanRead)
         {
             throw new ArgumentException("Package file content stream must be readable.", nameof(contents));
         }
+        if (contents.CanSeek
+            && contents.Length - contents.Position > PackageStorageValidation.MaximumFileBytes)
+        {
+            throw new ArgumentException(
+                $"Package files cannot exceed {PackageStorageValidation.MaximumFileBytes} bytes.",
+                nameof(contents));
+        }
 
         await ReplaceAsync(
             relativePath,
-            (stream, token) => contents.CopyToAsync(stream, token),
+            (stream, token) => CopyWriteAsync(contents, stream, token),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -212,6 +252,57 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
 
     internal string ResolvePath(string relativePath) => PackageWorkspacePath.Resolve(_rootPath, relativePath);
 
+    private static async Task CopyReadAsync(
+        Stream source,
+        Stream destination,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[64 * 1024];
+        long totalBytes = 0;
+        while (true)
+        {
+            var bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (bytesRead == 0)
+            {
+                return;
+            }
+            if (totalBytes + bytesRead > PackageStorageValidation.MaximumFileBytes)
+            {
+                throw new InvalidDataException(
+                    $"The package file exceeds the {PackageStorageValidation.MaximumFileBytes} byte limit.");
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
+            totalBytes += bytesRead;
+        }
+    }
+
+    private static async Task CopyWriteAsync(
+        Stream source,
+        Stream destination,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[64 * 1024];
+        long totalBytes = 0;
+        while (true)
+        {
+            var bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (bytesRead == 0)
+            {
+                return;
+            }
+            if (totalBytes + bytesRead > PackageStorageValidation.MaximumFileBytes)
+            {
+                throw new ArgumentException(
+                    $"Package files cannot exceed {PackageStorageValidation.MaximumFileBytes} bytes.",
+                    "contents");
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
+            totalBytes += bytesRead;
+        }
+    }
+
     private async Task ReplaceAsync(
         string relativePath,
         Func<FileStream, CancellationToken, Task> writeAsync,
@@ -221,9 +312,8 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
         var path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
         var directory = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(directory);
-        var temporaryPath = Path.Combine(
-            directory,
-            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
+        var temporaryPath = Path.Combine(directory, $".sunder-{Guid.NewGuid():N}.tmp");
         try
         {
             await using (var stream = new FileStream(
@@ -241,6 +331,7 @@ internal sealed class LocalPackageFileStore(string rootPath) : IPackageFileStore
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            path = PackageWorkspacePath.Resolve(_rootPath, relativePath);
             File.Move(temporaryPath, path, overwrite: true);
         }
         finally
@@ -272,27 +363,19 @@ internal static class PackageWorkspacePath
 {
     internal static string Resolve(string rootPath, string relativePath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
-        if (Path.IsPathRooted(relativePath))
-        {
-            throw new ArgumentException("Package workspace paths must be relative.", nameof(relativePath));
-        }
-
-        var segments = relativePath.Split(
-            ['/', '\\'],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
-        {
-            throw new ArgumentException("Package workspace paths must not be empty or contain traversal segments.", nameof(relativePath));
-        }
+        PackageStorageGuards.RelativePath(relativePath, nameof(relativePath));
+        var segments = relativePath.Split('/');
 
         var canonicalRoot = Path.GetFullPath(rootPath);
-        EnsureNoReparsePoints(canonicalRoot, segments);
+        EnsureNoReparsePoints(canonicalRoot, segments, nameof(relativePath));
         var fullPath = Path.GetFullPath(Path.Combine([canonicalRoot, .. segments]));
         var rootPrefix = canonicalRoot.EndsWith(Path.DirectorySeparatorChar)
             ? canonicalRoot
             : canonicalRoot + Path.DirectorySeparatorChar;
-        if (!fullPath.StartsWith(rootPrefix, StringComparison.Ordinal))
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!fullPath.StartsWith(rootPrefix, pathComparison))
         {
             throw new ArgumentException("Package workspace paths must remain inside the workspace.", nameof(relativePath));
         }
@@ -300,18 +383,21 @@ internal static class PackageWorkspacePath
         return fullPath;
     }
 
-    private static void EnsureNoReparsePoints(string rootPath, IReadOnlyList<string> segments)
+    private static void EnsureNoReparsePoints(
+        string rootPath,
+        IReadOnlyList<string> segments,
+        string parameterName)
     {
         var current = rootPath;
-        EnsureNotReparsePoint(current);
+        EnsureNotReparsePoint(current, parameterName);
         foreach (var segment in segments)
         {
             current = Path.Combine(current, segment);
-            EnsureNotReparsePoint(current);
+            EnsureNotReparsePoint(current, parameterName);
         }
     }
 
-    private static void EnsureNotReparsePoint(string path)
+    private static void EnsureNotReparsePoint(string path, string parameterName)
     {
         try
         {
@@ -319,7 +405,9 @@ internal static class PackageWorkspacePath
                 || new DirectoryInfo(path).LinkTarget is not null
                 || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             {
-                throw new ArgumentException("Package workspace paths must not traverse symbolic links or reparse points.");
+                throw new ArgumentException(
+                    "Package workspace paths must not traverse symbolic links or reparse points.",
+                    parameterName);
             }
         }
         catch (FileNotFoundException)

@@ -83,13 +83,11 @@ public sealed class ShellSession : IAsyncDisposable
 
     internal Task StartRuntimeSubscriptionAsync(
         RuntimePackageSnapshot initialSnapshot,
-        bool watchDevPackages,
         CancellationToken cancellationToken
     ) =>
         RuntimeEventSubscription?.StartAsync(
             WindowLauncher,
             initialSnapshot,
-            watchDevPackages,
             cancellationToken
         ) ?? Task.CompletedTask;
 

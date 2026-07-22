@@ -77,9 +77,35 @@ public sealed class RuntimePackageExtensionCatalogTests
 
         var revision = Assert.Single(revisions);
         Assert.Equal(1, revision.Revision);
+        Assert.Equal(PackageExtensionCatalogChangeReason.PackageActivated, revision.Reason);
         Assert.Equal(2, revision.Changes.Count);
+        Assert.All(revision.Changes, change =>
+        {
+            Assert.Equal("test.package", change.PackageId);
+            Assert.Equal(TestPoint.Id, change.ExtensionPointId);
+            Assert.Equal(PackageExtensionChangeKind.Added, change.Kind);
+            Assert.Equal(typeof(TestContribution), change.ContributionType);
+        });
+        Assert.True(revision.IncludesExtensionPoint("TEST:CONTRIBUTION"));
         var mutableView = Assert.IsAssignableFrom<IList<PackageExtensionChange>>(revision.Changes);
         Assert.Throws<NotSupportedException>(() => mutableView[0] = revision.Changes[1]);
+    }
+
+    [Fact]
+    public void Changed_IsolatesSubscriberFailureAndNotifiesRemainingSubscribers()
+    {
+        var catalog = new RuntimePackageExtensionCatalog();
+        PackageExtensionCatalogChangedEventArgs? observed = null;
+        catalog.Changed += (_, _) => throw new InvalidOperationException("Subscriber failed.");
+        catalog.Changed += (_, change) => observed = change;
+
+        var exception = Record.Exception(() =>
+            catalog.Add("test.package", TestPoint, new TestContribution("registered")));
+
+        Assert.Null(exception);
+        Assert.NotNull(observed);
+        Assert.Equal(1, observed.Revision);
+        Assert.Single(catalog.GetExtensions(TestPoint));
     }
 
     private interface ITestContribution

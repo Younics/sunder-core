@@ -46,8 +46,6 @@ public interface IRuntimePackageSessionClient : IRuntimeClient
 {
     Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default);
-    Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken cancellationToken = default);
-    Task ReportPackageFaultAsync(string packageId, PackageFailureOrigin origin, string message, CancellationToken cancellationToken = default);
 }
 
 public interface IRuntimePackageUiClient : IRuntimeClient

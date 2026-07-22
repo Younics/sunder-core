@@ -5,10 +5,8 @@ using Sunder.Runtime.Contracts;
 namespace Sunder.App.Composition;
 
 public sealed class PackageViewHostServiceFactory(
-    PackageRuntimeFaultReporter packageFaultReporter,
     AppPackageShellViewService shellViewService,
     AppPackageSettingsNavigationService settingsNavigationService,
-    AppPackageSessionService packageSessionService,
     RuntimeClientTransport runtimeTransport,
     NotificationCenterService notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue,
@@ -22,10 +20,8 @@ public sealed class PackageViewHostServiceFactory(
         => await PackageViewHostService.CreateForPackagesWithResourceRegistryAsync(
             activePackages,
             packageSources,
-            packageFaultReporter,
             shellViewService,
             settingsNavigationService,
-            packageSessionService,
             notificationCenter,
             backgroundProcessQueue,
             packageResourceAssemblyRegistry,

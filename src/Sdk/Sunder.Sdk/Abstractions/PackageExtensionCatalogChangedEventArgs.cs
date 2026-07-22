@@ -31,20 +31,12 @@ public enum PackageExtensionCatalogChangeReason
     PackageActivated = 0,
     /// <summary>An active package was deactivated.</summary>
     PackageDeactivated = 1,
-    /// <summary>A package activation was replaced from the same source.</summary>
-    PackageReloaded = 2,
-    /// <summary>A package fault removed or replaced contributions.</summary>
-    PackageFaulted = 3,
-    /// <summary>A package was added to local installed state.</summary>
-    PackageInstalled = 4,
+    /// <summary>A package fault removed contributions.</summary>
+    PackageFaulted = 2,
     /// <summary>A package was removed from local installed state.</summary>
-    PackageUninstalled = 5,
-    /// <summary>An installed package was enabled.</summary>
-    PackageEnabled = 6,
+    PackageUninstalled = 3,
     /// <summary>An installed package was disabled.</summary>
-    PackageDisabled = 7,
-    /// <summary>Installed package content was replaced by another version.</summary>
-    PackageUpdated = 8,
+    PackageDisabled = 4,
 }
 
 /// <summary>Describes how an extension contribution changed.</summary>
@@ -55,20 +47,16 @@ public enum PackageExtensionChangeKind
     Added = 0,
     /// <summary>A contribution became unavailable.</summary>
     Removed = 1,
-    /// <summary>An existing contribution was replaced without an observable empty interval.</summary>
-    Replaced = 2,
 }
 
 /// <summary>Describes one contribution-level catalog mutation.</summary>
 /// <param name="PackageId">Package that owns the contribution.</param>
 /// <param name="ExtensionPointId">Stable affected extension-point id.</param>
 /// <param name="Kind">Mutation kind.</param>
-/// <param name="ContributionType">Runtime contribution type when available; <see langword="null"/> for metadata-only changes.</param>
-/// <param name="PackageVersion">Owner version when available; <see langword="null"/> before metadata resolution.</param>
+/// <param name="ContributionType">Runtime contribution type.</param>
 [SunderSdkCapability(SunderSdkCapabilities.ExtensionChangesV1)]
 public sealed record PackageExtensionChange(
     string PackageId,
     string ExtensionPointId,
     PackageExtensionChangeKind Kind,
-    Type? ContributionType = null,
-    Version? PackageVersion = null);
+    Type ContributionType);

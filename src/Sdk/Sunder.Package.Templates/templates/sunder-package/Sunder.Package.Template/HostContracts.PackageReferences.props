@@ -1,6 +1,6 @@
 <Project>
   <ItemGroup>
-    <PackageReference Include="Sunder.Host.Package.Contracts"
-                      Version="1.0.0-HOST-CONTRACTS" />
+    <PackageReference Include="SUNDER_HOST_CONTRACTS_PACKAGE_ID_XML"
+                      Version="SUNDER_HOST_CONTRACTS_VERSION_RANGE_XML" />
   </ItemGroup>
 </Project>

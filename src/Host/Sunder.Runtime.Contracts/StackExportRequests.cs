@@ -18,12 +18,9 @@ public sealed record RuntimeStackExportItemDescriptor(
     string DisplayName,
     string Kind,
     bool DefaultSelected,
-    IReadOnlyList<string> Sensitivities,
     string? Description = null,
     IReadOnlyList<RuntimeStackExportItemDetail>? Details = null)
 {
-    public IReadOnlyList<string> Sensitivities { get; }
-        = RuntimeContractCollections.Freeze(Sensitivities);
     public IReadOnlyList<RuntimeStackExportItemDetail>? Details { get; }
         = RuntimeContractCollections.FreezeNullable(Details);
 }

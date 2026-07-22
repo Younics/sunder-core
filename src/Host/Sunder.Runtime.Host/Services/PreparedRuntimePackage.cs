@@ -12,4 +12,4 @@ internal sealed record PreparedRuntimePackage(
     PackageHostRoles HostRoles,
     RuntimePackageActivationState Activation,
     string EntryAssemblyPath,
-    IReadOnlyList<string> Dependencies);
+    IReadOnlyList<PackageDependencyDescriptor> Dependencies);

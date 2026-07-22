@@ -67,6 +67,50 @@ public sealed class RegistryContractGoldenTests
             typeof(RegistryResolveInstallPlanResponse)
         },
         {
+            "requirements.json",
+            new RegistryResolvePackageChangesRequest(
+                [new RegistryPackageChangeRequest(
+                    "sunder.package.sample",
+                    Version: null,
+                    Tag: "preview",
+                    VersionRange: ">=2.3.0",
+                    Required: false)],
+                [new RegistryInstalledPackageState(
+                    "sunder.package.base",
+                    "1.5.0",
+                    [new RegistryPackageDependency("sunder.package.shared", ">=1.0.0")])],
+                IncludePrerelease: true),
+            typeof(RegistryResolvePackageChangesRequest)
+        },
+        {
+            "requirement-conflict.json",
+            new RegistryResolveInstallPlanResponse(
+                false,
+                [],
+                [],
+                [],
+                [new RegistryPackageInstallPlanConflict(
+                    "sunder.package.sample",
+                    "1.0.0",
+                    ">=2.3.0",
+                    null,
+                    RegistryV1ErrorCodes.PackageRequirementUnsatisfied,
+                    "Selected package version does not satisfy the Stack requirement.")]),
+            typeof(RegistryResolveInstallPlanResponse)
+        },
+        {
+            "stack-requirement.json",
+            new RegistryStackPackageRequirement(
+                "sunder.package.sample",
+                "preview",
+                "2.4.0",
+                "2.3.0",
+                false,
+                "Sample",
+                "/api/v1/packages/sunder.package.sample/versions/2.4.0/icon"),
+            typeof(RegistryStackPackageRequirement)
+        },
+        {
             "pagination.json",
             new RegistryPackageSearchResult(
                 [new RegistryPackageSummary(
@@ -99,6 +143,12 @@ public sealed class RegistryContractGoldenTests
         },
     };
 
+    public static TheoryData<string, Type> NMinusOneCases => new()
+    {
+        { "requirements.json", typeof(RegistryResolvePackageChangesRequest) },
+        { "requirement-conflict.json", typeof(RegistryResolveInstallPlanResponse) },
+    };
+
     [Theory]
     [MemberData(nameof(Cases))]
     public void V1Payload_MatchesGoldenJson(string fixtureName, object payload, Type payloadType)
@@ -109,5 +159,26 @@ public sealed class RegistryContractGoldenTests
 
         Assert.Equal(expected, actual);
         Assert.NotNull(JsonSerializer.Deserialize(expected, payloadType, JsonOptions));
+    }
+
+    [Theory]
+    [MemberData(nameof(NMinusOneCases))]
+    public void V1Payload_DeserializesNMinusOneJson(string fixtureName, Type payloadType)
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "N-1", fixtureName);
+        var payload = JsonSerializer.Deserialize(File.ReadAllText(fixturePath), payloadType, JsonOptions);
+
+        Assert.NotNull(payload);
+        if (payload is RegistryResolvePackageChangesRequest request)
+        {
+            var package = Assert.Single(request.Packages);
+            Assert.Null(package.VersionRange);
+            Assert.True(package.Required);
+        }
+        else
+        {
+            var response = Assert.IsType<RegistryResolveInstallPlanResponse>(payload);
+            Assert.Equal(RegistryV1ErrorCodes.Conflict, Assert.Single(response.Conflicts).ErrorCode);
+        }
     }
 }

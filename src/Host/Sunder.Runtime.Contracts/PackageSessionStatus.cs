@@ -9,7 +9,4 @@ public sealed record PackageSessionStatus(
     bool WatchEnabled,
     bool OverridesInstalledPackage,
     PackageReadinessState? Readiness,
-    string? ErrorMessage)
-{
-    public long GenerationId { get; init; }
-}
+    string? ErrorMessage);

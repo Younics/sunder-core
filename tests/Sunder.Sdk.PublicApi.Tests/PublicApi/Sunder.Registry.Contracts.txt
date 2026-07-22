@@ -118,12 +118,14 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageArtifact : System.IEq
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryPackageChangeRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageChangeRequest>
-  method .ctor(System.String PackageId, System.String? Version, System.String? Tag = null)
+  method .ctor(System.String PackageId, System.String? Version, System.String? Tag = null, System.String? VersionRange = null, System.Boolean Required = true)
   property System.String PackageId { get; init; }
+  property System.Boolean Required { get; init; }
   property System.String? Tag { get; init; }
   property System.String? Version { get; init; }
+  property System.String? VersionRange { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageChangeRequest <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag)
+  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.String? VersionRange, out System.Boolean Required)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageChangeRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -164,7 +166,7 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageDependent : System.IE
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryPackageDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDetails>
-  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null, Sunder.Registry.Contracts.RegistryPackageStats? Stats = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers = null)
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null, Sunder.Registry.Contracts.RegistryPackageStats? Stats = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers = null, System.Int32? TotalVersionCount = null, System.Int32? TotalDependentCount = null)
   property System.DateTimeOffset CreatedAtUtc { get; init; }
   property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents { get; init; }
@@ -176,10 +178,12 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageDetails : System.IEqu
   property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { get; init; }
   property Sunder.Registry.Contracts.RegistryPackageStats? Stats { get; init; }
   property System.String? Summary { get; init; }
+  property System.Int32? TotalDependentCount { get; init; }
+  property System.Int32? TotalVersionCount { get; init; }
   property System.DateTimeOffset UpdatedAtUtc { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageDetails <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile, out Sunder.Registry.Contracts.RegistryPackageStats? Stats, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers)
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile, out Sunder.Registry.Contracts.RegistryPackageStats? Stats, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents, out Sunder.Registry.Contracts.RegistryUserAttribution? Creator, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers, out System.Int32? TotalVersionCount, out System.Int32? TotalDependentCount)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDetails? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -216,14 +220,15 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageDownloadPoint : Syste
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict>
-  method .ctor(System.String PackageId, System.String? CurrentVersion, System.String? RequestedVersionRange, System.String? RequiredByPackageId, System.String Message)
+  method .ctor(System.String PackageId, System.String? CurrentVersion, System.String? RequestedVersionRange, System.String? RequiredByPackageId, System.String ErrorCode = "registry.v1.resource.conflict", System.String Message = "")
   property System.String? CurrentVersion { get; init; }
+  property System.String ErrorCode { get; init; }
   property System.String Message { get; init; }
   property System.String PackageId { get; init; }
   property System.String? RequestedVersionRange { get; init; }
   property System.String? RequiredByPackageId { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? CurrentVersion, out System.String? RequestedVersionRange, out System.String? RequiredByPackageId, out System.String Message)
+  method System.Void Deconstruct(out System.String PackageId, out System.String? CurrentVersion, out System.String? RequestedVersionRange, out System.String? RequiredByPackageId, out System.String ErrorCode, out System.String Message)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -264,6 +269,7 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageMaintainerOperationRe
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageMaintainerOperationResponse <Clone>$()
   method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
@@ -286,6 +292,7 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageManagementOperationRe
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageManagementOperationResponse <Clone>$()
   method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
@@ -331,6 +338,7 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageProfileOperationRespo
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageProfileOperationResponse <Clone>$()
@@ -368,6 +376,7 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageStarResponse : System
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property Sunder.Registry.Contracts.RegistryPackageStats? Stats { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageStarResponse <Clone>$()
@@ -519,6 +528,7 @@ type sealed class Sunder.Registry.Contracts.RegistryPublishStackResponse : Syste
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property System.String? StackId { get; init; }
   property System.Boolean Success { get; init; }
   property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; init; }
@@ -529,16 +539,18 @@ type sealed class Sunder.Registry.Contracts.RegistryPublishStackResponse : Syste
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest>
-  method .ctor(System.String PackageId, System.String? Version, System.String? Tag, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
+  method .ctor(System.String PackageId, System.String? Version, System.String? Tag, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false, System.String? VersionRange = null, System.Boolean Required = true)
   property System.Boolean AllowDowngrade { get; init; }
   property System.Boolean IncludePrerelease { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages { get; init; }
   property System.String PackageId { get; init; }
   property System.Boolean Reinstall { get; init; }
+  property System.Boolean Required { get; init; }
   property System.String? Tag { get; init; }
   property System.String? Version { get; init; }
+  property System.String? VersionRange { get; init; }
   method Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
+  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall, out System.String? VersionRange, out System.Boolean Required)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -703,6 +715,7 @@ type sealed class Sunder.Registry.Contracts.RegistryStackMaintainerOperationResp
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryStackMaintainerOperationResponse <Clone>$()
   method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
@@ -725,6 +738,7 @@ type sealed class Sunder.Registry.Contracts.RegistryStackManagementOperationResp
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryStackManagementOperationResponse <Clone>$()
   method System.Void Deconstruct(out System.Boolean Success, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
@@ -785,6 +799,7 @@ type sealed class Sunder.Registry.Contracts.RegistryStackProfileOperationRespons
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property Sunder.Registry.Contracts.RegistryStackProfile? Profile { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryStackProfileOperationResponse <Clone>$()
@@ -824,6 +839,7 @@ type sealed class Sunder.Registry.Contracts.RegistryStackStarResponse : System.I
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property System.Boolean Forbidden { get; init; }
   property System.String? Message { get; init; }
+  property System.Boolean NotFound { get; init; }
   property Sunder.Registry.Contracts.RegistryStackStats? Stats { get; init; }
   property System.Boolean Success { get; init; }
   method Sunder.Registry.Contracts.RegistryStackStarResponse <Clone>$()
@@ -873,13 +889,10 @@ type sealed class Sunder.Registry.Contracts.RegistryStackViewResponse : System.I
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest>
-  method .ctor(System.String? Username, System.String? DisplayName, System.String? Email, System.String? AvatarUrl)
-  property System.String? AvatarUrl { get; init; }
-  property System.String? DisplayName { get; init; }
-  property System.String? Email { get; init; }
+  method .ctor(System.String? Username)
   property System.String? Username { get; init; }
   method Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest <Clone>$()
-  method System.Void Deconstruct(out System.String? Username, out System.String? DisplayName, out System.String? Email, out System.String? AvatarUrl)
+  method System.Void Deconstruct(out System.String? Username)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -928,7 +941,7 @@ type sealed class Sunder.Registry.Contracts.RegistryUserAttribution : System.IEq
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryUserPackageDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryUserPackageDetails>
-  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.String Role, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null)
+  method .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.String Role, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null, System.Int32? TotalVersionCount = null)
   property System.DateTimeOffset CreatedAtUtc { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags { get; init; }
   property System.String? IconUrl { get; init; }
@@ -939,10 +952,11 @@ type sealed class Sunder.Registry.Contracts.RegistryUserPackageDetails : System.
   property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { get; init; }
   property System.String Role { get; init; }
   property System.String? Summary { get; init; }
+  property System.Int32? TotalVersionCount { get; init; }
   property System.DateTimeOffset UpdatedAtUtc { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions { get; init; }
   method Sunder.Registry.Contracts.RegistryUserPackageDetails <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.String Role, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile)
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String? Summary, out System.String? LatestVersion, out System.String? IconUrl, out System.String Role, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDistTag> DistTags, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageMaintainer> Maintainers, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out Sunder.Registry.Contracts.RegistryPackageProfile? Profile, out System.Int32? TotalVersionCount)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryUserPackageDetails? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -989,5 +1003,9 @@ type sealed class Sunder.Registry.Contracts.RegistryV1ErrorCodes
   field static System.String Internal = "registry.v1.internal"
   field static System.String InvalidRequest = "registry.v1.request.invalid"
   field static System.String NotFound = "registry.v1.resource.not_found"
+  field static System.String PackageRequirementUnavailable = "registry.v1.package.requirement_unavailable"
+  field static System.String PackageRequirementUnsatisfied = "registry.v1.package.requirement_unsatisfied"
   field static System.String PackageVersionExists = "registry.v1.package.version_exists"
+  field static System.String RateLimited = "registry.v1.request.rate_limited"
+  field static System.String RequestTooLarge = "registry.v1.request.too_large"
   field static System.String Unauthorized = "registry.v1.auth.unauthorized"

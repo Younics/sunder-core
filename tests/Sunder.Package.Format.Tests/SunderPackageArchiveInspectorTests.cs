@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Sunder.Package.Format;
 using Xunit;
 
@@ -262,6 +263,34 @@ public sealed class SunderPackageArchiveInspectorTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValidateExtractedPackageAsync_WhenContentIndexPathIsMissingOrNull_ReturnsRequiredError(
+        bool useNull)
+    {
+        var root = CreateTempDirectory();
+        var staging = Path.Combine(root, "staging");
+        SunderPackageArchiveInspector.ExtractArchive(CreatePackageArchive(root, "test.package", "1.0.0"), staging);
+        var indexPath = Path.Combine(staging, "manifest", "content-index.json");
+        var index = JsonNode.Parse(await File.ReadAllTextAsync(indexPath))!.AsObject();
+        var entry = index["files"]![0]!.AsObject();
+        if (useNull)
+        {
+            entry["path"] = null;
+        }
+        else
+        {
+            entry.Remove("path");
+        }
+        await File.WriteAllTextAsync(indexPath, index.ToJsonString());
+
+        var result = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(staging);
+
+        Assert.False(result.Success);
+        Assert.Contains("Package content-index path is required.", result.Errors);
+    }
+
+    [Theory]
     [InlineData("unknownMember")]
     [InlineData("ManifestVersion")]
     public async Task ValidateExtractedPackageAsync_WhenSchemaIsOpenOrWrongCase_ReturnsParseError(string propertyName)
@@ -359,7 +388,7 @@ public sealed class SunderPackageArchiveInspectorTests
         }));
 
         var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "lib", "Test.Package.dll");
-        File.Copy(typeof(SunderPackageArchiveInspectorTests).Assembly.Location, entryAssemblyPath);
+        File.Copy(typeof(SunderPackageArchiveInspector).Assembly.Location, entryAssemblyPath);
         if (includeNestedContentIndex)
         {
             Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "assets"));

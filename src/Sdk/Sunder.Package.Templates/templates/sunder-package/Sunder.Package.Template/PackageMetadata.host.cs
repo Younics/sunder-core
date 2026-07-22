@@ -1,10 +1,10 @@
 using Sunder.Sdk.Packaging;
 
 [assembly: SunderPackage(
-    Id = "sunder.package.template",
-    Name = "Sunder Package Template",
+    Id = "SUNDER_PACKAGE_ID_CSHARP",
+    Name = "SUNDER_PACKAGE_NAME_CSHARP",
     Summary = "Adds a custom Sunder package extension.",
     Icon = "assets/icon.png"
 )]
 
-[assembly: SunderPackageDependency(PackageId = "sunder.host.package", VersionRange = ">=1.0.0 <2.0.0")]
+[assembly: SunderPackageDependency(PackageId = "SUNDER_HOST_PACKAGE_ID_CSHARP", VersionRange = "SUNDER_HOST_PACKAGE_VERSION_RANGE_CSHARP")]

@@ -140,10 +140,7 @@ internal sealed partial class PackageSessionLifecycleService
             overlay?.Watch ?? false,
             overlay is not null && installed is not null,
             current?.Readiness,
-            current?.LastError)
-        {
-            GenerationId = _sessions.Generation,
-        };
+            current?.LastError);
     }
 
     public async Task<PackageLifecycleStageResult> StageAsync(
@@ -267,7 +264,7 @@ internal sealed partial class PackageSessionLifecycleService
         try
         {
             var publication = await _publisher.BeginPublishAsync(stage.Candidate, operationToken);
-            var committedPublication = await _publisher.CommitAsync(publication);
+            var committedPublication = await _publisher.CommitAsync(publication, operationToken);
             var warnings = stage.Candidate.Warnings.Concat(committedPublication.CleanupWarnings).ToArray();
             var committed = _sessions.GetSnapshot();
             var result = new PackageLifecycleOperationResult(

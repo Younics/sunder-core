@@ -117,11 +117,105 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             Assert.Contains(snapshot.Entries, entry => entry.Message == $"entry-{PackageLogStreamService.MaxInitialReplayFiles + 1}");
 
             await File.AppendAllTextAsync(oldestPath!, $"level=info category=test msg=entry-0-new{Environment.NewLine}");
-            service.ProcessFileForTest(oldestPath!);
+            await WaitUntilAsync(() =>
+                service.GetSnapshot(limit: 1000).Entries.Any(entry => entry.Message == "entry-0-new"));
             var updated = service.GetSnapshot(limit: 1000);
 
             Assert.DoesNotContain(updated.Entries, entry => entry.Message == "entry-0");
             Assert.Contains(updated.Entries, entry => entry.Message == "entry-0-new");
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task PackageLogs_LimitedReplayUsesContinuationCursorWithoutSkippingEntries()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var logs = Path.Combine(root, "test.package", "logs");
+            Directory.CreateDirectory(logs);
+            await File.WriteAllLinesAsync(
+                Path.Combine(logs, "runtime.log"),
+                Enumerable.Range(0, 1200).Select(index => $"level=info category=test msg=entry-{index}"));
+            await using var service = new PackageLogStreamService(root);
+            service.Start();
+
+            var first = service.GetSnapshot(limit: 500);
+            var second = service.GetSnapshot(first.SequenceId, limit: 500);
+            var third = service.GetSnapshot(second.SequenceId, limit: 500);
+
+            Assert.Equal(1, first.Entries[0].SequenceId);
+            Assert.Equal(500, first.SequenceId);
+            Assert.Equal(501, second.Entries[0].SequenceId);
+            Assert.Equal(1000, second.SequenceId);
+            Assert.Equal(1001, third.Entries[0].SequenceId);
+            Assert.Equal(1200, third.SequenceId);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task PackageLogs_SingleLargeAppendContinuesPastOneMiBReadBudget()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var logs = Path.Combine(root, "test.package", "logs");
+            Directory.CreateDirectory(logs);
+            var path = Path.Combine(logs, "runtime.log");
+            await File.WriteAllTextAsync(path, string.Empty);
+            await using var service = new PackageLogStreamService(root);
+            service.Start();
+            var payload = new string('x', 1024);
+            var content = string.Join(
+                Environment.NewLine,
+                Enumerable.Range(0, 1100)
+                    .Select(index => $"level=info category=test msg=entry-{index}-{payload}"));
+            await File.AppendAllTextAsync(
+                path,
+                content + Environment.NewLine + "level=info category=test msg=continuation-marker" + Environment.NewLine);
+
+            await WaitUntilAsync(() =>
+            {
+                var replay = service.GetSnapshot(limit: 1000);
+                return service.GetSnapshot(replay.SequenceId, limit: 1000).Entries
+                    .Any(entry => entry.Message == "continuation-marker");
+            });
+
+            var first = service.GetSnapshot(limit: 1000);
+            Assert.Contains(
+                service.GetSnapshot(first.SequenceId, limit: 1000).Entries,
+                entry => entry.Message == "continuation-marker");
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task PackageLogs_WatcherObservesFileCreatedAfterReplaySetup()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            await using var service = new PackageLogStreamService(root);
+            service.Start();
+            var logs = Path.Combine(root, "test.package", "logs");
+            Directory.CreateDirectory(logs);
+            await File.WriteAllTextAsync(
+                Path.Combine(logs, "runtime.log"),
+                $"level=info category=test msg=watcher-marker{Environment.NewLine}");
+
+            await WaitUntilAsync(() =>
+                service.GetSnapshot(limit: 10).Entries.Any(entry => entry.Message == "watcher-marker"));
         }
         finally
         {
@@ -147,21 +241,32 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     public async Task PackageLogs_SlowClientIsDisconnectedAtBoundedCapacity()
     {
         var root = CreateTempDirectory();
-        await using var service = new PackageLogStreamService(root);
-        service.Start();
-        await using var subscription = service.Subscribe(0);
-        for (var index = 0; index < PackageLogStreamService.SubscriberCapacity + 10; index++)
+        try
         {
-            service.ProcessLineForTest("test.package", $"level=info category=test msg=entry-{index}");
-        }
+            var logs = Path.Combine(root, "test.package", "logs");
+            Directory.CreateDirectory(logs);
+            var path = Path.Combine(logs, "runtime.log");
+            await File.WriteAllTextAsync(path, string.Empty);
+            await using var service = new PackageLogStreamService(root);
+            service.Start();
+            await using var subscription = service.Subscribe(0);
+            var entryCount = PackageLogStreamService.SubscriberCapacity + 10;
+            await File.AppendAllLinesAsync(
+                path,
+                Enumerable.Range(0, entryCount).Select(index => $"level=info category=test msg=entry-{index}"));
+            await WaitUntilAsync(() => service.GetSnapshot(limit: 1000).Entries.Count == entryCount);
 
-        await Assert.ThrowsAsync<SlowRuntimeStreamConsumerException>(async () =>
-        {
-            await foreach (var _ in subscription.Reader.ReadAllAsync())
+            await Assert.ThrowsAsync<SlowRuntimeStreamConsumerException>(async () =>
             {
-            }
-        });
-        TryDeleteDirectory(root);
+                await foreach (var _ in subscription.Reader.ReadAllAsync())
+                {
+                }
+            });
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Fact]
@@ -188,7 +293,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
 
         for (var index = 0; index < 20; index++)
         {
-            watcher.NotifyChangedForTest("test.package");
+            await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), index.ToString());
         }
 
         await WaitUntilAsync(() => Volatile.Read(ref commitCount) == 1);
@@ -216,7 +321,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
 
         await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
         await watcher.SynchronizeAsync([]);
-        watcher.NotifyChangedForTest("test.package");
+        await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "unregistered");
         await Task.Delay(100);
         Assert.DoesNotContain(
             events.GetSnapshot().Events,
@@ -247,11 +352,10 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             Directory.Move(folder, old);
             CreateDevPackageFolder(folder);
             TryDeleteDirectory(old);
-            watcher.NotifyParentReplacementForTest("test.package");
         }
 
-        watcher.NotifyChangedForTest("test.package");
         await WaitUntilAsync(() => Volatile.Read(ref commitCount) >= 1);
+        await Task.Delay(250);
         var afterStorm = commitCount;
         await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "rebound");
         await WaitUntilAsync(() => Volatile.Read(ref commitCount) > afterStorm);
@@ -269,7 +373,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             commit: (_, _) => Task.FromResult(CreateReloadResult(success: false, "stage is stale because the session generation changed")));
         await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
 
-        watcher.NotifyChangedForTest("test.package");
+        await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "stale");
         await WaitUntilAsync(() => events.GetSnapshot().Events.Any(item => item.Kind == RuntimeEventKind.DevReloadCompleted));
 
         var result = events.GetSnapshot().Events.Last(item => item.Kind == RuntimeEventKind.DevReloadCompleted);

@@ -50,6 +50,26 @@ public sealed class PackageLoadPlannerTests
     }
 
     [Fact]
+    public void ResolveLoadOrder_ExcludesPackageWhoseDependencyVersionIsOutsideAuthoredRange()
+    {
+        var errors = new List<string>();
+        var planner = new PackageLoadPlanner();
+
+        var ordered = planner.ResolveLoadOrder(
+            [
+                CreatePackage("package.app", [new PackageDependencyDescriptor("package.core", ">=1.0.0 <2.0.0")]),
+                CreatePackage("package.core", version: "2.0.0"),
+            ],
+            errors);
+
+        Assert.Equal(["package.core"], ordered.Select(package => package.PackageId).ToArray());
+        Assert.Contains(errors, error =>
+            error.Contains("package.app", StringComparison.Ordinal)
+            && error.Contains(">=1.0.0 <2.0.0", StringComparison.Ordinal)
+            && error.Contains("2.0.0", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ResolveLoadOrder_ExcludesDependencyCycles()
     {
         var errors = new List<string>();
@@ -63,16 +83,30 @@ public sealed class PackageLoadPlannerTests
         Assert.Contains(errors, error => error.Contains("Dependency cycle detected", StringComparison.Ordinal));
     }
 
-    private static PreparedRuntimePackage CreatePackage(string packageId, IReadOnlyList<string>? dependencies = null)
+    private static PreparedRuntimePackage CreatePackage(
+        string packageId,
+        IReadOnlyList<string>? dependencyIds = null,
+        string version = "1.0.0")
+        => CreatePackage(
+            packageId,
+            (dependencyIds ?? [])
+                .Select(dependencyId => new PackageDependencyDescriptor(dependencyId, ">=0.0.0-0"))
+                .ToArray(),
+            version);
+
+    private static PreparedRuntimePackage CreatePackage(
+        string packageId,
+        IReadOnlyList<PackageDependencyDescriptor> dependencies,
+        string version = "1.0.0")
         => new(
             SourceFolder: "/source/" + packageId,
             Source: new RuntimePackageSource(packageId, PackageSourceKind.Dev, "/source/" + packageId),
             ShadowFolder: "/shadow/" + packageId,
             LibraryFolder: "/shadow/" + packageId + "/lib",
             packageId,
-            Version: "1.0.0",
+            Version: version,
             HostRoles: PackageHostRoles.Runtime,
-            Activation: new RuntimePackageActivationState(packageId, packageId, "1.0.0", PackageHostRoles.Runtime, null),
+            Activation: new RuntimePackageActivationState(packageId, packageId, version, PackageHostRoles.Runtime, null),
             EntryAssemblyPath: "/shadow/" + packageId + "/lib/" + packageId + ".dll",
-            Dependencies: dependencies ?? []);
+            Dependencies: dependencies);
 }

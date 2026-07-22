@@ -50,8 +50,11 @@ public sealed record RuntimeStackImportRequest(
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeStackImportOutcome>))]
 public enum RuntimeStackImportOutcome
 {
+    /// <summary>All selected actions committed.</summary>
     Completed,
+    /// <summary>At least one selected action committed and at least one did not.</summary>
     Partial,
+    /// <summary>No selected actions committed.</summary>
     Failed,
 }
 
@@ -95,17 +98,6 @@ public sealed record RuntimeStackImportContributorResultDescriptor(
     public IReadOnlyList<string> Warnings { get; } = RuntimeContractCollections.Freeze(Warnings);
     [JsonPropertyOrder(7)]
     public IReadOnlyList<string> Errors { get; } = RuntimeContractCollections.Freeze(Errors);
-}
-
-public sealed record RuntimeStackImportAppliedContributionDescriptor(
-    string OwnerPackageId,
-    string ContributorId,
-    IReadOnlyList<string> FragmentIds,
-    IReadOnlyList<RuntimeStackImportedItemDescriptor> ImportedItems)
-{
-    public IReadOnlyList<string> FragmentIds { get; } = RuntimeContractCollections.Freeze(FragmentIds);
-    public IReadOnlyList<RuntimeStackImportedItemDescriptor> ImportedItems { get; }
-        = RuntimeContractCollections.Freeze(ImportedItems);
 }
 
 public sealed record RuntimeStackImportActionDescriptor(
