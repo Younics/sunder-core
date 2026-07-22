@@ -318,7 +318,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         window.Activate();
     }
 
-    private static void ActivateMainWindow()
+    internal void ActivateMainWindow()
     {
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } mainWindow })
         {

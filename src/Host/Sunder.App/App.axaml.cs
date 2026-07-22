@@ -54,6 +54,13 @@ public partial class App : Application
             _desktopLifetime = desktop;
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             desktop.ShutdownRequested += OnDesktopShutdownRequested;
+            if (
+                OperatingSystem.IsMacOS()
+                && this.TryGetFeature<IActivatableLifetime>() is { } activatableLifetime
+            )
+            {
+                activatableLifetime.Activated += OnMacOsActivated;
+            }
 
             var loadingViewModel = new LoadingWindowViewModel();
             var loadingWindow = new LoadingWindow { DataContext = loadingViewModel };
@@ -237,9 +244,27 @@ public partial class App : Application
         }
 
         e.Cancel = true;
+        if (OperatingSystem.IsMacOS() && sender is MainWindow mainWindow)
+        {
+            mainWindow.Hide();
+            return;
+        }
+
         if (_desktopLifetime is { } desktop)
         {
             RequestDesktopShutdown(desktop);
+        }
+    }
+
+    private void OnMacOsActivated(object? sender, ActivatedEventArgs e)
+    {
+        if (
+            e.Kind == ActivationKind.Reopen
+            && _session is { } session
+            && Volatile.Read(ref _desktopShutdownTask) is null
+        )
+        {
+            session.WindowLauncher.ActivateMainWindow();
         }
     }
 

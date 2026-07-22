@@ -180,6 +180,38 @@ public sealed class PresentationLifecycleArchitectureTests
     }
 
     [Fact]
+    public void MacMainWindowLifecycle_HidesForCloseAndReopensFromDock()
+    {
+        var appPath = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "App.axaml.cs");
+        var appSource = File.ReadAllText(appPath);
+        var launcherPath = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Services",
+            "WindowLauncher.cs");
+        var launcherSource = File.ReadAllText(launcherPath);
+
+        Assert.Contains("ShutdownMode.OnExplicitShutdown", appSource, StringComparison.Ordinal);
+        Assert.Contains("TryGetFeature<IActivatableLifetime>()", appSource, StringComparison.Ordinal);
+        Assert.Contains("e.Kind == ActivationKind.Reopen", appSource, StringComparison.Ordinal);
+        Assert.Contains("sender is MainWindow mainWindow", appSource, StringComparison.Ordinal);
+        Assert.Contains("mainWindow.Hide();", appSource, StringComparison.Ordinal);
+        Assert.Contains(
+            "session.WindowLauncher.ActivateMainWindow();",
+            appSource,
+            StringComparison.Ordinal);
+        Assert.Contains("internal void ActivateMainWindow()", launcherSource, StringComparison.Ordinal);
+        Assert.Contains("ShowWindow(mainWindow);", launcherSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InitialShellReveal_WaitsForNativeComposition()
     {
         var path = Path.Combine(
