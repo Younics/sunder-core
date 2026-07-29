@@ -2,12 +2,15 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimeSessionOwner
 {
     private readonly object _snapshotGate = new();
+    private readonly object _snapshotPublicationGate = new();
+    private readonly object _packageFaultGate = new();
     private readonly ILogger<RuntimeSessionOwner> _logger;
     private readonly RuntimeEventStreamService _events;
     private readonly PackageUiSnapshotStore? _uiSnapshots;
@@ -59,8 +62,8 @@ internal sealed class RuntimeSessionOwner
         Auth = new PackageAuthSessionCoordinator(
             State,
             Callbacks,
-            (packageId, generation, origin, exception, action) =>
-                HandlePackageFault(packageId, generation, origin, exception, action));
+            (packageId, activationIdentity, origin, exception, action) =>
+                HandlePackageFault(packageId, activationIdentity, origin, exception, action));
         hostLifetime?.ApplicationStopping.Register(MarkShuttingDown);
     }
 
@@ -98,8 +101,20 @@ internal sealed class RuntimeSessionOwner
         CancellationToken cancellationToken = default)
     {
         var prepared = await State.PreparePublicationAsync(session, expectedGeneration, cancellationToken);
-        var publication = await CommitPublicationAsync(prepared, sources, uiSnapshots, warnings, errors);
-        return publication.Warnings;
+        try
+        {
+            var publication = await CommitPublicationAsync(prepared, sources, uiSnapshots, warnings, errors);
+            State.ActivatePublication(prepared);
+            return publication.Warnings;
+        }
+        catch
+        {
+            if (prepared.Committed && !prepared.Activated)
+            {
+                State.ActivatePublication(prepared);
+            }
+            throw;
+        }
     }
 
     internal Task<PackageSessionState.SessionPublication> PreparePublicationAsync(
@@ -134,6 +149,37 @@ internal sealed class RuntimeSessionOwner
 
     internal void DiscardPublication(PackageSessionState.SessionPublication publication)
         => State.DiscardPublication(publication);
+
+    internal void ActivatePublication(PackageSessionState.SessionPublication publication)
+        => State.ActivatePublication(publication);
+
+    internal async Task<(RuntimePackageStamp Stamp, IReadOnlyList<string> Warnings)> FailPublicationAsync(
+        PackageSessionState.SessionPublication publication,
+        PackageSessionSourceSnapshot sources,
+        IReadOnlyList<string> warnings,
+        IReadOnlyList<string> errors,
+        Exception exception)
+    {
+        var failureErrors = errors
+            .Append($"Package Runtime generation activation failed: {exception.Message}")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var result = await State.FailCommittedPublicationAsync(
+            publication,
+            generation => CommitGeneration(
+                generation,
+                [],
+                [],
+                [],
+                sources,
+                warnings,
+                failureErrors));
+        if (result.Warnings.Count > 0)
+        {
+            AppendWarnings(result.Generation, result.Warnings);
+        }
+        return (new RuntimePackageStamp(_events.RuntimeInstanceId, result.Generation), result.Warnings);
+    }
 
     public void MarkReady(IReadOnlyList<string>? warnings = null, IReadOnlyList<string>? errors = null)
         => SetBootstrapState(RuntimeBootstrapState.Ready, warnings, errors, message: null);
@@ -222,71 +268,90 @@ internal sealed class RuntimeSessionOwner
 
     private bool HandlePackageFault(
         string packageId,
-        long generation,
+        PackageActivationIdentity activationIdentity,
         PackageFailureOrigin origin,
         Exception exception,
         string action)
         => CommitPackageFault(
             packageId,
-            generation,
             exception.Message,
-            committed => State.HandlePackageFault(packageId, generation, origin, exception, action, committed));
+            (expectedGeneration, committed) => State.HandlePackageFault(
+                packageId,
+                activationIdentity,
+                expectedGeneration,
+                origin,
+                exception,
+                action,
+                committed));
+
+    internal void HandleRuntimeGenerationFault(
+        string packageId,
+        PackageRuntimeGeneration runtimeGeneration,
+        Exception exception)
+        => _ = CommitPackageFault(
+            packageId,
+            exception.Message,
+            (expectedGeneration, committed) => State.HandleRuntimeGenerationFault(
+                packageId,
+                runtimeGeneration,
+                expectedGeneration,
+                PackageFailureOrigin.RuntimeBackgroundService,
+                exception,
+                "maintain Runtime generation ownership",
+                committed));
 
     private bool CommitPackageFault(
         string packageId,
-        long generation,
         string message,
-        Func<Action<long>, bool> apply)
+        Func<long, Action<long>, bool> apply)
     {
-        var current = GetSnapshot();
-        if (generation != current.SessionGeneration)
+        lock (_packageFaultGate)
         {
-            return false;
-        }
+            var current = GetSnapshot();
+            var nextGeneration = checked(current.SessionGeneration + 1);
+            var warnings = current.Warnings;
+            IReadOnlyList<PackageUiSnapshotDescriptor> snapshots;
+            try
+            {
+                snapshots = _uiSnapshots?.CreateSnapshots(
+                    State.GetActivePackageSources()
+                        .Where(source => !string.Equals(source.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+                        .ToArray(),
+                    nextGeneration) ?? [];
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception, "Failed to prepare package UI snapshots while faulting package {PackageId}", packageId);
+                warnings = current.Warnings
+                    .Append($"Package UI snapshots could not be prepared after '{packageId}' failed: {exception.Message}")
+                    .ToArray();
+                snapshots = [];
+            }
 
-        var nextGeneration = checked(generation + 1);
-        var warnings = current.Warnings;
-        IReadOnlyList<PackageUiSnapshotDescriptor> snapshots;
-        try
-        {
-            snapshots = _uiSnapshots?.CreateSnapshots(
-                State.GetActivePackageSources()
-                    .Where(source => !string.Equals(source.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
-                    .ToArray(),
-                nextGeneration) ?? [];
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(exception, "Failed to prepare package UI snapshots while faulting package {PackageId}", packageId);
-            warnings = current.Warnings
-                .Append($"Package UI snapshots could not be prepared after '{packageId}' failed: {exception.Message}")
+            var sources = Sources.Snapshot();
+            var errors = current.Errors
+                .Append($"Package '{packageId}' failed: {message}")
+                .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            snapshots = [];
-        }
+            var applied = apply(current.SessionGeneration, committedGeneration => CommitGeneration(
+                committedGeneration,
+                State.GetActivePackages(),
+                State.GetSessionPackages(),
+                snapshots,
+                sources,
+                warnings,
+                errors));
+            if (!applied)
+            {
+                _uiSnapshots?.RemoveSnapshots(snapshots);
+                return false;
+            }
 
-        var sources = Sources.Snapshot();
-        var errors = current.Errors
-            .Append($"Package '{packageId}' failed: {message}")
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var applied = apply(committedGeneration => CommitGeneration(
-            committedGeneration,
-            State.GetActivePackages(),
-            State.GetSessionPackages(),
-            snapshots,
-            sources,
-            warnings,
-            errors));
-        if (!applied)
-        {
-            _uiSnapshots?.RemoveSnapshots(snapshots);
-            return false;
+            return true;
         }
-
-        return true;
     }
 
-    private void CommitGeneration(
+    internal bool CommitGeneration(
         long generation,
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<SessionPackageDescriptor> sessionPackages,
@@ -295,28 +360,41 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors)
     {
-        _events.PublishSessionGeneration(
-            generation,
-            activePackages.Select(package => package.PackageId).ToArray(),
-            runtimeEvent =>
+        lock (_snapshotPublicationGate)
+        {
+            lock (_snapshotGate)
             {
-                Sources.Replace(sources);
-                lock (_snapshotGate)
+                if (generation < _snapshot.SessionGeneration || generation < State.Generation)
                 {
-                    _snapshot = new RuntimePackageSnapshot(
-                        runtimeEvent.RuntimeInstanceId,
-                        generation,
-                        runtimeEvent.SequenceId,
-                        _snapshot.BootstrapState,
-                        activePackages.ToArray(),
-                        sessionPackages.ToArray(),
-                        uiSnapshots.ToArray(),
-                        NormalizeDiagnostics(warnings),
-                        NormalizeDiagnostics(errors));
-                    _uiSnapshots?.RemoveOlderGenerations(generation);
+                    _uiSnapshots?.RemoveSnapshots(uiSnapshots);
+                    return false;
                 }
-            });
-        InvalidateStaleStages(generation);
+            }
+
+            _events.PublishSessionGeneration(
+                generation,
+                activePackages.Select(package => package.PackageId).ToArray(),
+                runtimeEvent =>
+                {
+                    Sources.Replace(sources);
+                    lock (_snapshotGate)
+                    {
+                        _snapshot = new RuntimePackageSnapshot(
+                            runtimeEvent.RuntimeInstanceId,
+                            generation,
+                            runtimeEvent.SequenceId,
+                            _snapshot.BootstrapState,
+                            activePackages.ToArray(),
+                            sessionPackages.ToArray(),
+                            uiSnapshots.ToArray(),
+                            NormalizeDiagnostics(warnings),
+                            NormalizeDiagnostics(errors));
+                        _uiSnapshots?.RemoveOlderGenerations(generation);
+                    }
+                });
+            InvalidateStaleStages(generation);
+            return true;
+        }
     }
 
     private void SetBootstrapState(
@@ -325,70 +403,84 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string>? errors,
         string? message)
     {
-        var current = GetSnapshot();
-        if (current.BootstrapState == state
-            || current.BootstrapState == RuntimeBootstrapState.ShuttingDown)
+        lock (_snapshotPublicationGate)
         {
-            return;
-        }
-
-        _events.PublishBootstrapState(
-            state,
-            current.SessionGeneration,
-            current.ActivePackages.Select(package => package.PackageId).ToArray(),
-            message,
-            runtimeEvent =>
+            RuntimePackageSnapshot current;
+            lock (_snapshotGate)
             {
-                lock (_snapshotGate)
+                current = _snapshot;
+                if (current.BootstrapState == state
+                    || current.BootstrapState == RuntimeBootstrapState.ShuttingDown)
                 {
-                    _snapshot = new RuntimePackageSnapshot(
-                        _snapshot.RuntimeInstanceId,
-                        _snapshot.SessionGeneration,
-                        runtimeEvent.SequenceId,
-                        state,
-                        _snapshot.ActivePackages,
-                        _snapshot.SessionPackages,
-                        _snapshot.PackageUiSnapshots,
-                        NormalizeDiagnostics(_snapshot.Warnings.Concat(warnings ?? [])),
-                        NormalizeDiagnostics(_snapshot.Errors.Concat(errors ?? [])));
+                    return;
                 }
-            });
-        if (state != RuntimeBootstrapState.Starting)
-        {
-            _bootstrapCompletion.TrySetResult();
-        }
-    }
+            }
 
-    private void AppendWarnings(long generation, IReadOnlyList<string> warnings)
-    {
-        var current = GetSnapshot();
-        if (current.SessionGeneration != generation)
-        {
-            return;
-        }
-
-        _events.PublishSnapshotDiagnostics(
-            generation,
-            current.ActivePackages.Select(package => package.PackageId).ToArray(),
-            runtimeEvent =>
-            {
-                lock (_snapshotGate)
+            _events.PublishBootstrapState(
+                state,
+                current.SessionGeneration,
+                current.ActivePackages.Select(package => package.PackageId).ToArray(),
+                message,
+                runtimeEvent =>
                 {
-                    if (_snapshot.SessionGeneration == generation)
+                    lock (_snapshotGate)
                     {
                         _snapshot = new RuntimePackageSnapshot(
                             _snapshot.RuntimeInstanceId,
                             _snapshot.SessionGeneration,
                             runtimeEvent.SequenceId,
-                            _snapshot.BootstrapState,
+                            state,
                             _snapshot.ActivePackages,
                             _snapshot.SessionPackages,
                             _snapshot.PackageUiSnapshots,
-                            NormalizeDiagnostics(_snapshot.Warnings.Concat(warnings)),
-                            _snapshot.Errors);
+                            NormalizeDiagnostics(_snapshot.Warnings.Concat(warnings ?? [])),
+                            NormalizeDiagnostics(_snapshot.Errors.Concat(errors ?? [])));
                     }
+                });
+            if (state != RuntimeBootstrapState.Starting)
+            {
+                _bootstrapCompletion.TrySetResult();
+            }
+        }
+    }
+
+    private void AppendWarnings(long generation, IReadOnlyList<string> warnings)
+    {
+        lock (_snapshotPublicationGate)
+        {
+            RuntimePackageSnapshot current;
+            lock (_snapshotGate)
+            {
+                current = _snapshot;
+                if (current.SessionGeneration != generation)
+                {
+                    return;
                 }
-            });
+            }
+
+            _events.PublishSnapshotDiagnostics(
+                generation,
+                current.ActivePackages.Select(package => package.PackageId).ToArray(),
+                runtimeEvent =>
+                {
+                    lock (_snapshotGate)
+                    {
+                        if (_snapshot.SessionGeneration == generation)
+                        {
+                            _snapshot = new RuntimePackageSnapshot(
+                                _snapshot.RuntimeInstanceId,
+                                _snapshot.SessionGeneration,
+                                runtimeEvent.SequenceId,
+                                _snapshot.BootstrapState,
+                                _snapshot.ActivePackages,
+                                _snapshot.SessionPackages,
+                                _snapshot.PackageUiSnapshots,
+                                NormalizeDiagnostics(_snapshot.Warnings.Concat(warnings)),
+                                _snapshot.Errors);
+                        }
+                    }
+                });
+        }
     }
 
     private void TransitionStage(

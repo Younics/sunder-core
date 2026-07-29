@@ -63,7 +63,7 @@ internal sealed class SdkCapabilityCatalog
         ISet<string> destination)
         where TKey : notnull
     {
-        if (!source.TryGetValue(key, out var declared))
+        if (!source.TryGetValue(key, out var declared) || declared.Count == 0)
         {
             return false;
         }

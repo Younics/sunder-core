@@ -30,21 +30,39 @@ internal static class BackgroundProcessCancellation
             return;
         }
 
-        Deliver([cancellationTokenSource]);
+        _ = DeliverAsync([cancellationTokenSource]);
     }
 
     public static void Deliver(IEnumerable<CancellationTokenSource> cancellationTokenSources)
+        => _ = DeliverAsync(cancellationTokenSources);
+
+    private static Task DeliverAsync(IEnumerable<CancellationTokenSource> cancellationTokenSources)
     {
+        var cancellations = new List<Task>();
         foreach (var cancellationTokenSource in cancellationTokenSources)
         {
             try
             {
-                cancellationTokenSource.Cancel();
+                cancellations.Add(cancellationTokenSource.CancelAsync());
             }
             catch (ObjectDisposedException)
             {
                 // The process completed between marking it as cancelling and delivering cancellation.
             }
+        }
+
+        return ObserveCancellationAsync(cancellations);
+    }
+
+    private static async Task ObserveCancellationAsync(IReadOnlyList<Task> cancellations)
+    {
+        try
+        {
+            await Task.WhenAll(cancellations).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            AppSessionLog.WriteError("A background process cancellation callback failed.", exception);
         }
     }
 }

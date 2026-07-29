@@ -54,18 +54,23 @@ Current SDK capabilities are:
 | `settings-views.v1` | settings view registration |
 | `settings-navigation.v1` | package settings navigation service |
 | `background-services.v1` | package background services |
+| `runtime-generations.v1` | post-publication Runtime generation participants |
 | `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
 | `extensions.v1` | extension points, contribution registration, extension catalog queries |
 | `extensions.changes.v1` | extension catalog change monitoring |
+| `extensions.invocations.v1` | owner-activation-scoped extension references, invocation leases, and exact-owner App fault reporting |
 | `settings.schema.v1` | host-rendered package settings schema contracts |
 | `settings.v1` | validated writable package settings, stored independently from opaque state |
 | `storage.v1` | package storage/file/key-value abstractions |
+| `storage.key-migration.v1` | portable physical-key derivation and host-atomic storage-key migration |
 | `role-local-workspace.v1` | activation-owned App/Runtime role-local workspace capability |
 | `secrets.v1` | package secret storage abstraction |
 | `logging.v1` | package logging abstractions |
 | `notifications.v1` | package notifications |
 | `shell-view.v1` | shell view/hotbar/navigation services |
+| `view-navigation-preparation.v1` | hidden package-view preparation and post-presentation acknowledgement |
 | `runtime-operations.v1` | package-scoped typed App-to-Runtime operations and streams |
+| `runtime-invocation-errors.v1` | sanitized package-visible Runtime invocation failure metadata |
 | `stacks.v1` | `Sunder.Sdk.Stacks` Stack import/export data contracts |
 | `stacks.contributions.v1` | `Sunder.Sdk.Stacks` Stack contributor extension contracts |
 | `callbacks.v1` | generic callback sessions |
@@ -98,3 +103,11 @@ Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one
 Use `IPackageExtensionCatalogMonitor` for structured extension catalog changes. It exposes `Changed` with `PackageExtensionCatalogChangedEventArgs` including revision, active-lifecycle reason, and per-extension-point additions/removals. The Host isolates subscriber exceptions so one package cannot interrupt another package's activation or prevent later subscribers from receiving the revision.
 
 `IPackageExtensionCatalog.GetExtensionContributions` is mandatory. Hosts and test catalogs must supply the canonical non-empty id of the package that registered each contribution. The extension-point definition or contracts assembly does not own contributions from other packages; explicit ownership prevents Stack and other dependency-producing consumers from silently omitting package requirements.
+
+## Extension Invocation Leases
+
+Use `IPackageExtensionInvocationCatalog.GetExtensionReferences` when contribution code or metadata must survive an asynchronous call, callback, event subscription, or queued delivery. A reference is bound to one exact owner activation. `TryAcquire` and owner retirement are linearized: once retirement starts, that reference can never acquire again, including after a package with the same id registers a replacement contribution.
+
+Only an acquired `IPackageExtensionLease<TContract>` exposes `PackageId`, `Contribution`, and `RetirementToken`. Keep the contribution inside the lease scope, link long-running work to the retirement token, and dispose the lease promptly and idempotently. The Host removes the owner from discovery and raises `Changed` without waiting for leases, then drains only that owner's leases before disposing its service provider or unloading its ALC. A lease that exceeds the bounded cleanup deadline quarantines those owner resources; the Host never forces disposal while the lease remains active.
+
+`TryReportInvariantViolation` is default-deny and does not grant ordinary packages package-lifetime control. A Host may enable it only on a caller-bound catalog for a trusted extension orchestrator. Accepted reports remain tied to the opaque reference's exact owner epoch through queued lifecycle handling, so neither a same-id replacement nor a later App generation can be disabled by a stale report.

@@ -119,6 +119,18 @@ type interface Sunder.Sdk.Abstractions.IPackageExtensionCatalog
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("extensions.changes.v1")
 type interface Sunder.Sdk.Abstractions.IPackageExtensionCatalogMonitor
   event System.EventHandler<Sunder.Sdk.Abstractions.PackageExtensionCatalogChangedEventArgs> Changed
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("extensions.invocations.v1")
+type interface Sunder.Sdk.Abstractions.IPackageExtensionInvocationCatalog
+  method abstract IReadOnlyList<IPackageExtensionReference<TContract?>> GetExtensionReferences<TContract>(PackageExtensionPoint<TContract?> extensionPoint)
+  method virtual System.Boolean TryReportInvariantViolation<TContract>(IPackageExtensionReference<TContract?> reference, System.Exception exception)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("extensions.invocations.v1")
+type interface Sunder.Sdk.Abstractions.IPackageExtensionLease<TContract> : System.IDisposable
+  property TContract? Contribution { get; }
+  property System.String PackageId { get; }
+  property System.Threading.CancellationToken RetirementToken { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("extensions.invocations.v1")
+type interface Sunder.Sdk.Abstractions.IPackageExtensionReference<TContract>
+  method abstract System.Boolean TryAcquire(out IPackageExtensionLease<TContract?>? lease)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
 type interface Sunder.Sdk.Abstractions.IPackageFileStore
   method abstract System.Threading.Tasks.Task DeleteAsync(System.String relativePath, System.Threading.CancellationToken cancellationToken = null)
@@ -137,6 +149,10 @@ attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("role-local-work
 type interface Sunder.Sdk.Abstractions.IPackageRoleLocalWorkspace
   property System.String WorkspaceRootPath { get; }
   method abstract System.String GetLocalPath(System.String relativePath)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
+type interface Sunder.Sdk.Abstractions.IPackageRuntimeGenerationParticipant : Sunder.Sdk.Abstractions.IPackageBackgroundService
+  property System.Threading.Tasks.Task GenerationCompletion { get; }
+  method abstract System.Threading.Tasks.Task CommitGenerationAsync(Sunder.Sdk.Abstractions.PackageRuntimeGeneration generation, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("secrets.v1")
 type interface Sunder.Sdk.Abstractions.IPackageSecrets
   method abstract System.Threading.Tasks.Task DeleteSecretAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
@@ -166,6 +182,15 @@ type interface Sunder.Sdk.Abstractions.IPackageStorageContext
   property Sunder.Sdk.Abstractions.IPackageFileStore Files { get; }
   property Sunder.Sdk.Abstractions.IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
   property Sunder.Sdk.Abstractions.IPackageKeyValueStore State { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+type interface Sunder.Sdk.Abstractions.IPackageStorageKeyMigrator
+  method abstract System.Threading.Tasks.Task MigrateKeysAsync(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Storage.PackageStorageKeyMigration> migrations, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("shell-view.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("view-navigation-preparation.v1")
+type interface Sunder.Sdk.Abstractions.IPackageViewNavigationPreparationTarget
+  method abstract System.Threading.Tasks.ValueTask OnNavigationPresentedAsync(Sunder.Sdk.Abstractions.PackageViewNavigationContext context, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask<System.Boolean> PrepareNavigationAsync(Sunder.Sdk.Abstractions.PackageViewNavigationContext context, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("shell-view.v1")
 type interface Sunder.Sdk.Abstractions.IPackageViewNavigationTarget
   method abstract System.Threading.Tasks.ValueTask OnNavigatedToAsync(Sunder.Sdk.Abstractions.PackageViewNavigationContext context, System.Threading.CancellationToken cancellationToken = null)
@@ -276,6 +301,17 @@ type sealed class Sunder.Sdk.Abstractions.PackageHotbarView : System.IEquatable<
   method Sunder.Sdk.Abstractions.PackageHotbarView <Clone>$()
   method System.Void Deconstruct(out System.String ViewId, out System.String PackageId, out System.String PackageDisplayName, out System.String Title, out System.String Glyph, out Sunder.Sdk.Abstractions.PackageViewPlacement Placement, out System.Int32 Order, out System.Boolean IsOpen)
   method virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageHotbarView? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
+type sealed class Sunder.Sdk.Abstractions.PackageRuntimeGeneration : System.IEquatable<Sunder.Sdk.Abstractions.PackageRuntimeGeneration>
+  method .ctor(System.Guid ActivationId, System.Int64 SessionGeneration)
+  property System.Guid ActivationId { get; init; }
+  property System.Int64 SessionGeneration { get; init; }
+  method Sunder.Sdk.Abstractions.PackageRuntimeGeneration <Clone>$()
+  method System.Void Deconstruct(out System.Guid ActivationId, out System.Int64 SessionGeneration)
+  method virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageRuntimeGeneration? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
@@ -489,11 +525,14 @@ type sealed class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field static System.String ContributionsV1 = "contributions.v1"
   field static System.String CoreV1 = "core.v1"
   field static System.String ExtensionChangesV1 = "extensions.changes.v1"
+  field static System.String ExtensionInvocationsV1 = "extensions.invocations.v1"
   field static System.String ExtensionsV1 = "extensions.v1"
   field static System.String LoggingV1 = "logging.v1"
   field static System.String NotificationsV1 = "notifications.v1"
   field static System.String PackagingV1 = "packaging.v1"
   field static System.String RoleLocalWorkspaceV1 = "role-local-workspace.v1"
+  field static System.String RuntimeGenerationsV1 = "runtime-generations.v1"
+  field static System.String RuntimeInvocationErrorsV1 = "runtime-invocation-errors.v1"
   field static System.String RuntimeOperationsV1 = "runtime-operations.v1"
   field static System.String SecretsV1 = "secrets.v1"
   field static System.String SettingsNavigationV1 = "settings-navigation.v1"
@@ -503,8 +542,10 @@ type sealed class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field static System.String ShellViewV1 = "shell-view.v1"
   field static System.String StackContributionsV1 = "stacks.contributions.v1"
   field static System.String StacksV1 = "stacks.v1"
+  field static System.String StorageKeyMigrationV1 = "storage.key-migration.v1"
   field static System.String StorageV1 = "storage.v1"
   field static System.String ThemingV1 = "theming.v1"
+  field static System.String ViewNavigationPreparationV1 = "view-navigation-preparation.v1"
   field static System.String ViewsV1 = "views.v1"
 type sealed class Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute : System.Attribute
   method .ctor(System.String capability)
@@ -636,6 +677,14 @@ type sealed class Sunder.Sdk.Runtime.NullPackageRuntimeClient : Sunder.Sdk.Runti
   property System.Boolean IsAvailable { get; }
   method virtual IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, TRequest request, System.Threading.CancellationToken cancellationToken = null) where TRequest : class where TEvent : class
   method virtual ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, TRequest request, System.Threading.CancellationToken cancellationToken = null) where TRequest : class where TResponse : class
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-invocation-errors.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
+type sealed class Sunder.Sdk.Runtime.PackageRuntimeInvocationException : System.Exception, System.Runtime.Serialization.ISerializable
+  method .ctor(System.String code, System.Boolean isTransient, System.Int32? statusCode = null, System.String? correlationId = null)
+  property System.String Code { get; }
+  property System.String? CorrelationId { get; }
+  property System.Boolean IsTransient { get; }
+  property System.Int32? StatusCode { get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
 type sealed class Sunder.Sdk.Runtime.PackageRuntimeOperation<TRequest, TResponse> where TRequest : class where TResponse : class
   method .ctor(System.String operationId)
@@ -699,6 +748,41 @@ type sealed class Sunder.Sdk.Settings.PackageSettingsSection : System.IEquatable
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+type sealed class Sunder.Sdk.Storage.PackageStorageKeyFactory
+  method static System.String Create(System.String prefix, System.Int32 version, System.String opaqueId)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+type sealed class Sunder.Sdk.Storage.PackageStorageKeyMigration
+  property System.Boolean IsDynamicCleanup { get; }
+  property System.String LegacyPrefix { get; }
+  property System.String LegacySuffix { get; }
+  method Sunder.Sdk.Storage.PackageStorageKeyMigrationAction Resolve(System.String legacyKey)
+  method Sunder.Sdk.Storage.PackageStorageKeyMigrationAction Resolve(System.String legacyKey, System.String value)
+  method System.Boolean TryGetDestinationKey(System.String legacyKey, System.String value, out System.String destinationKey)
+  method System.Boolean TryGetDestinationKey(System.String legacyKey, out System.String destinationKey)
+  method static Sunder.Sdk.Storage.PackageStorageKeyMigration DynamicCleanup(System.Func<System.String, Sunder.Sdk.Storage.PackageStorageKeyMigrationAction> resolver)
+  method static Sunder.Sdk.Storage.PackageStorageKeyMigration Exact(System.String legacyKey, System.String destinationKey)
+  method static Sunder.Sdk.Storage.PackageStorageKeyMigration OpaqueId(System.String legacyPrefix, System.String legacySuffix, System.String destinationPrefix, System.Int32 destinationVersion)
+  method static Sunder.Sdk.Storage.PackageStorageKeyMigration OpaqueIdWithCaseInsensitiveJsonIdentity(System.String legacyPrefix, System.String legacySuffix, System.String destinationPrefix, System.Int32 destinationVersion, System.String identityPropertyName)
+  method static Sunder.Sdk.Storage.PackageStorageKeyMigration OpaqueIdWithJsonIdentity(System.String legacyPrefix, System.String legacySuffix, System.String destinationPrefix, System.Int32 destinationVersion, System.String identityPropertyName)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+type sealed class Sunder.Sdk.Storage.PackageStorageKeyMigrationAction
+  property static Sunder.Sdk.Storage.PackageStorageKeyMigrationAction Delete { get; }
+  property System.String? DestinationKey { get; }
+  property Sunder.Sdk.Storage.PackageStorageKeyMigrationActionKind Kind { get; }
+  property static Sunder.Sdk.Storage.PackageStorageKeyMigrationAction NoMatch { get; }
+  property System.Int32 Precedence { get; }
+  method static Sunder.Sdk.Storage.PackageStorageKeyMigrationAction Rewrite(System.String destinationKey, System.Int32 precedence = 0)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+type enum Sunder.Sdk.Storage.PackageStorageKeyMigrationActionKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Sdk.Storage.PackageStorageKeyMigrationActionKind Delete = 1
+  field static Sunder.Sdk.Storage.PackageStorageKeyMigrationActionKind NoMatch = 0
+  field static Sunder.Sdk.Storage.PackageStorageKeyMigrationActionKind Rewrite = 2
+  field System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
 type sealed class Sunder.Sdk.Storage.PackageStorageValidation
   field static System.Int32 MaximumFileBytes = 16777216

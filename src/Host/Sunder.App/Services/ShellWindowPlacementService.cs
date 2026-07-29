@@ -49,22 +49,43 @@ public static class ShellWindowPlacementService
         }
     }
 
-    public static ShellWindowPlacement Capture(Window window, ShellWindowPlacement? previousPlacement = null)
+    public static ShellWindowPlacement? Capture(Window window, ShellWindowPlacement? previousPlacement = null)
     {
-        if (window.WindowState == WindowState.Minimized && previousPlacement is not null)
+        var width = window.Bounds.Width > 0 ? window.Bounds.Width : window.Width;
+        var height = window.Bounds.Height > 0 ? window.Bounds.Height : window.Height;
+        return Capture(
+            new ShellWindowPlacementSnapshot(
+                window.Position.X,
+                window.Position.Y,
+                width,
+                height,
+                window.MinWidth,
+                window.MinHeight,
+                window.WindowState),
+            previousPlacement);
+    }
+
+    internal static ShellWindowPlacement? Capture(
+        ShellWindowPlacementSnapshot window,
+        ShellWindowPlacement? previousPlacement = null)
+    {
+        if (window.State == WindowState.FullScreen)
         {
             return previousPlacement;
         }
 
-        var width = window.Bounds.Width > 0 ? window.Bounds.Width : window.Width;
-        var height = window.Bounds.Height > 0 ? window.Bounds.Height : window.Height;
+        if (window.State == WindowState.Minimized && previousPlacement is not null)
+        {
+            return previousPlacement;
+        }
+
         return new ShellWindowPlacement
         {
-            X = window.Position.X,
-            Y = window.Position.Y,
-            Width = Math.Max(window.MinWidth, width),
-            Height = Math.Max(window.MinHeight, height),
-            IsMaximized = window.WindowState == WindowState.Maximized,
+            X = window.X,
+            Y = window.Y,
+            Width = Math.Max(window.MinWidth, window.Width),
+            Height = Math.Max(window.MinHeight, window.Height),
+            IsMaximized = window.State == WindowState.Maximized,
         };
     }
 
@@ -102,4 +123,48 @@ public static class ShellWindowPlacementService
            && !double.IsInfinity(x)
            && !double.IsNaN(y)
            && !double.IsInfinity(y);
+}
+
+internal readonly record struct ShellWindowPlacementSnapshot(
+    double X,
+    double Y,
+    double Width,
+    double Height,
+    double MinWidth,
+    double MinHeight,
+    WindowState State);
+
+internal sealed class ShellWindowPlacementTracker
+{
+    private readonly Window _window;
+    private ShellWindowPlacement? _lastWindowedPlacement;
+
+    public ShellWindowPlacementTracker(Window window, ShellWindowPlacement? initialPlacement)
+    {
+        _window = window;
+        _lastWindowedPlacement = initialPlacement;
+        _window.PositionChanged += (_, _) => RecordWindowedPlacement();
+        _window.Resized += (_, _) => RecordWindowedPlacement();
+    }
+
+    public ShellWindowPlacement? Capture()
+    {
+        RecordWindowedPlacement();
+        return _lastWindowedPlacement;
+    }
+
+    public void RecordWindowedPlacement()
+    {
+        if (
+            _window.WindowState == WindowState.FullScreen
+            || (_window.WindowState == WindowState.Minimized && _lastWindowedPlacement is not null)
+        )
+        {
+            return;
+        }
+
+        _lastWindowedPlacement = ShellWindowPlacementService.Capture(
+            _window,
+            _lastWindowedPlacement);
+    }
 }

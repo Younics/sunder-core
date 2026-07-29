@@ -12,6 +12,7 @@ internal enum StorageCommitPhase
     StateDocument,
     SecretDocument,
     MasterKey,
+    MigrationBackup,
     Quarantine,
     FailureMarker,
 }
@@ -393,6 +394,35 @@ internal sealed class AtomicFileTransaction(
 
     internal void Write(byte[] contents) => WriteFile(filePath, contents, sensitive, commitPhase);
 
+    internal string RetainMigrationBackup(byte[] contents)
+    {
+        var backupPath = $"{filePath}.migration-backup.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.{Guid.NewGuid():N}";
+        WriteFile(backupPath, contents, sensitive, StorageCommitPhase.MigrationBackup);
+        return backupPath;
+    }
+
+    internal byte[] ReadRecoveryQuarantine(StorageFailureMarker marker)
+    {
+        var canonicalFileName = Path.GetFileName(filePath);
+        if (!marker.QuarantineFile.StartsWith(canonicalFileName + ".corrupt.", StringComparison.Ordinal)
+            || !string.Equals(Path.GetFileName(marker.QuarantineFile), marker.QuarantineFile, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The package storage recovery marker has an invalid quarantine reference.");
+        }
+
+        var quarantinePath = Path.Combine(directoryPath, marker.QuarantineFile);
+        if (!fileSystem.FileExists(quarantinePath))
+        {
+            throw new InvalidDataException("The package storage recovery quarantine is missing.");
+        }
+        if (sensitive)
+        {
+            fileSystem.RestrictFile(quarantinePath);
+        }
+
+        return fileSystem.ReadAllBytes(quarantinePath);
+    }
+
     internal string QuarantineAndReplaceWithFailure(
         byte[] quarantineContents,
         string quarantineProtection,
@@ -494,11 +524,31 @@ internal sealed record StorageFailureMarker(
         JsonElement root,
         string canonicalPath)
     {
-        if (!root.TryGetProperty("version", out var versionElement)
+        var marker = Read(root);
+
+        var quarantinePath = Path.Combine(Path.GetDirectoryName(canonicalPath)!, marker.QuarantineFile);
+        return new PackageStorageRecoveryRequiredException(
+            $"Package storage is locked after corruption was quarantined at '{quarantinePath}'. "
+                + "Explicit recovery or reset is required.",
+            quarantinePath);
+    }
+
+    internal static StorageFailureMarker Read(JsonElement root)
+    {
+        if (!IsMarker(root)
+            || !root.TryGetProperty("version", out var versionElement)
             || !versionElement.TryGetInt32(out var version)
             || version != CurrentVersion
+            || !root.TryGetProperty("failureKind", out var failureKindElement)
+            || failureKindElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(failureKindElement.GetString())
             || !root.TryGetProperty("quarantineFile", out var quarantineElement)
-            || quarantineElement.ValueKind != JsonValueKind.String)
+            || quarantineElement.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("quarantineProtection", out var protectionElement)
+            || protectionElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(protectionElement.GetString())
+            || !root.TryGetProperty("detectedAtUtc", out var detectedElement)
+            || !detectedElement.TryGetDateTimeOffset(out var detectedAtUtc))
         {
             throw new InvalidDataException("The package storage recovery marker is malformed.");
         }
@@ -509,10 +559,12 @@ internal sealed record StorageFailureMarker(
             throw new InvalidDataException("The package storage recovery marker has an invalid quarantine reference.");
         }
 
-        var quarantinePath = Path.Combine(Path.GetDirectoryName(canonicalPath)!, quarantineFile);
-        return new PackageStorageRecoveryRequiredException(
-            $"Package storage is locked after corruption was quarantined at '{quarantinePath}'. "
-                + "Explicit recovery or reset is required.",
-            quarantinePath);
+        return new StorageFailureMarker(
+            FormatName,
+            CurrentVersion,
+            failureKindElement.GetString()!,
+            quarantineFile,
+            protectionElement.GetString()!,
+            detectedAtUtc);
     }
 }

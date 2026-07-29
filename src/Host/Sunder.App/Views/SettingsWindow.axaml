@@ -340,9 +340,16 @@
               </StackPanel>
             </ScrollViewer>
 
-            <ContentControl Grid.Row="1"
-                            Content="{Binding HostedSettingsView}"
-                            IsVisible="{Binding HasHostedSettingsView}" />
+            <Grid Grid.Row="1">
+              <ContentControl Content="{Binding StagedHostedSettingsView}"
+                              IsVisible="{Binding HasStagedHostedSettingsView}"
+                              Opacity="0"
+                              IsHitTestVisible="False"
+                              Focusable="False"
+                              IsTabStop="False" />
+              <ContentControl Content="{Binding HostedSettingsView}"
+                              IsVisible="{Binding HasHostedSettingsView}" />
+            </Grid>
           </Grid>
         </Border>
         </Grid>

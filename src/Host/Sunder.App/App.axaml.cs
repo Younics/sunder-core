@@ -244,9 +244,8 @@ public partial class App : Application
         }
 
         e.Cancel = true;
-        if (OperatingSystem.IsMacOS() && sender is MainWindow mainWindow)
+        if (OperatingSystem.IsMacOS() && sender is MainWindow)
         {
-            mainWindow.Hide();
             return;
         }
 

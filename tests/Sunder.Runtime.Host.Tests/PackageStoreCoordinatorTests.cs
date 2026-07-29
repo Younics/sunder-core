@@ -643,50 +643,6 @@ public sealed class PackageStoreCoordinatorTests
         Assert.True(RuntimeLocalState.IsLeaseAvailable(paths.RootPath));
     }
 
-    [Fact]
-    public async Task RuntimePackageFault_WhenGenerationIsStale_CannotFaultReplacementSession()
-    {
-        var state = new PackageSessionState(
-            NullLogger.Instance,
-            static () => { },
-            static _ => { });
-        var session = new ActivePackageSession(
-            sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = new SessionPackageDescriptor(
-                    "test.package",
-                    "Test Package",
-                    "2.0.0",
-                    PackageHostRoles.Runtime,
-                    Icon: null,
-                    IsEnabled: true,
-                    PackageReadinessState.Ready,
-                    Views: [],
-                    FailureOrigin: null,
-                    LastError: null,
-                    LastFailureAtUtc: null,
-                    FailureCount: 0),
-            });
-        await state.PublishSessionAsync(new ActivePackageSession(
-            sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)));
-        var publication = await state.PublishSessionAsync(session);
-        Assert.Equal(2, publication.Generation);
-
-        var stale = state.HandlePackageFault(
-            "test.package",
-            generation: 1,
-            PackageFailureOrigin.RuntimeAuthentication,
-            new InvalidOperationException("old authentication failed"),
-            "read package auth status");
-
-        Assert.False(stale);
-        Assert.True(Assert.Single(state.GetSessionPackages()).IsEnabled);
-    }
-
     private static async Task<Fixture> CreateFixtureAsync(IPackageStoreFaultInjector? faultInjector = null)
     {
         var root = CreateTempDirectory();

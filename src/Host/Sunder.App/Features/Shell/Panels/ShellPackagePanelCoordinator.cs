@@ -186,13 +186,11 @@ internal sealed class ShellPackagePanelCoordinator(
             return false;
         }
 
-        if (
-            !string.Equals(
+        if (presentViewAsync is null
+            && !string.Equals(
                 ShellSelectionState.GetSelectedViewId(shellState, packageView.Placement),
                 viewId,
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
+                StringComparison.OrdinalIgnoreCase))
         {
             SelectItem(item, allowToggle: false, notifyNavigation: false);
         }
@@ -295,6 +293,15 @@ internal sealed class ShellPackagePanelCoordinator(
             && panel.HostedView is not null
         )
         {
+            return;
+        }
+
+        if (presentViewAsync is not null)
+        {
+            if (notifyNavigation)
+            {
+                notifyViewNavigated(item.Id);
+            }
             return;
         }
 

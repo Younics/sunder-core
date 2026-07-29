@@ -165,6 +165,14 @@ public sealed class BackgroundProcessQueueService : IBackgroundProcessQueue, IDi
                         && metadata.OwnerId == ownerId,
             cancellationToken);
 
+    internal Task CancelOwnerProcessesAsync(
+        Guid ownerId,
+        CancellationToken cancellationToken = default)
+        => CancelMatchingAsync(
+            snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+                        && metadata.OwnerId == ownerId,
+            cancellationToken);
+
     internal void CancelPackageOwnerProcesses(string packageId, Guid ownerId)
         => CancelMatching(
             snapshot => PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)

@@ -249,6 +249,7 @@ type enum Sunder.Runtime.Contracts.PackageFailureOrigin : System.IComparable, Sy
   field static Sunder.Runtime.Contracts.PackageFailureOrigin AppUnhandledUi = 3
   field static Sunder.Runtime.Contracts.PackageFailureOrigin RuntimeActivation = 4
   field static Sunder.Runtime.Contracts.PackageFailureOrigin RuntimeAuthentication = 6
+  field static Sunder.Runtime.Contracts.PackageFailureOrigin RuntimeBackgroundService = 7
   field static Sunder.Runtime.Contracts.PackageFailureOrigin RuntimeConfiguration = 5
   field static Sunder.Runtime.Contracts.PackageFailureOrigin Unknown = 0
   field System.Int32 value__

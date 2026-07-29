@@ -21,6 +21,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private readonly LatestAsyncRequest _selectionLoadRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(SettingsWindowViewModel));
     private readonly CancellationTokenSource _disposeCts = new();
+    private SettingsSectionItemViewModel? _presentedSection;
     private bool _disposed;
 
     public SettingsWindowViewModel(
@@ -101,6 +102,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasHostedSettingsView => HostedSettingsView is not null;
 
+    public bool HasStagedHostedSettingsView => StagedHostedSettingsView is not null;
+
     public bool ShowGenericPackageSettings => IsPackageSelection && !HasHostedSettingsView;
 
     public bool ShowScrollableSelectionContent => !HasHostedSettingsView;
@@ -156,6 +159,20 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             OnPropertyChanged(nameof(ShowScrollableSelectionContent));
             OnPropertyChanged(nameof(ShowGenericPackageSettings));
             OnPropertyChanged(nameof(ShowApplySaveButtons));
+        }
+    }
+
+    private object? _stagedHostedSettingsView;
+
+    public object? StagedHostedSettingsView
+    {
+        get => _stagedHostedSettingsView;
+        private set
+        {
+            if (SetProperty(ref _stagedHostedSettingsView, value))
+            {
+                OnPropertyChanged(nameof(HasStagedHostedSettingsView));
+            }
         }
     }
 
@@ -317,6 +334,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             await ApplyPackageSelectionAsync(
                 selectedSection,
                 _selection.Version,
+                selectedSection,
                 new Dictionary<string, string?>(),
                 refreshToken);
         }
@@ -325,6 +343,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     internal void DetachHostedPackageSettingsView()
     {
         _selectionLoadRequest.Invalidate();
+        ReleaseStagedHostedSettingsView();
         HostedSettingsView = null;
     }
 
@@ -446,6 +465,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _packageSectionRefresh.Dispose();
         _disposeCts.Cancel();
         _tasks.Dispose();
+        ReleaseStagedHostedSettingsView();
         HostedSettingsView = null;
         if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
         {
@@ -473,6 +493,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
 
         _selection.PreserveSelection(refreshedSelection);
+        _presentedSection = refreshedSelection;
 
         _packageSettings.TryGetSchema(selectedPackageId, out var schema);
         ApplyPackageSelectionHeader(refreshedSelection, schema);
@@ -480,7 +501,9 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     private void ApplyCoreSelection(SettingsSectionItemViewModel item)
     {
+        _presentedSection = item;
         IsBusy = false;
+        ReleaseStagedHostedSettingsView();
         HostedSettingsView = null;
         IsPackageSelection = false;
         IsCliSelection = string.Equals(item.Id, "cli", StringComparison.OrdinalIgnoreCase);
@@ -512,6 +535,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private async Task<bool> ApplyPackageSelectionAsync(
         SettingsSectionItemViewModel item,
         int selectionVersion,
+        SettingsSectionItemViewModel? previousSelection,
         IReadOnlyDictionary<string, string?> parameters,
         CancellationToken cancellationToken)
     {
@@ -523,62 +547,140 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         using var request = _selectionLoadRequest.Start(cancellationToken);
         IsBusy = true;
+        HostedPackageViewBoundary? candidateBoundary = null;
+        HostedPackageSettingsSelection? hostedSelection = null;
+        var committed = false;
         try
         {
             var hasSchema = _packageSettings.TryGetSchema(item.PackageId, out var schema);
-            ApplyPackageSelectionHeader(item, schema);
-            SelectedCoreLines.Clear();
-            _packageSettings.ClearSelectedSections();
-            HostedSettingsView = null;
 
             var result = await _packageSettings.LoadSelectionAsync(
                 item.PackageId,
                 hasSchema ? schema : null,
+                IsHostedSettingsViewInUse(item.PackageId),
                 request.Token);
             if (!request.IsCurrent || !IsCurrentSelection(item, selectionVersion))
             {
                 return false;
             }
 
-            HostedSettingsView = result is HostedPackageSettingsSelection hosted ? hosted.View : null;
-            _packageSettings.ApplySelectionResult(result);
-
-            StatusText = result.StatusText;
-            if (HostedSettingsView is Avalonia.Controls.Control hostedSettingsView)
+            if (result is HostedPackageSettingsSelection hosted)
             {
-                await AppPackageViewNavigator.NotifyViewNavigatedAsync(
-                    hostedSettingsView,
+                hostedSelection = hosted;
+                candidateBoundary = hosted.View as HostedPackageViewBoundary
+                    ?? throw new InvalidOperationException("The package settings view host is invalid.");
+                ReleaseStagedHostedSettingsView();
+                StagedHostedSettingsView = candidateBoundary;
+
+                var context = new PackageViewNavigationContext(
                     $"settings:{item.PackageId}",
-                    parameters,
-                    request.Token);
-                if (hostedSettingsView is HostedPackageViewBoundary { IsFaulted: true } boundary)
+                    parameters);
+                if (!await candidateBoundary.PrepareNavigationAsync(context, request.Token)
+                    || candidateBoundary.IsFaulted)
                 {
-                    throw new InvalidOperationException(boundary.FaultMessage ?? "The package settings view rejected navigation.");
+                    throw new InvalidOperationException(
+                        candidateBoundary.FaultMessage ?? "The package settings view rejected navigation.");
                 }
+                if (!request.IsCurrent || !IsCurrentSelection(item, selectionVersion))
+                {
+                    return false;
+                }
+                if (!hosted.PromoteCandidate())
+                {
+                    throw new InvalidOperationException("The package settings view changed while navigation was being prepared.");
+                }
+
+                CommitPackageSelection(item, schema);
+                StagedHostedSettingsView = null;
+                HostedSettingsView = candidateBoundary;
+                candidateBoundary = null;
+                _packageSettings.ApplySelectionResult(result);
+                StatusText = result.StatusText;
+                committed = true;
+                await ((HostedPackageViewBoundary)HostedSettingsView!).OnNavigationPresentedAsync(
+                    context,
+                    request.Token);
+                if (HostedSettingsView is HostedPackageViewBoundary { IsFaulted: true } presentedBoundary)
+                {
+                    throw new InvalidOperationException(
+                        presentedBoundary.FaultMessage ?? "The package settings view rejected presentation.");
+                }
+            }
+            else
+            {
+                CommitPackageSelection(item, schema);
+                ReleaseStagedHostedSettingsView();
+                HostedSettingsView = null;
+                _packageSettings.ApplySelectionResult(result);
+                StatusText = result.StatusText;
+                committed = true;
             }
 
             return request.IsCurrent && IsCurrentSelection(item, selectionVersion);
         }
         catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
         {
+            if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
+            {
+                RestoreSelection(previousSelection);
+            }
             return false;
         }
         catch (Exception ex)
         {
             if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
             {
-                ApplyCoreSelection(CoreSections[0]);
+                if (committed)
+                {
+                    _selection.PreserveSelection(CoreSections[0]);
+                    ApplyCoreSelection(CoreSections[0]);
+                }
+                else
+                {
+                    RestoreSelection(previousSelection);
+                }
                 StatusText = $"Could not open package settings: {ex.Message}";
             }
             return false;
         }
         finally
         {
+            if (candidateBoundary is not null)
+            {
+                if (ReferenceEquals(StagedHostedSettingsView, candidateBoundary))
+                {
+                    StagedHostedSettingsView = null;
+                }
+                if (!ReferenceEquals(HostedSettingsView, candidateBoundary))
+                {
+                    candidateBoundary.Release();
+                }
+            }
+            hostedSelection?.Dispose();
             if (request.IsCurrent && IsCurrentSelection(item, selectionVersion))
             {
                 IsBusy = false;
             }
         }
+    }
+
+    private void CommitPackageSelection(
+        SettingsSectionItemViewModel item,
+        PackageSettingsSchemaDescriptor? schema)
+    {
+        _presentedSection = item;
+        ApplyPackageSelectionHeader(item, schema);
+        SelectedCoreLines.Clear();
+        _packageSettings.ClearSelectedSections();
+    }
+
+    private void RestoreSelection(SettingsSectionItemViewModel? previousSelection)
+    {
+        if (previousSelection is not null)
+        {
+            _selection.PreserveSelection(previousSelection);
+        }
+        IsBusy = false;
     }
 
     private void ApplyPackageSelectionHeader(
@@ -611,5 +713,21 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     private bool IsCurrentSelection(SettingsSectionItemViewModel item, int? selectionVersion = null)
         => !_disposed && _selection.IsCurrent(item, selectionVersion);
+
+    private void ReleaseStagedHostedSettingsView()
+    {
+        var staged = StagedHostedSettingsView;
+        StagedHostedSettingsView = null;
+        if (!ReferenceEquals(staged, HostedSettingsView))
+        {
+            HostedPackageViewBoundary.ReleaseHostedView(staged);
+        }
+    }
+
+    private bool IsHostedSettingsViewInUse(string packageId)
+        => HostedSettingsView is HostedPackageViewBoundary presented
+               && string.Equals(presented.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+           || StagedHostedSettingsView is HostedPackageViewBoundary staged
+               && string.Equals(staged.PackageId, packageId, StringComparison.OrdinalIgnoreCase);
 
 }

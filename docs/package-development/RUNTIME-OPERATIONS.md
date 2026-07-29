@@ -132,7 +132,18 @@ Before a stream response starts, Runtime API failures use RFC Problem Details wi
 
 Problem details include `X-Correlation-ID`; internal failures expose a generic detail while Runtime logs the exception. Once a stream has emitted data, a handler failure uses the terminal `runtime.package-stream.handler-error` frame and truncates its message to 4,096 characters. Do not put credentials or private data in exception messages.
 
-At the SDK boundary, expect `ArgumentException`/`ArgumentNullException` for invalid local arguments, `OperationCanceledException` for cancellation/deadlines, `InvalidDataException` for malformed or oversized transport data, and an operation/stream failure exception for Runtime-reported errors. Do not depend on host implementation exception types that are outside `Sunder.Sdk`; present a safe package-level error and use correlation ids from host diagnostics when available.
+At the SDK boundary, expect `ArgumentException`/`ArgumentNullException` for invalid local arguments, `OperationCanceledException` when the caller cancels, and `InvalidDataException` for malformed or oversized successful transport data. Runtime availability, transport, timeout, Runtime-reported operation failures, and stream terminal failures throw `PackageRuntimeInvocationException`, which exposes a bounded lowercase `Code`, `IsTransient`, optional HTTP `StatusCode`, and optional diagnostic `CorrelationId`. This scalar metadata is the complete package-visible failure contract; host exceptions are logged internally and are never attached as inner exceptions.
+
+```csharp
+try
+{
+    await runtime.InvokeAsync(QuickstartOperations.Greet, request, cancellationToken);
+}
+catch (PackageRuntimeInvocationException error) when (error.IsTransient)
+{
+    // Retry according to package policy; retain the correlation id for diagnostics.
+}
+```
 
 ## Design Guidance
 

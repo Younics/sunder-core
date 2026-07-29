@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
@@ -19,6 +20,10 @@ internal sealed record ActiveLoadedPackage(
     RuntimePackageLoadContext LoadContext,
     IPackageSettings Settings)
 {
+    public PackageExtensionOwnerActivation? ExtensionOwner { get; init; }
+
+    public Guid RuntimeActivationId { get; init; } = Guid.NewGuid();
+
     public PackageSettingsSchema? CanonicalSettingsSchema { get; init; }
 
     public IReadOnlyDictionary<string, RuntimePackageOperationRegistration> RuntimeOperations { get; init; }
@@ -40,6 +45,9 @@ internal sealed class ActivePackageSession
     private readonly RuntimePackageExtensionCatalog _extensionCatalog;
     private readonly object _lifecycleSync = new();
     private readonly List<Task> _lifecycleOperations = [];
+    private readonly List<Task> _runtimeGenerationActivationOperations = [];
+    private readonly HashSet<IPackageRuntimeGenerationParticipant> _committedRuntimeGenerationParticipants =
+        new(ReferenceEqualityComparer.Instance);
     private Task? _disposalTask;
 
     public ActivePackageSession(
@@ -62,6 +70,9 @@ internal sealed class ActivePackageSession
     }
 
     private bool _backgroundServicesStarted;
+    private bool _runtimeGenerationCommitted;
+    private bool _runtimeGenerationMonitoringStarted;
+    private long? _committedSessionGeneration;
 
     public static ActivePackageSession Empty { get; } = new(
         null,
@@ -142,6 +153,120 @@ internal sealed class ActivePackageSession
     }
 
     public IReadOnlyDictionary<string, ActiveLoadedPackage> LoadedPackageMap => _loadedPackageMap;
+
+    public async Task CommitRuntimeGenerationAsync(
+        long sessionGeneration,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_backgroundServicesStarted)
+        {
+            throw new InvalidOperationException("Package background services must start before their Runtime generation is committed.");
+        }
+        if (_runtimeGenerationCommitted)
+        {
+            if (_committedSessionGeneration != sessionGeneration)
+            {
+                throw new InvalidOperationException("Package background services are already committed to another Runtime generation.");
+            }
+            return;
+        }
+        if (_committedSessionGeneration is { } existingGeneration && existingGeneration != sessionGeneration)
+        {
+            throw new InvalidOperationException("Package background-service generation commit cannot change session generations after it begins.");
+        }
+        _committedSessionGeneration = sessionGeneration;
+
+        foreach (var package in _loadedPackageMap.Values.ToArray())
+        {
+            var generation = new PackageRuntimeGeneration(package.RuntimeActivationId, sessionGeneration);
+            foreach (var participant in package.BackgroundServices.OfType<IPackageRuntimeGenerationParticipant>())
+            {
+                if (_committedRuntimeGenerationParticipants.Contains(participant))
+                {
+                    continue;
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                var commitTask = Task.Run(
+                    () => participant.CommitGenerationAsync(generation, cancellationToken),
+                    CancellationToken.None);
+                TrackRuntimeGenerationActivation(commitTask);
+                await commitTask.WaitAsync(cancellationToken);
+                _committedRuntimeGenerationParticipants.Add(participant);
+            }
+        }
+
+        _runtimeGenerationCommitted = true;
+    }
+
+    public void StartRuntimeGenerationMonitoring(
+        Action<string, PackageRuntimeGeneration, Exception> generationFaulted)
+    {
+        ArgumentNullException.ThrowIfNull(generationFaulted);
+        if (!_runtimeGenerationCommitted || _committedSessionGeneration is not { } sessionGeneration)
+        {
+            throw new InvalidOperationException("The Runtime generation must be committed before it can be monitored.");
+        }
+        if (_runtimeGenerationMonitoringStarted)
+        {
+            return;
+        }
+
+        _runtimeGenerationMonitoringStarted = true;
+        foreach (var package in _loadedPackageMap.Values.ToArray())
+        {
+            var generation = new PackageRuntimeGeneration(package.RuntimeActivationId, sessionGeneration);
+            foreach (var participant in package.BackgroundServices
+                         .OfType<IPackageRuntimeGenerationParticipant>()
+                         .Where(_committedRuntimeGenerationParticipants.Contains))
+            {
+                Task completion;
+                try
+                {
+                    completion = participant.GenerationCompletion
+                        ?? Task.FromException(new InvalidOperationException(
+                            "A package Runtime generation participant returned a null completion task."));
+                }
+                catch (Exception exception)
+                {
+                    completion = Task.FromException(exception);
+                }
+                var monitorTask = MonitorRuntimeGenerationAsync(
+                    completion,
+                    package.Descriptor.PackageId,
+                    generation,
+                    generationFaulted);
+                TrackLifecycleOperation(monitorTask);
+            }
+        }
+    }
+
+    public bool OwnsPackageActivation(string packageId, Guid runtimeActivationId)
+        => _loadedPackageMap.TryGetValue(packageId, out var package)
+           && package.RuntimeActivationId == runtimeActivationId
+           && IsPackageEnabled(packageId);
+
+    public bool OwnsRuntimeGeneration(
+        string packageId,
+        PackageRuntimeGeneration generation)
+        => _runtimeGenerationCommitted
+           && _committedSessionGeneration == generation.SessionGeneration
+           && OwnsPackageActivation(packageId, generation.ActivationId);
+
+    private static async Task MonitorRuntimeGenerationAsync(
+        Task completion,
+        string packageId,
+        PackageRuntimeGeneration generation,
+        Action<string, PackageRuntimeGeneration, Exception> generationFaulted)
+    {
+        try
+        {
+            await completion.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            generationFaulted(packageId, generation, exception);
+        }
+    }
 
     public IReadOnlyDictionary<string, SessionPackageDescriptor> SessionPackageMap => _sessionPackageMap;
 
@@ -230,6 +355,27 @@ internal sealed class ActivePackageSession
         string message,
         out ActiveLoadedPackage? packageToDeactivate)
     {
+        var marked = MarkPackageFailedWithoutRetiringExtensions(
+            packageId,
+            origin,
+            message,
+            out packageToDeactivate);
+        if (marked)
+        {
+            BeginPackageExtensionRetirement(
+                packageId,
+                packageToDeactivate,
+                PackageExtensionCatalogChangeReason.PackageFaulted);
+        }
+        return marked;
+    }
+
+    internal bool MarkPackageFailedWithoutRetiringExtensions(
+        string packageId,
+        PackageFailureOrigin origin,
+        string message,
+        out ActiveLoadedPackage? packageToDeactivate)
+    {
         packageToDeactivate = null;
         if (!_sessionPackageMap.TryGetValue(packageId, out var package))
         {
@@ -248,7 +394,6 @@ internal sealed class ActivePackageSession
 
         _sessionPackageMap[packageId] = updatedPackage;
         _loadedPackageMap.Remove(packageId, out packageToDeactivate);
-        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
 
         return true;
     }
@@ -270,7 +415,10 @@ internal sealed class ActivePackageSession
             LastFailureAtUtc = null,
         };
         _loadedPackageMap.Remove(packageId, out packageToDeactivate);
-        _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDisabled);
+        BeginPackageExtensionRetirement(
+            packageId,
+            packageToDeactivate,
+            PackageExtensionCatalogChangeReason.PackageDisabled);
         return true;
     }
 
@@ -281,7 +429,10 @@ internal sealed class ActivePackageSession
         _packageSourceMap.Remove(packageId);
         if (removedSessionPackage || removedLoadedPackage)
         {
-            _extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageUninstalled);
+            BeginPackageExtensionRetirement(
+                packageId,
+                packageToDeactivate,
+                PackageExtensionCatalogChangeReason.PackageUninstalled);
             return true;
         }
 
@@ -293,12 +444,19 @@ internal sealed class ActivePackageSession
         TimeSpan cleanupTimeout,
         CancellationToken cancellationToken = default)
     {
+        _extensionCatalog.BeginAllOwnerRetirements();
         if (!_backgroundServicesStarted)
         {
             return;
         }
 
         _backgroundServicesStarted = false;
+        Task[] activationOperations;
+        lock (_lifecycleSync)
+        {
+            activationOperations = _runtimeGenerationActivationOperations.ToArray();
+        }
+        await Task.WhenAll(activationOperations.Select(ObserveAsync));
         var backgroundServices = _loadedPackageMap.Values
             .Reverse()
             .SelectMany(package => package.BackgroundServices
@@ -335,13 +493,38 @@ internal sealed class ActivePackageSession
 
     private Task GetOrStartDisposal()
     {
+        TaskCompletionSource? completion = null;
         lock (_lifecycleSync)
         {
-            return _disposalTask ??= Task.Run(DisposeAfterLifecycleOperationsAsync, CancellationToken.None);
+            if (_disposalTask is not null)
+            {
+                return _disposalTask;
+            }
+
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _disposalTask = completion.Task;
+        }
+
+        _ = CompleteDisposalAsync(completion);
+        return completion.Task;
+    }
+
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            var extensionRetirements = _extensionCatalog.BeginAllOwnerRetirements();
+            await DisposeAfterLifecycleOperationsAsync(extensionRetirements);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
         }
     }
 
-    private async Task DisposeAfterLifecycleOperationsAsync()
+    private async Task DisposeAfterLifecycleOperationsAsync(
+        IReadOnlyList<PackageExtensionOwnerRetirement> extensionRetirements)
     {
         Task[] lifecycleOperations;
         lock (_lifecycleSync)
@@ -350,13 +533,31 @@ internal sealed class ActivePackageSession
         }
 
         await Task.WhenAll(lifecycleOperations.Select(ObserveAsync));
+        await Task.WhenAll(extensionRetirements.Select(static retirement => retirement.Completion));
         await DisposeCoreAsync();
     }
+
+    internal PackageExtensionOwnerRetirement BeginPackageExtensionRetirement(
+        string packageId,
+        ActiveLoadedPackage? loadedPackage,
+        PackageExtensionCatalogChangeReason reason)
+        => loadedPackage?.ExtensionOwner is { } owner
+            ? _extensionCatalog.BeginOwnerRetirement(owner, reason)
+            : PackageExtensionOwnerRetirement.Completed(packageId);
 
     private void TrackLifecycleOperation(Task operation)
     {
         lock (_lifecycleSync)
         {
+            _lifecycleOperations.Add(operation);
+        }
+    }
+
+    private void TrackRuntimeGenerationActivation(Task operation)
+    {
+        lock (_lifecycleSync)
+        {
+            _runtimeGenerationActivationOperations.Add(operation);
             _lifecycleOperations.Add(operation);
         }
     }

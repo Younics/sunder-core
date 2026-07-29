@@ -266,6 +266,111 @@ internal sealed class AppPackageViewRegistry
         return result;
     }
 
+    public AppPackageSettingsViewNavigationTarget? GetSettingsViewForNavigation(
+        string packageId,
+        bool requireReplacement,
+        Func<string, bool> isPackageDisabled,
+        Action<string, string, Exception> reportFailure)
+    {
+        AppRegisteredSettingsView registration;
+        lock (_syncRoot)
+        {
+            if (!_registeredSettingsViews.TryGetValue(packageId, out var foundRegistration))
+            {
+                return null;
+            }
+            registration = foundRegistration;
+        }
+
+        if (isPackageDisabled(registration.PackageId))
+        {
+            return null;
+        }
+
+        lock (_syncRoot)
+        {
+            if (!_registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
+                || currentRegistration != registration)
+            {
+                return null;
+            }
+            if (!requireReplacement && _settingsViewCache.TryGetValue(packageId, out var cachedView))
+            {
+                return new AppPackageSettingsViewNavigationTarget(cachedView, Candidate: null);
+            }
+        }
+
+        Control control;
+        try
+        {
+            control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
+        }
+        catch (Exception ex)
+        {
+            reportFailure(registration.PackageId, $"Failed to create package settings view for '{packageId}': {ex.Message}", ex);
+            return null;
+        }
+
+        var isCurrent = false;
+        lock (_syncRoot)
+        {
+            isCurrent = _registeredSettingsViews.TryGetValue(packageId, out var currentRegistration)
+                && currentRegistration == registration;
+        }
+        if (!isCurrent)
+        {
+            DisposeCachedControl(control);
+            return null;
+        }
+
+        var candidate = new AppPackageSettingsViewCandidate(
+            this,
+            packageId,
+            registration,
+            control,
+            isPackageDisabled);
+        return new AppPackageSettingsViewNavigationTarget(control, candidate);
+    }
+
+    internal bool PromoteSettingsViewCandidate(AppPackageSettingsViewCandidate candidate)
+    {
+        if (!ReferenceEquals(candidate.Owner, this)
+            || candidate.IsPackageDisabled(candidate.PackageId))
+        {
+            return false;
+        }
+
+        lock (_syncRoot)
+        {
+            if (candidate.IsCompleted
+                || candidate.IsPromoted
+                || !_registeredSettingsViews.TryGetValue(candidate.PackageId, out var registration)
+                || !Equals(registration, candidate.Registration))
+            {
+                return false;
+            }
+
+            _settingsViewCache.Remove(candidate.PackageId, out var displacedView);
+            _settingsViewCache[candidate.PackageId] = candidate.View;
+            candidate.MarkPromoted(displacedView);
+            return true;
+        }
+    }
+
+    internal void ReleaseSettingsViewCandidate(AppPackageSettingsViewCandidate candidate)
+    {
+        Control? controlToDispose;
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(candidate.Owner, this) || !candidate.TryComplete(out controlToDispose))
+            {
+                return;
+            }
+        }
+
+        DisposeCachedControl(controlToDispose);
+    }
+
     public void RemoveCachedViews(string packageId)
     {
         var controlsToDispose = new List<Control>();
@@ -454,4 +559,52 @@ internal sealed class AppPackageViewRegistry
         PackageViewRegistration Registration);
 
     private sealed record AppRegisteredSettingsView(IServiceProvider ServiceProvider, Type ImplementationType, string PackageId);
+}
+
+internal sealed record AppPackageSettingsViewNavigationTarget(
+    Control View,
+    AppPackageSettingsViewCandidate? Candidate);
+
+internal sealed class AppPackageSettingsViewCandidate(
+    AppPackageViewRegistry owner,
+    string packageId,
+    object registration,
+    Control view,
+    Func<string, bool> isPackageDisabled) : IDisposable
+{
+    private Control? _displacedView;
+    private bool _promoted;
+    private bool _completed;
+
+    internal AppPackageViewRegistry Owner { get; } = owner;
+    internal string PackageId { get; } = packageId;
+    internal object Registration { get; } = registration;
+    internal Control View { get; } = view;
+    internal Func<string, bool> IsPackageDisabled { get; } = isPackageDisabled;
+    internal bool IsCompleted => _completed;
+    internal bool IsPromoted => _promoted;
+
+    public bool Promote() => Owner.PromoteSettingsViewCandidate(this);
+
+    internal void MarkPromoted(Control? displacedView)
+    {
+        _promoted = true;
+        _displacedView = displacedView;
+    }
+
+    internal bool TryComplete(out Control? controlToDispose)
+    {
+        if (_completed)
+        {
+            controlToDispose = null;
+            return false;
+        }
+
+        _completed = true;
+        controlToDispose = _promoted ? _displacedView : View;
+        _displacedView = null;
+        return true;
+    }
+
+    public void Dispose() => Owner.ReleaseSettingsViewCandidate(this);
 }

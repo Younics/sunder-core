@@ -9,7 +9,7 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class PackageAuthSessionCoordinator(
     PackageSessionState sessionState,
     PackageCallbackSessionCoordinator callbacks,
-    Action<string, long, PackageFailureOrigin, Exception, string> handlePackageFault)
+    Action<string, PackageActivationIdentity, PackageFailureOrigin, Exception, string> handlePackageFault)
 {
     public async Task<PackageAuthStatusResponse?> GetPackageAuthStatusAsync(
         PackageSessionLease lease,
@@ -18,6 +18,7 @@ internal sealed class PackageAuthSessionCoordinator(
     {
         var loadedPackage = sessionState.GetLoadedPackage(lease, packageId);
         if (loadedPackage?.AuthHandler is null) return null;
+        var activationIdentity = lease.GetPackageActivationIdentity(loadedPackage);
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
         try
         {
@@ -26,7 +27,7 @@ internal sealed class PackageAuthSessionCoordinator(
         catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
-            handlePackageFault(packageId, lease.Generation, PackageFailureOrigin.RuntimeAuthentication, exception, "read package auth status");
+            handlePackageFault(packageId, activationIdentity, PackageFailureOrigin.RuntimeAuthentication, exception, "read package auth status");
             return new PackageAuthStatusResponse(
                 packageId,
                 Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,
@@ -91,6 +92,7 @@ internal sealed class PackageAuthSessionCoordinator(
     {
         var loadedPackage = sessionState.GetLoadedPackage(lease, packageId);
         if (loadedPackage?.AuthHandler is null) return null;
+        var activationIdentity = lease.GetPackageActivationIdentity(loadedPackage);
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
         try
         {
@@ -99,7 +101,7 @@ internal sealed class PackageAuthSessionCoordinator(
         catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
-            handlePackageFault(packageId, lease.Generation, PackageFailureOrigin.RuntimeAuthentication, exception, "disconnect package authorization");
+            handlePackageFault(packageId, activationIdentity, PackageFailureOrigin.RuntimeAuthentication, exception, "disconnect package authorization");
             return new PackageAuthStatusResponse(
                 packageId,
                 Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed,

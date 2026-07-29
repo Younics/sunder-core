@@ -136,7 +136,7 @@ public sealed class AppPackageLifecycleCoordinator
                 packageSources,
                 retryDisabledPackageIds,
                 Publisher.HasCommittedGeneration,
-                Retirement.Enqueue,
+                RejectCandidate,
                 cancellationToken).ConfigureAwait(false);
             var enabledPackages = AppPackageGenerationBuilder.FilterEnabledPackages(candidate, activePackages);
             if (snapshot is not null)
@@ -169,9 +169,15 @@ public sealed class AppPackageLifecycleCoordinator
         {
             if (!committed && candidate is not null)
             {
-                Retirement.Enqueue(candidate);
+                RejectCandidate(candidate);
             }
         }
+    }
+
+    private void RejectCandidate(AppPackageGeneration candidate)
+    {
+        candidate.Composition.UnpublishServices();
+        Retirement.Enqueue(candidate);
     }
 
     private AppPackageGenerationBuilder Builder

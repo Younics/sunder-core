@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Sunder.App.Views.Controls;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -98,6 +99,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             _snapshotCache,
             EnsureSessionFolder,
             DisablePackageForGeneration,
+            DisableExtensionOwnerForGeneration,
             shellViewService,
             settingsNavigationService,
             notificationCenter,
@@ -324,6 +326,14 @@ public sealed class PackageViewHostService : IAsyncDisposable
             && generation.Composition.ViewFacade.IsViewPrepared(viewId);
     }
 
+    internal bool SupportsNavigationPreparation(string viewId, Guid expectedGenerationId)
+    {
+        ThrowIfDisposed();
+        var generation = CurrentGeneration;
+        return generation.Id == expectedGenerationId
+            && generation.Composition.ViewFacade.SupportsNavigationPreparation(viewId);
+    }
+
     internal async Task<Control?> PreloadViewAsync(
         string viewId,
         Guid expectedGenerationId,
@@ -512,6 +522,43 @@ public sealed class PackageViewHostService : IAsyncDisposable
         return notified;
     }
 
+    internal async ValueTask<bool> PrepareNavigationForPresentationAsync(
+        string viewId,
+        IReadOnlyDictionary<string, string?>? parameters,
+        Guid expectedGenerationId,
+        Func<Control, bool> stageView,
+        Func<Control, bool> presentView,
+        Action<Control> unstageView,
+        CancellationToken cancellationToken,
+        Func<bool>? canStart = null)
+    {
+        var prepared = false;
+        cancellationToken.ThrowIfCancellationRequested();
+        await InvokeNavigationOnUiThreadAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var generation = CurrentGeneration;
+            if (generation.Id != expectedGenerationId)
+            {
+                return;
+            }
+
+            prepared = await generation.Composition.ViewFacade
+                .PrepareNavigationForPresentationAsync(
+                    viewId,
+                    parameters,
+                    stageView,
+                    presentView,
+                    unstageView,
+                    cancellationToken,
+                    () => CurrentGeneration.Id == expectedGenerationId
+                        && (canStart is null || canStart()));
+            prepared = prepared && CurrentGeneration.Id == expectedGenerationId;
+        }).ConfigureAwait(false);
+        return prepared;
+    }
+
     internal void CancelViewNavigation(string viewId)
         => CurrentGeneration.Composition.ViewFacade.CancelViewNavigation(viewId);
 
@@ -556,6 +603,16 @@ public sealed class PackageViewHostService : IAsyncDisposable
     {
         ThrowIfDisposed();
         return CurrentGeneration.Composition.ViewFacade.GetOrCreateSettingsView(packageId);
+    }
+
+    internal AppPackageSettingsViewNavigationTarget? GetSettingsViewForNavigation(
+        string packageId,
+        bool requireReplacement)
+    {
+        ThrowIfDisposed();
+        return CurrentGeneration.Composition.ViewFacade.GetSettingsViewForNavigation(
+            packageId,
+            requireReplacement);
     }
 
     internal Control? CreateHostedViewBoundary(string packageId, string viewId, Control? hostedView)
@@ -646,6 +703,42 @@ public sealed class PackageViewHostService : IAsyncDisposable
             $"disabling package '{packageId}' for generation '{generationId:N}'");
     }
 
+    private void DisableExtensionOwnerForGeneration(
+        Guid generationId,
+        PackageExtensionOwnerToken ownerToken,
+        string message,
+        PackageFailureOrigin origin,
+        Exception? exception)
+    {
+        var faultedGeneration = CurrentGeneration;
+        if (faultedGeneration.Id != generationId
+            || !faultedGeneration.Composition.ExtensionCatalog.IsActiveOwner(ownerToken))
+        {
+            return;
+        }
+
+        var packageId = ownerToken.PackageId;
+        _faultTasks.Run(
+            async cancellationToken =>
+            {
+                using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+                var currentGeneration = CurrentGeneration;
+                if (currentGeneration.Id != generationId
+                    || !currentGeneration.Composition.ExtensionCatalog.IsActiveOwner(ownerToken))
+                {
+                    return;
+                }
+
+                await currentGeneration.Composition.DisablePackageAsync(
+                    packageId,
+                    message,
+                    origin,
+                    exception,
+                    cancellationToken).ConfigureAwait(false);
+            },
+            $"disabling extension owner '{packageId}' for generation '{generationId:N}'");
+    }
+
     internal async Task DisablePackageAsync(
         string packageId,
         string message,
@@ -666,6 +759,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         CancellationToken cancellationToken)
         => InvokeNavigationOnUiThreadAsync(async () =>
         {
+            using var runtimePreparation = generation.Composition.BeginRuntimePreparation();
             cancellationToken.ThrowIfCancellationRequested();
             Control? stagedView = null;
             var prepared = await generation.Composition.ViewFacade.PrepareViewAsync(

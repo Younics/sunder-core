@@ -8,7 +8,10 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Views.Controls;
 
-internal sealed class HostedPackageViewBoundary : Panel, IPackageViewNavigationTarget, IDisposable
+internal sealed class HostedPackageViewBoundary : Panel,
+    IPackageViewNavigationTarget,
+    IPackageViewNavigationPreparationTarget,
+    IDisposable
 {
     private readonly string _packageId;
     private readonly string _viewId;
@@ -34,6 +37,8 @@ internal sealed class HostedPackageViewBoundary : Panel, IPackageViewNavigationT
 
     public Control HostedView => _hostedView;
 
+    internal string PackageId => _packageId;
+
     public bool IsFaulted => _faulted;
 
     public string? FaultMessage { get; private set; }
@@ -58,6 +63,64 @@ internal sealed class HostedPackageViewBoundary : Panel, IPackageViewNavigationT
         try
         {
             await AppPackageViewNavigator.NotifyViewNavigatedAsync(
+                _hostedView,
+                context.ViewId,
+                context.Parameters,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            HandleFault(ex);
+        }
+    }
+
+    public async ValueTask<bool> PrepareNavigationAsync(
+        PackageViewNavigationContext context,
+        CancellationToken cancellationToken = default)
+    {
+        if (_faulted || _released)
+        {
+            return false;
+        }
+
+        try
+        {
+            var status = await AppPackageViewNavigator.PrepareViewNavigationAsync(
+                _hostedView,
+                context.ViewId,
+                context.Parameters,
+                cancellationToken);
+            if (status == AppPackageViewNavigator.NavigationPreparationStatus.Unsupported)
+            {
+                await AppPackageViewNavigator.NotifyViewNavigatedAsync(
+                    _hostedView,
+                    context.ViewId,
+                    context.Parameters,
+                    cancellationToken);
+                return true;
+            }
+
+            return status == AppPackageViewNavigator.NavigationPreparationStatus.Ready;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            HandleFault(ex);
+            return false;
+        }
+    }
+
+    public async ValueTask OnNavigationPresentedAsync(
+        PackageViewNavigationContext context,
+        CancellationToken cancellationToken = default)
+    {
+        if (_faulted || _released)
+        {
+            return;
+        }
+
+        try
+        {
+            await AppPackageViewNavigator.NotifyViewNavigationPresentedAsync(
                 _hostedView,
                 context.ViewId,
                 context.Parameters,

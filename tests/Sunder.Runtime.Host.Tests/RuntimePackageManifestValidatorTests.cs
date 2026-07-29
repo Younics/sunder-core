@@ -68,6 +68,17 @@ public sealed class RuntimePackageManifestValidatorTests
         Assert.Contains(errors, error => error.Contains("requires SDK capability 'callbacks.v2'", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("storage.key-migration.v2")]
+    [InlineData("runtime-invocation-errors.v2")]
+    [InlineData("view-navigation-preparation.v2")]
+    public void Validate_WhenNewCapabilityVersionIsUnsupported_RejectsBeforeActivation(string capability)
+    {
+        var errors = SunderSdkCompatibilityProfile.Validate(CreateManifest(requiredSdkCapabilities: [capability]));
+
+        Assert.Contains(errors, error => error.Contains($"requires SDK capability '{capability}'", StringComparison.Ordinal));
+    }
+
     private static SunderPackageManifest CreateManifest(
         string entryAssembly = "Test.Package.dll",
         int? sdkApiVersion = 1,

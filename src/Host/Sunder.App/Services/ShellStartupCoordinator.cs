@@ -411,7 +411,7 @@ public sealed class ShellStartupCoordinator
                         {
                             settingsNavigationService.Detach(windowLauncher);
                             mainWindowViewModel?.Dispose();
-                            mainWindow?.Close();
+                            mainWindow?.CloseForShutdown();
                             windowLauncher.CloseForShutdown();
                             throw;
                         }

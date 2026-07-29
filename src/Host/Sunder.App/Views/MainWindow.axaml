@@ -48,7 +48,15 @@
         <controls:ShellToolbar x:Name="ShellToolbar"
                                Grid.Row="0" />
 
-        <controls:ShellWorkspace Grid.Row="1" />
+        <controls:ShellWorkspace x:Name="ShellWorkspaceControl"
+                                 Grid.Row="1" />
+
+        <Image x:Name="PackageViewTransitionSnapshot"
+               Grid.Row="1"
+               IsVisible="False"
+               IsHitTestVisible="True"
+               Stretch="Fill"
+               ZIndex="800" />
 
         <controls:ShellStatusBar Grid.Row="2" />
 

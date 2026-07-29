@@ -12,7 +12,7 @@ public partial class PackagesWindow : Window
 {
     private PackagesWindowViewModel? ViewModel => DataContext as PackagesWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
-    private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private readonly WindowCloseToHideCoordinator _closeCoordinator;
     private PackagesWindowViewModel? _subscribedViewModel;
     private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindow));
     private readonly CancellationTokenSource _lifetime = new();
@@ -21,10 +21,12 @@ public partial class PackagesWindow : Window
     {
         InitializeComponent();
         SunderWindowSizing.ApplySecondaryWindowSize(this);
-        _lifecycleController = new SecondaryWindowLifecycleController(
+        _closeCoordinator = new WindowCloseToHideCoordinator(
             this,
-            () => _stateController?.PersistWindowState(),
-            OnLifecycleClosed);
+            hideOnClose: true,
+            closeOnEscape: true,
+            persistWindowState: () => _stateController?.PersistWindowState(),
+            closed: OnLifecycleClosed);
         DataContextChanged += OnDataContextChanged;
         Opened += OnOpened;
     }
@@ -46,11 +48,12 @@ public partial class PackagesWindow : Window
     }
 
     public void CloseForShutdown()
-        => _lifecycleController.CloseForShutdown();
+        => _closeCoordinator.CloseForShutdown();
 
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
+        _stateController?.RecordWindowedPlacement();
 
         if (ViewModel is not null)
         {

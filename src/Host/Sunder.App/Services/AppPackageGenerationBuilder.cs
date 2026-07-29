@@ -1,3 +1,4 @@
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -9,6 +10,7 @@ internal sealed class AppPackageGenerationBuilder(
     AppPackageSnapshotCache snapshotCache,
     Func<string> ensureSessionFolder,
     Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
+    Action<Guid, PackageExtensionOwnerToken, string, PackageFailureOrigin, Exception?> disableExtensionOwner,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
     NotificationCenterService? notificationCenter,
@@ -215,6 +217,7 @@ internal sealed class AppPackageGenerationBuilder(
             viewRegistry,
             state,
             disablePackage,
+            disableExtensionOwner,
             sharedAssemblyRegistry,
             extensionCatalog,
             shellViewService,

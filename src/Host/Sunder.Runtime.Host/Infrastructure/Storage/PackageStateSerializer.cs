@@ -9,7 +9,10 @@ internal sealed class PackageStateSerializer
     private const string Format = "sunder.package-state";
     private const int Version = 1;
 
-    internal PackageValuesDocument Deserialize(byte[] contents, string canonicalPath)
+    internal PackageValuesDocument Deserialize(
+        byte[] contents,
+        string canonicalPath,
+        bool enforcePackageKeyValidation = true)
     {
         using var json = JsonDocument.Parse(contents);
         var root = PackageStorageJson.RequireObject(json, "state document");
@@ -47,7 +50,8 @@ internal sealed class PackageStateSerializer
             PackageStorageJson.ReadStringDictionary(
                 valuesElement,
                 "Stored values must be a JSON object.",
-                "Every stored state value must be a string."),
+                "Every stored state value must be a string.",
+                enforcePackageKeyValidation),
             revision);
     }
 

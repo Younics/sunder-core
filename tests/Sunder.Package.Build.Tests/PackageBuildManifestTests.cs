@@ -20,6 +20,7 @@ using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Runtime;
 using Sunder.Sdk.Settings;
 using Sunder.Sdk.Stacks;
+using Sunder.Sdk.Storage;
 using Xunit;
 using MSBuildTaskItem = Microsoft.Build.Utilities.TaskItem;
 
@@ -69,21 +70,26 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.ViewsV1,
             SunderSdkCapabilities.SettingsViewsV1,
             SunderSdkCapabilities.BackgroundServicesV1,
+            SunderSdkCapabilities.RuntimeGenerationsV1,
             SunderSdkCapabilities.ExtensionsV1,
             SunderSdkCapabilities.SettingsSchemaV1,
             SunderSdkCapabilities.SettingsV1,
             SunderSdkCapabilities.StorageV1,
+            SunderSdkCapabilities.StorageKeyMigrationV1,
             SunderSdkCapabilities.RoleLocalWorkspaceV1,
             SunderSdkCapabilities.SecretsV1,
             SunderSdkCapabilities.LoggingV1,
             SunderSdkCapabilities.NotificationsV1,
             SunderSdkCapabilities.ShellViewV1,
+            SunderSdkCapabilities.ViewNavigationPreparationV1,
             SunderSdkCapabilities.CallbacksV1,
             SunderSdkCapabilities.AuthV1,
             SunderSdkCapabilities.ExtensionChangesV1,
+            SunderSdkCapabilities.ExtensionInvocationsV1,
             SunderSdkCapabilities.StacksV1,
             SunderSdkCapabilities.StackContributionsV1,
             SunderSdkCapabilities.RuntimeOperationsV1,
+            SunderSdkCapabilities.RuntimeInvocationErrorsV1,
             SunderSdkCapabilities.ThemingV1,
         }.Order(StringComparer.OrdinalIgnoreCase), capabilities.Order(StringComparer.OrdinalIgnoreCase));
     }
@@ -372,6 +378,14 @@ public sealed class PackageBuildManifestTests
         Assert.True(File.Exists(manifestPath), $"Source-reference fixture manifest was not generated: {manifestPath}");
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         Assert.Equal("1.1.0", document.RootElement.GetProperty("sdkPackageVersion").GetString());
+        AssertContainsCapabilities(
+            ReadCapabilities(document.RootElement),
+            SunderSdkCapabilities.StorageV1,
+            SunderSdkCapabilities.StorageKeyMigrationV1,
+            SunderSdkCapabilities.ShellViewV1,
+            SunderSdkCapabilities.ViewNavigationPreparationV1,
+            SunderSdkCapabilities.RuntimeOperationsV1,
+            SunderSdkCapabilities.RuntimeInvocationErrorsV1);
     }
 
     [Theory]
@@ -875,12 +889,17 @@ public sealed class FixtureView : UserControl;
 
 public sealed class FixtureSettingsView : UserControl;
 
-public sealed class FixtureBackgroundService : IPackageBackgroundService
+public sealed class FixtureBackgroundService : IPackageRuntimeGenerationParticipant
 {
     public Task StartAsync(CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 
     public Task StopAsync(CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task CommitGenerationAsync(
+        PackageRuntimeGeneration generation,
+        CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 }
 
@@ -954,8 +973,10 @@ public sealed class FixtureAuthHandler : IPackageAuthHandler
 public sealed class FixtureExtensionCatalogObserver(IPackageExtensionCatalog extensionCatalog)
 {
     private readonly IPackageExtensionCatalogMonitor? _monitor = extensionCatalog as IPackageExtensionCatalogMonitor;
+    private readonly IPackageExtensionInvocationCatalog? _invocations = extensionCatalog as IPackageExtensionInvocationCatalog;
 
     public bool HasMonitor => _monitor is not null;
+    public bool HasInvocations => _invocations is not null;
 }
 
 public sealed class FixtureShellViewConsumer(IPackageShellViewService shellViewService)
@@ -965,7 +986,25 @@ public sealed class FixtureShellViewConsumer(IPackageShellViewService shellViewS
     public IReadOnlyList<string> ThemeKeys => SunderThemeKeys.BrushKeys;
 }
 
+public sealed class FixturePreparedNavigationConsumer(IPackageViewNavigationPreparationTarget target)
+{
+    public IPackageViewNavigationPreparationTarget Target { get; } = target;
+}
+
 public sealed class FixturePackageActivationCapabilities(IPackageRoleLocalWorkspace roleLocalWorkspace)
 {
     public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; } = roleLocalWorkspace;
+}
+
+public sealed class FixtureNewSdkCapabilities(IPackageStorageKeyMigrator storageKeyMigrator)
+{
+    public IPackageStorageKeyMigrator StorageKeyMigrator { get; } = storageKeyMigrator;
+
+    public string StorageKey { get; } = PackageStorageKeyFactory.Create("fixture", 1, "key");
+
+    public PackageStorageKeyMigration StorageMigration { get; }
+        = PackageStorageKeyMigration.Exact("legacy", "fixture.v1.key");
+
+    public PackageRuntimeInvocationException RuntimeFailure { get; }
+        = new("runtime.v1.fixture", isTransient: false);
 }

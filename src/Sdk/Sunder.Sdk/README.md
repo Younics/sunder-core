@@ -172,6 +172,41 @@ await context.Settings.DeleteValueAsync("enabled", cancellationToken);
 
 Do not use `Storage.State` as a settings store or write mutable data into the installed package folder.
 
+Do not place imported or otherwise opaque domain identifiers directly in physical state or secret keys. Create a deterministic portable key instead; the opaque identifier remains unchanged in the domain model and is hashed only at the storage boundary:
+
+```csharp
+using Sunder.Sdk.Storage;
+
+var physicalKey = PackageStorageKeyFactory.Create(
+    "workspace.config",
+    version: 2,
+    importedWorkspaceId);
+await context.Storage.State.SetValueAsync(physicalKey, json, cancellationToken);
+```
+
+If an earlier package version wrote nonportable dynamic keys, declare their exact shape and ask the Runtime-owned store to migrate them before normal storage access:
+
+```csharp
+if (context.Storage.State is not IPackageStorageKeyMigrator migrator)
+{
+    throw new NotSupportedException("This Runtime cannot migrate package storage keys.");
+}
+
+await migrator.MigrateKeysAsync(
+[
+    PackageStorageKeyMigration.OpaqueId(
+        "workspace:",
+        ":config",
+        "workspace.config",
+        destinationVersion: 2),
+    PackageStorageKeyMigration.Exact("images:v1", "images.v1"),
+], cancellationToken);
+```
+
+Use `PackageStorageKeyMigration.DynamicCleanup` only for a bounded package-owned physical-key grammar that must remove orphaned crash remnants without enumerating secret values. Return `NoMatch` for every key outside that grammar so unknown invalid keys continue to fail closed.
+
+Runtime applies the declared rewrites atomically under the document lock, retains the pre-migration document, and treats repeat execution as a no-op. Every legacy key must match exactly one rule. Unknown invalid keys, ambiguous rules, and unequal destination collisions fail closed instead of discarding data. `IPackageSecrets` implements the same migration capability without exposing secret enumeration.
+
 `Storage.RoleLocalWorkspace` provides paths for APIs such as SQLite, process working directories, and atomic directory trees. It belongs to the current package activation and host role. App and Runtime workspaces are separate, the host owns their lifecycle, and package code must not dispose the capability.
 
 ## Package Runtime Operations
@@ -225,6 +260,10 @@ var response = await runtimeClient.InvokeAsync(
     new ListItemsRequest(Offset: 0, Limit: 100),
     cancellationToken);
 ```
+
+Runtime availability, transport, timeout, and Runtime-reported operation failures throw `PackageRuntimeInvocationException`. Its bounded `Code`, optional `StatusCode` and `CorrelationId`, and `IsTransient` classification are the complete package-visible failure contract. Host exceptions are logged internally and are never attached to the package-visible exception. Caller-requested cancellation remains `OperationCanceledException`.
+
+Host-level App extension orchestrators should invoke contributions through `IPackageExtensionInvocationCatalog` leases. Handle expected operation failures, cancellation, and owner retirement locally. A host may caller-bind `TryReportInvariantViolation` for a trusted orchestrator; ordinary package scopes receive default-deny behavior. For an unexpected contributor invariant failure, the trusted orchestrator releases the lease and reports the original opaque reference. The App accepts only that exact current owner activation and generation before applying its normal package-disable policy.
 
 Requests may run concurrently and are cancelled when the caller disconnects, Runtime shuts down, or the package session generation begins retirement. A retiring generation stops admitting new leases and reload waits only for a bounded drain deadline. Handlers must promptly observe cancellation; a handler that ignores it causes reload to fail while the old generation remains loaded and undisposed. Keep operations coarse-grained, use paging for large collections, do not send local filesystem paths, and do not model the channel as remote SQL or a generic repository. Hosts enforce bounded request and response payloads.
 

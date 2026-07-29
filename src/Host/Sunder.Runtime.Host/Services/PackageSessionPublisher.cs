@@ -29,7 +29,8 @@ internal sealed class PackageSessionPublisher(
     ILogger<PackageSessionPublisher> logger,
     RuntimeLifecyclePolicyOptions? lifecyclePolicy = null)
 {
-    private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
+    private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy = ValidateLifecyclePolicy(
+        lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions());
 
     public PreparedPackageSession Prepare(
         ActivePackageSession session,
@@ -131,19 +132,56 @@ internal sealed class PackageSessionPublisher(
                 snapshots,
                 candidate.Warnings,
                 candidate.Errors);
+            await CommitRuntimeGenerationAsync(
+                candidate.Session,
+                publication.Stamp.SessionGeneration,
+                cancellationToken);
+            sessions.ActivatePublication(pending.Publication);
+            candidate.Session.StartRuntimeGenerationMonitoring(sessions.HandleRuntimeGenerationFault);
             ui.ScheduleCacheGarbageCollection();
             logger.LogInformation(
-                "Started background services and committed the package session in {ElapsedMilliseconds} ms",
+                "Started background services, committed the package session, and activated Runtime generations in {ElapsedMilliseconds} ms",
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             return new PackageSessionPublicationResult(publication.Stamp, publication.Warnings, snapshots);
         }
         catch (Exception exception)
         {
             sessions.DiscardPublication(pending.Publication);
+            if (pending.Publication.Committed && !pending.Publication.Activated)
+            {
+                try
+                {
+                    var failed = await sessions.FailPublicationAsync(
+                        pending.Publication,
+                        candidate.Sources,
+                        candidate.Warnings,
+                        candidate.Errors,
+                        exception);
+                    if (failed.Warnings.Count > 0)
+                    {
+                        logger.LogWarning(
+                            "Failed package Runtime generation cleanup completed with warnings: {Warnings}",
+                            string.Join(" | ", failed.Warnings));
+                    }
+                }
+                catch (Exception retirementException)
+                {
+                    logger.LogCritical(
+                        retirementException,
+                        "Failed to remove a package session whose Runtime generation did not activate");
+                }
+                if (candidate.StageId is not null)
+                {
+                    ui.DiscardStage(candidate.StageId);
+                }
+                ui.DiscardSnapshots(snapshots);
+                logger.LogError(exception, "Package session publication failed before Runtime generation activation completed");
+                throw;
+            }
             if (pending.Publication.Committed)
             {
                 const string warning = "The package session was applied, but publishing its Runtime snapshot did not complete; reconciliation is pending.";
-                logger.LogError(exception, "Package session publication failed after the active session was swapped");
+                logger.LogError(exception, "Package session publication failed after Runtime generation activation completed");
                 return new PackageSessionPublicationResult(
                     sessions.Stamp,
                     [warning],
@@ -157,6 +195,46 @@ internal sealed class PackageSessionPublisher(
             ui.DiscardSnapshots(snapshots);
             await DisposeSessionAsync(candidate.Session);
             throw;
+        }
+    }
+
+    private async Task CommitRuntimeGenerationAsync(
+        ActivePackageSession session,
+        long sessionGeneration,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var timeoutCancellation = new CancellationTokenSource(
+                _lifecyclePolicy.PackageRuntimeGenerationActivationTimeout);
+            using var activationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeoutCancellation.Token);
+            try
+            {
+                await session.CommitRuntimeGenerationAsync(
+                    sessionGeneration,
+                    activationCancellation.Token);
+                return;
+            }
+            catch (OperationCanceledException exception) when (
+                timeoutCancellation.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Package Runtime generation activation did not complete within {_lifecyclePolicy.PackageRuntimeGenerationActivationTimeout.TotalSeconds:0.###} seconds.",
+                    exception);
+            }
+            catch (Exception exception) when (
+                exception is not OperationCanceledException
+                && attempt < _lifecyclePolicy.PackageRuntimeGenerationActivationAttempts)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Package Runtime generation activation attempt {Attempt} of {MaximumAttempts} failed; retrying the exact generation",
+                    attempt,
+                    _lifecyclePolicy.PackageRuntimeGenerationActivationAttempts);
+            }
         }
     }
 
@@ -203,5 +281,22 @@ internal sealed class PackageSessionPublisher(
         {
             logger.LogWarning(exception, "Failed to dispose a discarded package session within the cleanup deadline");
         }
+    }
+
+    private static RuntimeLifecyclePolicyOptions ValidateLifecyclePolicy(RuntimeLifecyclePolicyOptions policy)
+    {
+        if (policy.PackageRuntimeGenerationActivationTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(policy),
+                "The package Runtime generation activation timeout must be positive.");
+        }
+        if (policy.PackageRuntimeGenerationActivationAttempts < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(policy),
+                "At least one package Runtime generation activation attempt is required.");
+        }
+        return policy;
     }
 }

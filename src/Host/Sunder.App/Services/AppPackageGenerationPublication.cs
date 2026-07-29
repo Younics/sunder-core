@@ -4,6 +4,8 @@ internal sealed class AppPackageGenerationPublication
 {
     private readonly object _syncRoot = new();
     private readonly List<Action> _bufferedActions = [];
+    private readonly AsyncLocal<RuntimePreparationAuthority?> _runtimePreparation = new();
+    private readonly CancellationTokenSource _revocation = new();
     private PublicationState _state;
 
     public bool IsPublished
@@ -26,6 +28,36 @@ internal sealed class AppPackageGenerationPublication
                 return _state == PublicationState.Revoked;
             }
         }
+    }
+
+    public bool IsRuntimeAvailable
+    {
+        get
+        {
+            lock (_syncRoot)
+            {
+                return _state == PublicationState.Published
+                       || _state == PublicationState.Pending
+                       && _runtimePreparation.Value is { IsActive: true };
+            }
+        }
+    }
+
+    public IDisposable BeginRuntimePreparation()
+    {
+        lock (_syncRoot)
+        {
+            if (_state != PublicationState.Pending)
+            {
+                throw new InvalidOperationException(
+                    "Runtime preparation authority is only available to a pending App generation.");
+            }
+        }
+
+        var previous = _runtimePreparation.Value;
+        var authority = new RuntimePreparationAuthority();
+        _runtimePreparation.Value = authority;
+        return new RuntimePreparationScope(this, authority, previous);
     }
 
     public void Buffer(Action publish)
@@ -73,8 +105,24 @@ internal sealed class AppPackageGenerationPublication
     {
         lock (_syncRoot)
         {
+            if (_state == PublicationState.Revoked)
+            {
+                return;
+            }
+
             _state = PublicationState.Revoked;
             _bufferedActions.Clear();
+        }
+
+        try
+        {
+            _revocation.Cancel();
+        }
+        catch (Exception exception)
+        {
+            AppSessionLog.WriteError(
+                "Failed to cancel work owned by a retired App package generation.",
+                exception);
         }
     }
 
@@ -84,6 +132,33 @@ internal sealed class AppPackageGenerationPublication
         {
             throw new InvalidOperationException(
                 $"Package capability '{capability}' is unavailable until its App generation has been published.");
+        }
+    }
+
+    public CancellationToken RequireRuntimeAccess(string capability)
+    {
+        lock (_syncRoot)
+        {
+            if (_state == PublicationState.Published
+                || _state == PublicationState.Pending
+                && _runtimePreparation.Value is { IsActive: true })
+            {
+                return _revocation.Token;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Package capability '{capability}' is unavailable outside its current App generation or candidate preparation.");
+    }
+
+    private void EndRuntimePreparation(
+        RuntimePreparationAuthority authority,
+        RuntimePreparationAuthority? previous)
+    {
+        authority.Revoke();
+        if (ReferenceEquals(_runtimePreparation.Value, authority))
+        {
+            _runtimePreparation.Value = previous;
         }
     }
 
@@ -104,5 +179,25 @@ internal sealed class AppPackageGenerationPublication
         Pending,
         Published,
         Revoked,
+    }
+
+    private sealed class RuntimePreparationAuthority
+    {
+        private int _active = 1;
+
+        public bool IsActive => Volatile.Read(ref _active) != 0;
+
+        public void Revoke() => Interlocked.Exchange(ref _active, 0);
+    }
+
+    private sealed class RuntimePreparationScope(
+        AppPackageGenerationPublication owner,
+        RuntimePreparationAuthority authority,
+        RuntimePreparationAuthority? previous) : IDisposable
+    {
+        private AppPackageGenerationPublication? _owner = owner;
+
+        public void Dispose()
+            => Interlocked.Exchange(ref _owner, null)?.EndRuntimePreparation(authority, previous);
     }
 }

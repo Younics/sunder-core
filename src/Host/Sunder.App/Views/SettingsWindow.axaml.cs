@@ -13,17 +13,19 @@ public partial class SettingsWindow : Window
 {
     private SettingsWindowViewModel? ViewModel => DataContext as SettingsWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
-    private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private readonly WindowCloseToHideCoordinator _closeCoordinator;
     private readonly OwnedTaskObserver _tasks = new("Settings window");
 
     public SettingsWindow()
     {
         InitializeComponent();
         SunderWindowSizing.ApplySecondaryWindowSize(this);
-        _lifecycleController = new SecondaryWindowLifecycleController(
+        _closeCoordinator = new WindowCloseToHideCoordinator(
             this,
-            () => _stateController?.PersistWindowState(),
-            OnLifecycleClosed);
+            hideOnClose: true,
+            closeOnEscape: true,
+            persistWindowState: () => _stateController?.PersistWindowState(),
+            closed: OnLifecycleClosed);
         Opened += OnOpened;
         Closed += (_, _) => _tasks.Dispose();
     }
@@ -45,7 +47,7 @@ public partial class SettingsWindow : Window
     }
 
     public void CloseForShutdown()
-        => _lifecycleController.CloseForShutdown();
+        => _closeCoordinator.CloseForShutdown();
 
     private void SectionButton_OnClick(object? sender, RoutedEventArgs e)
     {
@@ -102,6 +104,7 @@ public partial class SettingsWindow : Window
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
+        _stateController?.RecordWindowedPlacement();
     }
 
     private void OnLifecycleClosed()

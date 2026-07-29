@@ -1,5 +1,9 @@
 namespace Sunder.Runtime.Host.Services;
 
+internal readonly record struct PackageActivationIdentity(
+    object SessionIdentity,
+    Guid RuntimeActivationId);
+
 internal sealed class PackageSessionLease : IDisposable
 {
     private Action? _release;
@@ -25,6 +29,9 @@ internal sealed class PackageSessionLease : IDisposable
     public CancellationToken RetirementToken { get; }
 
     internal object Identity { get; }
+
+    internal PackageActivationIdentity GetPackageActivationIdentity(ActiveLoadedPackage package)
+        => new(Identity, package.RuntimeActivationId);
 
     public CancellationTokenSource CreateLinkedCancellation(
         CancellationToken requestCancellation,

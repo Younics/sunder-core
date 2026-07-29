@@ -50,6 +50,7 @@ public sealed class ShellSession : IAsyncDisposable
             initialShellRenderWaiter ?? new InitialShellRenderWaiter(uiDispatcher);
         _shellUiWorkScheduler = new ShellUiWorkScheduler();
         _developerLog = developerLog;
+        MainWindow.HidingForClose += MainWindow_OnHidingForClose;
     }
 
     internal MainWindow MainWindow { get; }
@@ -455,9 +456,10 @@ public sealed class ShellSession : IAsyncDisposable
     {
         _settingsNavigationService.Detach(WindowLauncher);
         MainWindowViewModel.Dispose();
+        MainWindow.HidingForClose -= MainWindow_OnHidingForClose;
         try
         {
-            MainWindow.Close();
+            MainWindow.CloseForShutdown();
         }
         finally
         {
@@ -465,12 +467,23 @@ public sealed class ShellSession : IAsyncDisposable
         }
 
         WindowLauncher.CloseForShutdown();
-        if (_aboutSunderWindow is not null)
+        CloseAboutSunderWindow();
+    }
+
+    private void MainWindow_OnHidingForClose(object? sender, EventArgs e) =>
+        CloseAboutSunderWindow();
+
+    private void CloseAboutSunderWindow()
+    {
+        var window = _aboutSunderWindow;
+        if (window is null)
         {
-            _aboutSunderWindow.Closed -= AboutSunderWindow_OnClosed;
-            _aboutSunderWindow.Close();
-            _aboutSunderWindow = null;
+            return;
         }
+
+        _aboutSunderWindow = null;
+        window.Closed -= AboutSunderWindow_OnClosed;
+        window.Close();
     }
 
     private void AboutSunderWindow_OnClosed(object? sender, EventArgs e)

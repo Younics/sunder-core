@@ -96,7 +96,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         }
     }
 
-    public void ShowSettings()
+    public void ShowSettings(IReadOnlyDictionary<string, string?>? parameters = null)
     {
         var createdWindow = _settingsWindow is null;
         _settingsWindow ??= CreateSettingsWindow();
@@ -308,6 +308,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private static void ShowWindow(Window window)
     {
+        WindowCloseToHideCoordinator.PrepareToShow(window);
         if (window.IsVisible)
         {
             window.Activate();

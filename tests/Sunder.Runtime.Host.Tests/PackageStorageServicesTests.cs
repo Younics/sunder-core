@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sunder.Runtime.Host.Infrastructure.Storage;
+using Sunder.Sdk.Storage;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -157,6 +158,334 @@ public sealed class PackageStorageServicesTests
 
         using var document = JsonDocument.Parse(File.ReadAllBytes(statePath));
         Assert.Equal(writeCount, document.RootElement.GetProperty("revision").GetInt64());
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_MigratesKnownLegacyKeysRetainsBackupAndIsIdempotent()
+    {
+        const string bindingId = "workspace:/caf\u00E9 with spaces/";
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var legacyWorkspaceKey = $"workspace-bindings:{bindingId}:config";
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 7,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [legacyWorkspaceKey] = "workspace-value",
+                ["docker.images:v1"] = "image-value",
+                ["stable"] = "stable-value",
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var store = new JsonPackageKeyValueStore(statePath);
+        PackageStorageKeyMigration[] migrations =
+        [
+            PackageStorageKeyMigration.OpaqueId(
+                "workspace-bindings:",
+                ":config",
+                "workspace-bindings.config",
+                2),
+            PackageStorageKeyMigration.Exact("docker.images:v1", "docker.images.v1"),
+        ];
+
+        await store.MigrateKeysAsync(migrations);
+
+        var workspaceKey = PackageStorageKeyFactory.Create("workspace-bindings.config", 2, bindingId);
+        Assert.Equal("workspace-value", await store.GetValueAsync(workspaceKey));
+        Assert.Equal("image-value", await store.GetValueAsync("docker.images.v1"));
+        Assert.Equal("stable-value", await store.GetValueAsync("stable"));
+        var backupPath = Assert.Single(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+        Assert.Equal(original, await File.ReadAllBytesAsync(backupPath));
+        var committed = await File.ReadAllBytesAsync(statePath);
+        using (var document = JsonDocument.Parse(committed))
+        {
+            Assert.Equal(8, document.RootElement.GetProperty("revision").GetInt64());
+            Assert.False(document.RootElement.GetProperty("values").TryGetProperty(legacyWorkspaceKey, out _));
+            Assert.False(document.RootElement.GetProperty("values").TryGetProperty("docker.images:v1", out _));
+        }
+
+        await Task.WhenAll(Enumerable.Range(0, 12).Select(_ =>
+            new JsonPackageKeyValueStore(statePath).MigrateKeysAsync(migrations)));
+
+        Assert.Equal(committed, await File.ReadAllBytesAsync(statePath));
+        Assert.Single(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_JsonIdentityMigrationUsesOnlyCaseEquivalentPayloadIdentity()
+    {
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        const string payload = "{\"ServerId\":\"server-one\",\"Name\":\"one\"}";
+        const string mismatchedPayload = "{\"ServerId\":\"unrelated\",\"Name\":\"other\"}";
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 2,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["mcp.servers.SERVER-ONE"] = payload,
+                ["mcp.servers.source-id"] = mismatchedPayload,
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var migration = PackageStorageKeyMigration.OpaqueIdWithJsonIdentity(
+            "mcp.servers.",
+            string.Empty,
+            "mcp.catalog.server",
+            1,
+            "serverId");
+        var destination = PackageStorageKeyFactory.Create("mcp.catalog.server", 1, "server-one");
+
+        var store = new JsonPackageKeyValueStore(statePath);
+        await store.MigrateKeysAsync([migration]);
+
+        Assert.Equal(payload, await store.GetValueAsync(destination));
+        Assert.Null(await store.GetValueAsync(PackageStorageKeyFactory.Create(
+            "mcp.catalog.server",
+            1,
+            "SERVER-ONE")));
+        Assert.Equal(
+            mismatchedPayload,
+            await store.GetValueAsync(PackageStorageKeyFactory.Create(
+                "mcp.catalog.server",
+                1,
+                "source-id")));
+        Assert.Null(await store.GetValueAsync(PackageStorageKeyFactory.Create(
+            "mcp.catalog.server",
+            1,
+            "unrelated")));
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_JsonIdentityMigrationRejectsCaseCollisionAtomically()
+    {
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 2,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["mcp.servers.Server-One"] = "{\"ServerId\":\"server-one\",\"Name\":\"first\"}",
+                ["mcp.servers.SERVER-ONE"] = "{\"ServerId\":\"server-one\",\"Name\":\"second\"}",
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var migration = PackageStorageKeyMigration.OpaqueIdWithJsonIdentity(
+            "mcp.servers.",
+            string.Empty,
+            "mcp.catalog.server",
+            1,
+            "serverId");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new JsonPackageKeyValueStore(statePath).MigrateKeysAsync([migration]));
+
+        Assert.Contains("collision", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, await File.ReadAllBytesAsync(statePath));
+        Assert.Empty(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_CaseInsensitiveJsonIdentityRejectsCaseVariantPayloadsAtomically()
+    {
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 2,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["mcp.servers.server-one"] = "{\"ServerId\":\"server-one\",\"Name\":\"first\"}",
+                ["mcp.servers.SERVER-ONE"] = "{\"ServerId\":\"SERVER-ONE\",\"Name\":\"second\"}",
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var migration = PackageStorageKeyMigration.OpaqueIdWithCaseInsensitiveJsonIdentity(
+            "mcp.servers.",
+            string.Empty,
+            "mcp.catalog.server",
+            1,
+            "serverId");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new JsonPackageKeyValueStore(statePath).MigrateKeysAsync([migration]));
+
+        Assert.Contains("collision", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, await File.ReadAllBytesAsync(statePath));
+        Assert.Empty(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_MigrationRejectsNonidenticalCollisionWithoutMutation()
+    {
+        const string bindingId = "binding";
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var destination = PackageStorageKeyFactory.Create("workspace-bindings.config", 2, bindingId);
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 3,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [$"workspace-bindings:{bindingId}:config"] = "legacy",
+                [destination] = "different",
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var migration = PackageStorageKeyMigration.OpaqueId(
+            "workspace-bindings:",
+            ":config",
+            "workspace-bindings.config",
+            2);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new JsonPackageKeyValueStore(statePath).MigrateKeysAsync([migration]));
+
+        Assert.Contains("nonidentical", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, await File.ReadAllBytesAsync(statePath));
+        Assert.Empty(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_MigrationRejectsMultipleMatchingRulesWithoutMutation()
+    {
+        const string legacyKey = "legacy:binding";
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var destination = PackageStorageKeyFactory.Create("bindings.config", 1, "binding");
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 2,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [legacyKey] = "value",
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new JsonPackageKeyValueStore(statePath).MigrateKeysAsync(
+            [
+                PackageStorageKeyMigration.Exact(legacyKey, destination),
+                PackageStorageKeyMigration.OpaqueId("legacy:", string.Empty, "bindings.config", 1),
+            ]));
+
+        Assert.Contains("multiple migration rules", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original, await File.ReadAllBytesAsync(statePath));
+        Assert.Empty(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_MigrationLeavesUnknownInvalidKeysFailClosed()
+    {
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 1,
+            values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workspace-bindings:known:config"] = "known",
+                ["unknown:invalid"] = "must-not-reset",
+            },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var migration = PackageStorageKeyMigration.OpaqueId(
+            "workspace-bindings:",
+            ":config",
+            "workspace-bindings.config",
+            2);
+
+        var exception = await Assert.ThrowsAsync<PackageStorageRecoveryRequiredException>(() =>
+            new JsonPackageKeyValueStore(statePath).MigrateKeysAsync([migration]));
+
+        Assert.Equal(original, await File.ReadAllBytesAsync(exception.QuarantinePath));
+        AssertFailureMarker(statePath, exception.QuarantinePath);
+        Assert.Empty(Directory.GetFiles(directory, "state.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public void PackageStorageKeyMigrationEngine_DynamicCleanupPrefersCanonicalAndExistingValues()
+    {
+        var firstDestination = PackageStorageKeyFactory.Create("mcp.secret.header", 1, "first");
+        var secondDestination = PackageStorageKeyFactory.Create("mcp.secret.header", 1, "second");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["mcp.servers.live.v3.headers.X-Token"] = "canonical",
+            ["mcp.servers.LIVE.v3.headers.x-token"] = "conflicting-case-remnant",
+            ["mcp.servers.live.v2.headers.X-Token"] = "old-version",
+            ["mcp.servers.live.v3.headers.Second"] = "stale-second",
+            [secondDestination] = "current-second",
+        };
+        var migration = PackageStorageKeyMigration.DynamicCleanup(key => key switch
+        {
+            "mcp.servers.live.v3.headers.X-Token" =>
+                PackageStorageKeyMigrationAction.Rewrite(firstDestination, precedence: 1),
+            _ when key.Equals("mcp.servers.live.v3.headers.X-Token", StringComparison.OrdinalIgnoreCase) =>
+                PackageStorageKeyMigrationAction.Rewrite(firstDestination),
+            _ when key.Equals("mcp.servers.live.v3.headers.Second", StringComparison.OrdinalIgnoreCase) =>
+                PackageStorageKeyMigrationAction.Rewrite(secondDestination),
+            _ when key.StartsWith("mcp.servers.", StringComparison.OrdinalIgnoreCase) =>
+                PackageStorageKeyMigrationAction.Delete,
+            _ => PackageStorageKeyMigrationAction.NoMatch,
+        });
+
+        var result = PackageStorageKeyMigrationEngine.Apply(values, [migration]);
+
+        Assert.True(result.Changed);
+        Assert.Equal("canonical", result.Values[firstDestination]);
+        Assert.Equal("current-second", result.Values[secondDestination]);
+        Assert.Equal(2, result.Values.Count);
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_MigrationRecoversMarkerCreatedOnlyByKnownLegacyKey()
+    {
+        const string bindingId = "imported:/\u65E5\u672C\u8A9E workspace";
+        var directory = CreateTempDirectory();
+        var statePath = Path.Combine(directory, "state.json");
+        var legacyKey = $"workspace-bindings:{bindingId}:config";
+        var original = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "sunder.package-state",
+            version = 1,
+            revision = 4,
+            values = new Dictionary<string, string> { [legacyKey] = "preserved" },
+        });
+        await File.WriteAllBytesAsync(statePath, original);
+        var store = new JsonPackageKeyValueStore(statePath);
+        var failure = await Assert.ThrowsAsync<PackageStorageRecoveryRequiredException>(() =>
+            store.GetValueAsync("valid"));
+        var migration = PackageStorageKeyMigration.OpaqueId(
+            "workspace-bindings:",
+            ":config",
+            "workspace-bindings.config",
+            2);
+
+        await store.MigrateKeysAsync([migration]);
+
+        Assert.Equal(
+            "preserved",
+            await store.GetValueAsync(PackageStorageKeyFactory.Create("workspace-bindings.config", 2, bindingId)));
+        Assert.Equal(original, await File.ReadAllBytesAsync(failure.QuarantinePath));
+        Assert.True(File.Exists(failure.QuarantinePath));
+        Assert.Empty(Directory.GetFiles(directory, "state.json.migration-backup.*"));
     }
 
     [Fact]
@@ -452,6 +781,139 @@ public sealed class PackageStorageServicesTests
         await store.ReplaceValuesAsync(new Dictionary<string, string> { ["key"] = "value" });
 
         Assert.Equal(committed, File.ReadAllBytes(secretsPath));
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_MigrationRecoversKnownInvalidEncryptedKey()
+    {
+        var directory = CreateTempDirectory();
+        var secretsPath = Path.Combine(directory, "secrets.json");
+        var permissiveStore = new JsonPackageSecretsStore(
+            secretsPath,
+            null,
+            null,
+            new RestrictedFileMasterKeyProtection(),
+            enforcePackageKeyValidation: false);
+        await permissiveStore.SetSecretAsync("mcp.servers:imported/token", "preserved-secret");
+        var strictStore = CreateSecretsStore(secretsPath);
+        var failure = await Assert.ThrowsAsync<PackageStorageRecoveryRequiredException>(() =>
+            strictStore.GetSecretAsync("valid"));
+        var destination = PackageStorageKeyFactory.Create("mcp.oauth.tokens", 1, "imported/token");
+
+        await strictStore.MigrateKeysAsync(
+        [
+            PackageStorageKeyMigration.Exact("mcp.servers:imported/token", destination),
+        ]);
+
+        Assert.Equal("preserved-secret", await strictStore.GetSecretAsync(destination));
+        Assert.True(File.Exists(failure.QuarantinePath));
+        Assert.Empty(Directory.GetFiles(directory, "secrets.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_DynamicCleanupRecoversRecognizedOrphanWithoutReadingItsValue()
+    {
+        const string orphanKey = "mcp.servers.deleted/id.v7.headers.X%2FToken";
+        var directory = CreateTempDirectory();
+        var secretsPath = Path.Combine(directory, "secrets.json");
+        var permissiveStore = new JsonPackageSecretsStore(
+            secretsPath,
+            null,
+            null,
+            new RestrictedFileMasterKeyProtection(),
+            enforcePackageKeyValidation: false);
+        await permissiveStore.SetSecretAsync(orphanKey, "orphan-secret");
+        var strictStore = CreateSecretsStore(secretsPath);
+        var failure = await Assert.ThrowsAsync<PackageStorageRecoveryRequiredException>(() =>
+            strictStore.GetSecretAsync("valid"));
+
+        await strictStore.MigrateKeysAsync(
+        [
+            PackageStorageKeyMigration.DynamicCleanup(key =>
+                string.Equals(key, orphanKey, StringComparison.Ordinal)
+                    ? PackageStorageKeyMigrationAction.Delete
+                    : PackageStorageKeyMigrationAction.NoMatch),
+        ]);
+
+        Assert.Empty(await strictStore.ListKeysAsync());
+        Assert.True(File.Exists(failure.QuarantinePath));
+        Assert.Empty(Directory.GetFiles(directory, "secrets.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_DynamicCleanupLeavesUnknownInvalidKeyQuarantinedAtomically()
+    {
+        const string recognizedKey = "mcp.servers.deleted/id.apiKey";
+        const string unknownKey = "mcp.servers.deleted/id.unknown:shape";
+        var directory = CreateTempDirectory();
+        var secretsPath = Path.Combine(directory, "secrets.json");
+        var permissiveStore = new JsonPackageSecretsStore(
+            secretsPath,
+            null,
+            null,
+            new RestrictedFileMasterKeyProtection(),
+            enforcePackageKeyValidation: false);
+        await permissiveStore.SetSecretAsync(recognizedKey, "recognized-secret");
+        await permissiveStore.SetSecretAsync(unknownKey, "unknown-secret");
+        var strictStore = CreateSecretsStore(secretsPath);
+
+        var failure = await Assert.ThrowsAsync<PackageStorageRecoveryRequiredException>(() =>
+            strictStore.MigrateKeysAsync(
+            [
+                PackageStorageKeyMigration.DynamicCleanup(key =>
+                    string.Equals(key, recognizedKey, StringComparison.Ordinal)
+                        ? PackageStorageKeyMigrationAction.Delete
+                        : PackageStorageKeyMigrationAction.NoMatch),
+            ]));
+
+        AssertFailureMarker(secretsPath, failure.QuarantinePath, "aes-gcm-master-key");
+        var recognizedDestination = PackageStorageKeyFactory.Create("mcp.secret.api-key", 1, "deleted/id");
+        var unknownDestination = PackageStorageKeyFactory.Create("mcp.secret.recovered", 1, "unknown");
+        await strictStore.MigrateKeysAsync(
+        [
+            PackageStorageKeyMigration.DynamicCleanup(key => key switch
+            {
+                recognizedKey => PackageStorageKeyMigrationAction.Rewrite(recognizedDestination),
+                unknownKey => PackageStorageKeyMigrationAction.Rewrite(unknownDestination),
+                _ => PackageStorageKeyMigrationAction.NoMatch,
+            }),
+        ]);
+        Assert.Equal("recognized-secret", await strictStore.GetSecretAsync(recognizedDestination));
+        Assert.Equal("unknown-secret", await strictStore.GetSecretAsync(unknownDestination));
+        Assert.Empty(Directory.GetFiles(directory, "secrets.json.migration-backup.*"));
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_MigratesEncryptedLegacyKeyRetainsCiphertextBackupAndIsIdempotent()
+    {
+        const string legacyKey = "mcp.servers.imported/id.apiKey";
+        const string secret = "preserved-secret-value";
+        var directory = CreateTempDirectory();
+        var secretsPath = Path.Combine(directory, "secrets.json");
+        var permissiveStore = new JsonPackageSecretsStore(
+            secretsPath,
+            null,
+            null,
+            new RestrictedFileMasterKeyProtection(),
+            enforcePackageKeyValidation: false);
+        await permissiveStore.SetSecretAsync(legacyKey, secret);
+        var original = await File.ReadAllBytesAsync(secretsPath);
+        var destination = PackageStorageKeyFactory.Create("mcp.secret.api-key", 1, "imported/id");
+        var migration = PackageStorageKeyMigration.Exact(legacyKey, destination);
+        var strictStore = CreateSecretsStore(secretsPath);
+
+        await strictStore.MigrateKeysAsync([migration]);
+
+        Assert.Equal(secret, await strictStore.GetSecretAsync(destination));
+        var backupPath = Assert.Single(Directory.GetFiles(directory, "secrets.json.migration-backup.*"));
+        Assert.Equal(original, await File.ReadAllBytesAsync(backupPath));
+        Assert.DoesNotContain(secret, await File.ReadAllTextAsync(backupPath), StringComparison.Ordinal);
+        var committed = await File.ReadAllBytesAsync(secretsPath);
+
+        await strictStore.MigrateKeysAsync([migration]);
+
+        Assert.Equal(committed, await File.ReadAllBytesAsync(secretsPath));
+        Assert.Single(Directory.GetFiles(directory, "secrets.json.migration-backup.*"));
     }
 
     [Fact]

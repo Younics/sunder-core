@@ -14,7 +14,8 @@ Runtime performs these steps:
 4. Call `ConfigureRuntimeServices(IServiceCollection, IPackageContext)` on the module.
 5. Add host-owned services and build the package provider.
 6. Call `RegisterRuntimeContributions(ISunderRuntimeContributionRegistry, IServiceProvider)`.
-7. After the complete candidate is prepared and the previous generation drains, start registered background services and publish the candidate generation.
+7. After the complete candidate is prepared and the previous generation drains, call registered background-service `StartAsync` methods as a non-destructive preparation phase.
+8. Publish the candidate as non-leasable, call `CommitGenerationAsync` on `IPackageRuntimeGenerationParticipant` services with the exact committed activation and session generation, then admit external leases only after every participant succeeds.
 
 The module is constructed directly and is **not** resolved from the package provider. Keep no disposable resource on the module itself; place owned resources in DI services so provider disposal can release them.
 
@@ -54,7 +55,7 @@ public void RegisterRuntimeContributions(
 
 Do not build a nested provider in `Configure*Services`. Resolve contribution instances from the provider supplied to `Register*Contributions`.
 
-Packages cannot replace reserved host capabilities. Both roles reserve `IPackageContext`, `ILoggerFactory`, `ILogger<T>`, `IPackageExtensionCatalog`, `IPackageShellViewService`, `IPackageSettingsNavigationService`, `IPackageNotificationService`, `IPackageRuntimeClient`, and `IPackageCallbackClient`. App also reserves `IBackgroundProcessQueue`. Registering a reserved service fails activation.
+Packages cannot replace reserved host capabilities. Both roles reserve `IPackageContext`, `ILoggerFactory`, `ILogger<T>`, `IPackageExtensionCatalog`, `IPackageExtensionInvocationCatalog`, `IPackageShellViewService`, `IPackageSettingsNavigationService`, `IPackageNotificationService`, `IPackageRuntimeClient`, and `IPackageCallbackClient`. App also reserves `IBackgroundProcessQueue`. Registering a reserved service fails activation.
 
 Host services intentionally vary by role. Runtime supplies unavailable/no-op shell, settings-navigation, notification, Runtime-client, and callback-client implementations. App supplies the real shell-facing services after generation publication.
 
@@ -64,7 +65,7 @@ Treat both `Configure*Services` and `Register*Contributions` as side-effect-free
 
 Before an App generation is published:
 
-- Runtime operations, streams, callbacks, and package data mutations throw `InvalidOperationException`.
+- Runtime operations and streams throw `PackageRuntimeInvocationException` with code `runtime.v1.unavailable`; callbacks and package data mutations throw `InvalidOperationException`.
 - Shell and settings navigation report `false` or an empty snapshot.
 - Notifications and App background-process enqueues are buffered and published only if the generation commits.
 - Read access may still contact Runtime, but activation should not depend on network or durable side effects.
@@ -79,7 +80,9 @@ Register a service already present in DI:
 registry.RegisterBackgroundService<IndexingService>();
 ```
 
-`IPackageBackgroundService.StartAsync` is called once after the candidate graph is ready. Completion means startup is complete; long-running work should continue in package-owned tasks. Services start sequentially in package dependency order and have a shared 10-second startup deadline.
+`IPackageBackgroundService.StartAsync` is called once after the candidate graph is ready but before publication. It must not recover durable work, dispatch externally visible work, or otherwise assume the candidate will commit. Completion means candidate preparation is complete.
+
+Implement `IPackageRuntimeGenerationParticipant` when recovery or dispatch must begin only for a published activation. The host calls `CommitGenerationAsync` after the Runtime session swap with a host-assigned activation id and committed session generation, while the new session still rejects external leases. Activation has a bounded deadline and the exact same commit can be retried, so implementations must observe cancellation and be idempotent. If activation still fails, Runtime publishes an empty follow-up generation and quarantines the failed candidate until its lifecycle work exits. A candidate discarded before the session swap receives `StopAsync` without a generation commit. Packages that coordinate durable work across reloads should persist this activation id and recover only ownership held by a stopped, proven-dead, or expired prior activation. `GenerationCompletion` should complete after orderly generation shutdown and fault when the committed generation can no longer operate safely; the host validates the exact activation id and original committed generation independently of later session snapshot increments before disabling that package. `StopAsync` must return the actual owned-work drain task even if its deadline token is cancelled, because the host bounds its own wait and quarantines package disposal on the still-running task.
 
 On retirement, services stop in reverse package and registration order. `StopAsync` must cancel and await all owned work promptly. Startup rollback has a 5-second cleanup budget; normal generation retirement shares the 10-second drain budget. Exceptions during cleanup are logged and remaining services still receive a stop attempt. If `StartAsync` or `StopAsync` ignores cancellation and outlives its deadline, the operation returns without publishing or blocking the next generation, but the old provider, load context, and generation files remain quarantined until the actual task completes.
 
@@ -119,6 +122,10 @@ Package services must:
 
 ## Extension Contributions
 
-Register each contribution in the role where consumers need it. Contributions are role-local objects and are owned by the package currently activating, not by the package that defines the extension point.
+Register each contribution in the role where consumers need it. Contributions are role-local objects and are owned by the package currently activating, not by the package that defines the extension point. Activation registrations remain staged and cannot be queried or acquired until their exact owner batch commits atomically; rollback discards them without publishing an add/remove revision.
 
 Use `GetExtensionContributions` when ownership affects attribution, dependencies, or export behavior. Every result has a canonical non-empty owner package id. Use `IPackageExtensionCatalogMonitor` to refresh long-lived state when relevant extension points change; filter by extension-point id and treat the event as a notification to re-query the catalog.
+
+Use `IPackageExtensionInvocationCatalog.GetExtensionReferences` instead of retaining a raw contribution when an invocation crosses an `await`, is queued, or is subscribed as a callback. Acquire immediately before use, read owner metadata and contribution properties only through the lease, link work to `RetirementToken`, and dispose before retaining any result. Retirement rejects new leases for that exact activation and waits for its existing leases only. If a lease misses the host deadline, that owner provider and load context remain quarantined until the lease drains.
+
+The host can caller-bind `IPackageExtensionInvocationCatalog.TryReportInvariantViolation` for a trusted App orchestrator. Other package scopes receive the default-deny behavior and cannot use it as arbitrary package lifetime control. The trusted orchestrator passes the original opaque reference after releasing its lease; the host carries that owner epoch through queued lifecycle handling and accepts it only while the same activation and App generation remain current. Do not report expected operation failures, owner retirement, caller cancellation, or malformed user input.

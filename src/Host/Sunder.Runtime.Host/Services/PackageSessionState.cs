@@ -25,6 +25,10 @@ internal sealed class PackageSessionState(
             {
                 throw new RuntimeUnavailableException("The active package session is draining and is not accepting new requests.");
             }
+            if (!entry.AcceptingLeases)
+            {
+                throw new RuntimeUnavailableException("The active package session is still activating and is not accepting requests.");
+            }
             var leaseId = ++entry.LastLeaseId;
             entry.ActiveLeaseIds.Add(leaseId);
             return new PackageSessionLease(
@@ -145,10 +149,16 @@ internal sealed class PackageSessionState(
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await CommitPublicationAsync(publication, committed);
+            var result = await CommitPublicationAsync(publication, committed);
+            ActivatePublication(publication);
+            return result;
         }
         catch
         {
+            if (publication.Committed && !publication.Activated)
+            {
+                ActivatePublication(publication);
+            }
             DiscardPublication(publication);
             throw;
         }
@@ -231,14 +241,16 @@ internal sealed class PackageSessionState(
             publication.Completed = true;
             publication.Committed = true;
             _generation = generation;
-            _activeEntry = new SessionEntry(publication.Session, generation);
+            var activeEntry = new SessionEntry(publication.Session, generation, acceptingLeases: false);
+            publication.ActiveEntry = activeEntry;
+            _activeEntry = activeEntry;
         }
 
         Exception? publicationException = null;
         try
         {
-            clearAuthSessions();
             committed?.Invoke(generation);
+            clearAuthSessions();
         }
         catch (Exception exception)
         {
@@ -246,6 +258,84 @@ internal sealed class PackageSessionState(
         }
 
         var warnings = await RetireSessionAsync(publication.PreviousEntry);
+        if (publicationException is not null)
+        {
+            throw publicationException;
+        }
+        return (generation, warnings);
+    }
+
+    internal void ActivatePublication(SessionPublication publication)
+    {
+        lock (_syncRoot)
+        {
+            if (!publication.Committed
+                || publication.Failed
+                || publication.ActiveEntry is null
+                || !ReferenceEquals(_activeEntry, publication.ActiveEntry)
+                || publication.ActiveEntry.Draining)
+            {
+                throw new InvalidOperationException("The committed package session is no longer available for activation.");
+            }
+
+            publication.Activated = true;
+            publication.ActiveEntry.AcceptingLeases = true;
+        }
+    }
+
+    internal async Task<(long Generation, IReadOnlyList<string> Warnings)> FailCommittedPublicationAsync(
+        SessionPublication publication,
+        Action<long>? committed = null)
+    {
+        SessionEntry failedEntry;
+        CancellationTokenSource retirement;
+        lock (_syncRoot)
+        {
+            if (!publication.Committed
+                || publication.Activated
+                || publication.Failed
+                || publication.ActiveEntry is null
+                || !ReferenceEquals(_activeEntry, publication.ActiveEntry))
+            {
+                throw new InvalidOperationException("The package session publication cannot be failed from its current state.");
+            }
+
+            failedEntry = publication.ActiveEntry;
+            failedEntry.Draining = true;
+            retirement = failedEntry.Retirement;
+            publication.Failed = true;
+            SignalRetirementIfDrained(failedEntry);
+        }
+
+        retirement.Cancel();
+        await failedEntry.Drained.Task;
+
+        long generation;
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(_activeEntry, failedEntry) || !failedEntry.Draining)
+            {
+                throw new InvalidOperationException("The failed package session changed while it was retiring.");
+            }
+
+            generation = checked(_generation + 1);
+            failedEntry.Retired = true;
+            _generation = generation;
+            _activeEntry = new SessionEntry(ActivePackageSession.Empty, generation);
+        }
+
+        Exception? publicationException = null;
+        try
+        {
+            committed?.Invoke(generation);
+            clearAuthSessions();
+        }
+        catch (Exception exception)
+        {
+            publicationException = exception;
+        }
+
+        var warnings = await RetireSessionAsync(failedEntry);
         if (publicationException is not null)
         {
             throw publicationException;
@@ -265,7 +355,8 @@ internal sealed class PackageSessionState(
 
     public bool HandlePackageFault(
         string packageId,
-        long generation,
+        PackageActivationIdentity activationIdentity,
+        long expectedGeneration,
         PackageFailureOrigin origin,
         Exception exception,
         string action,
@@ -276,9 +367,18 @@ internal sealed class PackageSessionState(
         long committedGeneration;
         lock (_syncRoot)
         {
-            if (generation != _generation
+            if (expectedGeneration != _generation
+                || !ReferenceEquals(activationIdentity.SessionIdentity, _activeEntry)
+                || !_activeEntry.AcceptingLeases
                 || _activeEntry.Draining
-                || !_activeEntry.Session.MarkPackageFailed(packageId, origin, exception.Message, out packageToDeactivate))
+                || !_activeEntry.Session.OwnsPackageActivation(
+                    packageId,
+                    activationIdentity.RuntimeActivationId)
+                || !_activeEntry.Session.MarkPackageFailedWithoutRetiringExtensions(
+                    packageId,
+                    origin,
+                    exception.Message,
+                    out packageToDeactivate))
             {
                 return false;
             }
@@ -289,10 +389,57 @@ internal sealed class PackageSessionState(
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
         }
 
-        removePackageAuthSessions(packageId);
         committed?.Invoke(committedGeneration);
+        deactivation?.BeginExtensionRetirement();
+        removePackageAuthSessions(packageId);
         QueuePackageDeactivation(deactivation);
         logger.LogError(exception, "Failed to {Action} for package {PackageId}; package disabled for current session", action, packageId);
+        return true;
+    }
+
+    public bool HandleRuntimeGenerationFault(
+        string packageId,
+        PackageRuntimeGeneration runtimeGeneration,
+        long expectedGeneration,
+        PackageFailureOrigin origin,
+        Exception exception,
+        string action,
+        Action<long>? committed = null)
+    {
+        ActiveLoadedPackage? packageToDeactivate;
+        PackageDeactivationWork? deactivation;
+        long committedGeneration;
+        lock (_syncRoot)
+        {
+            if (expectedGeneration != _generation
+                || !_activeEntry.AcceptingLeases
+                || _activeEntry.Draining
+                || !_activeEntry.Session.OwnsRuntimeGeneration(packageId, runtimeGeneration)
+                || !_activeEntry.Session.MarkPackageFailedWithoutRetiringExtensions(
+                    packageId,
+                    origin,
+                    exception.Message,
+                    out packageToDeactivate))
+            {
+                return false;
+            }
+
+            _generation = checked(_generation + 1);
+            _activeEntry.Generation = _generation;
+            committedGeneration = _generation;
+            deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
+        }
+
+        committed?.Invoke(committedGeneration);
+        deactivation?.BeginExtensionRetirement();
+        removePackageAuthSessions(packageId);
+        QueuePackageDeactivation(deactivation);
+        logger.LogError(
+            exception,
+            "Failed to {Action} for exact Runtime generation {ActivationId} of package {PackageId}; package disabled for current session",
+            action,
+            runtimeGeneration.ActivationId,
+            packageId);
         return true;
     }
 
@@ -371,7 +518,12 @@ internal sealed class PackageSessionState(
         var barrier = CaptureLeaseBarrier(_activeEntry);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _activeEntry.PendingCleanups.Add(completion.Task);
-        return new PackageDeactivationWork(packageId, loadedPackage, barrier.Completion.Task, completion);
+        return new PackageDeactivationWork(
+            packageId,
+            loadedPackage,
+            _activeEntry.Session,
+            barrier.Completion.Task,
+            completion);
     }
 
     private void QueuePackageDeactivation(PackageDeactivationWork? work)
@@ -388,7 +540,19 @@ internal sealed class PackageSessionState(
     {
         try
         {
-            await work.LeasesDrained;
+            try
+            {
+                await work.ExtensionLeasesDrained.WaitAsync(_sessionDrainTimeout);
+            }
+            catch (TimeoutException exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Package {PackageId} owner retirement exceeded the drain deadline; its provider and load context remain quarantined",
+                    work.PackageId);
+                await work.ExtensionLeasesDrained;
+            }
+            await work.SessionLeasesDrained;
             await DeactivateLoadedPackageAsync(work.PackageId, work.LoadedPackage);
         }
         catch (Exception ex)
@@ -585,7 +749,10 @@ internal sealed class PackageSessionState(
         GC.WaitForPendingFinalizers();
     }
 
-    internal sealed class SessionEntry(ActivePackageSession session, long generation)
+    internal sealed class SessionEntry(
+        ActivePackageSession session,
+        long generation,
+        bool acceptingLeases = true)
     {
         public ActivePackageSession Session { get; } = session;
         public long Generation { get; set; } = generation;
@@ -597,6 +764,7 @@ internal sealed class PackageSessionState(
         public long LastLeaseId { get; set; }
         public bool Retired { get; set; }
         public bool Draining { get; set; }
+        public bool AcceptingLeases { get; set; } = acceptingLeases;
     }
 
     internal sealed class SessionPublication
@@ -622,6 +790,9 @@ internal sealed class PackageSessionState(
         public long? ExpectedGeneration { get; }
         public bool Completed { get; set; }
         public bool Committed { get; set; }
+        internal SessionEntry? ActiveEntry { get; set; }
+        public bool Activated { get; set; }
+        public bool Failed { get; set; }
     }
 
     internal sealed class LeaseBarrier(IEnumerable<long> leaseIds)
@@ -633,13 +804,21 @@ internal sealed class PackageSessionState(
     private sealed class PackageDeactivationWork(
         string packageId,
         ActiveLoadedPackage loadedPackage,
-        Task leasesDrained,
+        ActivePackageSession session,
+        Task sessionLeasesDrained,
         TaskCompletionSource completion)
     {
         public string PackageId { get; } = packageId;
         public ActiveLoadedPackage LoadedPackage { get; } = loadedPackage;
-        public Task LeasesDrained { get; } = leasesDrained;
+        public Task SessionLeasesDrained { get; } = sessionLeasesDrained;
+        public Task ExtensionLeasesDrained { get; private set; } = Task.CompletedTask;
         public TaskCompletionSource Completion { get; } = completion;
         public Task? StartedTask { get; set; }
+
+        public void BeginExtensionRetirement()
+            => ExtensionLeasesDrained = session.BeginPackageExtensionRetirement(
+                PackageId,
+                LoadedPackage,
+                PackageExtensionCatalogChangeReason.PackageFaulted).Completion;
     }
 }

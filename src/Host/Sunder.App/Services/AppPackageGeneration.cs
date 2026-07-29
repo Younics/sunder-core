@@ -46,11 +46,13 @@ internal sealed class AppPackageGeneration(
         }
 
         Composition.UnpublishServices();
-        await Composition.ViewFacade.CancelAllViewOperationsAsync().ConfigureAwait(false);
-        foreach (var packageId in State.SnapshotLoadedPackageIds())
-        {
-            await Composition.UnloadPackageAsync(packageId).ConfigureAwait(false);
-        }
+        var retirementDrains = Composition.BeginGenerationRetirement().ToList();
+        retirementDrains.AddRange(State
+            .SnapshotLoadedPackageIds()
+            .Select(packageId => Task.Run(
+                () => Composition.UnloadPackageForGenerationRetirementAsync(packageId),
+                CancellationToken.None)));
+        await Task.WhenAll(retirementDrains).ConfigureAwait(false);
 
         await Composition.DisposeRemainingOwnedResourcesAsync().ConfigureAwait(false);
         Composition.DisposeSharedAssemblies();

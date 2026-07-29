@@ -19,18 +19,24 @@ public static class SunderSdkCapabilities
     public const string SettingsNavigationV1 = "settings-navigation.v1";
     /// <summary>Background service contracts.</summary>
     public const string BackgroundServicesV1 = "background-services.v1";
+    /// <summary>Post-publication Runtime generation lifecycle contracts.</summary>
+    public const string RuntimeGenerationsV1 = "runtime-generations.v1";
     /// <summary>Background process contracts.</summary>
     public const string BackgroundProcessesV1 = "background-processes.v1";
     /// <summary>Extension contribution contracts.</summary>
     public const string ExtensionsV1 = "extensions.v1";
     /// <summary>Extension change contracts.</summary>
     public const string ExtensionChangesV1 = "extensions.changes.v1";
+    /// <summary>Owner-activation-scoped extension invocation leases.</summary>
+    public const string ExtensionInvocationsV1 = "extensions.invocations.v1";
     /// <summary>Host-rendered settings schema contracts.</summary>
     public const string SettingsSchemaV1 = "settings.schema.v1";
     /// <summary>Writable package settings contracts.</summary>
     public const string SettingsV1 = "settings.v1";
     /// <summary>Package storage contracts.</summary>
     public const string StorageV1 = "storage.v1";
+    /// <summary>Portable physical-key derivation and host-atomic key migration contracts.</summary>
+    public const string StorageKeyMigrationV1 = "storage.key-migration.v1";
     /// <summary>Activation-owned role-local workspace contracts.</summary>
     public const string RoleLocalWorkspaceV1 = "role-local-workspace.v1";
     /// <summary>Secret storage contracts.</summary>
@@ -41,8 +47,12 @@ public static class SunderSdkCapabilities
     public const string NotificationsV1 = "notifications.v1";
     /// <summary>Shell view contracts.</summary>
     public const string ShellViewV1 = "shell-view.v1";
+    /// <summary>Hidden package-view navigation preparation and presentation acknowledgement contracts.</summary>
+    public const string ViewNavigationPreparationV1 = "view-navigation-preparation.v1";
     /// <summary>Package-scoped App-to-Runtime operation contracts.</summary>
     public const string RuntimeOperationsV1 = "runtime-operations.v1";
+    /// <summary>Sanitized package-visible Runtime invocation failure contracts.</summary>
+    public const string RuntimeInvocationErrorsV1 = "runtime-invocation-errors.v1";
     /// <summary>Stack data contracts.</summary>
     public const string StacksV1 = "stacks.v1";
     /// <summary>Stack contribution contracts.</summary>

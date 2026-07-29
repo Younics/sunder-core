@@ -31,6 +31,10 @@ internal sealed class AppPackageHostedViewFacade(
         }
     }
 
+    public bool SupportsNavigationPreparation(string viewId)
+        => GetOrCreateView(viewId) is { } view
+           && AppPackageViewNavigator.SupportsNavigationPreparation(view);
+
     public async ValueTask<Control?> WarmupViewAsync(
         string viewId,
         CancellationToken cancellationToken,
@@ -268,6 +272,143 @@ internal sealed class AppPackageHostedViewFacade(
         }
     }
 
+    public async ValueTask<bool> PrepareNavigationForPresentationAsync(
+        string viewId,
+        IReadOnlyDictionary<string, string?>? parameters,
+        Func<Control, bool> stageView,
+        Func<Control, bool> presentView,
+        Action<Control> unstageView,
+        CancellationToken cancellationToken,
+        Func<bool>? canStart = null)
+    {
+        ArgumentNullException.ThrowIfNull(stageView);
+        ArgumentNullException.ThrowIfNull(presentView);
+        ArgumentNullException.ThrowIfNull(unstageView);
+
+        var currentCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationTokenSource? previousCancellation;
+        lock (_operationSyncRoot)
+        {
+            _navigationCancellations.Remove(viewId, out previousCancellation);
+            _navigationCancellations[viewId] = currentCancellation;
+        }
+
+        TryCancel(previousCancellation);
+        try
+        {
+            return await RunViewOperationAsync(
+                viewId,
+                ViewOperationKind.Navigation,
+                currentCancellation.Token,
+                staleResult: static () => false,
+                async (_, operationCancellation) =>
+                {
+                    if (canStart is not null && !canStart())
+                    {
+                        return false;
+                    }
+
+                    var view = GetOrCreateView(viewId);
+                    if (view is null
+                        || !AppPackageViewNavigator.SupportsNavigationPreparation(view)
+                        || !stageView(view))
+                    {
+                        return false;
+                    }
+
+                    var presented = false;
+                    try
+                    {
+                        AppPackageViewNavigator.NavigationPreparationStatus status;
+                        try
+                        {
+                            status = await AppPackageViewNavigator.PrepareViewNavigationAsync(
+                                view,
+                                viewId,
+                                parameters,
+                                operationCancellation);
+                        }
+                        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            ReportViewFailure(
+                                viewId,
+                                $"navigation preparation failed: {ex.Message}",
+                                "navigation preparation failed",
+                                ex);
+                            return false;
+                        }
+
+                        operationCancellation.ThrowIfCancellationRequested();
+                        if (status != AppPackageViewNavigator.NavigationPreparationStatus.Ready
+                            || canStart is not null && !canStart())
+                        {
+                            return false;
+                        }
+
+                        presented = presentView(view);
+                        if (!presented)
+                        {
+                            return false;
+                        }
+
+                        lock (_operationSyncRoot)
+                        {
+                            _warmedViewIds.Add(viewId);
+                            _presentedViewIds.Add(viewId);
+                        }
+
+                        try
+                        {
+                            await AppPackageViewNavigator.NotifyViewNavigationPresentedAsync(
+                                view,
+                                viewId,
+                                parameters,
+                                operationCancellation);
+                        }
+                        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            ReportViewFailure(
+                                viewId,
+                                $"presentation acknowledgment failed: {ex.Message}",
+                                "presentation acknowledgment failed",
+                                ex);
+                        }
+
+                        return true;
+                    }
+                    finally
+                    {
+                        if (!presented)
+                        {
+                            unstageView(view);
+                        }
+                    }
+                },
+                navigationCancellation: currentCancellation);
+        }
+        finally
+        {
+            lock (_operationSyncRoot)
+            {
+                if (_navigationCancellations.TryGetValue(viewId, out var activeCancellation)
+                    && ReferenceEquals(activeCancellation, currentCancellation))
+                {
+                    _navigationCancellations.Remove(viewId);
+                }
+            }
+
+            currentCancellation.Dispose();
+        }
+    }
+
     public void CancelViewNavigation(string viewId)
     {
         CancellationTokenSource? cancellation;
@@ -340,21 +481,28 @@ internal sealed class AppPackageHostedViewFacade(
     }
 
     public async Task CancelAllViewOperationsAsync()
+        => await BeginCancelAllViewOperations().ConfigureAwait(false);
+
+    internal Task BeginCancelAllViewOperations()
     {
         CancellationTokenSource[] navigationCancellations;
+        ActiveViewOperation[] operations;
         lock (_operationSyncRoot)
         {
             _operationsStopping = true;
             navigationCancellations = _navigationCancellations.Values.ToArray();
             _navigationCancellations.Clear();
+            operations = _activeOperations
+                .Where(operation => _operationScope.Value?.Contains(operation) != true)
+                .ToArray();
         }
 
-        await TryCancelAsync(_operationCancellation).ConfigureAwait(false);
-        await Task.WhenAll(navigationCancellations.Select(TryCancelAsync)).ConfigureAwait(false);
-        await WaitForOperationsAsync(
-            viewId: null,
-            kind: null,
-            _operationScope.Value).ConfigureAwait(false);
+        var cancellationSignals = navigationCancellations
+            .Append(_operationCancellation)
+            .Concat(operations.Select(static operation => operation.Cancellation))
+            .Select(static cancellation => TryCancelAsync(cancellation))
+            .ToArray();
+        return DrainAllViewOperationsAsync(cancellationSignals, operations);
     }
 
     public async Task CancelPackageViewOperationsAsync(string packageId)
@@ -482,6 +630,15 @@ internal sealed class AppPackageHostedViewFacade(
         {
             AppSessionLog.WriteError("Package view navigation cancellation callback failed.", ex);
         }
+    }
+
+    private static async Task DrainAllViewOperationsAsync(
+        IReadOnlyList<Task> cancellationSignals,
+        IReadOnlyList<ActiveViewOperation> operations)
+    {
+        await Task.WhenAll(cancellationSignals).ConfigureAwait(false);
+        await Task.WhenAll(operations.Select(static operation => operation.Completion.Task))
+            .ConfigureAwait(false);
     }
 
     private Task<T> RunViewOperationAsync<T>(
@@ -696,6 +853,15 @@ internal sealed class AppPackageHostedViewFacade(
 
     public Control? GetOrCreateSettingsView(string packageId)
         => viewRegistry.GetOrCreateSettingsView(packageId, isPackageDisabled, reportHostedViewFailure);
+
+    public AppPackageSettingsViewNavigationTarget? GetSettingsViewForNavigation(
+        string packageId,
+        bool requireReplacement)
+        => viewRegistry.GetSettingsViewForNavigation(
+            packageId,
+            requireReplacement,
+            isPackageDisabled,
+            reportHostedViewFailure);
 
     public IReadOnlyList<PackageViewDescriptor> GetPackageViewDescriptors(string packageId)
         => viewRegistry.GetPackageViewDescriptors(packageId);

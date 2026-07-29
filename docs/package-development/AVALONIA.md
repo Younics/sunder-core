@@ -65,6 +65,27 @@ Navigation starts on the App UI dispatcher and operations for one view are seria
 
 An unhandled view construction, warmup, navigation, or hosted rendering exception disables that package in the current App generation and is logged as a client-local presentation fault. It does not fault the Runtime package generation.
 
+## Prepared Navigation
+
+Implement `IPackageViewNavigationPreparationTarget` on a control or its data context when authoritative state must be loaded before the first visible or interactive frame. This is the preferred lifecycle for Runtime-backed custom settings views.
+
+```csharp
+public async ValueTask<bool> PrepareNavigationAsync(
+    PackageViewNavigationContext context,
+    CancellationToken cancellationToken = default)
+{
+    await InitializeAsync(cancellationToken);
+    return true;
+}
+
+public ValueTask OnNavigationPresentedAsync(
+    PackageViewNavigationContext context,
+    CancellationToken cancellationToken = default)
+    => ValueTask.CompletedTask;
+```
+
+App attaches the destination to a transparent, non-interactive layout slot at its final panel size, keeps the current destination presented, and awaits preparation. Returning `false` rejects navigation. After promotion, App invokes `OnNavigationPresentedAsync`; that callback must not redo hydration or initial layout. Initialization should be idempotent, disposal-owned, retryable after a presented domain failure, and guarded so a stale refresh cannot overwrite newer input or selection. Cached views may refresh during later preparation, but should reconcile keyed rows and field revisions rather than clear and replace editable state.
+
 ## Warmup
 
 Implement `IPackageViewWarmupTarget` on the control or data context for parameter-free preparation before first presentation:

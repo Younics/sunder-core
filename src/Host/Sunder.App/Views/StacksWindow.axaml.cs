@@ -12,7 +12,7 @@ public partial class StacksWindow : Window
 {
     private StacksWindowViewModel? ViewModel => DataContext as StacksWindowViewModel;
     private readonly SecondaryWindowStateController? _stateController;
-    private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private readonly WindowCloseToHideCoordinator _closeCoordinator;
     private readonly StackWizardWindowFactory? _stackWizardWindowFactory;
     private readonly OwnedTaskObserver _tasks = new(nameof(StacksWindow));
     private readonly CancellationTokenSource _lifetime = new();
@@ -22,10 +22,12 @@ public partial class StacksWindow : Window
     {
         InitializeComponent();
         SunderWindowSizing.ApplySecondaryWindowSize(this);
-        _lifecycleController = new SecondaryWindowLifecycleController(
+        _closeCoordinator = new WindowCloseToHideCoordinator(
             this,
-            () => _stateController?.PersistWindowState(),
-            OnLifecycleClosed);
+            hideOnClose: true,
+            closeOnEscape: true,
+            persistWindowState: () => _stateController?.PersistWindowState(),
+            closed: OnLifecycleClosed);
         Opened += OnOpened;
         DataContextChanged += OnDataContextChanged;
     }
@@ -51,11 +53,12 @@ public partial class StacksWindow : Window
     }
 
     public void CloseForShutdown()
-        => _lifecycleController.CloseForShutdown();
+        => _closeCoordinator.CloseForShutdown();
 
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
+        _stateController?.RecordWindowedPlacement();
 
         if (ViewModel is not null)
         {

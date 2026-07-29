@@ -396,8 +396,10 @@ public sealed class RuntimeHostProcessManagerTests
             tryGetRuntimeHandshakeAsync: (url, _) => Task.FromResult<RuntimeHandshakeResponse?>(
                 url == publishedUrl ? CreateHandshake() : null),
             isRuntimeHealthyAsync: (url, _) => Task.FromResult(url == publishedUrl),
+            shutdownRuntimeAsync: static (_, _) => Task.CompletedTask,
             startProcess: _ => startCount++,
-            connectionInfoPath: connectionInfoPath);
+            connectionInfoPath: connectionInfoPath,
+            tryGetHostHandshakeAsync: static (_, _) => Task.FromResult<HostHandshakeResponse?>(null));
 
         try
         {

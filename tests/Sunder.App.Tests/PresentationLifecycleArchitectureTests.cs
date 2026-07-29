@@ -93,7 +93,7 @@ public sealed class PresentationLifecycleArchitectureTests
     }
 
     [Fact]
-    public void ShellPanels_KeepRetainedViewsHostedAndShowOnlyTheActiveView()
+    public void ShellPanels_KeepRetainedViewsHostedAndStageWithoutPresentingThem()
     {
         var controls = Path.Combine(
             GetRepositoryRoot(),
@@ -106,13 +106,26 @@ public sealed class PresentationLifecycleArchitectureTests
         var workspace = File.ReadAllText(Path.Combine(controls, "ShellWorkspace.axaml"));
 
         Assert.Contains("ItemsSource=\"{Binding HostedViews}\"", panelHost, StringComparison.Ordinal);
-        Assert.Contains("IsVisible=\"{Binding IsActive}\"", panelHost, StringComparison.Ordinal);
+        Assert.Contains("IsVisible=\"{Binding IsLayoutVisible}\"", panelHost, StringComparison.Ordinal);
+        Assert.Contains("Opacity=\"{Binding PresentationOpacity}\"", panelHost, StringComparison.Ordinal);
+        Assert.Contains(
+            "IsHitTestVisible=\"{Binding IsPresentationHitTestVisible}\"",
+            panelHost,
+            StringComparison.Ordinal);
         Assert.Contains(
             "ItemsSource=\"{Binding MiddlePanel.HostedViews}\"",
             workspace,
             StringComparison.Ordinal);
         Assert.Contains(
-            "IsVisible=\"{Binding IsActive}\"",
+            "IsVisible=\"{Binding IsLayoutVisible}\"",
+            workspace,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Opacity=\"{Binding PresentationOpacity}\"",
+            workspace,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsHitTestVisible=\"{Binding IsPresentationHitTestVisible}\"",
             workspace,
             StringComparison.Ordinal);
     }
@@ -161,7 +174,7 @@ public sealed class PresentationLifecycleArchitectureTests
     }
 
     [Fact]
-    public void MacNativeMenuRefresh_IsLazyAndUsesSmallIcons()
+    public void MacNativeMenuRefresh_MarshalsBeforeStateAccessAndCoalesces()
     {
         var path = Path.Combine(
             GetRepositoryRoot(),
@@ -172,15 +185,48 @@ public sealed class PresentationLifecycleArchitectureTests
             "MacNativeMenuController.cs");
         var source = File.ReadAllText(path);
 
-        Assert.Contains("ViewModel_OnShellViewStateChanged() => _menuDirty = true", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("Dispatcher.UIThread.Post", source, StringComparison.Ordinal);
+        var eventHandlerStart = source.IndexOf(
+            "private void ViewModel_OnShellViewStateChanged()",
+            StringComparison.Ordinal);
+        var schedulerStart = source.IndexOf(
+            "private void ScheduleMenuRefresh()",
+            StringComparison.Ordinal);
+        var schedulerEnd = source.IndexOf(
+            "private void UpdateMenuIfDirty()",
+            StringComparison.Ordinal);
+        Assert.True(eventHandlerStart >= 0 && schedulerStart > eventHandlerStart);
+        Assert.True(schedulerEnd > schedulerStart);
+        var eventHandler = source[eventHandlerStart..schedulerStart];
+        var scheduler = source[schedulerStart..schedulerEnd];
+
+        Assert.Contains("if (!Dispatcher.UIThread.CheckAccess())", eventHandler, StringComparison.Ordinal);
+        Assert.Contains(
+            "Dispatcher.UIThread.Post(ScheduleMenuRefresh, DispatcherPriority.Normal)",
+            eventHandler,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("_menuDirty", eventHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("_menuRefreshScheduled", eventHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("_disposed", eventHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("_rootMenu", eventHandler, StringComparison.Ordinal);
+        Assert.Contains("Dispatcher.UIThread.VerifyAccess()", scheduler, StringComparison.Ordinal);
+        Assert.Contains("if (_disposed)", scheduler, StringComparison.Ordinal);
+        Assert.Contains("_menuDirty = true", scheduler, StringComparison.Ordinal);
+        Assert.Contains(
+            "if (_rootMenu is null || _menuRefreshScheduled)",
+            scheduler,
+            StringComparison.Ordinal);
+        Assert.Contains("_menuRefreshScheduled = true", scheduler, StringComparison.Ordinal);
+        Assert.Contains("DispatcherPriority.Background", scheduler, StringComparison.Ordinal);
+        Assert.Contains("_menuRefreshScheduled = false", scheduler, StringComparison.Ordinal);
+        Assert.Contains("UpdateMenuIfDirty();", scheduler, StringComparison.Ordinal);
+        Assert.Contains("_rootMenu.NeedsUpdate += Menu_OnNeedsUpdate", source, StringComparison.Ordinal);
         Assert.Contains("Bitmap.DecodeToWidth(", source, StringComparison.Ordinal);
         Assert.Contains("NativeMenuIconSize", source, StringComparison.Ordinal);
         Assert.Contains("CreateScaledBitmap(", source, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void MacMainWindowLifecycle_HidesForCloseAndReopensFromDock()
+    public void MacMainWindowLifecycle_CoordinatesCloseAndReopensFromDock()
     {
         var appPath = Path.Combine(
             GetRepositoryRoot(),
@@ -197,18 +243,56 @@ public sealed class PresentationLifecycleArchitectureTests
             "Services",
             "WindowLauncher.cs");
         var launcherSource = File.ReadAllText(launcherPath);
+        var mainWindowPath = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Views",
+            "MainWindow.axaml.cs");
+        var mainWindowSource = File.ReadAllText(mainWindowPath);
+        var shellSessionPath = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Services",
+            "ShellSession.cs");
+        var shellSessionSource = File.ReadAllText(shellSessionPath);
 
         Assert.Contains("ShutdownMode.OnExplicitShutdown", appSource, StringComparison.Ordinal);
         Assert.Contains("TryGetFeature<IActivatableLifetime>()", appSource, StringComparison.Ordinal);
         Assert.Contains("e.Kind == ActivationKind.Reopen", appSource, StringComparison.Ordinal);
-        Assert.Contains("sender is MainWindow mainWindow", appSource, StringComparison.Ordinal);
-        Assert.Contains("mainWindow.Hide();", appSource, StringComparison.Ordinal);
         Assert.Contains(
             "session.WindowLauncher.ActivateMainWindow();",
             appSource,
             StringComparison.Ordinal);
+        Assert.Contains("WindowCloseToHideCoordinator", mainWindowSource, StringComparison.Ordinal);
+        Assert.Contains("MainWindow.HidingForClose +=", shellSessionSource, StringComparison.Ordinal);
+        Assert.Contains("CloseAboutSunderWindow();", shellSessionSource, StringComparison.Ordinal);
         Assert.Contains("internal void ActivateMainWindow()", launcherSource, StringComparison.Ordinal);
         Assert.Contains("ShowWindow(mainWindow);", launcherSource, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("SettingsWindow.axaml.cs")]
+    [InlineData("PackagesWindow.axaml.cs")]
+    [InlineData("StacksWindow.axaml.cs")]
+    [InlineData("DeveloperLogWindow.axaml.cs")]
+    public void CachedSecondaryWindows_UseCentralCloseToHideCoordinator(string fileName)
+    {
+        var path = Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "Views",
+            fileName);
+        var source = File.ReadAllText(path);
+
+        Assert.Contains("WindowCloseToHideCoordinator", source, StringComparison.Ordinal);
+        Assert.Contains("hideOnClose: true", source, StringComparison.Ordinal);
+        Assert.Contains("_closeCoordinator.CloseForShutdown()", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -302,6 +386,45 @@ public sealed class PresentationLifecycleArchitectureTests
 
         Assert.Equal(1, dispatcher.InvocationCount);
         Assert.True(launcher.SettingsShown);
+    }
+
+    [Fact]
+    public async Task SettingsNavigation_SnapshotsAndForwardsParametersBeforeDeferredDispatch()
+    {
+        var dispatcher = new DeferredDispatcher();
+        var launcher = new RecordingWindowLauncher();
+        var service = new AppPackageSettingsNavigationService(dispatcher);
+        service.Attach(launcher);
+        var parameters = new Dictionary<string, string?> { ["section"] = "original" };
+
+        var open = service.OpenSettingsAsync(parameters).AsTask();
+        await dispatcher.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        parameters["section"] = "mutated";
+        dispatcher.Release.SetResult();
+
+        Assert.True(await open);
+        Assert.Equal("original", launcher.SettingsParameters?["section"]);
+        Assert.Throws<NotSupportedException>(() =>
+            Assert.IsAssignableFrom<IDictionary<string, string?>>(launcher.SettingsParameters)["section"] = "changed");
+    }
+
+    [Fact]
+    public async Task PackageSettingsNavigation_SnapshotsParametersBeforeDeferredDispatch()
+    {
+        var dispatcher = new DeferredDispatcher();
+        var launcher = new RecordingWindowLauncher();
+        var service = new AppPackageSettingsNavigationService(dispatcher);
+        service.Attach(launcher);
+        var parameters = new Dictionary<string, string?> { ["workspace"] = "original" };
+
+        var open = service.OpenPackageSettingsAsync("agent", parameters).AsTask();
+        await dispatcher.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        parameters["workspace"] = "mutated";
+        dispatcher.Release.SetResult();
+
+        Assert.True(await open);
+        Assert.Equal("agent", launcher.PackageSettingsId);
+        Assert.Equal("original", launcher.PackageSettingsParameters?["workspace"]);
     }
 
     [Fact]
@@ -472,10 +595,24 @@ public sealed class PresentationLifecycleArchitectureTests
     {
         public bool SettingsShown { get; private set; }
 
-        public void ShowSettings() => SettingsShown = true;
+        public IReadOnlyDictionary<string, string?>? SettingsParameters { get; private set; }
+
+        public string? PackageSettingsId { get; private set; }
+
+        public IReadOnlyDictionary<string, string?>? PackageSettingsParameters { get; private set; }
+
+        public void ShowSettings(IReadOnlyDictionary<string, string?>? parameters = null)
+        {
+            SettingsShown = true;
+            SettingsParameters = parameters;
+        }
 
         public Task<bool> ShowPackageSettingsAsync(string packageId, IReadOnlyDictionary<string, string?>? parameters = null, CancellationToken cancellationToken = default)
-            => Task.FromResult(true);
+        {
+            PackageSettingsId = packageId;
+            PackageSettingsParameters = parameters;
+            return Task.FromResult(true);
+        }
 
         public void ShowPackages() { }
 
@@ -505,6 +642,11 @@ public sealed class PresentationLifecycleArchitectureTests
             return action();
         }
 
-        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => throw new NotSupportedException();
+        public async Task<T> InvokeAsync<T>(Func<Task<T>> action)
+        {
+            Started.SetResult();
+            await Release.Task;
+            return await action();
+        }
     }
 }

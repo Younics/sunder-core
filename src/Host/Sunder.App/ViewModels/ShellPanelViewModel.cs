@@ -12,6 +12,8 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
 
     public bool HasHostedView => HostedView is not null;
 
+    public bool HasLayoutHostedView => HostedViews.Any(view => view.IsLayoutVisible);
+
     public bool ShowFallbackLines => HostedView is null;
 
     private string? _activeViewId;
@@ -34,6 +36,12 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
     private bool _isDockVisible;
 
     public bool IsDockVisible => _isDockVisible;
+
+    private bool _isDockStaged;
+
+    public bool IsDockStaged => _isDockStaged;
+
+    public bool IsDockLayoutVisible => IsDockVisible || IsDockStaged;
 
     private object? _hostedView;
 
@@ -63,9 +71,11 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
         foreach (var view in HostedViews)
         {
             view.IsActive = ReferenceEquals(view, retainedView);
+            view.IsStaged = false;
         }
 
         SetHostedView(retainedView.View);
+        OnPropertyChanged(nameof(HasLayoutHostedView));
     }
 
     public object RetainHostedView(string viewId, object hostedView)
@@ -76,6 +86,7 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
         {
             retainedView = new ShellHostedViewViewModel(viewId, hostedView);
             HostedViews.Add(retainedView);
+            OnPropertyChanged(nameof(HasLayoutHostedView));
             return hostedView;
         }
 
@@ -87,6 +98,40 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
         return retainedView.View;
     }
 
+    public bool StageHostedView(string viewId)
+    {
+        var stagedView = HostedViews.FirstOrDefault(view => string.Equals(
+            view.ViewId,
+            viewId,
+            StringComparison.OrdinalIgnoreCase));
+        if (stagedView is null)
+        {
+            return false;
+        }
+
+        foreach (var view in HostedViews)
+        {
+            view.IsStaged = ReferenceEquals(view, stagedView);
+        }
+        OnPropertyChanged(nameof(HasLayoutHostedView));
+        return true;
+    }
+
+    public void UnstageHostedView(string viewId)
+    {
+        var stagedView = HostedViews.FirstOrDefault(view => string.Equals(
+            view.ViewId,
+            viewId,
+            StringComparison.OrdinalIgnoreCase));
+        if (stagedView?.IsStaged != true)
+        {
+            return;
+        }
+
+        stagedView.IsStaged = false;
+        OnPropertyChanged(nameof(HasLayoutHostedView));
+    }
+
     public void ClearActiveView()
     {
         ActiveViewId = null;
@@ -94,7 +139,20 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
     }
 
     public void SetDockVisible(bool isVisible)
-        => SetProperty(ref _isDockVisible, isVisible, nameof(IsDockVisible));
+    {
+        if (SetProperty(ref _isDockVisible, isVisible, nameof(IsDockVisible)))
+        {
+            OnPropertyChanged(nameof(IsDockLayoutVisible));
+        }
+    }
+
+    public void SetDockStaged(bool isStaged)
+    {
+        if (SetProperty(ref _isDockStaged, isStaged, nameof(IsDockStaged)))
+        {
+            OnPropertyChanged(nameof(IsDockLayoutVisible));
+        }
+    }
 
     public object? GetRetainedView(string viewId)
         => HostedViews.FirstOrDefault(view => string.Equals(view.ViewId, viewId, StringComparison.OrdinalIgnoreCase))?.View;
@@ -115,6 +173,7 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
             ActiveViewId = null;
             SetHostedView(null);
         }
+        OnPropertyChanged(nameof(HasLayoutHostedView));
     }
 
     public void ClearRetainedViews()
@@ -140,9 +199,11 @@ public sealed partial class ShellPanelViewModel : ViewModelBase
         foreach (var view in HostedViews)
         {
             view.IsActive = false;
+            view.IsStaged = false;
         }
 
         SetHostedView(null);
+        OnPropertyChanged(nameof(HasLayoutHostedView));
     }
 
     private void SetHostedView(object? hostedView)

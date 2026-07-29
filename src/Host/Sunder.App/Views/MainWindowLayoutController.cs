@@ -70,10 +70,10 @@ internal sealed class MainWindowLayoutController
             return;
         }
 
-        var hasLeftTop = viewModel.LeftTopPanel.IsDockVisible;
-        var hasRightTop = viewModel.RightTopPanel.IsDockVisible;
-        var hasLeftBottom = viewModel.LeftBottomPanel.IsDockVisible;
-        var hasRightBottom = viewModel.RightBottomPanel.IsDockVisible;
+        var hasLeftTop = viewModel.LeftTopPanel.IsDockLayoutVisible;
+        var hasRightTop = viewModel.RightTopPanel.IsDockLayoutVisible;
+        var hasLeftBottom = viewModel.LeftBottomPanel.IsDockLayoutVisible;
+        var hasRightBottom = viewModel.RightBottomPanel.IsDockLayoutVisible;
         var hasBottom = hasLeftBottom || hasRightBottom;
         var hasBottomSplit = hasLeftBottom && hasRightBottom;
 
@@ -267,18 +267,18 @@ internal sealed class MainWindowLayoutController
     {
         var resizableWidth = CalculateResizableExtent(
             GetTopContentWidth(),
-            viewModel.LeftTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0,
-            viewModel.RightTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0);
-        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.RightTopPanel.IsDockVisible ? viewModel.RightPanelWidth : 0);
+            viewModel.LeftTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0,
+            viewModel.RightTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0);
+        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.RightTopPanel.IsDockLayoutVisible ? viewModel.RightPanelWidth : 0);
     }
 
     private double GetMaximumRightPanelWidth(MainWindowViewModel viewModel)
     {
         var resizableWidth = CalculateResizableExtent(
             GetTopContentWidth(),
-            viewModel.LeftTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0,
-            viewModel.RightTopPanel.IsDockVisible ? ShellLayoutCalculator.SplitterThickness : 0);
-        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.LeftTopPanel.IsDockVisible ? viewModel.LeftPanelWidth : 0);
+            viewModel.LeftTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0,
+            viewModel.RightTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0);
+        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.LeftTopPanel.IsDockLayoutVisible ? viewModel.LeftPanelWidth : 0);
     }
 
     private sealed record LayoutGeometryState(

@@ -34,9 +34,10 @@ public sealed class StackWizardWindowFactory(ShellStateService shellStateService
         Action<ShellState, ShellWindowPlacement?> setPlacement)
     {
         ShellWindowPlacementService.Apply(window, getPlacement(shellState));
+        var placementTracker = new ShellWindowPlacementTracker(window, getPlacement(shellState));
         window.Closing += (_, _) =>
         {
-            var placement = ShellWindowPlacementService.Capture(window, getPlacement(shellState));
+            var placement = placementTracker.Capture();
             setPlacement(shellState, placement);
             shellStateService.Update(shellState, state => setPlacement(state, placement));
         };

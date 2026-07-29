@@ -91,6 +91,138 @@ public sealed class PackageAuthSessionCoordinatorTests
     }
 
     [Fact]
+    public async Task GetPackageAuthStatusAsync_BlockedFailuresFromTwoPackagesDisableBothActivations()
+    {
+        var firstAuthHandler = new TestPackageAuthHandler(
+            "first.package",
+            blockStatus: true,
+            statusFailure: new InvalidOperationException("First auth status failed."));
+        var secondAuthHandler = new TestPackageAuthHandler(
+            "second.package",
+            blockStatus: true,
+            statusFailure: new InvalidOperationException("Second auth status failed."));
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        await owner.PublishAsync(
+            CreateSession(
+                CreateLoadedPackage(firstAuthHandler, "first.package"),
+                CreateLoadedPackage(secondAuthHandler, "second.package")),
+            owner.Sources.Snapshot(),
+            [],
+            [],
+            [],
+            expectedGeneration: 0);
+        var initialGeneration = owner.Generation;
+        var firstLease = owner.State.AcquireLease();
+        var secondLease = owner.State.AcquireLease();
+
+        try
+        {
+            var firstStatusTask = owner.Auth.GetPackageAuthStatusAsync(firstLease, "first.package");
+            var secondStatusTask = owner.Auth.GetPackageAuthStatusAsync(secondLease, "second.package");
+            await Task.WhenAll(firstAuthHandler.StatusEntered, secondAuthHandler.StatusEntered)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            firstAuthHandler.ReleaseStatus();
+            var firstStatus = await firstStatusTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed, firstStatus?.Status);
+            Assert.Equal(initialGeneration + 1, owner.Generation);
+            Assert.False(owner.State.GetSessionPackage("first.package")!.IsEnabled);
+            Assert.True(owner.State.GetSessionPackage("second.package")!.IsEnabled);
+            Assert.Equal(initialGeneration, secondLease.Generation);
+
+            secondAuthHandler.ReleaseStatus();
+            var secondStatus = await secondStatusTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed, secondStatus?.Status);
+            Assert.Equal(initialGeneration + 2, owner.Generation);
+            Assert.False(owner.State.GetSessionPackage("second.package")!.IsEnabled);
+            Assert.Empty(owner.State.GetActivePackages());
+        }
+        finally
+        {
+            firstAuthHandler.ReleaseStatus();
+            secondAuthHandler.ReleaseStatus();
+            firstLease.Dispose();
+            secondLease.Dispose();
+            await owner.State.ClearActiveSessionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task GetPackageAuthStatusAsync_RetiredActivationReportCannotFaultReplacement()
+    {
+        var staleException = new InvalidOperationException("Retired auth status failed.");
+        var stalePackage = CreateLoadedPackage(
+            new TestPackageAuthHandler(statusFailure: staleException));
+        var replacementPackage = CreateLoadedPackage(new TestPackageAuthHandler());
+        Assert.NotEqual(stalePackage.RuntimeActivationId, replacementPackage.RuntimeActivationId);
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        await owner.PublishAsync(
+            CreateSession(stalePackage),
+            owner.Sources.Snapshot(),
+            [],
+            [],
+            [],
+            expectedGeneration: 0);
+        var staleLease = owner.State.AcquireLease();
+        Func<bool>? applyStaleReport = null;
+        var coordinator = new PackageAuthSessionCoordinator(
+            owner.State,
+            owner.Callbacks,
+            (packageId, activationIdentity, origin, exception, action) =>
+            {
+                Assert.Same(staleLease.Identity, activationIdentity.SessionIdentity);
+                Assert.Equal(stalePackage.RuntimeActivationId, activationIdentity.RuntimeActivationId);
+                applyStaleReport = () => owner.State.HandlePackageFault(
+                    packageId,
+                    activationIdentity,
+                    owner.State.Generation,
+                    origin,
+                    exception,
+                    action);
+            });
+
+        try
+        {
+            var status = await coordinator.GetPackageAuthStatusAsync(staleLease, "test.package");
+            Assert.Equal(Sunder.Runtime.Contracts.PackageAuthStatusKind.Failed, status?.Status);
+            Assert.NotNull(applyStaleReport);
+
+            staleLease.Dispose();
+            await owner.PublishAsync(
+                CreateSession(replacementPackage),
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                [],
+                expectedGeneration: 1);
+            var replacementGeneration = owner.Generation;
+
+            Assert.False(applyStaleReport!());
+            Assert.Equal(replacementGeneration, owner.Generation);
+            var replacement = owner.State.GetSessionPackage("test.package");
+            Assert.True(replacement?.IsEnabled);
+            Assert.Equal(PackageReadinessState.Ready, replacement?.Readiness);
+            using (var replacementLease = owner.State.AcquireLease())
+            {
+                Assert.Same(
+                    replacementPackage,
+                    owner.State.GetLoadedPackage(replacementLease, "test.package"));
+            }
+        }
+        finally
+        {
+            staleLease.Dispose();
+            await owner.State.ClearActiveSessionAsync();
+        }
+    }
+
+    [Fact]
     public async Task StartPackageAuthAsync_ParallelCallsShareOneProviderStart()
     {
         var authHandler = new TestPackageAuthHandler(blockStart: true);
@@ -198,41 +330,43 @@ public sealed class PackageAuthSessionCoordinatorTests
     private static async Task<PackageSessionState> CreateSessionStateAsync(ActiveLoadedPackage loadedPackage)
     {
         var state = new PackageSessionState(NullLogger.Instance, static () => { }, static _ => { });
-        var packageId = loadedPackage.Descriptor.PackageId;
-        var session = new ActivePackageSession(
+        await state.PublishSessionAsync(CreateSession(loadedPackage));
+        return state;
+    }
+
+    private static ActivePackageSession CreateSession(params ActiveLoadedPackage[] loadedPackages)
+        => new(
             sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
-            {
-                [packageId] = loadedPackage,
-            },
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-            {
-                [packageId] = new SessionPackageDescriptor(
-                    packageId,
-                    loadedPackage.Descriptor.DisplayName,
-                    loadedPackage.Descriptor.Version,
-                    loadedPackage.Descriptor.HostRoles,
-                    loadedPackage.Descriptor.Icon,
+            loadedPackages.ToDictionary(
+                static package => package.Descriptor.PackageId,
+                StringComparer.OrdinalIgnoreCase),
+            loadedPackages.ToDictionary(
+                static package => package.Descriptor.PackageId,
+                static package => new SessionPackageDescriptor(
+                    package.Descriptor.PackageId,
+                    package.Descriptor.DisplayName,
+                    package.Descriptor.Version,
+                    package.Descriptor.HostRoles,
+                    package.Descriptor.Icon,
                     IsEnabled: true,
                     PackageReadinessState.Ready,
-                    loadedPackage.Descriptor.Views,
+                    package.Descriptor.Views,
                     FailureOrigin: null,
                     LastError: null,
                     LastFailureAtUtc: null,
                     FailureCount: 0),
-            });
-        await state.PublishSessionAsync(session);
-        return state;
-    }
+                StringComparer.OrdinalIgnoreCase));
 
-    private static ActiveLoadedPackage CreateLoadedPackage(IPackageAuthHandler authHandler)
+    private static ActiveLoadedPackage CreateLoadedPackage(
+        IPackageAuthHandler authHandler,
+        string packageId = "test.package")
     {
         var tempDirectory = CreateTempDirectory();
         var assemblyPath = typeof(PackageAuthSessionCoordinator).Assembly.Location;
 
         return new ActiveLoadedPackage(
-            new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
-            new RuntimePackageSource("test.package", PackageSourceKind.Dev, tempDirectory),
+            new ActivePackageDescriptor(packageId, "Test Package", "1.0.0", PackageHostRoles.Runtime, Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
+            new RuntimePackageSource(packageId, PackageSourceKind.Dev, tempDirectory),
             SettingsSchema: null,
             new JsonPackageKeyValueStore(Path.Combine(tempDirectory, "state.json")),
             new JsonPackageSecretsStore(
@@ -248,7 +382,7 @@ public sealed class PackageAuthSessionCoordinatorTests
             BackgroundServices: [],
             new ServiceCollection().BuildServiceProvider(),
             new RuntimePackageLoadContext(
-                "test.package",
+                packageId,
                 assemblyPath,
                 new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
             EmptyTestPackageSettings.Instance);
@@ -268,13 +402,20 @@ public sealed class PackageAuthSessionCoordinatorTests
         return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    private sealed class TestPackageAuthHandler(bool blockStart = false, bool blockCompletion = false) : IPackageAuthHandler
+    private sealed class TestPackageAuthHandler(
+        string packageId = "test.package",
+        bool blockStart = false,
+        bool blockCompletion = false,
+        bool blockStatus = false,
+        Exception? statusFailure = null) : IPackageAuthHandler
     {
         private bool _connected;
         private readonly TaskCompletionSource _startEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _releaseStart = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _completionEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _releaseCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _statusEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseStatus = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _startCount;
         private int _completionCount;
         private readonly List<PackageCallbackCancellationReason> _cancellationReasons = [];
@@ -287,6 +428,8 @@ public sealed class PackageAuthSessionCoordinatorTests
         public Task StartEntered => _startEntered.Task;
 
         public Task CompletionEntered => _completionEntered.Task;
+
+        public Task StatusEntered => _statusEntered.Task;
 
         public string? CompletedCode { get; private set; }
 
@@ -303,15 +446,28 @@ public sealed class PackageAuthSessionCoordinatorTests
             }
         }
 
-        public ValueTask<PackageAuthStatus> GetStatusAsync(CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(new PackageAuthStatus(
-                "test.package",
+        public async ValueTask<PackageAuthStatus> GetStatusAsync(CancellationToken cancellationToken = default)
+        {
+            _statusEntered.TrySetResult();
+            if (blockStatus)
+            {
+                await _releaseStatus.Task.WaitAsync(cancellationToken);
+            }
+
+            if (statusFailure is not null)
+            {
+                throw statusFailure;
+            }
+
+            return new PackageAuthStatus(
+                packageId,
                 _connected
                     ? Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected
                     : Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected,
                 _connected ? "Connected." : "Not connected.",
                 CanAuthorize: !_connected,
-                CanDisconnect: _connected));
+                CanDisconnect: _connected);
+        }
 
         public async Task<PackageAuthSessionStartResult?> StartAuthorizationAsync(
             PackageAuthSessionStartContext context,
@@ -325,7 +481,7 @@ public sealed class PackageAuthSessionCoordinatorTests
                 await _releaseStart.Task.WaitAsync(cancellationToken);
             }
             return new PackageAuthSessionStartResult(
-                "test.package",
+                packageId,
                 context.AuthSessionId,
                 Sunder.Sdk.Authentication.PackageAuthFlowKind.Browser,
                 "https://login.example.test",
@@ -345,7 +501,7 @@ public sealed class PackageAuthSessionCoordinatorTests
             CompletedCode = context.QueryValues.TryGetValue("code", out var code) ? code : null;
             _connected = true;
             return new PackageAuthStatus(
-                "test.package",
+                packageId,
                 Sunder.Sdk.Authentication.PackageAuthStatusKind.Connected,
                 "Connected.",
                 CanAuthorize: false,
@@ -355,6 +511,8 @@ public sealed class PackageAuthSessionCoordinatorTests
         public void ReleaseStart() => _releaseStart.TrySetResult();
 
         public void ReleaseCompletion() => _releaseCompletion.TrySetResult();
+
+        public void ReleaseStatus() => _releaseStatus.TrySetResult();
 
         public async Task WaitForCancellationAsync()
         {
@@ -382,7 +540,7 @@ public sealed class PackageAuthSessionCoordinatorTests
         {
             _connected = false;
             return Task.FromResult(new PackageAuthStatus(
-                    "test.package",
+                    packageId,
                     Sunder.Sdk.Authentication.PackageAuthStatusKind.NotConnected,
                     "Disconnected.",
                     CanAuthorize: true,

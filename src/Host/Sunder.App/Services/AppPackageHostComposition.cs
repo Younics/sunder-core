@@ -1,4 +1,5 @@
 using System.Reflection;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -23,6 +24,7 @@ internal sealed class AppPackageHostComposition : IDisposable
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
         Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
+        Action<Guid, PackageExtensionOwnerToken, string, PackageFailureOrigin, Exception?> disableExtensionOwner,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry,
         AppPackageExtensionCatalog? extensionCatalog,
         IPackageShellViewService? shellViewService,
@@ -50,6 +52,8 @@ internal sealed class AppPackageHostComposition : IDisposable
 
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         ExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
+        ExtensionCatalog.ConfigureFaultReporting((ownerToken, message, origin, exception) =>
+            disableExtensionOwner(generationId, ownerToken, message, origin, exception));
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _ownedBackgroundProcessQueue = backgroundProcessQueue is null ? resolvedBackgroundProcessQueue : null;
         var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue, generationId);
@@ -97,6 +101,21 @@ internal sealed class AppPackageHostComposition : IDisposable
 
     public void UnpublishServices() => _publication.Revoke();
 
+    public IDisposable BeginRuntimePreparation() => _publication.BeginRuntimePreparation();
+
+    public IReadOnlyList<Task> BeginGenerationRetirement()
+    {
+        var viewOperations = ViewFacade.BeginCancelAllViewOperations();
+        var backgroundOperations = _unloadCoordinator.StopAllOwnedRuntimeWorkAsync();
+        var ownerRetirements = ExtensionCatalog.BeginAllOwnerRetirements();
+        return
+        [
+            viewOperations,
+            backgroundOperations,
+            .. ownerRetirements.Select(static retirement => retirement.Completion),
+        ];
+    }
+
     public void AddSharedAssemblyProbeDirectories(IEnumerable<string> probeDirectories)
         => _sharedAssemblyRegistry.AddProbeDirectories(probeDirectories);
 
@@ -130,7 +149,10 @@ internal sealed class AppPackageHostComposition : IDisposable
                     source,
                     activation.PackageInfo.Folder,
                     activation.ServiceProvider,
-                    activation.LoadContext));
+                    activation.LoadContext)
+                {
+                    ExtensionOwner = activation.ExtensionOwner,
+                });
             activated = true;
         }
         finally
@@ -141,7 +163,8 @@ internal sealed class AppPackageHostComposition : IDisposable
                     package.PackageId,
                     activation.PackageInfo,
                     activation.ServiceProvider,
-                    activation.LoadContext).ConfigureAwait(false);
+                    activation.LoadContext,
+                    activation.ExtensionOwner).ConfigureAwait(false);
             }
         }
     }
@@ -182,8 +205,23 @@ internal sealed class AppPackageHostComposition : IDisposable
         return true;
     }
 
+    public async Task<bool> UnloadPackageForGenerationRetirementAsync(string packageId)
+    {
+        if (!_state.TryRemoveLoadedPackage(packageId, preserveDisabled: true, out var handle) || handle is null)
+        {
+            return false;
+        }
+
+        await _unloadCoordinator.UnloadPackageAsync(
+            packageId,
+            handle,
+            useRetirementDeadline: false).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task DisposeRemainingOwnedResourcesAsync()
     {
+        await _unloadCoordinator.RetireAllOwnersAsync().ConfigureAwait(false);
         var (ownedDisposables, loadContexts) = _state.SnapshotOwnedResources();
         await _unloadCoordinator.DisposeOwnedResourcesAsync(ownedDisposables, loadContexts).ConfigureAwait(false);
     }

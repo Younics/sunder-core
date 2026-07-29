@@ -5,17 +5,21 @@ namespace Sunder.App.Views;
 
 public partial class DeveloperLogWindow : Window
 {
-    private readonly SecondaryWindowLifecycleController _lifecycleController;
+    private readonly WindowCloseToHideCoordinator _closeCoordinator;
 
     public DeveloperLogWindow()
     {
         InitializeComponent();
         SunderWindowSizing.ApplySecondaryWindowSize(this);
-        _lifecycleController = new SecondaryWindowLifecycleController(this, () => { }, OnLifecycleClosed);
+        _closeCoordinator = new WindowCloseToHideCoordinator(
+            this,
+            hideOnClose: true,
+            closeOnEscape: true,
+            closed: OnLifecycleClosed);
     }
 
     public void CloseForShutdown()
-        => _lifecycleController.CloseForShutdown();
+        => _closeCoordinator.CloseForShutdown();
 
     private void OnLifecycleClosed()
     {

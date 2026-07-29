@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Package.Hosting;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
@@ -18,63 +19,80 @@ internal sealed class AppPackageUnloadCoordinator(
         AppLoadedPackageInfo? packageInfo,
         ServiceProvider? serviceProvider,
         AppPackageLoadContext? loadContext,
+        PackageExtensionOwnerActivation? extensionOwner,
         bool stopRuntimeWork = true)
     {
-        var canDeletePackageFolder = true;
-        await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
-        extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
-        if (stopRuntimeWork)
+        var retirement = extensionOwner is null
+            ? PackageExtensionOwnerRetirement.Completed(packageId)
+            : extensionCatalog.BeginOwnerRetirement(extensionOwner, PackageExtensionCatalogChangeReason.PackageDeactivated);
+        if (extensionOwner is not null)
         {
-            await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
-        }
-
-        assemblyTracker.RemovePackage(packageId);
-        removePackageResourceAssemblies?.Invoke(packageId);
-
-        if (packageInfo is not null)
-        {
-            canDeletePackageFolder = sharedAssemblyRegistry.TryRemoveProbeDirectories([packageInfo.LibraryFolder]);
+            await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
+            if (stopRuntimeWork)
+            {
+                await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
+            }
         }
 
         if (serviceProvider is not null)
         {
             removeOwnedDisposable(serviceProvider);
-            await AppPackageResourceDisposer.TryDisposeOwnedInstanceAsync(serviceProvider, $"Failed to dispose app-side services for package '{packageId}'.");
         }
-
         if (loadContext is not null)
         {
             removeLoadContext(loadContext);
-            AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId);
         }
 
-        if (packageInfo is not null && canDeletePackageFolder)
-        {
-            AppPackageSourcePreparer.TryDeleteDirectory(packageInfo.Folder);
-        }
+        await RunBoundedOwnerCleanupAsync(
+            packageId,
+            CleanupRetiredPackageAsync(
+                packageId,
+                retirement,
+                packageInfo?.Folder,
+                packageInfo?.LibraryFolder,
+                serviceProvider,
+                loadContext,
+                removeWholePackageTracking: extensionOwner is not null));
     }
 
-    public async Task UnloadPackageAsync(string packageId, AppLoadedPackageHandle handle)
+    public async Task UnloadPackageAsync(
+        string packageId,
+        AppLoadedPackageHandle handle,
+        bool useRetirementDeadline = true)
     {
+        var retirement = handle.ExtensionOwner is null
+            ? PackageExtensionOwnerRetirement.Completed(packageId)
+            : extensionCatalog.BeginOwnerRetirement(handle.ExtensionOwner, PackageExtensionCatalogChangeReason.PackageDeactivated);
         await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
-        extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageDeactivated);
         await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
 
         removeOwnedDisposable(handle.ServiceProvider);
-        await Task.Run(
-            async () => await AppPackageResourceDisposer.TryDisposeOwnedInstanceAsync(handle.ServiceProvider, $"Failed to dispose app-side services for package '{packageId}'."),
-            CancellationToken.None);
-
         removeLoadContext(handle.LoadContext);
-        assemblyTracker.RemovePackage(packageId);
-        removePackageResourceAssemblies?.Invoke(packageId);
-        var canDeletePackageFolder = sharedAssemblyRegistry.TryRemoveProbeDirectories([Path.Combine(handle.Folder, "lib")]);
-        AppPackageResourceDisposer.TryUnloadLoadContext(handle.LoadContext, packageId);
-        if (canDeletePackageFolder)
+        var cleanup = CleanupRetiredPackageAsync(
+            packageId,
+            retirement,
+            handle.Folder,
+            Path.Combine(handle.Folder, "lib"),
+            handle.ServiceProvider,
+            handle.LoadContext,
+            removeWholePackageTracking: true);
+        if (useRetirementDeadline)
         {
-            AppPackageSourcePreparer.TryDeleteDirectory(handle.Folder);
+            await RunBoundedOwnerCleanupAsync(packageId, cleanup);
+        }
+        else
+        {
+            await cleanup;
         }
     }
+
+    public async Task RetireAllOwnersAsync()
+        => await Task.WhenAll(extensionCatalog
+            .BeginAllOwnerRetirements()
+            .Select(static retirement => retirement.Completion));
+
+    public Task StopAllOwnedRuntimeWorkAsync()
+        => runtimeWorkStopper.StopAllOwnedWorkAsync(CancellationToken.None);
 
     public async Task DisposeOwnedResourcesAsync(
         IReadOnlyList<object> ownedDisposables,
@@ -89,6 +107,62 @@ internal sealed class AppPackageUnloadCoordinator(
         foreach (var loadContext in loadContexts)
         {
             AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId: null);
+        }
+    }
+
+    private async Task CleanupRetiredPackageAsync(
+        string packageId,
+        PackageExtensionOwnerRetirement retirement,
+        string? packageFolder,
+        string? libraryFolder,
+        object? serviceProvider,
+        AppPackageLoadContext? loadContext,
+        bool removeWholePackageTracking)
+    {
+        await retirement.Completion.ConfigureAwait(false);
+        if (removeWholePackageTracking)
+        {
+            assemblyTracker.RemovePackage(packageId);
+            removePackageResourceAssemblies?.Invoke(packageId);
+        }
+        else if (loadContext is not null)
+        {
+            assemblyTracker.RemoveLoadContext(loadContext);
+        }
+        var canDeletePackageFolder = libraryFolder is null
+            || sharedAssemblyRegistry.TryRemoveProbeDirectories([libraryFolder]);
+
+        if (serviceProvider is not null)
+        {
+            await Task.Run(
+                async () => await AppPackageResourceDisposer.TryDisposeOwnedInstanceAsync(
+                    serviceProvider,
+                    $"Failed to dispose app-side services for package '{packageId}'."),
+                CancellationToken.None);
+        }
+
+        if (loadContext is not null)
+        {
+            AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId);
+        }
+        if (packageFolder is not null && canDeletePackageFolder)
+        {
+            AppPackageSourcePreparer.TryDeleteDirectory(packageFolder);
+        }
+    }
+
+    private static async Task RunBoundedOwnerCleanupAsync(string packageId, Task cleanup)
+    {
+        try
+        {
+            await cleanup.WaitAsync(AppShutdownBudgets.GenerationRetirement).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            AppSessionLog.WriteError(
+                $"App package '{packageId}' owner retirement exceeded its {AppShutdownBudgets.GenerationRetirement.TotalSeconds:0.###} second budget; its provider and load context were quarantined without forced disposal.",
+                exception);
+            AppCleanupQuarantine.Retain(cleanup, $"retiring App package '{packageId}' extension owner");
         }
     }
 

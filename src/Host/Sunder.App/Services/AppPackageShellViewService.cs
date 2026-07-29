@@ -49,7 +49,13 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         bool openPanel = false,
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
-        => InvokeAsync(viewModel => viewModel.AddPackageViewToDefaultHotbarAsync(viewId, openPanel, parameters), cancellationToken);
+        => InvokeNavigationAsync(
+            parameters,
+            (viewModel, snapshot) => viewModel.AddPackageViewToDefaultHotbarAsync(
+                viewId,
+                openPanel,
+                snapshot),
+            cancellationToken);
 
     internal ValueTask<bool> AddViewToDefaultHotbarAsync(
         string viewId,
@@ -57,8 +63,12 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         IReadOnlyDictionary<string, string?>? parameters,
         AppPackageGenerationPublication publication,
         CancellationToken cancellationToken)
-        => InvokeAsync(
-            viewModel => viewModel.AddPackageViewToDefaultHotbarAsync(viewId, openPanel, parameters),
+        => InvokeNavigationAsync(
+            parameters,
+            (viewModel, snapshot) => viewModel.AddPackageViewToDefaultHotbarAsync(
+                viewId,
+                openPanel,
+                snapshot),
             cancellationToken,
             publication);
 
@@ -69,7 +79,15 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         bool openPanel = false,
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
-        => InvokeAsync(viewModel => viewModel.AddPackageViewToHotbarAsync(viewId, placement, index, openPanel, parameters), cancellationToken);
+        => InvokeNavigationAsync(
+            parameters,
+            (viewModel, snapshot) => viewModel.AddPackageViewToHotbarAsync(
+                viewId,
+                placement,
+                index,
+                openPanel,
+                snapshot),
+            cancellationToken);
 
     internal ValueTask<bool> AddViewToHotbarAsync(
         string viewId,
@@ -79,8 +97,14 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         IReadOnlyDictionary<string, string?>? parameters,
         AppPackageGenerationPublication publication,
         CancellationToken cancellationToken)
-        => InvokeAsync(
-            viewModel => viewModel.AddPackageViewToHotbarAsync(viewId, placement, index, openPanel, parameters),
+        => InvokeNavigationAsync(
+            parameters,
+            (viewModel, snapshot) => viewModel.AddPackageViewToHotbarAsync(
+                viewId,
+                placement,
+                index,
+                openPanel,
+                snapshot),
             cancellationToken,
             publication);
 
@@ -102,15 +126,23 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
         string viewId,
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
-        => InvokeAsync(viewModel => viewModel.OpenPackageViewPanelAsync(viewId, parameters), cancellationToken);
+        => InvokeNavigationAsync(
+            parameters,
+            (viewModel, snapshot) => viewModel.OpenPackageViewPanelAsync(
+                viewId,
+                snapshot),
+            cancellationToken);
 
     internal ValueTask<bool> OpenViewPanelAsync(
         string viewId,
         IReadOnlyDictionary<string, string?>? parameters,
         AppPackageGenerationPublication publication,
         CancellationToken cancellationToken)
-        => InvokeAsync(
-            viewModel => viewModel.OpenPackageViewPanelAsync(viewId, parameters),
+        => InvokeNavigationAsync(
+            parameters,
+            (viewModel, snapshot) => viewModel.OpenPackageViewPanelAsync(
+                viewId,
+                snapshot),
             cancellationToken,
             publication);
 
@@ -127,6 +159,16 @@ public sealed class AppPackageShellViewService(IUiDispatcher? uiDispatcher = nul
             viewModel => ValueTask.FromResult(viewModel.ClosePackageViewPanel(viewId)),
             cancellationToken,
             publication);
+
+    private ValueTask<bool> InvokeNavigationAsync(
+        IReadOnlyDictionary<string, string?>? parameters,
+        Func<MainWindowViewModel, IReadOnlyDictionary<string, string?>, ValueTask<bool>> action,
+        CancellationToken cancellationToken,
+        AppPackageGenerationPublication? publication = null)
+    {
+        var snapshot = PackageNavigationParameters.Snapshot(parameters);
+        return InvokeAsync(viewModel => action(viewModel, snapshot), cancellationToken, publication);
+    }
 
     private async ValueTask<bool> InvokeAsync(
         Func<MainWindowViewModel, ValueTask<bool>> action,

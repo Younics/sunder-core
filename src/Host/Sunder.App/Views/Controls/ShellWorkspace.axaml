@@ -51,7 +51,7 @@
               <controls:ShellWelcomePanel IsVisible="{Binding MiddlePanel.ShowFallbackLines}" />
               <ItemsControl HorizontalAlignment="Stretch"
                             VerticalAlignment="Stretch"
-                            IsVisible="{Binding MiddlePanel.HasHostedView}"
+                             IsVisible="{Binding MiddlePanel.HasLayoutHostedView}"
                             ItemsSource="{Binding MiddlePanel.HostedViews}">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
@@ -64,7 +64,10 @@
                                      VerticalAlignment="Stretch"
                                      HorizontalContentAlignment="Stretch"
                                      VerticalContentAlignment="Stretch"
-                                     IsVisible="{Binding IsActive}"
+                                      IsVisible="{Binding IsLayoutVisible}"
+                                      Opacity="{Binding PresentationOpacity}"
+                                      IsHitTestVisible="{Binding IsPresentationHitTestVisible}"
+                                      Focusable="False"
                                      Content="{Binding View}" />
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>

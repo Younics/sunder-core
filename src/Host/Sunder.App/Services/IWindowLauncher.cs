@@ -2,7 +2,7 @@ namespace Sunder.App.Services;
 
 public interface IWindowLauncher
 {
-    void ShowSettings();
+    void ShowSettings(IReadOnlyDictionary<string, string?>? parameters = null);
 
     Task<bool> ShowPackageSettingsAsync(
         string packageId,

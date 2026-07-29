@@ -39,6 +39,20 @@ internal sealed class AppPackageAssemblyTracker
         }
     }
 
+    public void RemoveLoadContext(AssemblyLoadContext loadContext)
+    {
+        lock (_syncRoot)
+        {
+            foreach (var assembly in _assemblyPackageMap.Keys
+                         .Where(assembly => ReferenceEquals(AssemblyLoadContext.GetLoadContext(assembly), loadContext))
+                         .ToArray())
+            {
+                _assemblyPackageMap.Remove(assembly);
+            }
+            _loadContextPackageMap.Remove(loadContext);
+        }
+    }
+
     public IReadOnlyList<(string PackageId, Assembly Assembly)> SnapshotPackageAssemblies()
     {
         lock (_syncRoot)

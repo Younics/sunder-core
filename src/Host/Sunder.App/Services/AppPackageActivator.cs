@@ -1,6 +1,7 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Package.Format;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -49,6 +50,7 @@ internal sealed class AppPackageActivator(
             getRuntimeConnectionInfo,
             serviceProviderFactory.Publication,
             cancellationToken).ConfigureAwait(false);
+        activation.ExtensionOwner = extensionCatalog.BeginOwnerActivation(package.PackageId);
         ServiceProvider serviceProvider;
         try
         {
@@ -68,8 +70,15 @@ internal sealed class AppPackageActivator(
             $"Configure {package.DisplayName}."));
         if (module is not null)
         {
-            var registry = new AppPackageContributionRegistry(serviceProvider, viewRegistry, extensionCatalog, package.PackageId);
-            using var extensionBatch = extensionCatalog.BeginBatch(PackageExtensionCatalogChangeReason.PackageActivated);
+            var registry = new AppPackageContributionRegistry(
+                serviceProvider,
+                viewRegistry,
+                extensionCatalog,
+                package.PackageId,
+                activation.ExtensionOwner);
+            using var extensionBatch = extensionCatalog.BeginBatch(
+                activation.ExtensionOwner,
+                PackageExtensionCatalogChangeReason.PackageActivated);
             module.RegisterAppContributions(registry, serviceProvider);
             extensionBatch.Commit();
         }

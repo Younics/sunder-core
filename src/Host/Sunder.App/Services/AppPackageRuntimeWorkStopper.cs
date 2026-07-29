@@ -18,4 +18,9 @@ internal sealed class AppPackageRuntimeWorkStopper(
             .CancelAllPackageProcessesAsync(packageId, CancellationToken.None)
             .ConfigureAwait(false);
     }
+
+    public Task StopAllOwnedWorkAsync(CancellationToken cancellationToken)
+        => ownerId is { } generationOwnerId
+            ? backgroundProcessQueue.CancelOwnerProcessesAsync(generationOwnerId, CancellationToken.None)
+            : Task.CompletedTask;
 }

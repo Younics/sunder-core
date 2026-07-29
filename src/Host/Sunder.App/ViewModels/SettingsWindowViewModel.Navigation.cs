@@ -19,12 +19,14 @@ public sealed partial class SettingsWindowViewModel
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        var previousSelection = _presentedSection;
         var selectionVersion = _selection.Select(item);
         if (item.IsPackage)
         {
             return await ApplyPackageSelectionAsync(
                 item,
                 selectionVersion,
+                previousSelection,
                 parameters,
                 cancellationToken);
         }

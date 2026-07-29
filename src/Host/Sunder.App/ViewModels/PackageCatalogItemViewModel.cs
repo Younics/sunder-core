@@ -186,6 +186,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
                 PackageFailureOrigin.RuntimeActivation => "runtime activation",
                 PackageFailureOrigin.RuntimeConfiguration => "runtime configuration",
                 PackageFailureOrigin.RuntimeAuthentication => "runtime auth",
+                PackageFailureOrigin.RuntimeBackgroundService => "runtime background service",
                 _ => "package fault",
             };
 

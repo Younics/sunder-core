@@ -25,6 +25,7 @@ internal sealed class AppPackageServiceProviderFactory(
         typeof(ILoggerFactory),
         typeof(ILogger<>),
         typeof(IPackageExtensionCatalog),
+        typeof(IPackageExtensionInvocationCatalog),
         typeof(IPackageShellViewService),
         typeof(IPackageSettingsNavigationService),
         typeof(IBackgroundProcessQueue),
@@ -49,6 +50,8 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
+        services.AddSingleton<IPackageExtensionInvocationCatalog>(
+            extensionCatalog.CreateInvocationCatalog(package.PackageId));
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
         services.AddSingleton<IPackageSettingsNavigationService>(settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
         services.AddSingleton<IBackgroundProcessQueue>(_ =>

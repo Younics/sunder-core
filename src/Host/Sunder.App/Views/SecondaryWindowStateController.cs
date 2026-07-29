@@ -18,6 +18,9 @@ internal sealed class SecondaryWindowStateController(
 {
     private const double MinimumSidebarWidth = 180;
     private const double MaximumSidebarWidth = 900;
+    private readonly ShellWindowPlacementTracker _placementTracker = new(
+        window,
+        shellState is null ? null : getWindowPlacement(shellState));
 
     public void ApplyInitialWindowState()
     {
@@ -48,6 +51,8 @@ internal sealed class SecondaryWindowStateController(
         setSidebarWidth(shellState, Math.Clamp(sidebarPane.Bounds.Width, MinimumSidebarWidth, MaximumSidebarWidth));
     }
 
+    public void RecordWindowedPlacement() => _placementTracker.RecordWindowedPlacement();
+
     public void PersistWindowState()
     {
         if (shellState is null || shellStateService is null)
@@ -57,7 +62,7 @@ internal sealed class SecondaryWindowStateController(
 
         PersistSidebarWidth();
         var sidebarWidth = getSidebarWidth(shellState);
-        var placement = ShellWindowPlacementService.Capture(window, getWindowPlacement(shellState));
+        var placement = _placementTracker.Capture();
         setWindowPlacement(shellState, placement);
         shellStateService.Update(shellState, persisted =>
         {

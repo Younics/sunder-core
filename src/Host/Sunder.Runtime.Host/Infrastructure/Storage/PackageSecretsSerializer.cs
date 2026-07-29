@@ -23,6 +23,16 @@ internal sealed class PackageSecretsSerializer
         => _enforcePackageKeyValidation = enforcePackageKeyValidation;
 
     internal EncryptedPackageSecrets DeserializeEncrypted(byte[] contents, string canonicalPath)
+        => DeserializeCiphertext(contents, canonicalPath, EncryptedFormat, allowFailureMarker: true);
+
+    internal EncryptedPackageSecrets DeserializeQuarantine(byte[] contents)
+        => DeserializeCiphertext(contents, canonicalPath: null, QuarantineFormat, allowFailureMarker: false);
+
+    private static EncryptedPackageSecrets DeserializeCiphertext(
+        byte[] contents,
+        string? canonicalPath,
+        string expectedFormat,
+        bool allowFailureMarker)
     {
         using var json = JsonDocument.Parse(contents);
         var root = PackageStorageJson.RequireObject(json, "secrets document");
@@ -32,13 +42,13 @@ internal sealed class PackageSecretsSerializer
                 "Legacy plaintext package secrets are not supported in the Runtime V1 state root.");
         }
 
-        if (StorageFailureMarker.IsMarker(root))
+        if (allowFailureMarker && StorageFailureMarker.IsMarker(root))
         {
-            throw StorageFailureMarker.CreateException(root, canonicalPath);
+            throw StorageFailureMarker.CreateException(root, canonicalPath!);
         }
 
         var format = PackageStorageJson.ReadString(root, "format", "encrypted secrets document");
-        if (!string.Equals(format, EncryptedFormat, StringComparison.Ordinal))
+        if (!string.Equals(format, expectedFormat, StringComparison.Ordinal))
         {
             throw new PackageStorageNotSupportedException($"Unsupported package secrets format '{format}'.");
         }

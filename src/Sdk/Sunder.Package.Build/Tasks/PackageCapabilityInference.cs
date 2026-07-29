@@ -726,6 +726,10 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "IPackageBackgroundService"):
                 capabilities.Add(SunderSdkCapabilities.BackgroundServicesV1);
                 break;
+            case ("Sunder.Sdk.Abstractions", "IPackageRuntimeGenerationParticipant"):
+            case ("Sunder.Sdk.Abstractions", "PackageRuntimeGeneration"):
+                capabilities.UnionWith([SunderSdkCapabilities.BackgroundServicesV1, SunderSdkCapabilities.RuntimeGenerationsV1]);
+                break;
             case ("Sunder.Sdk.Abstractions", "IBackgroundProcessQueue"):
             case ("Sunder.Sdk.Abstractions", "BackgroundProcessRequest"):
             case ("Sunder.Sdk.Abstractions", "BackgroundProcessSnapshot"):
@@ -748,6 +752,11 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "PackageExtensionChange"):
                 capabilities.Add(SunderSdkCapabilities.ExtensionChangesV1);
                 break;
+            case ("Sunder.Sdk.Abstractions", "IPackageExtensionInvocationCatalog"):
+            case ("Sunder.Sdk.Abstractions", "IPackageExtensionReference`1"):
+            case ("Sunder.Sdk.Abstractions", "IPackageExtensionLease`1"):
+                capabilities.Add(SunderSdkCapabilities.ExtensionInvocationsV1);
+                break;
             case ("Sunder.Sdk.Settings", _):
                 capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
                 break;
@@ -758,6 +767,11 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "IPackageFileStore"):
             case ("Sunder.Sdk.Abstractions", "IPackageKeyValueStore"):
                 capabilities.Add(SunderSdkCapabilities.StorageV1);
+                break;
+            case ("Sunder.Sdk.Abstractions", "IPackageStorageKeyMigrator"):
+            case ("Sunder.Sdk.Storage", "PackageStorageKeyFactory"):
+            case ("Sunder.Sdk.Storage", "PackageStorageKeyMigration"):
+                capabilities.UnionWith([SunderSdkCapabilities.StorageV1, SunderSdkCapabilities.StorageKeyMigrationV1]);
                 break;
             case ("Sunder.Sdk.Abstractions", "IPackageRoleLocalWorkspace"):
                 capabilities.Add(SunderSdkCapabilities.RoleLocalWorkspaceV1);
@@ -777,9 +791,13 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "PackageHotbarView"):
                 capabilities.Add(SunderSdkCapabilities.ShellViewV1);
                 break;
+            case ("Sunder.Sdk.Abstractions", "IPackageViewNavigationPreparationTarget"): capabilities.UnionWith([SunderSdkCapabilities.ShellViewV1, SunderSdkCapabilities.ViewNavigationPreparationV1]); break;
             case ("Sunder.Sdk.Abstractions", "IPackageSettingsNavigationService"):
             case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
                 capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
+                break;
+            case ("Sunder.Sdk.Runtime", "PackageRuntimeInvocationException"):
+                capabilities.UnionWith([SunderSdkCapabilities.RuntimeOperationsV1, SunderSdkCapabilities.RuntimeInvocationErrorsV1]);
                 break;
             case ("Sunder.Sdk.Runtime", _):
                 capabilities.Add(SunderSdkCapabilities.RuntimeOperationsV1);
@@ -788,8 +806,7 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Stacks", "IPackageStackImporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
             case ("Sunder.Sdk.Stacks", "SunderStackExtensionPoints"):
-                capabilities.Add(SunderSdkCapabilities.StacksV1);
-                capabilities.Add(SunderSdkCapabilities.StackContributionsV1);
+                capabilities.UnionWith([SunderSdkCapabilities.StacksV1, SunderSdkCapabilities.StackContributionsV1]);
                 break;
             case ("Sunder.Sdk.Stacks", _):
                 capabilities.Add(SunderSdkCapabilities.StacksV1);

@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
+using Sunder.App.Views.Controls;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
@@ -34,7 +35,158 @@ public sealed class SettingsWindowViewModelTests
         await viewModel.RefreshPackageSectionsAsync();
 
         Assert.Equal(2, probe.Contexts.Count);
+        Assert.Equal(2, probe.PresentedCount);
         Assert.Equal(0, probe.DataContextNavigationCount);
+    }
+
+    [Fact]
+    public async Task HostedSettings_PreparesInHiddenNonInteractiveSlotBeforePresentation()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var preparationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probe = new SettingsNavigationProbe
+        {
+            NavigateAsync = async (_, cancellationToken) =>
+            {
+                preparationStarted.TrySetResult();
+                await releasePreparation.Task.WaitAsync(cancellationToken);
+            },
+        };
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+
+        var selection = viewModel.SelectPackageSettingsAsync("agent");
+        await preparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Null(viewModel.HostedSettingsView);
+        Assert.NotNull(viewModel.StagedHostedSettingsView);
+        Assert.True(viewModel.IsCoreSelection);
+        Assert.Equal("Appearance", viewModel.SelectedTitle);
+        Assert.Equal(0, probe.PresentedCount);
+
+        releasePreparation.TrySetResult();
+        Assert.True(await selection);
+
+        Assert.Null(viewModel.StagedHostedSettingsView);
+        Assert.NotNull(viewModel.HostedSettingsView);
+        Assert.Equal(1, probe.PresentedCount);
+    }
+
+    [Fact]
+    public async Task HostedSettings_RejectedPreparationKeepsCurrentDestinationPresented()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var currentProbe = new SettingsNavigationProbe();
+        var rejectedProbe = new SettingsNavigationProbe { PrepareResult = false };
+        await using var packageViewHostService = CreateHostedSettingsViewHost(
+            ("agent", currentProbe),
+            ("tools", rejectedProbe));
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+        Assert.True(await viewModel.SelectPackageSettingsAsync("agent"));
+        var currentView = viewModel.HostedSettingsView;
+        var currentTitle = viewModel.SelectedTitle;
+
+        Assert.False(await viewModel.SelectPackageSettingsAsync("tools"));
+
+        Assert.Same(currentView, viewModel.HostedSettingsView);
+        Assert.Null(viewModel.StagedHostedSettingsView);
+        Assert.Equal(currentTitle, viewModel.SelectedTitle);
+        Assert.True(viewModel.PackageSettings.FindSection("agent")!.IsSelected);
+        Assert.False(viewModel.PackageSettings.FindSection("tools")!.IsSelected);
+        Assert.Equal(1, currentProbe.PresentedCount);
+        Assert.Equal(0, rejectedProbe.PresentedCount);
+        Assert.Contains("rejected navigation", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HostedSettings_SamePackageRejectionDoesNotPrepareOrMutatePresentedInstance()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var probe = new SettingsNavigationProbe();
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+        Assert.True(await viewModel.SelectPackageSettingsAsync(
+            "agent",
+            new Dictionary<string, string?> { ["target"] = "accepted" }));
+        var presentedBoundary = Assert.IsType<HostedPackageViewBoundary>(viewModel.HostedSettingsView);
+        var presentedView = Assert.IsType<SettingsNavigationView>(presentedBoundary.HostedView);
+        probe.PrepareResult = false;
+
+        Assert.False(await viewModel.SelectPackageSettingsAsync(
+            "agent",
+            new Dictionary<string, string?> { ["target"] = "rejected" }));
+
+        var retainedBoundary = Assert.IsType<HostedPackageViewBoundary>(viewModel.HostedSettingsView);
+        var rejectedView = Assert.Single(probe.Views, view => !ReferenceEquals(view, presentedView));
+        Assert.Same(presentedBoundary, retainedBoundary);
+        Assert.Same(presentedView, retainedBoundary.HostedView);
+        Assert.Equal(1, presentedView.PrepareCount);
+        Assert.Equal("accepted", presentedView.PreparedTarget);
+        Assert.Equal("rejected", rejectedView.PreparedTarget);
+        Assert.True(rejectedView.IsDisposed);
+        Assert.False(presentedView.IsDisposed);
+    }
+
+    [Fact]
+    public async Task HostedSettings_SamePackageSupersessionPresentsOnlyLatestPreparedCandidate()
+    {
+        using var runtimeClient = new FakeRuntimeApiClient();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probe = new SettingsNavigationProbe();
+        probe.PrepareAsync = async (_, context, cancellationToken) =>
+        {
+            if (!string.Equals(context.Parameters.GetValueOrDefault("target"), "first", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            firstStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        await using var packageViewHostService = CreateHostedSettingsViewHost(probe);
+        using var viewModel = new SettingsWindowViewModel(
+            runtimeClient,
+            packageViewHostService,
+            new CliInstallationService());
+        await viewModel.RefreshPackageSectionsAsync();
+        Assert.True(await viewModel.SelectPackageSettingsAsync(
+            "agent",
+            new Dictionary<string, string?> { ["target"] = "initial" }));
+        var initialView = Assert.IsType<SettingsNavigationView>(
+            Assert.IsType<HostedPackageViewBoundary>(viewModel.HostedSettingsView).HostedView);
+
+        var superseded = viewModel.SelectPackageSettingsAsync(
+            "agent",
+            new Dictionary<string, string?> { ["target"] = "first" });
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var latest = viewModel.SelectPackageSettingsAsync(
+            "agent",
+            new Dictionary<string, string?> { ["target"] = "latest" });
+
+        Assert.False(await superseded.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(await latest.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        var latestView = Assert.IsType<SettingsNavigationView>(
+            Assert.IsType<HostedPackageViewBoundary>(viewModel.HostedSettingsView).HostedView);
+        Assert.Equal("latest", latestView.PreparedTarget);
+        Assert.NotSame(initialView, latestView);
+        Assert.True(initialView.IsDisposed);
+        Assert.Equal(3, probe.Views.Count);
+        Assert.Single(probe.Views, view => !view.IsDisposed);
+        Assert.Equal(2, probe.PresentedCount);
     }
 
     [Fact]
@@ -411,16 +563,24 @@ public sealed class SettingsWindowViewModelTests
             new CliInstallationService());
 
     private static PackageViewHostService CreateHostedSettingsViewHost(SettingsNavigationProbe probe)
+        => CreateHostedSettingsViewHost(("agent", probe));
+
+    private static PackageViewHostService CreateHostedSettingsViewHost(
+        params (string PackageId, SettingsNavigationProbe Probe)[] registrations)
     {
-        var services = new ServiceCollection()
-            .AddSingleton(probe)
-            .BuildServiceProvider();
         var registry = new AppPackageViewRegistry();
-        registry.RegisterSettingsView<SettingsNavigationView>("agent", services);
+        var providers = registrations.Select(registration =>
+        {
+            var provider = new ServiceCollection()
+                .AddSingleton(registration.Probe)
+                .BuildServiceProvider();
+            registry.RegisterSettingsView<SettingsNavigationView>(registration.PackageId, provider);
+            return provider;
+        }).ToArray();
         return new PackageViewHostService(
             registry,
             [],
-            [services],
+            providers,
             [],
             sessionFolder: null,
             uiDispatcher: new ImmediateUiDispatcher());
@@ -507,15 +667,25 @@ public sealed class SettingsWindowViewModelTests
         }
     }
 
-    private sealed class SettingsNavigationView : Control, IPackageViewNavigationTarget
+    private sealed class SettingsNavigationView : Control,
+        IPackageViewNavigationTarget,
+        IPackageViewNavigationPreparationTarget,
+        IDisposable
     {
         private readonly SettingsNavigationProbe _probe;
 
         public SettingsNavigationView(SettingsNavigationProbe probe)
         {
             _probe = probe;
+            _probe.Views.Add(this);
             DataContext = new SettingsNavigationDataContext(probe);
         }
+
+        public int PrepareCount { get; private set; }
+
+        public string? PreparedTarget { get; private set; }
+
+        public bool IsDisposed { get; private set; }
 
         public async ValueTask OnNavigatedToAsync(
             PackageViewNavigationContext context,
@@ -523,6 +693,39 @@ public sealed class SettingsWindowViewModelTests
         {
             _probe.Contexts.Add(context);
             await _probe.NavigateAsync(context, cancellationToken);
+        }
+
+        public async ValueTask<bool> PrepareNavigationAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            PrepareCount++;
+            PreparedTarget = context.Parameters.GetValueOrDefault("target");
+            _probe.Contexts.Add(context);
+            if (_probe.PrepareAsync is not null)
+            {
+                await _probe.PrepareAsync(this, context, cancellationToken);
+            }
+            else
+            {
+                await _probe.NavigateAsync(context, cancellationToken);
+            }
+            return _probe.PrepareResult;
+        }
+
+        public ValueTask OnNavigationPresentedAsync(
+            PackageViewNavigationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _probe.PresentedCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            DataContext = null;
         }
     }
 
@@ -542,6 +745,14 @@ public sealed class SettingsWindowViewModelTests
         public List<PackageViewNavigationContext> Contexts { get; } = [];
 
         public int DataContextNavigationCount { get; set; }
+
+        public int PresentedCount { get; set; }
+
+        public bool PrepareResult { get; set; } = true;
+
+        public List<SettingsNavigationView> Views { get; } = [];
+
+        public Func<SettingsNavigationView, PackageViewNavigationContext, CancellationToken, ValueTask>? PrepareAsync { get; set; }
 
         public Func<PackageViewNavigationContext, CancellationToken, ValueTask> NavigateAsync { get; set; }
             = static (_, _) => ValueTask.CompletedTask;

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Package.Hosting;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Runtime;
 using Sunder.Sdk.Settings;
@@ -8,7 +9,8 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class RuntimePackageContributionRegistry(
     IServiceProvider serviceProvider,
     RuntimePackageExtensionCatalog extensionCatalog,
-    string packageId) : ISunderRuntimeContributionRegistry
+    string packageId,
+    PackageExtensionOwnerActivation? extensionOwner = null) : ISunderRuntimeContributionRegistry
 {
     private readonly List<IPackageBackgroundService> _backgroundServices = [];
     private readonly Dictionary<string, RuntimePackageOperationRegistration> _runtimeOperations = new(StringComparer.Ordinal);
@@ -35,7 +37,14 @@ internal sealed class RuntimePackageContributionRegistry(
     public void RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)
     {
         HasRegisteredExtensions = true;
-        extensionCatalog.Add(packageId, extensionPoint, contribution);
+        if (extensionOwner is null)
+        {
+            extensionCatalog.Add(packageId, extensionPoint, contribution);
+        }
+        else
+        {
+            extensionCatalog.Add(extensionOwner, extensionPoint, contribution);
+        }
     }
 
     public void RegisterSettingsSchema(PackageSettingsSchema schema)

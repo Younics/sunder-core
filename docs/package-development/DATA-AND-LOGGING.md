@@ -31,6 +31,17 @@ Never write mutable data under `ContentRootPath`; package content is a read-only
 
 Keys are case-sensitive and may contain only ASCII letters, digits, `.`, `-`, and `_`. `ListKeysAsync` returns an ordinally sorted snapshot; an optional prefix is also case-sensitive. Missing key/value/secret/file reads return `null`.
 
+Opaque identifiers from imports, remote systems, users, paths, or extension packages are domain data, not physical key fragments. Preserve the identifier in the domain model and derive a bounded key at the storage boundary:
+
+```csharp
+var key = PackageStorageKeyFactory.Create(
+    "workspace-bindings.config",
+    version: 2,
+    opaqueBindingId);
+```
+
+The output is `{prefix}.v{version}.{lowercase-sha256-of-exact-UTF8}`. It is deterministic, portable, and independent of the current OS or culture. Do not normalize, truncate, or case-fold the opaque identifier before hashing unless that transformation is part of the domain identity itself.
+
 Portable paths:
 
 - use `/`, including on Windows;
@@ -54,6 +65,29 @@ await using var input = await context.Storage.Files.OpenReadAsync("cache/index.j
 ```
 
 State and file APIs are thread-safe. Mutations are atomic: cancellation before commit preserves the previous value/file; once replacement commits, the operation succeeds even if cancellation races afterward. File writes create parent directories. Stream writes advance but never dispose the caller-owned input stream. The caller must dispose streams returned by `OpenReadAsync`.
+
+### Migrating Legacy Keys
+
+Runtime state and secret stores also implement `IPackageStorageKeyMigrator`. At package startup, before ordinary access to a store, declare all legacy physical-key shapes owned by that package:
+
+```csharp
+var migrator = context.Storage.State as IPackageStorageKeyMigrator
+    ?? throw new NotSupportedException("Package storage migration is unavailable.");
+
+await migrator.MigrateKeysAsync(
+[
+    PackageStorageKeyMigration.OpaqueId(
+        "workspace-bindings:",
+        ":config",
+        "workspace-bindings.config",
+        destinationVersion: 2),
+    PackageStorageKeyMigration.Exact("docker.images:v1", "docker.images.v1"),
+], cancellationToken);
+```
+
+`OpaqueId` extracts the exact non-empty text between the legacy prefix and suffix, then derives the destination with `PackageStorageKeyFactory`. `Exact` handles fixed legacy keys. Rules and matching use ordinal comparison. `DynamicCleanup` is reserved for bounded package-owned key grammars where deleted entities or crash leftovers cannot be enumerated from live metadata. Its key-only resolver must return `NoMatch` for anything outside that grammar, `Delete` for recognized obsolete entries, or `Rewrite` for a current destination.
+
+The host performs one document-locked atomic rewrite, increments the document revision, and retains the original as a `migration-backup` file. Repeating the same migration is a no-op. If a prior strict read quarantined a structurally valid document solely because it contained covered legacy keys, migration can recover that retained document. Authentication failures, malformed documents, unknown invalid keys, keys matching multiple rules, and unequal values colliding under ordinary rewrite rules remain fail-closed. Dynamic cleanup preserves an existing destination; without one, identical remnants converge, the highest declared precedence wins, and equally preferred conflicting values are removed without selecting one. Package code cannot enumerate secrets or inspect values through a dynamic resolver.
 
 Use `RoleLocalWorkspace` only when an API needs a real local path:
 
@@ -164,5 +198,6 @@ Oversized/truncated entries are marked. Runtime discovers and tails files; App n
 | Undeclared/secret setting or required setting deletion | `ArgumentException` with the setting reason. |
 | Runtime-backed App data unavailable | Authenticated Runtime request failure; do not assume an App-local fallback. |
 | Corrupt state/settings/secrets | Fail-closed storage error; package activation or request fails without implicit reset. |
+| Unknown, ambiguous, or colliding legacy key migration | `InvalidDataException`, `InvalidOperationException`, or fail-closed recovery error without implicit reset. |
 
 Validate at input boundaries with `PackageStorageValidation` when producing identifiers dynamically. Do not catch a corruption or key-unavailable error and overwrite the store; direct users to [Troubleshooting](TROUBLESHOOTING.md).

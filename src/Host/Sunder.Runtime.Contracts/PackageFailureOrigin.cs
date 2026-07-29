@@ -9,4 +9,5 @@ public enum PackageFailureOrigin
     RuntimeActivation = 4,
     RuntimeConfiguration = 5,
     RuntimeAuthentication = 6,
+    RuntimeBackgroundService = 7,
 }

@@ -3,7 +3,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
-internal sealed partial class JsonPackageSecretsStore : IPackageSecrets
+internal sealed partial class JsonPackageSecretsStore : IPackageSecrets, IPackageStorageKeyMigrator
 {
     private readonly AtomicFileDocument _document;
     private readonly PackageSecretsSerializer _serializer;

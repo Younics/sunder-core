@@ -12,12 +12,14 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePaths paths)
 {
+    private static readonly TimeSpan FailedActivationRetirementTimeout = TimeSpan.FromSeconds(5);
     private static readonly Type[] ReservedServiceTypes =
     [
         typeof(IPackageContext),
         typeof(ILoggerFactory),
         typeof(ILogger<>),
         typeof(IPackageExtensionCatalog),
+        typeof(IPackageExtensionInvocationCatalog),
         typeof(IPackageShellViewService),
         typeof(IPackageSettingsNavigationService),
         typeof(IPackageNotificationService),
@@ -35,6 +37,7 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
     {
         RuntimePackageLoadContext? loadContext = null;
         ServiceProvider? serviceProvider = null;
+        PackageExtensionOwnerActivation? extensionOwner = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -61,6 +64,7 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
                 return Failed(package, message);
             }
             var module = moduleInstance as ISunderRuntimePackageModule;
+            extensionOwner = extensionCatalog.BeginOwnerActivation(package.PackageId);
             var packageContext = new RuntimePackageContext(package.PackageId, package.Version, package.ShadowFolder, paths.PackageDataRootPath);
             var packageServices = new ConstrainedPackageServiceCollection(ReservedServiceTypes);
             module?.ConfigureRuntimeServices(packageServices, packageContext);
@@ -70,6 +74,7 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
             services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
             services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
+            services.AddSingleton<IPackageExtensionInvocationCatalog>(extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(EmptyPackageShellViewService.Instance);
             services.AddSingleton<IPackageSettingsNavigationService>(NullPackageSettingsNavigationService.Instance);
             services.AddSingleton<IPackageNotificationService>(NullPackageNotificationService.Instance);
@@ -77,8 +82,14 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             services.AddSingleton<IPackageCallbackClient>(NullPackageCallbackClient.Instance);
             serviceProvider = services.BuildServiceProvider();
 
-            var contributions = new RuntimePackageContributionRegistry(serviceProvider, extensionCatalog, package.PackageId);
-            using (var extensionBatch = extensionCatalog.BeginBatch(PackageExtensionCatalogChangeReason.PackageActivated))
+            var contributions = new RuntimePackageContributionRegistry(
+                serviceProvider,
+                extensionCatalog,
+                package.PackageId,
+                extensionOwner);
+            using (var extensionBatch = extensionCatalog.BeginBatch(
+                       extensionOwner,
+                       PackageExtensionCatalogChangeReason.PackageActivated))
             {
                 module?.RegisterRuntimeContributions(contributions, serviceProvider);
                 extensionBatch.Commit();
@@ -97,6 +108,7 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
                 loadContext,
                 packageContext.Settings)
             {
+                ExtensionOwner = extensionOwner,
                 CanonicalSettingsSchema = contributions.SettingsSchema,
                 RuntimeOperations = contributions.RuntimeOperations,
                 RuntimeStreams = contributions.RuntimeStreams,
@@ -114,26 +126,73 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
         }
         catch (Exception exception)
         {
-            if (serviceProvider is not null)
+            var retirement = extensionOwner is null
+                ? PackageExtensionOwnerRetirement.Completed(package.PackageId)
+                : extensionCatalog.BeginOwnerRetirement(extensionOwner, PackageExtensionCatalogChangeReason.PackageFaulted);
+            var cleanup = CleanupFailedActivationAsync(
+                package.PackageId,
+                retirement,
+                serviceProvider,
+                loadContext);
+            try
             {
-                try
-                {
-                    await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
-                }
-                catch (Exception cleanupException)
-                {
-                    logger.LogWarning(
-                        cleanupException,
-                        "Failed to dispose services after package {PackageId} activation failed",
-                        package.PackageId);
-                }
+                await cleanup.WaitAsync(FailedActivationRetirementTimeout);
             }
-            loadContext?.Unload();
-            extensionCatalog.RemovePackage(package.PackageId, PackageExtensionCatalogChangeReason.PackageFaulted);
+            catch (TimeoutException cleanupException)
+            {
+                logger.LogWarning(
+                    cleanupException,
+                    "Package {PackageId} activation cleanup exceeded the owner retirement deadline; its provider and load context remain quarantined",
+                    package.PackageId);
+                _ = ObserveFailedActivationCleanupAsync(package.PackageId, cleanup);
+            }
+            catch (Exception cleanupException)
+            {
+                logger.LogWarning(
+                    cleanupException,
+                    "Failed to clean up package {PackageId} after activation failed",
+                    package.PackageId);
+            }
             if (exception is OperationCanceledException && cancellationToken.IsCancellationRequested) throw;
             logger.LogError(exception, "Failed to activate package {PackageId}", package.PackageId);
             errors.Add($"Failed to activate package '{package.PackageId}': {exception.Message}");
             return Failed(package, exception.Message);
+        }
+    }
+
+    private async Task CleanupFailedActivationAsync(
+        string packageId,
+        PackageExtensionOwnerRetirement retirement,
+        ServiceProvider? serviceProvider,
+        RuntimePackageLoadContext? loadContext)
+    {
+        await retirement.Completion.ConfigureAwait(false);
+        if (serviceProvider is not null)
+        {
+            try
+            {
+                await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(serviceProvider);
+            }
+            catch (Exception cleanupException)
+            {
+                logger.LogWarning(
+                    cleanupException,
+                    "Failed to dispose services after package {PackageId} activation failed",
+                    packageId);
+            }
+        }
+        loadContext?.Unload();
+    }
+
+    private async Task ObserveFailedActivationCleanupAsync(string packageId, Task cleanup)
+    {
+        try
+        {
+            await cleanup.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Deferred activation cleanup failed for package {PackageId}", packageId);
         }
     }
 

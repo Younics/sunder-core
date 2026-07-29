@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
@@ -21,6 +22,7 @@ internal sealed class MacNativeMenuController : IDisposable
     private Bitmap? _defaultIcon;
     private MainWindowViewModel? _subscribedViewModel;
     private bool _menuDirty = true;
+    private bool _menuRefreshScheduled;
     private bool _disposed;
 
     public MacNativeMenuController(Window window, Func<MainWindowViewModel?> viewModelAccessor)
@@ -39,6 +41,7 @@ internal sealed class MacNativeMenuController : IDisposable
 
     public void Dispose()
     {
+        Dispatcher.UIThread.VerifyAccess();
         if (_disposed)
         {
             return;
@@ -73,12 +76,13 @@ internal sealed class MacNativeMenuController : IDisposable
     private void Window_OnDataContextChanged(object? sender, EventArgs e)
     {
         SubscribeToCurrentViewModel();
-        _menuDirty = true;
+        ScheduleMenuRefresh();
         AttachMenu();
     }
 
     private void AttachMenu()
     {
+        Dispatcher.UIThread.VerifyAccess();
         if (_disposed || !OperatingSystem.IsMacOS() || _rootMenu is not null || _viewModelAccessor() is null)
         {
             return;
@@ -95,6 +99,7 @@ internal sealed class MacNativeMenuController : IDisposable
 
     private void UpdateMenu()
     {
+        Dispatcher.UIThread.VerifyAccess();
         if (_disposed || _rootMenu is null)
         {
             return;
@@ -161,10 +166,45 @@ internal sealed class MacNativeMenuController : IDisposable
         _subscribedViewModel = null;
     }
 
-    private void ViewModel_OnShellViewStateChanged() => _menuDirty = true;
+    private void ViewModel_OnShellViewStateChanged()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(ScheduleMenuRefresh, DispatcherPriority.Normal);
+            return;
+        }
+
+        ScheduleMenuRefresh();
+    }
+
+    private void ScheduleMenuRefresh()
+    {
+        Dispatcher.UIThread.VerifyAccess();
+        if (_disposed)
+        {
+            return;
+        }
+
+        _menuDirty = true;
+        if (_rootMenu is null || _menuRefreshScheduled)
+        {
+            return;
+        }
+
+        _menuRefreshScheduled = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _menuRefreshScheduled = false;
+            if (!_disposed)
+            {
+                UpdateMenuIfDirty();
+            }
+        }, DispatcherPriority.Background);
+    }
 
     private void UpdateMenuIfDirty()
     {
+        Dispatcher.UIThread.VerifyAccess();
         if (_menuDirty)
         {
             UpdateMenu();

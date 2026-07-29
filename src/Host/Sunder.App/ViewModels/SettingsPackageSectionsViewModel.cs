@@ -58,8 +58,13 @@ public sealed class SettingsPackageSectionsViewModel : ViewModelBase
     internal async Task<SettingsPackageSelectionResult> LoadSelectionAsync(
         string packageId,
         PackageSettingsSchemaDescriptor? schema,
+        bool requireHostedViewReplacement,
         CancellationToken cancellationToken)
-        => await _selectionCoordinator.LoadAsync(packageId, schema, cancellationToken);
+        => await _selectionCoordinator.LoadAsync(
+            packageId,
+            schema,
+            requireHostedViewReplacement,
+            cancellationToken);
 
     internal void ApplySelectionResult(SettingsPackageSelectionResult result)
     {

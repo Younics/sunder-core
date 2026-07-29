@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -28,6 +29,8 @@ internal sealed record AppLoadedPackageHandle(
     AppPackageLoadContext LoadContext)
 {
     public string PackageId => Package.PackageId;
+
+    public PackageExtensionOwnerActivation? ExtensionOwner { get; init; }
 }
 
 internal sealed class AppPackageManifest

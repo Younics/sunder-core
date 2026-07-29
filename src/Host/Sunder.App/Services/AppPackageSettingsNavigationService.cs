@@ -18,32 +18,46 @@ public sealed class AppPackageSettingsNavigationService(IUiDispatcher? uiDispatc
         }
     }
 
-    public async ValueTask<bool> OpenSettingsAsync(
+    public ValueTask<bool> OpenSettingsAsync(
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
-        => await OpenSettingsCoreAsync(parameters, publication: null, cancellationToken);
+        => OpenSettingsCoreAsync(
+            PackageNavigationParameters.Snapshot(parameters),
+            publication: null,
+            cancellationToken);
 
     internal ValueTask<bool> OpenSettingsAsync(
         IReadOnlyDictionary<string, string?>? parameters,
         AppPackageGenerationPublication publication,
         CancellationToken cancellationToken)
-        => OpenSettingsCoreAsync(parameters, publication, cancellationToken);
+        => OpenSettingsCoreAsync(
+            PackageNavigationParameters.Snapshot(parameters),
+            publication,
+            cancellationToken);
 
-    public async ValueTask<bool> OpenPackageSettingsAsync(
+    public ValueTask<bool> OpenPackageSettingsAsync(
         string packageId,
         IReadOnlyDictionary<string, string?>? parameters = null,
         CancellationToken cancellationToken = default)
-        => await OpenPackageSettingsCoreAsync(packageId, parameters, publication: null, cancellationToken);
+        => OpenPackageSettingsCoreAsync(
+            packageId,
+            PackageNavigationParameters.Snapshot(parameters),
+            publication: null,
+            cancellationToken);
 
     internal ValueTask<bool> OpenPackageSettingsAsync(
         string packageId,
         IReadOnlyDictionary<string, string?>? parameters,
         AppPackageGenerationPublication publication,
         CancellationToken cancellationToken)
-        => OpenPackageSettingsCoreAsync(packageId, parameters, publication, cancellationToken);
+        => OpenPackageSettingsCoreAsync(
+            packageId,
+            PackageNavigationParameters.Snapshot(parameters),
+            publication,
+            cancellationToken);
 
     private async ValueTask<bool> OpenSettingsCoreAsync(
-        IReadOnlyDictionary<string, string?>? parameters,
+        IReadOnlyDictionary<string, string?> parameters,
         AppPackageGenerationPublication? publication,
         CancellationToken cancellationToken)
     {
@@ -62,14 +76,14 @@ public sealed class AppPackageSettingsNavigationService(IUiDispatcher? uiDispatc
                 return false;
             }
 
-            launcher.ShowSettings();
+            launcher.ShowSettings(parameters);
             return true;
         });
     }
 
     private async ValueTask<bool> OpenPackageSettingsCoreAsync(
         string packageId,
-        IReadOnlyDictionary<string, string?>? parameters,
+        IReadOnlyDictionary<string, string?> parameters,
         AppPackageGenerationPublication? publication,
         CancellationToken cancellationToken)
     {

@@ -9,6 +9,12 @@ internal sealed class PackageSecretsEncryption(
     PackageSecretsSerializer serializer)
 {
     internal byte[] Decrypt(EncryptedPackageSecrets encrypted)
+        => Decrypt(encrypted, PackageSecretsSerializer.EncryptedFormat);
+
+    internal byte[] DecryptQuarantine(EncryptedPackageSecrets encrypted)
+        => Decrypt(encrypted, PackageSecretsSerializer.QuarantineFormat);
+
+    private byte[] Decrypt(EncryptedPackageSecrets encrypted, string format)
     {
         var keyMaterial = masterKeyStore.GetExisting();
         byte[]? plaintext = null;
@@ -18,9 +24,9 @@ internal sealed class PackageSecretsEncryption(
                 keyMaterial.Key,
                 encrypted.Nonce,
                 encrypted.Ciphertext,
-                encrypted.Tag,
-                CreateAssociatedData(
-                    PackageSecretsSerializer.EncryptedFormat,
+                    encrypted.Tag,
+                    CreateAssociatedData(
+                    format,
                     encrypted.KeyScheme,
                     encrypted.KeyVersion));
             if (keyMaterial.NeedsReprotection)

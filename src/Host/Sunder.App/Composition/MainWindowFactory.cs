@@ -51,7 +51,8 @@ public sealed class MainWindowFactory(
         var window = new MainWindow { DataContext = viewModel };
         viewModel.ConfigurePackageViewStagingSurface(
             window.StagePackageView,
-            window.DetachStagedPackageViews);
+            window.DetachStagedPackageViews,
+            window.AcquirePackageViewTransitionSnapshot);
         return (window, viewModel);
     }
 }

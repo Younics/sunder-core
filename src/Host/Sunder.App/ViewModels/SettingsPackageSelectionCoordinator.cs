@@ -11,17 +11,21 @@ internal sealed class SettingsPackageSelectionCoordinator(
     public async Task<SettingsPackageSelectionResult> LoadAsync(
         string packageId,
         PackageSettingsSchemaDescriptor? schema,
+        bool requireHostedViewReplacement,
         CancellationToken cancellationToken)
     {
         if (packageViewHostService.HasSettingsView(packageId))
         {
+            var navigationTarget = packageViewHostService.GetSettingsViewForNavigation(
+                packageId,
+                requireHostedViewReplacement);
             var hostedSettingsView = packageViewHostService.CreateHostedViewBoundary(
                 packageId,
                 $"settings:{packageId}",
-                packageViewHostService.GetOrCreateSettingsView(packageId));
+                navigationTarget?.View);
             return hostedSettingsView is null
                 ? new UnavailablePackageSettingsSelection("Package settings view is unavailable.")
-                : new HostedPackageSettingsSelection(hostedSettingsView);
+                : new HostedPackageSettingsSelection(hostedSettingsView, navigationTarget!.Candidate);
         }
 
         if (schema is null)
@@ -36,8 +40,15 @@ internal sealed class SettingsPackageSelectionCoordinator(
 
 internal abstract record SettingsPackageSelectionResult(string StatusText);
 
-internal sealed record HostedPackageSettingsSelection(Control View)
-    : SettingsPackageSelectionResult(string.Empty);
+internal sealed record HostedPackageSettingsSelection(
+    Control View,
+    AppPackageSettingsViewCandidate? Candidate)
+    : SettingsPackageSelectionResult(string.Empty), IDisposable
+{
+    public bool PromoteCandidate() => Candidate?.Promote() ?? true;
+
+    public void Dispose() => Candidate?.Dispose();
+}
 
 internal sealed record PackageSettingsFormSelection(IReadOnlyList<SettingsFieldSectionViewModel> Sections)
     : SettingsPackageSelectionResult(string.Empty);
