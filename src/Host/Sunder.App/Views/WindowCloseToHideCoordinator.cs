@@ -17,6 +17,7 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
     private readonly Action _persistWindowState;
     private readonly Action _hiding;
     private readonly Action _closed;
+    private readonly Func<bool> _isCloseBlocked;
     private readonly IFullScreenReconciliationScheduler _reconciliationScheduler;
     private readonly Window? _avaloniaWindow;
     private IDisposable? _scheduledReconciliation;
@@ -35,7 +36,8 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         Action? hiding = null,
         Action? closed = null,
         INativeFullScreenTransition? fullScreenTransition = null,
-        IFullScreenReconciliationScheduler? reconciliationScheduler = null)
+        IFullScreenReconciliationScheduler? reconciliationScheduler = null,
+        Func<bool>? isCloseBlocked = null)
         : this(
             new AvaloniaCloseToHideWindow(window),
             fullScreenTransition ?? MacOsNativeFullScreenTransition.Create(window),
@@ -43,7 +45,8 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
             persistWindowState,
             hiding,
             closed,
-            reconciliationScheduler ?? DispatcherFullScreenReconciliationScheduler.Instance)
+            reconciliationScheduler ?? DispatcherFullScreenReconciliationScheduler.Instance,
+            isCloseBlocked)
     {
         _avaloniaWindow = window;
         _closeOnEscape = closeOnEscape;
@@ -62,7 +65,8 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         Action? persistWindowState = null,
         Action? hiding = null,
         Action? closed = null,
-        IFullScreenReconciliationScheduler? reconciliationScheduler = null)
+        IFullScreenReconciliationScheduler? reconciliationScheduler = null,
+        Func<bool>? isCloseBlocked = null)
     {
         _window = window;
         _fullScreenTransition = fullScreenTransition;
@@ -70,6 +74,7 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         _persistWindowState = persistWindowState ?? (static () => { });
         _hiding = hiding ?? (static () => { });
         _closed = closed ?? (static () => { });
+        _isCloseBlocked = isCloseBlocked ?? (static () => false);
         _reconciliationScheduler =
             reconciliationScheduler ?? DispatcherFullScreenReconciliationScheduler.Instance;
         _fullScreenTransition.Changed += FullScreenTransition_OnChanged;
@@ -80,6 +85,11 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         if (_shutdown || _disposed || !_hideOnClose)
         {
             return false;
+        }
+
+        if (_isCloseBlocked())
+        {
+            return true;
         }
 
         _fullScreenTransition.StartObserving();
@@ -109,6 +119,8 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
 
         return true;
     }
+
+    internal bool IsHidePending => _deferredHide;
 
     internal void NotifyShownOrActivated()
     {

@@ -83,6 +83,7 @@ public sealed class LocalStackLibraryService
         try
         {
             await ReadManifestAsync(temporaryDestinationPath, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryDestinationPath, destinationPath, overwrite: true);
         }
         finally
@@ -92,7 +93,11 @@ public sealed class LocalStackLibraryService
 
         var now = DateTimeOffset.UtcNow;
         var details = BuildDetailsFromManifest(manifest);
-        var media = await ExtractMediaAsync(destinationPath, stackId, manifest.Media ?? [], cancellationToken);
+        var media = await ExtractMediaAsync(
+            destinationPath,
+            stackId,
+            manifest.Media ?? [],
+            CancellationToken.None);
         var item = new LocalStackLibraryItem(
             stackId,
             manifest.Name ?? stackId,
@@ -114,7 +119,7 @@ public sealed class LocalStackLibraryService
             .Where(item => !string.Equals(item.StackId, stackId, StringComparison.OrdinalIgnoreCase))
             .Append(ToStoredPath(item))
             .ToArray();
-        await SaveIndexAsync(new LocalStackLibraryIndex(items), cancellationToken);
+        await SaveIndexAsync(new LocalStackLibraryIndex(items), CancellationToken.None);
         return item;
     }
 

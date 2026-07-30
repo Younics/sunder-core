@@ -32,7 +32,8 @@
     <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
   </Window.Styles>
 
-  <Grid RowDefinitions="52,*,Auto"
+  <Grid x:Name="StacksRoot"
+        RowDefinitions="52,*,Auto"
         Background="{DynamicResource Sunder.Brush.Background.App}">
     <controls:WindowTitleBar Grid.Row="0">
       <controls:WindowTitleBar.LeadingContent>

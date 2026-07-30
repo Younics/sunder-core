@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Threading;
 using Sunder.App.Models;
 using Sunder.App.Composition;
 using Sunder.App.Services;
@@ -14,6 +15,7 @@ public partial class StacksWindow : Window
     private readonly SecondaryWindowStateController? _stateController;
     private readonly WindowCloseToHideCoordinator _closeCoordinator;
     private readonly StackWizardWindowFactory? _stackWizardWindowFactory;
+    private readonly WizardDialogLaunchCoordinator _wizardDialogs = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(StacksWindow));
     private readonly CancellationTokenSource _lifetime = new();
     private StacksWindowViewModel? _subscribedViewModel;
@@ -27,7 +29,8 @@ public partial class StacksWindow : Window
             hideOnClose: true,
             closeOnEscape: true,
             persistWindowState: () => _stateController?.PersistWindowState(),
-            closed: OnLifecycleClosed);
+            closed: OnLifecycleClosed,
+            isCloseBlocked: _wizardDialogs.HandleCloseRequest);
         Opened += OnOpened;
         DataContextChanged += OnDataContextChanged;
     }
@@ -73,31 +76,28 @@ public partial class StacksWindow : Window
 
     private void CreateStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (ViewModel is null)
-        {
-            return;
-        }
-
-        var wizardViewModel = ViewModel.CreateCreateStackWizardViewModel();
-        var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
-        _tasks.Observe(ShowCreateWizardAsync(wizardWindow, wizardViewModel, isEdit: false), "showing Create Stack wizard");
+        PrepareWizardDialogLaunch(sender, e);
+        _tasks.Observe(
+            _wizardDialogs.RunAsync(
+                SuppressWizardOwnerInput,
+                DeferWizardDialogLaunchAsync,
+                CanShowWizardDialog,
+                () => ShowCreateWizardAsync(isEdit: false),
+                cancellationToken: _lifetime.Token),
+            "showing Create Stack wizard");
     }
 
     private void EditStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (ViewModel is null)
-        {
-            return;
-        }
-
-        var wizardViewModel = ViewModel.CreateEditStackWizardViewModel();
-        if (wizardViewModel is null)
-        {
-            return;
-        }
-
-        var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
-        _tasks.Observe(ShowCreateWizardAsync(wizardWindow, wizardViewModel, isEdit: true), "showing Edit Stack wizard");
+        PrepareWizardDialogLaunch(sender, e);
+        _tasks.Observe(
+            _wizardDialogs.RunAsync(
+                SuppressWizardOwnerInput,
+                DeferWizardDialogLaunchAsync,
+                CanShowWizardDialog,
+                () => ShowCreateWizardAsync(isEdit: true),
+                cancellationToken: _lifetime.Token),
+            "showing Edit Stack wizard");
     }
 
     private void ImportStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -110,33 +110,48 @@ public partial class StacksWindow : Window
 
     private void UseRegistryStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        _tasks.Observe(ImportAndShowUseStackWizardAsync(), "opening a Registry Stack");
+        PrepareWizardDialogLaunch(sender, e);
+        _tasks.Observe(
+            _wizardDialogs.RunAsync(
+                SuppressWizardOwnerInput,
+                DeferWizardDialogLaunchAsync,
+                CanShowWizardDialog,
+                ShowUseStackWizardAsync,
+                PrepareRegistryStackUseAsync,
+                _lifetime.Token),
+            "opening a Registry Stack");
     }
 
     private void UseLocalStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        _tasks.Observe(ShowUseStackWizardAsync(), "showing Use Stack wizard");
+        PrepareWizardDialogLaunch(sender, e);
+        _tasks.Observe(
+            _wizardDialogs.RunAsync(
+                SuppressWizardOwnerInput,
+                DeferWizardDialogLaunchAsync,
+                CanShowWizardDialog,
+                ShowUseStackWizardAsync,
+                cancellationToken: _lifetime.Token),
+            "showing Use Stack wizard");
     }
 
-    private async Task ShowUseStackWizardAsync()
+    private async Task<Func<Task>?> ShowUseStackWizardAsync()
     {
-        if (ViewModel is null)
+        var ownerViewModel = ViewModel;
+        if (ownerViewModel is null)
         {
-            return;
+            return null;
         }
 
-        var wizardViewModel = ViewModel.CreateUseStackWizardViewModel();
+        var wizardViewModel = ownerViewModel.CreateUseStackWizardViewModel();
         if (wizardViewModel is null)
         {
-            return;
+            return null;
         }
 
         var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
         var result = await wizardWindow.ShowDialog<bool?>(this);
-        if (result == true)
-        {
-            await ViewModel.RefreshAfterUsedStackAsync();
-        }
+        return result == true ? ownerViewModel.RefreshAfterUsedStackAsync : null;
     }
 
     private void OnLifecycleClosed()
@@ -149,31 +164,110 @@ public partial class StacksWindow : Window
         _lifetime.Dispose();
     }
 
-    private async Task ShowCreateWizardAsync(
-        CreateStackWizardWindow window,
-        CreateStackWizardViewModel viewModel,
-        bool isEdit)
+    private async Task<Func<Task>?> ShowCreateWizardAsync(bool isEdit)
     {
-        var result = await window.ShowDialog<bool?>(this);
-        if (result == true && ViewModel is not null)
+        var ownerViewModel = ViewModel;
+        if (ownerViewModel is null)
         {
-            if (isEdit)
+            return null;
+        }
+        var viewModel = isEdit
+            ? ownerViewModel.CreateEditStackWizardViewModel()
+            : ownerViewModel.CreateCreateStackWizardViewModel();
+        if (viewModel is null)
+        {
+            return null;
+        }
+
+        var window = RequireWizardFactory().Create(viewModel);
+        var result = await window.ShowDialog<bool?>(this);
+        if (result != true)
+        {
+            return null;
+        }
+
+        var stackId = viewModel.CreatedStackId;
+        return isEdit
+            ? () => ownerViewModel.RefreshAfterEditedStackAsync(stackId)
+            : () => ownerViewModel.RefreshAfterCreatedStackAsync(stackId);
+    }
+
+    private async Task<bool> PrepareRegistryStackUseAsync(CancellationToken cancellationToken)
+    {
+        var viewModel = ViewModel;
+        return viewModel is not null
+               && await viewModel.ImportSelectedRegistryStackAsLocalAsync(
+                   AppLaunchRequestKind.StackUse,
+                   cancellationToken);
+    }
+
+    private Action SuppressWizardOwnerInput()
+    {
+        var wasEnabled = StacksRoot.IsEnabled;
+        var wasHitTestVisible = StacksRoot.IsHitTestVisible;
+        var focusedControl = FocusManager?.GetFocusedElement() as Control;
+        void RestoreOwnerInput()
+        {
+            try
             {
-                await ViewModel.RefreshAfterEditedStackAsync(viewModel.CreatedStackId);
+                StacksRoot.IsEnabled = wasEnabled;
             }
-            else
+            finally
             {
-                await ViewModel.RefreshAfterCreatedStackAsync(viewModel.CreatedStackId);
+                try
+                {
+                    StacksRoot.IsHitTestVisible = wasHitTestVisible;
+                }
+                finally
+                {
+                    if (IsVisible
+                        && !_lifetime.IsCancellationRequested
+                        && FocusManager?.GetFocusedElement() is null
+                        && focusedControl is
+                        {
+                            Focusable: true,
+                            IsEffectivelyEnabled: true,
+                            IsEffectivelyVisible: true,
+                        })
+                    {
+                        focusedControl.Focus();
+                    }
+                }
             }
+        }
+
+        try
+        {
+            StacksRoot.IsEnabled = false;
+            StacksRoot.IsHitTestVisible = false;
+            return RestoreOwnerInput;
+        }
+        catch
+        {
+            RestoreOwnerInput();
+            throw;
         }
     }
 
-    private async Task ImportAndShowUseStackWizardAsync()
+    private static Task DeferWizardDialogLaunchAsync()
+        => Dispatcher.UIThread.InvokeAsync(
+                static () => { },
+                DispatcherPriority.Background)
+            .GetTask();
+
+    private bool CanShowWizardDialog()
+        => IsVisible
+           && !_lifetime.IsCancellationRequested
+           && !_closeCoordinator.IsHidePending;
+
+    private static void PrepareWizardDialogLaunch(
+        object? sender,
+        Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (ViewModel is not null
-            && await ViewModel.ImportSelectedRegistryStackAsLocalAsync(AppLaunchRequestKind.StackUse, _lifetime.Token))
+        e.Handled = true;
+        if (sender is Control source)
         {
-            await ShowUseStackWizardAsync();
+            ToolTip.SetIsOpen(source, false);
         }
     }
 

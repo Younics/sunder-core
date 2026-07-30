@@ -36,6 +36,24 @@ public sealed class PresentationLifecycleArchitectureTests
     }
 
     [Fact]
+    public void StacksWindow_FencesWizardDialogsAndClosesSourceTooltip()
+    {
+        var views = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "Views");
+        var source = File.ReadAllText(Path.Combine(views, "StacksWindow.axaml.cs"));
+        var markup = File.ReadAllText(Path.Combine(views, "StacksWindow.axaml"));
+
+        Assert.Contains("_wizardDialogs.RunAsync(", source, StringComparison.Ordinal);
+        Assert.Contains("isCloseBlocked: _wizardDialogs.HandleCloseRequest", source, StringComparison.Ordinal);
+        Assert.Contains("ToolTip.SetIsOpen(source, false)", source, StringComparison.Ordinal);
+        Assert.Contains("StacksRoot.IsEnabled = false", source, StringComparison.Ordinal);
+        Assert.Contains("StacksRoot.IsHitTestVisible = false", source, StringComparison.Ordinal);
+        Assert.Contains("FocusManager?.GetFocusedElement()", source, StringComparison.Ordinal);
+        Assert.Contains("!_closeCoordinator.IsHidePending", source, StringComparison.Ordinal);
+        Assert.Contains("e.Handled = true", source, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"StacksRoot\"", markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WindowLauncher_HasNoFallbackWindowConstruction()
     {
         var path = Path.Combine(GetRepositoryRoot(), "src", "Host", "Sunder.App", "Services", "WindowLauncher.cs");

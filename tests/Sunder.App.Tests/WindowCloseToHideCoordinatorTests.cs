@@ -26,6 +26,28 @@ public sealed class WindowCloseToHideCoordinatorTests
     }
 
     [Fact]
+    public void BlockedClose_CancelsWithoutHidingUntilReleased()
+    {
+        var blocked = true;
+        var window = new FakeWindow();
+        var transition = new FakeFullScreenTransition(NativeFullScreenState.Windowed);
+        using var coordinator = new WindowCloseToHideCoordinator(
+            window,
+            transition,
+            isCloseBlocked: () => blocked);
+
+        Assert.True(coordinator.HandleCloseRequest());
+        Assert.Equal(0, window.HideCount);
+        Assert.Equal(0, transition.StartObservingCount);
+        Assert.False(coordinator.IsHidePending);
+
+        blocked = false;
+        Assert.True(coordinator.HandleCloseRequest());
+        Assert.Equal(1, window.HideCount);
+        Assert.Equal(1, transition.StartObservingCount);
+    }
+
+    [Fact]
     public void FullScreenClose_HidesOnlyAfterExactNativeDidExitNotification()
     {
         var calls = new List<string>();
@@ -40,12 +62,14 @@ public sealed class WindowCloseToHideCoordinatorTests
         Assert.True(coordinator.HandleCloseRequest());
         Assert.Equal(1, transition.ExitRequestCount);
         Assert.Equal(0, window.HideCount);
+        Assert.True(coordinator.IsHidePending);
 
         transition.Raise(NativeFullScreenTransitionKind.WillExit);
         Assert.Equal(0, window.HideCount);
 
         transition.Raise(NativeFullScreenTransitionKind.DidExit);
         Assert.Equal(1, window.HideCount);
+        Assert.False(coordinator.IsHidePending);
         Assert.Equal("hide", calls[^1]);
         scheduler.FireNext(includeCanceled: true);
         Assert.Equal(1, window.HideCount);
