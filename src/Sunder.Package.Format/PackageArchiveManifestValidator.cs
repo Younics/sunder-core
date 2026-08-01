@@ -2,34 +2,30 @@ using Sunder.Sdk.Packaging;
 
 namespace Sunder.Package.Format;
 
-public enum SunderPackageManifestLayout
-{
-    Archive,
-    Activation,
-}
-
 public static class SunderPackageManifestValidator
 {
     public static IReadOnlyList<string> Validate(
         SunderPackageManifest? manifest,
-        string rootPath,
-        SunderPackageManifestLayout layout = SunderPackageManifestLayout.Archive)
+        string rootPath)
     {
         var errors = new List<string>();
-        Validate(manifest, rootPath, errors, layout);
+        Validate(manifest, rootPath, errors);
         return errors;
     }
 
     public static void Validate(
         SunderPackageManifest? manifest,
         string rootPath,
-        ICollection<string> errors,
-        SunderPackageManifestLayout layout = SunderPackageManifestLayout.Archive)
+        ICollection<string> errors)
     {
         if (manifest is null)
         {
             errors.Add("Package manifest is empty or invalid.");
             return;
+        }
+        if (manifest.ArchiveFormatVersion != SunderPackageFormat.CurrentArchiveFormatVersion)
+        {
+            errors.Add($"Package manifest must declare archiveFormatVersion {SunderPackageFormat.CurrentArchiveFormatVersion}.");
         }
         if (manifest.ManifestVersion != SunderPackageFormat.CurrentManifestVersion)
         {
@@ -43,47 +39,30 @@ public static class SunderPackageManifestValidator
         {
             errors.Add($"Package manifest for '{manifest.Id ?? rootPath}' is missing name.");
         }
+        else if (manifest.Name.Length > 256)
+        {
+            errors.Add($"Package name for '{manifest.Id ?? rootPath}' must not exceed 256 characters.");
+        }
+        if (manifest.Summary is not null
+            && (string.IsNullOrWhiteSpace(manifest.Summary) || manifest.Summary.Length > 2048))
+        {
+            errors.Add($"Package summary for '{manifest.Id ?? rootPath}' must be non-empty and at most 2048 characters when declared.");
+        }
         if (!SemanticVersion.TryParse(manifest.Version, out _))
         {
             errors.Add($"Package version '{manifest.Version}' must be strict SemVer 2.0.");
         }
 
-        PackageAssetValidator.ValidateEntryAssembly(manifest, rootPath, errors, layout);
-        PackageHostRoleValidator.Validate(manifest, rootPath, errors, layout);
-        PackageAssetValidator.ValidateIcon(manifest, rootPath, errors, layout);
+        var files = Directory.Exists(rootPath)
+            ? SunderArchive.EnumerateFiles(rootPath)
+            : [];
+        var physicalFiles = files.ToDictionary(
+            static file => file.Path.ToString(),
+            static file => file.FullPath,
+            StringComparer.Ordinal);
+        PackageTargetValidator.Validate(manifest, files.Select(static file => file.Path), errors);
+        PackageAssetValidator.ValidateIcon(manifest, physicalFiles, errors);
+        PackageContractValidator.Validate(manifest, physicalFiles, errors);
         PackageDependencyValidator.Validate(manifest.DependsOn, errors);
-
-        if (manifest.SdkApiVersion != SunderPackageFormat.CurrentSdkApiVersion)
-        {
-            errors.Add($"Package manifest for '{manifest.Id ?? rootPath}' must declare sdkApiVersion {SunderPackageFormat.CurrentSdkApiVersion}.");
-        }
-        if (!SemanticVersion.TryParse(manifest.SdkPackageVersion, out _))
-        {
-            errors.Add($"Package manifest for '{manifest.Id ?? rootPath}' must declare a strict SemVer 2.0 sdkPackageVersion.");
-        }
-        ValidateCapabilities(manifest, rootPath, errors);
-    }
-
-    private static void ValidateCapabilities(SunderPackageManifest manifest, string stagingPath, ICollection<string> errors)
-    {
-        var capabilities = manifest.RequiredSdkCapabilities;
-        if (capabilities is null || capabilities.Count == 0)
-        {
-            errors.Add($"Package manifest for '{manifest.Id ?? stagingPath}' must declare requiredSdkCapabilities.");
-            return;
-        }
-
-        var seenCapabilities = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var capability in capabilities)
-        {
-            if (!SunderPackageFormat.IsSdkCapabilityId(capability))
-            {
-                errors.Add($"Package manifest for '{manifest.Id ?? stagingPath}' declares invalid SDK capability '{capability}'.");
-            }
-            else if (!seenCapabilities.Add(capability))
-            {
-                errors.Add($"Package manifest for '{manifest.Id ?? stagingPath}' declares SDK capability '{capability}' more than once.");
-            }
-        }
     }
 }

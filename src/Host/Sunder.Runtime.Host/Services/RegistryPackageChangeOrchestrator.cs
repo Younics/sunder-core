@@ -24,6 +24,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 [new RuntimeRegistryPackageChangeRequest(
                     request.PackageId,
                     request.Version,
+                    request.DesiredTargets ?? [],
                     request.Version is null ? request.Tag : null,
                     request.VersionRange,
                     request.Required)],
@@ -50,7 +51,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
         return await ExecuteAsync(
             new RuntimeRegistryPackageBatchRequest(
                 request.RegistryOrigin,
-                selected.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray(),
+                selected.Select(package => new RuntimeRegistryPackageChangeRequest(
+                    package.PackageId,
+                    null,
+                    request.DesiredTargets ?? [],
+                    "latest")).ToArray(),
                 request.IncludePrerelease),
             cancellationToken);
     }
@@ -99,7 +104,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
             foreach (var item in plan.Items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var upload = await artifactDownloader.DownloadAsync(origin, item, cancellationToken);
+                var upload = await artifactDownloader.DownloadAsync(
+                    origin,
+                    item,
+                    plan.TrustedArtifactOrigins,
+                    cancellationToken);
                 uploadIds.Add(upload.UploadId);
 
                 mutations.Add(new PackageStoreMutationRequest(
@@ -107,7 +116,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     item.CurrentVersion is null ? null : item.PackageId,
                     upload.UploadId,
                     request.AllowDowngrade,
-                    request.Reinstall));
+                    RequiresReinstall(item.CurrentVersion, item.Version, request.Reinstall)));
             }
 
             var stage = await installedPackages.StageAsync(new PackageStoreStageRequest(mutations), cancellationToken);
@@ -179,5 +188,10 @@ internal sealed class RegistryPackageChangeOrchestrator(
         RuntimeRegistryErrorCode errorCode,
         RegistryResolveInstallPlanResponse? plan = null)
         => new(false, errorCode, message, false, false, plan?.Warnings ?? [], [message], [], plan is null ? [] : RuntimeRegistryContractMapper.ToRuntime(plan.Items));
+
+    internal static bool RequiresReinstall(string? currentVersion, string version, bool requested)
+        => requested
+           || currentVersion is not null
+           && string.Equals(currentVersion, version, StringComparison.Ordinal);
 
 }

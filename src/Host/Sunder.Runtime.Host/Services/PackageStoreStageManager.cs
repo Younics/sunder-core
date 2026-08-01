@@ -87,8 +87,7 @@ internal sealed class PackageStoreStageManager(
 
                     archive = archive with
                     {
-                        StagedRecord = archive.StagedRecord with { IsEnabled = selected!.IsEnabled },
-                        InstalledRecord = archive.InstalledRecord with { IsEnabled = selected.IsEnabled },
+                        InstalledRecord = archive.InstalledRecord with { IsEnabled = selected!.IsEnabled },
                     };
                     prepared[archive.InstalledRecord.PackageId] = archive;
                     messages.Add($"Updated package '{archive.InstalledRecord.Name}' from {selected.Version} to {archive.InstalledRecord.Version}.");
@@ -99,7 +98,7 @@ internal sealed class PackageStoreStageManager(
                 }
 
                 desired[archive.InstalledRecord.PackageId] = archive.InstalledRecord;
-                prospective[archive.StagedRecord.PackageId] = archive.StagedRecord;
+                prospective[archive.InstalledRecord.PackageId] = archive.InstalledRecord;
                 impacted.Add(archive.InstalledRecord.PackageId);
             }
 
@@ -186,7 +185,15 @@ internal sealed class PackageStoreStageManager(
             }
 
             return new PackageStoreStagePreparation(
-                new PackageStorePreparedStage(stageId, stage.ProspectivePackages, result, catalogGeneration),
+                new PackageStorePreparedStage(
+                    stageId,
+                    stage.ProspectivePackages,
+                    stage.PreparedArchives.ToDictionary(
+                        static archive => archive.InstalledRecord.PackageId,
+                        static archive => archive.StagingPath,
+                        StringComparer.OrdinalIgnoreCase),
+                    result,
+                    catalogGeneration),
                 null);
         }
         catch

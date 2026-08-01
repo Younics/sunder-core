@@ -26,6 +26,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Contracts\sunder.stack.contributor.rpc.json"
+                      LogicalName="Sunder.Sdk.Stacks.Contracts.sunder.stack.contributor.rpc.json" />
+    <None Include="Contracts\sunder.stack.contributor.rpc.json"
+          Pack="true"
+          PackagePath="contracts" />
+    <None Include="buildTransitive\Sunder.Sdk.Stacks.props"
+          Pack="true"
+          PackagePath="buildTransitive" />
     <None Include="..\Sunder.Sdk\icon.png" Pack="true" PackagePath="" Link="icon.png" />
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="..\Sunder.Sdk\LICENSE" Pack="true" PackagePath="" Link="LICENSE" />

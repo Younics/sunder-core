@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
@@ -160,55 +161,6 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public void RuntimeSharedAssemblyRegistry_WhenSameUnsignedIdentityHasDifferentBinaryDefinition_RejectsIt()
-    {
-        using var registry = new RuntimeSharedAssemblyRegistry([]);
-        var registerMethod = typeof(RuntimeSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
-        var candidateType = typeof(RuntimeSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
-        Assert.NotNull(registerMethod);
-        Assert.NotNull(candidateType);
-        var assemblyName = new AssemblyName("Example.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null");
-        var firstCandidate = Activator.CreateInstance(candidateType, typeof(PackageSessionOverlayTests).Assembly.Location, assemblyName);
-        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderRuntimePackageModule).Assembly.Location, assemblyName);
-
-        registerMethod.Invoke(registry, [firstCandidate, null]);
-        var error = Assert.Throws<TargetInvocationException>(() => registerMethod.Invoke(registry, [secondCandidate, null]));
-        Assert.IsType<InvalidOperationException>(error.InnerException);
-    }
-
-    [Fact]
-    public void RuntimeSharedAssemblyRegistry_WhenHigherVersionContractExists_SelectsHigherVersion()
-    {
-        using var registry = new RuntimeSharedAssemblyRegistry([]);
-        var registerMethod = typeof(RuntimeSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
-        var candidateType = typeof(RuntimeSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
-        var namesField = typeof(RuntimeSharedAssemblyRegistry).GetField("_sharedAssemblyNames", BindingFlags.Instance | BindingFlags.NonPublic);
-        var pathsField = typeof(RuntimeSharedAssemblyRegistry).GetField("_sharedAssemblyPaths", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(registerMethod);
-        Assert.NotNull(candidateType);
-        Assert.NotNull(namesField);
-        Assert.NotNull(pathsField);
-
-        var lowerCandidate = Activator.CreateInstance(
-            candidateType,
-            "/tmp/old/Sunder.Package.Agent.Contracts.dll",
-            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null"));
-        var higherCandidate = Activator.CreateInstance(
-            candidateType,
-            "/tmp/new/Sunder.Package.Agent.Contracts.dll",
-            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null"));
-
-        registerMethod.Invoke(registry, [lowerCandidate, null]);
-        registerMethod.Invoke(registry, [higherCandidate, null]);
-        registerMethod.Invoke(registry, [lowerCandidate, null]);
-
-        var names = Assert.IsType<Dictionary<string, AssemblyName>>(namesField.GetValue(registry));
-        var paths = Assert.IsType<Dictionary<string, string>>(pathsField.GetValue(registry));
-        Assert.Equal(new Version(1, 0, 3, 0), names["Sunder.Package.Agent.Contracts"].Version);
-        Assert.Equal("/tmp/new/Sunder.Package.Agent.Contracts.dll", paths["Sunder.Package.Agent.Contracts"]);
-    }
-
-    [Fact]
     public void RuntimeSharedAssemblyRegistry_WhenRequestedVersionIsOlderThanLoadedVersion_AllowsBinding()
     {
         var requested = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null");
@@ -347,7 +299,9 @@ public sealed class PackageSessionOverlayTests
         try
         {
             await AddInstalledPackageAsync(store, installedPackage);
-            File.Delete(installedPackage.EntryAssemblyPath);
+            File.Delete(Path.Combine(
+                installedPackage.InstallPath,
+                installedPackage.ContentInventory.Single(entry => entry.Path.EndsWith(".dll", StringComparison.Ordinal)).Path.Replace('/', Path.DirectorySeparatorChar)));
 
             var loadResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
 
@@ -624,7 +578,7 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public async Task CommitPackageLifecycleStageAsync_PublishesExactStagedSessionAndSnapshots()
+    public async Task CommitPackageLifecycleStageAsync_PublishesExactStagedSessionWithLazyTargetSnapshots()
     {
         var paths = new RuntimePackagePaths(CreateTempDirectory());
         var store = new InstalledPackageStore(paths);
@@ -639,20 +593,109 @@ public sealed class PackageSessionOverlayTests
             WritePackageManifest(startupDevFolder, "startup.package", "1.1.0");
             var stage = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(startupDevFolder));
             var stagedSession = service.GetStagedLifecycleSession(stage.StageId!);
-            var stagedSnapshot = Assert.Single(stage.PackageUiSnapshots);
+            var stagedSnapshot = Assert.Single(service.GetStagedPackageUiSnapshots(stage.StageId!));
 
             var commit = await service.CommitPackageLifecycleStageAsync(stage.StageId!);
 
             Assert.True(commit.Success, string.Join(Environment.NewLine, commit.Errors));
             Assert.Same(stagedSession, service.ActiveSession);
             Assert.Equal(service.SessionGeneration, commit.CommittedStamp?.SessionGeneration);
-            var committedSnapshot = Assert.Single(commit.PackageUiSnapshots);
-            Assert.Equal(stagedSnapshot.SnapshotId, committedSnapshot.SnapshotId);
+            var committedSnapshot = Assert.Single(service.GetActivePackageUiSnapshots());
+            Assert.NotEqual(stagedSnapshot.SnapshotId, committedSnapshot.SnapshotId);
             Assert.Equal(stagedSnapshot.ContentHash, committedSnapshot.ContentHash);
             Assert.DoesNotContain("/stage/", committedSnapshot.SnapshotUri, StringComparison.Ordinal);
             Assert.Null(service.AcquireStageUiSnapshot(stage.StageId!, stagedSnapshot.SnapshotId));
             using var committedLease = service.AcquireCurrentUiSnapshot(committedSnapshot.SnapshotId);
             Assert.NotNull(committedLease);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ActiveAppSnapshots_WhenRequestedRidIsMissing_FailOnlyThatClientRequest()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer);
+        var folder = CreatePackageLayout(
+            paths.RootPath,
+            "startup-dev",
+            "test.package",
+            "1.0.0",
+            PackageSourceKind.Dev).InstallPath;
+        var currentRid = RuntimeInformation.RuntimeIdentifier;
+        var missingRid = SunderPackageFormat.SupportedRuntimeIdentifiers
+            .First(rid => !string.Equals(rid, currentRid, StringComparison.Ordinal));
+
+        try
+        {
+            var load = await service.LoadStartupDevPackagesAsync([folder]);
+            Assert.True(load.Success, string.Join(Environment.NewLine, load.Errors));
+            Assert.Single(service.GetActivePackageUiSnapshots(currentRid));
+
+            var exception = Assert.Throws<InvalidDataException>(
+                () => service.GetActivePackageUiSnapshots(missingRid));
+
+            Assert.Contains($"app/{missingRid}", exception.Message, StringComparison.Ordinal);
+            Assert.Single(service.GetActivePackages());
+            Assert.Single(service.GetActivePackageUiSnapshots(currentRid));
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(paths.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ActiveAppSnapshots_WhenExactTargetKindIsWeb_ReturnsWebProjection()
+    {
+        var paths = new RuntimePackagePaths(CreateTempDirectory());
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer);
+        var folder = Path.Combine(paths.RootPath, "startup-dev", "test.package", "1.0.0");
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            folder,
+            "test.package",
+            "1.0.0",
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            appTargetKind: SunderPackageFormat.WebTargetKind,
+            appEntryPoint: "index.html",
+            appViews:
+            [
+                new SunderPackageWebViewManifest
+                {
+                    ViewId = "test.package.main",
+                    DisplayName = "Test",
+                    Route = "/",
+                    DefaultPlacement = "middle",
+                    ShowInHotbar = true,
+                },
+            ]);
+        File.WriteAllText(Path.Combine(folder, "payload", "shared", "index.html"), "<html></html>");
+        CanonicalPackageTestBuilder.WriteContentIndex(folder);
+
+        try
+        {
+            var load = await service.LoadStartupDevPackagesAsync([folder]);
+            Assert.True(load.Success, string.Join(Environment.NewLine, load.Errors));
+
+            var snapshot = Assert.Single(service.GetActivePackageUiSnapshots(RuntimeInformation.RuntimeIdentifier));
+            Assert.Equal(SunderPackageFormat.WebTargetKind, snapshot.Target.Kind);
+            Assert.Equal("test.package.main", Assert.Single(snapshot.Target.Views).ViewId);
+            Assert.Single(service.GetActivePackages());
         }
         finally
         {
@@ -687,7 +730,7 @@ public sealed class PackageSessionOverlayTests
             Assert.True((await service.LoadStartupDevPackagesAsync([folder])).Success);
             WritePackageManifest(folder, "expiring.package", "1.1.0");
             var stage = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(folder));
-            var snapshot = Assert.Single(stage.PackageUiSnapshots);
+            var snapshot = Assert.Single(service.GetStagedPackageUiSnapshots(stage.StageId!));
             var pending = service.GetPackageStageStatus(stage.StageId!);
 
             Assert.NotNull(pending);
@@ -741,7 +784,7 @@ public sealed class PackageSessionOverlayTests
                 new PackageStoreMutationRequest(PackageStoreMutationKind.Enable, installed.PackageId),
             ]));
             Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
-            var snapshot = Assert.Single(stage.PackageUiSnapshots);
+            var snapshot = Assert.Single(service.GetStagedPackageUiSnapshots(stage.StageId!));
 
             clock.Advance(TimeSpan.FromMinutes(2));
             await service.SweepStoreStagesAsync(clock.GetUtcNow());
@@ -770,36 +813,21 @@ public sealed class PackageSessionOverlayTests
         string dependencyVersionRange = ">=0.0.0-0")
     {
         var packageFolder = Path.Combine(rootPath, folderName, packageId, version);
-        var libraryFolder = Path.Combine(packageFolder, "lib");
-        Directory.CreateDirectory(libraryFolder);
         var assemblyPath = typeof(PackageSessionOverlayTestPackageModule).Assembly.Location;
-        var entryAssemblyFileName = Path.GetFileName(assemblyPath);
-        WritePackageManifest(packageFolder, packageId, version, dependencies, dependencyVersionRange);
-
-        foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
-        {
-            File.Copy(file, Path.Combine(libraryFolder, Path.GetFileName(file)), overwrite: true);
-        }
-
-        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
-        if (File.Exists(depsPath))
-        {
-            File.Copy(depsPath, Path.Combine(libraryFolder, Path.GetFileName(depsPath)), overwrite: true);
-        }
-
-        return new InstalledPackageRecord(
-            packageId,
-            packageId,
-            Summary: null,
-            version,
-            entryAssemblyFileName,
-            Icon: null,
-            DependsOn: (dependencies ?? [])
-                .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, dependencyVersionRange))
-                .ToArray(),
+        var dependencyRecords = (dependencies ?? [])
+            .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, dependencyVersionRange))
+            .ToArray();
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
             packageFolder,
-            IsEnabled: true,
-            DateTimeOffset.UtcNow);
+            packageId,
+            version,
+            assemblyPath,
+            dependencies: dependencyRecords);
+        return CanonicalPackageTestBuilder.CreateInstalledRecord(
+            packageFolder,
+            packageId,
+            version,
+            dependencies: dependencyRecords);
     }
 
     private static void WritePackageManifest(
@@ -809,23 +837,14 @@ public sealed class PackageSessionOverlayTests
         IReadOnlyList<string>? dependencies = null,
         string dependencyVersionRange = ">=0.0.0-0")
     {
-        var entryAssemblyFileName = Path.GetFileName(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
-        var dependencyJson = dependencies is { Count: > 0 }
-            ? ",\n  \"dependsOn\": [\n" + string.Join(",\n", dependencies.Select(dependencyId => $"    {{ \"packageId\": \"{dependencyId}\", \"versionRange\": \"{dependencyVersionRange}\" }}")) + "\n  ]"
-            : string.Empty;
-        File.WriteAllText(Path.Combine(packageFolder, "sunder-package.json"), $$"""
-            {
-              "manifestVersion": 1,
-              "id": "{{packageId}}",
-              "name": "{{packageId}}",
-              "version": "{{version}}",
-              "hostRoles": ["app", "runtime"],
-              "sdkApiVersion": 1,
-              "sdkPackageVersion": "1.1.0",
-              "requiredSdkCapabilities": ["sdk-baseline-1-1.v1", "core.v1"],
-              "entryAssembly": "{{entryAssemblyFileName}}"{{dependencyJson}}
-            }
-            """);
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            packageFolder,
+            packageId,
+            version,
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            dependencies: (dependencies ?? [])
+                .Select(dependencyId => new InstalledPackageDependencyRecord(dependencyId, dependencyVersionRange))
+                .ToArray());
     }
 
     private static async Task AddInstalledPackageAsync(InstalledPackageStore store, InstalledPackageRecord package)
@@ -836,7 +855,7 @@ public sealed class PackageSessionOverlayTests
 
     private static PackageLifecycleStageRequest CreateHotReloadStageRequest(string folder)
     {
-        using var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "sunder-package.json")));
+        using var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "manifest", "sunder-package.json")));
         var packageId = manifest.RootElement.GetProperty("id").GetString()!;
         return new PackageLifecycleStageRequest([packageId]);
     }
@@ -918,8 +937,7 @@ public sealed class PackageSessionOverlayTestPackageModule : PackageSessionOverl
             context.PackageId,
             context.Version.ToString(),
             StackContributorContainsSecrets);
-        registry.RegisterExtension(SunderStackExtensionPoints.StackExporters, stackContributor);
-        registry.RegisterExtension(SunderStackExtensionPoints.StackImporters, stackContributor);
+        registry.RegisterStackContributor("test.stack.provider", stackContributor, services);
     }
 
     public override void ConfigureAppServices(IServiceCollection services, IPackageContext context)

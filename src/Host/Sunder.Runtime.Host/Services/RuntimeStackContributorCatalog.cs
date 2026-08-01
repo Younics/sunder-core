@@ -1,79 +1,76 @@
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal static class RuntimeStackContributorCatalog
 {
-    public static Dictionary<string, StackExporterRegistration> GetExporters(
-        RuntimeSessionOwner sessions,
-        PackageSessionLease lease,
-        ICollection<string> errors)
+    public static async Task<Dictionary<string, StackContributorRegistration>> GetExportersAsync(
+        ISunderRpcClient client,
+        ICollection<string> errors,
+        CancellationToken cancellationToken)
+        => await GetContributorsAsync(
+            client,
+            static metadata => metadata.SupportsExport,
+            "exporter",
+            errors,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async Task<Dictionary<string, StackContributorRegistration>> GetImportersAsync(
+        ISunderRpcClient client,
+        ICollection<string> errors,
+        CancellationToken cancellationToken)
+        => await GetContributorsAsync(
+            client,
+            static metadata => metadata.SupportsImport,
+            "importer",
+            errors,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async Task<Dictionary<string, StackContributorRegistration>> GetContributorsAsync(
+        ISunderRpcClient client,
+        Func<StackContributorMetadata, bool> include,
+        string kind,
+        ICollection<string> errors,
+        CancellationToken cancellationToken)
     {
-        var result = new Dictionary<string, StackExporterRegistration>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in sessions.State
-                     .GetExtensionContributions(lease, SunderStackExtensionPoints.StackExporters)
-                     .GroupBy(value => Key(value.PackageId, value.Contribution.ContributorId), StringComparer.OrdinalIgnoreCase))
+        var result = new Dictionary<string, StackContributorRegistration>(StringComparer.OrdinalIgnoreCase);
+        var catalog = await client.DiscoverAsync(
+            SunderStackContributorRpc.ContractId,
+            cancellationToken).ConfigureAwait(false);
+        foreach (var provider in catalog.Providers)
         {
-            var first = group.First();
-            if (string.IsNullOrWhiteSpace(first.PackageId) || string.IsNullOrWhiteSpace(first.Contribution.ContributorId))
+            var rpc = SunderStackContributorRpc.CreateClient(client, provider.Endpoint);
+            try
             {
-                errors.Add("An active Stack exporter has an invalid package or contributor id.");
+                var metadata = await rpc.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+                if (!include(metadata)) continue;
+                if (string.IsNullOrWhiteSpace(provider.PackageId)
+                    || string.IsNullOrWhiteSpace(metadata.ContributorId))
+                {
+                    errors.Add($"An active Stack {kind} has an invalid package or contributor id.");
+                    continue;
+                }
+
+                var key = Key(provider.PackageId, metadata.ContributorId);
+                if (!result.TryAdd(key, new StackContributorRegistration(provider, metadata, rpc)))
+                {
+                    errors.Add(
+                        $"Package '{provider.PackageId}' registered duplicate Stack {kind} id '{metadata.ContributorId}'.");
+                }
             }
-            else if (group.Skip(1).Any())
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                errors.Add($"Package '{first.PackageId}' registered duplicate Stack exporter id '{first.Contribution.ContributorId}'.");
-            }
-            else
-            {
-                result.Add(group.Key, new StackExporterRegistration(first.PackageId, first.Contribution));
+                errors.Add($"Stack {kind} provider '{provider.ProviderId}' metadata failed.");
             }
         }
         return result;
     }
-
-    public static Dictionary<string, StackImporterRegistration> GetImporters(
-        RuntimeSessionOwner sessions,
-        PackageSessionLease lease,
-        ICollection<string> errors)
-    {
-        var result = new Dictionary<string, StackImporterRegistration>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in sessions.State
-                     .GetExtensionContributions(lease, SunderStackExtensionPoints.StackImporters)
-                     .GroupBy(value => Key(value.PackageId, value.Contribution.ContributorId), StringComparer.OrdinalIgnoreCase))
-        {
-            var first = group.First();
-            if (string.IsNullOrWhiteSpace(first.PackageId) || string.IsNullOrWhiteSpace(first.Contribution.ContributorId))
-            {
-                errors.Add("An active Stack importer has an invalid package or contributor id.");
-            }
-            else if (group.Skip(1).Any())
-            {
-                errors.Add($"Package '{first.PackageId}' registered duplicate Stack importer id '{first.Contribution.ContributorId}'.");
-            }
-            else
-            {
-                result.Add(group.Key, new StackImporterRegistration(first.PackageId, first.Contribution));
-            }
-        }
-        return result;
-    }
-
-    public static IReadOnlyList<IPackageStackImportAppliedHandler> GetImportAppliedHandlers(
-        RuntimeSessionOwner sessions,
-        PackageSessionLease lease,
-        string packageId,
-        string contributorId)
-        => sessions.State
-            .GetExtensionContributions(lease, SunderStackExtensionPoints.StackImportAppliedHandlers)
-            .Where(value => string.Equals(value.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(value.Contribution.ContributorId, contributorId, StringComparison.OrdinalIgnoreCase))
-            .Select(value => value.Contribution)
-            .ToArray();
 
     public static void ValidateScopedValues(
         IReadOnlyDictionary<string, string> values,
         string kind,
-        IReadOnlyDictionary<string, StackImporterRegistration> importers,
+        IReadOnlyDictionary<string, StackContributorRegistration> importers,
         string label,
         ICollection<string> errors)
     {
@@ -89,28 +86,28 @@ internal static class RuntimeStackContributorCatalog
 
     public static bool ValidatePreviewIds(
         StackImportPreview preview,
-        StackImporterRegistration registration,
+        string contributorId,
         ICollection<string> errors)
     {
         var valid = true;
         if (preview.Actions.Any(action => action is null)
             || preview.RequiredInputs.Any(input => input is null))
         {
-            errors.Add($"Stack importer '{registration.Importer.ContributorId}' returned a null action or required input.");
+            errors.Add($"Stack importer '{contributorId}' returned a null action or required input.");
             return false;
         }
         foreach (var duplicate in preview.Actions
                      .GroupBy(action => action.ActionId, StringComparer.OrdinalIgnoreCase)
                      .Where(group => string.IsNullOrWhiteSpace(group.Key) || group.Skip(1).Any()))
         {
-            errors.Add($"Stack importer '{registration.Importer.ContributorId}' returned duplicate or empty action id '{duplicate.Key}'.");
+            errors.Add($"Stack importer '{contributorId}' returned duplicate or empty action id '{duplicate.Key}'.");
             valid = false;
         }
         foreach (var duplicate in preview.RequiredInputs
                      .GroupBy(input => input.InputId, StringComparer.OrdinalIgnoreCase)
                      .Where(group => string.IsNullOrWhiteSpace(group.Key) || group.Skip(1).Any()))
         {
-            errors.Add($"Stack importer '{registration.Importer.ContributorId}' returned duplicate or empty required input id '{duplicate.Key}'.");
+            errors.Add($"Stack importer '{contributorId}' returned duplicate or empty required input id '{duplicate.Key}'.");
             valid = false;
         }
         return valid;
@@ -118,12 +115,12 @@ internal static class RuntimeStackContributorCatalog
 
     public static bool ValidateExportItemIds(
         IReadOnlyList<StackExportItemDescriptor> items,
-        StackExporterRegistration registration,
+        string contributorId,
         ICollection<string> errors)
     {
         if (items.Any(item => item is null))
         {
-            errors.Add($"Stack exporter '{registration.Exporter.ContributorId}' returned a null item.");
+            errors.Add($"Stack exporter '{contributorId}' returned a null item.");
             return false;
         }
         var duplicates = items
@@ -133,7 +130,7 @@ internal static class RuntimeStackContributorCatalog
             .ToArray();
         foreach (var duplicate in duplicates)
         {
-            errors.Add($"Stack exporter '{registration.Exporter.ContributorId}' returned duplicate or empty item id '{duplicate}'.");
+            errors.Add($"Stack exporter '{contributorId}' returned duplicate or empty item id '{duplicate}'.");
         }
         return duplicates.Length == 0;
     }
@@ -144,4 +141,11 @@ internal static class RuntimeStackContributorCatalog
             : packageId.Trim() + "\u001f" + contributorId.Trim();
 }
 
-internal sealed record StackExporterRegistration(string PackageId, IPackageStackExporter Exporter);
+internal sealed record StackContributorRegistration(
+    SunderRpcProviderSnapshot Provider,
+    StackContributorMetadata Metadata,
+    StackContributorRpcClient Client)
+{
+    public string PackageId => Provider.PackageId;
+    public string ContributorId => Metadata.ContributorId;
+}

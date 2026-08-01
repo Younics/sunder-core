@@ -17,6 +17,7 @@
     <Project Path="tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj" />
     <Project Path="tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" />
     <Project Path="tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
+    <Project Path="tests/Sunder.Runtime.Host.TestWorker/Sunder.Runtime.Host.TestWorker.csproj" />
     <Project Path="tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
   </Folder>
   <Folder Name="/Sdk/">

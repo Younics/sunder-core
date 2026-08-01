@@ -12,7 +12,7 @@ internal sealed class PackageSessionState(
     TimeSpan? sessionDrainTimeout = null)
 {
     private readonly object _syncRoot = new();
-    private SessionEntry _activeEntry = new(ActivePackageSession.Empty, generation: 0);
+    private SessionEntry _activeEntry = new(ActivePackageSession.CreateEmpty(), generation: 0);
     private long _generation;
     private readonly TimeSpan _sessionDrainTimeout = sessionDrainTimeout ?? TimeSpan.FromSeconds(10);
 
@@ -72,6 +72,14 @@ internal sealed class PackageSessionState(
         }
     }
 
+    public IReadOnlyList<RuntimePackageSource> GetAppPackageSources()
+    {
+        lock (_syncRoot)
+        {
+            return _activeEntry.Session.GetAppPackageSources();
+        }
+    }
+
     public IReadOnlyList<ActiveLoadedPackage> ListEnabledLoadedPackages(PackageSessionLease lease)
     {
         lock (_syncRoot)
@@ -90,7 +98,7 @@ internal sealed class PackageSessionState(
         lock (_syncRoot)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (ReferenceEquals(_activeEntry.Session, ActivePackageSession.Empty))
+            if (_activeEntry.Session.IsEmpty)
             {
                 // Authentication state is external to the session lock.
             }
@@ -114,7 +122,9 @@ internal sealed class PackageSessionState(
         }
 
         var activeRetirement = retirement!;
-        activeRetirement.Cancel();
+        previousEntry.RetirementCallbacks = CombineRetirementCallbacks(
+            previousEntry.RetirementCallbacks,
+            RuntimeCancellation.Signal(activeRetirement));
         try
         {
             await previousEntry.Drained.Task.WaitAsync(_sessionDrainTimeout, cancellationToken);
@@ -132,7 +142,7 @@ internal sealed class PackageSessionState(
                 throw new InvalidOperationException("The active package session changed while it was draining.");
             }
             previousEntry.Retired = true;
-            _activeEntry = new SessionEntry(ActivePackageSession.Empty, _generation);
+            _activeEntry = new SessionEntry(ActivePackageSession.CreateEmpty(), _generation);
         }
 
         clearAuthSessions();
@@ -195,7 +205,9 @@ internal sealed class PackageSessionState(
             SignalRetirementIfDrained(previousEntry);
         }
 
-        retirement.Cancel();
+        previousEntry.RetirementCallbacks = CombineRetirementCallbacks(
+            previousEntry.RetirementCallbacks,
+            RuntimeCancellation.Signal(retirement));
         try
         {
             await previousEntry.Drained.Task.WaitAsync(_sessionDrainTimeout, cancellationToken);
@@ -307,7 +319,9 @@ internal sealed class PackageSessionState(
             SignalRetirementIfDrained(failedEntry);
         }
 
-        retirement.Cancel();
+        failedEntry.RetirementCallbacks = CombineRetirementCallbacks(
+            failedEntry.RetirementCallbacks,
+            RuntimeCancellation.Signal(retirement));
         await failedEntry.Drained.Task;
 
         long generation;
@@ -321,7 +335,7 @@ internal sealed class PackageSessionState(
             generation = checked(_generation + 1);
             failedEntry.Retired = true;
             _generation = generation;
-            _activeEntry = new SessionEntry(ActivePackageSession.Empty, generation);
+            _activeEntry = new SessionEntry(ActivePackageSession.CreateEmpty(), generation);
         }
 
         Exception? publicationException = null;
@@ -360,7 +374,7 @@ internal sealed class PackageSessionState(
         PackageFailureOrigin origin,
         Exception exception,
         string action,
-        Action<long>? committed = null)
+        Func<long, Task>? committed = null)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
@@ -374,7 +388,7 @@ internal sealed class PackageSessionState(
                 || !_activeEntry.Session.OwnsPackageActivation(
                     packageId,
                     activationIdentity.RuntimeActivationId)
-                || !_activeEntry.Session.MarkPackageFailedWithoutRetiringExtensions(
+                || !_activeEntry.Session.MarkPackageFailedInternal(
                     packageId,
                     origin,
                     exception.Message,
@@ -389,8 +403,14 @@ internal sealed class PackageSessionState(
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
         }
 
-        committed?.Invoke(committedGeneration);
-        deactivation?.BeginExtensionRetirement();
+        if (deactivation is not null)
+        {
+            deactivation.RpcRetirementCallbacks = committed?.Invoke(committedGeneration) ?? Task.CompletedTask;
+        }
+        else if (committed is not null)
+        {
+            _ = committed(committedGeneration);
+        }
         removePackageAuthSessions(packageId);
         QueuePackageDeactivation(deactivation);
         logger.LogError(exception, "Failed to {Action} for package {PackageId}; package disabled for current session", action, packageId);
@@ -404,7 +424,7 @@ internal sealed class PackageSessionState(
         PackageFailureOrigin origin,
         Exception exception,
         string action,
-        Action<long>? committed = null)
+        Func<long, Task>? committed = null)
     {
         ActiveLoadedPackage? packageToDeactivate;
         PackageDeactivationWork? deactivation;
@@ -415,7 +435,7 @@ internal sealed class PackageSessionState(
                 || !_activeEntry.AcceptingLeases
                 || _activeEntry.Draining
                 || !_activeEntry.Session.OwnsRuntimeGeneration(packageId, runtimeGeneration)
-                || !_activeEntry.Session.MarkPackageFailedWithoutRetiringExtensions(
+                || !_activeEntry.Session.MarkPackageFailedInternal(
                     packageId,
                     origin,
                     exception.Message,
@@ -430,8 +450,14 @@ internal sealed class PackageSessionState(
             deactivation = CreatePackageDeactivationLocked(packageId, packageToDeactivate);
         }
 
-        committed?.Invoke(committedGeneration);
-        deactivation?.BeginExtensionRetirement();
+        if (deactivation is not null)
+        {
+            deactivation.RpcRetirementCallbacks = committed?.Invoke(committedGeneration) ?? Task.CompletedTask;
+        }
+        else if (committed is not null)
+        {
+            _ = committed(committedGeneration);
+        }
         removePackageAuthSessions(packageId);
         QueuePackageDeactivation(deactivation);
         logger.LogError(
@@ -488,16 +514,6 @@ internal sealed class PackageSessionState(
         }
     }
 
-    public IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(
-        PackageSessionLease lease,
-        PackageExtensionPoint<TContract> extensionPoint)
-    {
-        lock (_syncRoot)
-        {
-            return lease.Session.GetExtensionContributions(extensionPoint);
-        }
-    }
-
     public string? TryResolvePackageAssetPath(string packageId, string assetPath)
     {
         lock (_syncRoot)
@@ -521,7 +537,6 @@ internal sealed class PackageSessionState(
         return new PackageDeactivationWork(
             packageId,
             loadedPackage,
-            _activeEntry.Session,
             barrier.Completion.Task,
             completion);
     }
@@ -540,19 +555,21 @@ internal sealed class PackageSessionState(
     {
         try
         {
+            var retirementBarriers = Task.WhenAll(
+                work.SessionLeasesDrained,
+                work.RpcRetirementCallbacks);
             try
             {
-                await work.ExtensionLeasesDrained.WaitAsync(_sessionDrainTimeout);
+                await retirementBarriers.WaitAsync(_sessionDrainTimeout);
             }
             catch (TimeoutException exception)
             {
                 logger.LogWarning(
                     exception,
-                    "Package {PackageId} owner retirement exceeded the drain deadline; its provider and load context remain quarantined",
+                    "Package {PackageId} session retirement exceeded the drain deadline; its provider and load context remain quarantined",
                     work.PackageId);
-                await work.ExtensionLeasesDrained;
+                await retirementBarriers;
             }
-            await work.SessionLeasesDrained;
             await DeactivateLoadedPackageAsync(work.PackageId, work.LoadedPackage);
         }
         catch (Exception ex)
@@ -597,10 +614,11 @@ internal sealed class PackageSessionState(
             pendingCleanups = entry.PendingCleanups.ToArray();
         }
         await Task.WhenAll(pendingCleanups);
+        await entry.RetirementCallbacks.ConfigureAwait(false);
 
-        if (ReferenceEquals(entry.Session, ActivePackageSession.Empty))
+        if (entry.Session.IsEmpty)
         {
-            entry.Retirement.Dispose();
+            RuntimeCancellation.DisposeAfterCallbacks(entry.Retirement, entry.RetirementCallbacks);
             return [];
         }
 
@@ -633,7 +651,7 @@ internal sealed class PackageSessionState(
             warnings.Add($"Previous package session cleanup failed: {ex.Message}");
         }
 
-        entry.Retirement.Dispose();
+        RuntimeCancellation.DisposeAfterCallbacks(entry.Retirement, entry.RetirementCallbacks);
         logger.LogInformation(
             "Cleaned the retired package session in {ElapsedMilliseconds} ms",
             Stopwatch.GetElapsedTime(started).TotalMilliseconds);
@@ -654,6 +672,7 @@ internal sealed class PackageSessionState(
 
     private void AbortDrain(SessionEntry entry, CancellationTokenSource cancelledRetirement)
     {
+        Task retirementCallbacks;
         lock (_syncRoot)
         {
             if (!ReferenceEquals(_activeEntry, entry) || entry.Retired || !entry.Draining)
@@ -662,11 +681,17 @@ internal sealed class PackageSessionState(
             }
 
             entry.Draining = false;
+            retirementCallbacks = entry.RetirementCallbacks;
             entry.Retirement = new CancellationTokenSource();
             entry.Drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        cancelledRetirement.Dispose();
+        RuntimeCancellation.DisposeAfterCallbacks(cancelledRetirement, retirementCallbacks);
     }
+
+    private static Task CombineRetirementCallbacks(Task existing, Task current)
+        => existing.IsCompletedSuccessfully
+            ? current
+            : Task.WhenAll(existing, current);
 
     private void ReleaseLease(SessionEntry entry, long leaseId)
     {
@@ -744,9 +769,12 @@ internal sealed class PackageSessionState(
             // Stop failures were logged above; disposal must still wait until package code exits.
         }
         await PackageSessionLifecycle.DisposeOwnedServiceProviderAsync(loadedPackage.ServiceProvider);
-        loadedPackage.LoadContext.Unload();
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
+        if (loadedPackage.LoadContext is not null)
+        {
+            loadedPackage.LoadContext.Unload();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
     }
 
     internal sealed class SessionEntry(
@@ -761,6 +789,7 @@ internal sealed class PackageSessionState(
         public List<Task> PendingCleanups { get; } = [];
         public TaskCompletionSource Drained { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public CancellationTokenSource Retirement { get; set; } = new();
+        public Task RetirementCallbacks { get; set; } = Task.CompletedTask;
         public long LastLeaseId { get; set; }
         public bool Retired { get; set; }
         public bool Draining { get; set; }
@@ -804,21 +833,14 @@ internal sealed class PackageSessionState(
     private sealed class PackageDeactivationWork(
         string packageId,
         ActiveLoadedPackage loadedPackage,
-        ActivePackageSession session,
         Task sessionLeasesDrained,
         TaskCompletionSource completion)
     {
         public string PackageId { get; } = packageId;
         public ActiveLoadedPackage LoadedPackage { get; } = loadedPackage;
         public Task SessionLeasesDrained { get; } = sessionLeasesDrained;
-        public Task ExtensionLeasesDrained { get; private set; } = Task.CompletedTask;
+        public Task RpcRetirementCallbacks { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Completion { get; } = completion;
         public Task? StartedTask { get; set; }
-
-        public void BeginExtensionRetirement()
-            => ExtensionLeasesDrained = session.BeginPackageExtensionRetirement(
-                PackageId,
-                LoadedPackage,
-                PackageExtensionCatalogChangeReason.PackageFaulted).Completion;
     }
 }

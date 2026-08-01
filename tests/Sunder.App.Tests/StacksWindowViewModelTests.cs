@@ -1080,11 +1080,25 @@ public sealed class StacksWindowViewModelTests
                 IsUpdate: false,
                 DeprecatedMessage: null,
                 DependsOn: [],
-                new RegistryPackageArtifact("sha256", 1024, "https://registry.example/packages/sunder.package.agent/1.2.0/download"))],
+                Targets: [],
+                Artifacts:
+                [
+                    new RegistryPackageProjectionArtifact(
+                        "shared",
+                        null,
+                        "sha256",
+                        1024,
+                        "https://registry.example/packages/sunder.package.agent/1.2.0/download",
+                        "source-sha256",
+                        "manifest-sha256",
+                        "content-identity",
+                        1),
+                ])],
+            [],
             [],
             [],
             []);
-        var noChangesPlan = new RegistryResolveInstallPlanResponse(true, [], [], [], []);
+        var noChangesPlan = new RegistryResolveInstallPlanResponse(true, [], [], [], [], []);
         var runtimeInstallPlan = new RuntimeRegistryResolveInstallPlanResponse(
             true,
             [new RuntimeRegistryPackageInstallPlanItem(
@@ -1094,7 +1108,21 @@ public sealed class StacksWindowViewModelTests
                 IsUpdate: false,
                 DeprecatedMessage: null,
                 DependsOn: [],
-                new RuntimeRegistryPackageArtifact("sha256", 1024, "https://registry.example/packages/sunder.package.agent/1.2.0/download"))],
+                Targets: [],
+                Artifacts:
+                [
+                    new RuntimeRegistryPackageProjectionArtifact(
+                        "shared",
+                        null,
+                        "sha256",
+                        1024,
+                        "https://registry.example/packages/sunder.package.agent/1.2.0/download",
+                        "source-sha256",
+                        "manifest-sha256",
+                        "content-identity",
+                        1),
+                ])],
+            [],
             [],
             [],
             []);
@@ -1393,7 +1421,7 @@ public sealed class StacksWindowViewModelTests
 
         public RegistryStackStarResponse UnstarStackResponse { get; init; } = new(true, "Unstarred Stack.", new RegistryStackStats(0, 0, false), []);
 
-        public IReadOnlyList<RegistryResolveInstallPlanResponse> InstallPlanResponses { get; init; } = [new(true, [], [], [], [])];
+        public IReadOnlyList<RegistryResolveInstallPlanResponse> InstallPlanResponses { get; init; } = [new(true, [], [], [], [], [])];
 
         public List<RegistryResolveInstallPlanRequest> InstallPlanRequests { get; } = [];
 
@@ -1428,7 +1456,7 @@ public sealed class StacksWindowViewModelTests
             => GetStackAsync(stackId, cancellationToken);
 
         public Task<RegistryResolveUpdatesResponse> ResolveUpdatesAsync(RegistryResolveUpdatesRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RegistryResolveUpdatesResponse([]));
+            => Task.FromResult(new RegistryResolveUpdatesResponse([], [], []));
 
         public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(RegistryResolveInstallPlanRequest request, CancellationToken cancellationToken = default)
         {
@@ -1437,9 +1465,6 @@ public sealed class StacksWindowViewModelTests
             _installPlanResponseIndex++;
             return Task.FromResult(response);
         }
-
-        public Task DownloadArtifactAsync(RegistryPackageArtifact artifact, string packageId, string version, string destinationPath, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
 
         public async Task DownloadStackAsync(RegistryStackArtifact artifact, string stackId, string destinationPath, CancellationToken cancellationToken = default)
         {
@@ -1496,13 +1521,14 @@ public sealed class StacksWindowViewModelTests
     private sealed class FakeRuntimeApiClient : IRuntimeStacksClient
     {
         private string? _exportPath;
+        private IReadOnlyList<PackageUiSnapshotDescriptor> _stagedPackageSources = [];
         public RuntimeStackExportDiscoveryResponse ExportDiscoveryResponse { get; init; } = new([], [], []);
 
         public RuntimeStackImportPreviewResponse ImportPreviewResponse { get; init; } = new(true, "plan-1", DateTimeOffset.UtcNow.AddMinutes(15), [], [], [], [], []);
 
         public RuntimeStackImportResponse ImportResponse { get; init; } = new(RuntimeStackImportOutcome.Completed, [], new Dictionary<string, string>(), [], [], []);
 
-        public RuntimeRegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], []);
+        public RuntimeRegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], [], []);
 
         public PackageOperationResult PackageStoreStageOperationResult { get; init; } = SuccessPackageOperation();
 
@@ -1538,7 +1564,10 @@ public sealed class StacksWindowViewModelTests
 
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default) => Task.FromResult(SessionPackages);
 
-        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(string appRid, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(string stageId, string appRid, CancellationToken cancellationToken = default)
+            => Task.FromResult(_stagedPackageSources);
 
         public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
@@ -1616,14 +1645,16 @@ public sealed class StacksWindowViewModelTests
         {
             LastPackageStoreStageRequest = request;
             var impactedPackageIds = request.Mutations.Select(GetMutationPackageId).ToArray();
+            _stagedPackageSources = impactedPackageIds
+                .Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId))
+                .ToArray();
             return Task.FromResult(new PackageStoreStageResult(
                 "stage-1",
                 SuccessPackageOperation() with
                 {
                     ImpactedPackageIds = impactedPackageIds,
                 },
-                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray(),
-                impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray()));
         }
 
         public Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)

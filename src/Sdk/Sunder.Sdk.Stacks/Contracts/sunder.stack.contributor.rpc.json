@@ -1,0 +1,485 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "descriptorVersion": 1,
+  "contractId": "sunder.stack.contributor",
+  "version": "1.0.0",
+  "services": [
+    {
+      "serviceId": "stack-contributor",
+      "methods": [
+        {
+          "methodId": "metadata",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/StackRpcEmpty" },
+          "responseSchema": { "$ref": "#/$defs/StackContributorMetadata" }
+        },
+        {
+          "methodId": "list-export-items",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/StackExportDiscoveryContext" },
+          "responseSchema": { "$ref": "#/$defs/StackExportItemList" }
+        },
+        {
+          "methodId": "export",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/StackExportRequest" },
+          "responseSchema": { "$ref": "#/$defs/StackRpcExportContribution" }
+        },
+        {
+          "methodId": "preview-import",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/StackRpcImportPreviewRequest" },
+          "responseSchema": { "$ref": "#/$defs/StackImportPreview" }
+        },
+        {
+          "methodId": "import",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/StackRpcImportRequest" },
+          "responseSchema": { "$ref": "#/$defs/StackImportResult" }
+        },
+        {
+          "methodId": "import-applied",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/StackImportAppliedContext" },
+          "responseSchema": { "$ref": "#/$defs/StackRpcEmpty" }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "StackRpcEmpty": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "ShortText": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 4096
+    },
+    "Text": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 1000000
+    },
+    "JsonText": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 1000000
+    },
+    "Timestamp": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "Sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "SchemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "ContentLength": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 67108864
+    },
+    "StackValueSensitivity": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "enum": [0, 1]
+    },
+    "StackImportActionKind": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "enum": [0, 1, 2, 3, 4]
+    },
+    "StackImportConflictSeverity": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "enum": [0, 1]
+    },
+    "StackImportOutcome": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2,
+      "enum": [0, 1, 2]
+    },
+    "SunderRpcContentRepeatability": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "enum": [0, 1]
+    },
+    "SunderRpcContentReference": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "length": { "$ref": "#/$defs/ContentLength" },
+        "sha256": { "$ref": "#/$defs/Sha256" },
+        "mediaType": { "$ref": "#/$defs/ShortText" },
+        "fileName": { "$ref": "#/$defs/ShortText" },
+        "expiresAtUtc": { "$ref": "#/$defs/Timestamp" },
+        "repeatability": { "$ref": "#/$defs/SunderRpcContentRepeatability" }
+      },
+      "required": ["id", "length", "sha256", "mediaType", "fileName", "expiresAtUtc", "repeatability"],
+      "additionalProperties": false
+    },
+    "StackRpcPayloadFile": {
+      "type": "object",
+      "properties": {
+        "relativePath": { "$ref": "#/$defs/ShortText" },
+        "content": { "$ref": "#/$defs/SunderRpcContentReference" }
+      },
+      "required": ["relativePath", "content"],
+      "additionalProperties": false
+    },
+    "StackRpcPayloadFileList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackRpcPayloadFile" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackContributorMetadata": {
+      "type": "object",
+      "properties": {
+        "contributorId": { "$ref": "#/$defs/Id" },
+        "displayName": { "$ref": "#/$defs/ShortText" },
+        "supportsExport": { "type": "boolean" },
+        "supportsImport": { "type": "boolean" },
+        "supportsImportApplied": { "type": "boolean" }
+      },
+      "required": ["contributorId", "displayName", "supportsExport", "supportsImport", "supportsImportApplied"],
+      "additionalProperties": false
+    },
+    "StackExportDiscoveryContext": {
+      "type": "object",
+      "properties": {
+        "packageId": { "$ref": "#/$defs/Id" }
+      },
+      "required": ["packageId"],
+      "additionalProperties": false
+    },
+    "StackExportItemDetail": {
+      "type": "object",
+      "properties": {
+        "label": { "$ref": "#/$defs/ShortText" },
+        "value": { "$ref": "#/$defs/Text" },
+        "sensitivity": { "$ref": "#/$defs/StackValueSensitivity" },
+        "description": { "$ref": "#/$defs/Text" },
+        "valueWhenExcluded": { "$ref": "#/$defs/Text" },
+        "detailId": { "$ref": "#/$defs/Id" },
+        "defaultSelected": { "type": "boolean" },
+        "isEditable": { "type": "boolean" },
+        "supportsAskOnImport": { "type": "boolean" }
+      },
+      "required": ["label", "value", "defaultSelected", "isEditable", "supportsAskOnImport"],
+      "additionalProperties": false
+    },
+    "StackExportItemDetailList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackExportItemDetail" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackExportItemDescriptor": {
+      "type": "object",
+      "properties": {
+        "itemId": { "$ref": "#/$defs/Id" },
+        "displayName": { "$ref": "#/$defs/ShortText" },
+        "kind": { "$ref": "#/$defs/Id" },
+        "description": { "$ref": "#/$defs/Text" },
+        "defaultSelected": { "type": "boolean" },
+        "details": { "$ref": "#/$defs/StackExportItemDetailList" }
+      },
+      "required": ["itemId", "displayName", "kind", "defaultSelected"],
+      "additionalProperties": false
+    },
+    "StackExportItemDescriptorList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackExportItemDescriptor" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackExportItemList": {
+      "type": "object",
+      "properties": {
+        "items": { "$ref": "#/$defs/StackExportItemDescriptorList" }
+      },
+      "required": ["items"],
+      "additionalProperties": false
+    },
+    "StackExportDetailSelection": {
+      "type": "object",
+      "properties": {
+        "detailId": { "$ref": "#/$defs/Id" },
+        "isSelected": { "type": "boolean" },
+        "valueOverride": { "$ref": "#/$defs/Text" },
+        "sensitivityOverride": { "$ref": "#/$defs/StackValueSensitivity" }
+      },
+      "required": ["detailId", "isSelected"],
+      "additionalProperties": false
+    },
+    "StackExportDetailSelectionList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackExportDetailSelection" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackExportItemSelection": {
+      "type": "object",
+      "properties": {
+        "itemId": { "$ref": "#/$defs/Id" },
+        "details": { "$ref": "#/$defs/StackExportDetailSelectionList" }
+      },
+      "required": ["itemId"],
+      "additionalProperties": false
+    },
+    "StackExportItemSelectionList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackExportItemSelection" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackExportRequest": {
+      "type": "object",
+      "properties": {
+        "itemSelections": { "$ref": "#/$defs/StackExportItemSelectionList" }
+      },
+      "required": ["itemSelections"],
+      "additionalProperties": false
+    },
+    "StackRequiredInputDescriptor": {
+      "type": "object",
+      "properties": {
+        "inputId": { "$ref": "#/$defs/Id" },
+        "label": { "$ref": "#/$defs/ShortText" },
+        "required": { "type": "boolean" },
+        "description": { "$ref": "#/$defs/Text" },
+        "defaultValue": { "$ref": "#/$defs/Text" }
+      },
+      "required": ["inputId", "label", "required"],
+      "additionalProperties": false
+    },
+    "StackRequiredInputDescriptorList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackRequiredInputDescriptor" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackPackageRequirement": {
+      "type": "object",
+      "properties": {
+        "packageId": { "$ref": "#/$defs/Id" },
+        "installTag": { "$ref": "#/$defs/Id" },
+        "createdWithVersion": { "$ref": "#/$defs/ShortText" },
+        "minimumVersion": { "$ref": "#/$defs/ShortText" },
+        "required": { "type": "boolean" }
+      },
+      "required": ["packageId", "installTag", "required"],
+      "additionalProperties": false
+    },
+    "StackPackageRequirementList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackPackageRequirement" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StringList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Text" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "IdList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Id" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StringMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/Text" },
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      },
+      "minProperties": 0,
+      "maxProperties": 10000
+    },
+    "StackRpcFragmentExport": {
+      "type": "object",
+      "properties": {
+        "fragmentId": { "$ref": "#/$defs/Id" },
+        "schemaId": { "$ref": "#/$defs/Id" },
+        "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+        "displayName": { "$ref": "#/$defs/ShortText" },
+        "jsonPayload": { "$ref": "#/$defs/JsonText" },
+        "description": { "$ref": "#/$defs/Text" },
+        "defaultSelected": { "type": "boolean" },
+        "requiredInputs": { "$ref": "#/$defs/StackRequiredInputDescriptorList" },
+        "files": { "$ref": "#/$defs/StackRpcPayloadFileList" },
+        "sourceItemId": { "$ref": "#/$defs/Id" }
+      },
+      "required": ["fragmentId", "schemaId", "schemaVersion", "displayName", "jsonPayload", "defaultSelected"],
+      "additionalProperties": false
+    },
+    "StackRpcFragmentExportList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackRpcFragmentExport" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackRpcExportContribution": {
+      "type": "object",
+      "properties": {
+        "fragments": { "$ref": "#/$defs/StackRpcFragmentExportList" },
+        "packageRequirements": { "$ref": "#/$defs/StackPackageRequirementList" },
+        "warnings": { "$ref": "#/$defs/StringList" }
+      },
+      "required": ["fragments", "packageRequirements", "warnings"],
+      "additionalProperties": false
+    },
+    "StackRpcFragmentImport": {
+      "type": "object",
+      "properties": {
+        "fragmentId": { "$ref": "#/$defs/Id" },
+        "ownerPackageId": { "$ref": "#/$defs/Id" },
+        "contributorId": { "$ref": "#/$defs/Id" },
+        "schemaId": { "$ref": "#/$defs/Id" },
+        "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+        "displayName": { "$ref": "#/$defs/ShortText" },
+        "jsonPayload": { "$ref": "#/$defs/JsonText" },
+        "description": { "$ref": "#/$defs/Text" },
+        "files": { "$ref": "#/$defs/StackRpcPayloadFileList" }
+      },
+      "required": ["fragmentId", "ownerPackageId", "contributorId", "schemaId", "schemaVersion", "displayName", "jsonPayload"],
+      "additionalProperties": false
+    },
+    "StackRpcFragmentImportList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackRpcFragmentImport" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackRpcImportPreviewRequest": {
+      "type": "object",
+      "properties": {
+        "fragments": { "$ref": "#/$defs/StackRpcFragmentImportList" },
+        "inputValues": { "$ref": "#/$defs/StringMap" },
+        "idRemaps": { "$ref": "#/$defs/StringMap" }
+      },
+      "required": ["fragments", "inputValues", "idRemaps"],
+      "additionalProperties": false
+    },
+    "StackImportAction": {
+      "type": "object",
+      "properties": {
+        "actionId": { "$ref": "#/$defs/Id" },
+        "displayName": { "$ref": "#/$defs/ShortText" },
+        "kind": { "$ref": "#/$defs/StackImportActionKind" },
+        "defaultSelected": { "type": "boolean" },
+        "description": { "$ref": "#/$defs/Text" }
+      },
+      "required": ["actionId", "displayName", "kind", "defaultSelected"],
+      "additionalProperties": false
+    },
+    "StackImportActionList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackImportAction" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackImportConflict": {
+      "type": "object",
+      "properties": {
+        "conflictId": { "$ref": "#/$defs/Id" },
+        "message": { "$ref": "#/$defs/Text" },
+        "severity": { "$ref": "#/$defs/StackImportConflictSeverity" },
+        "fragmentId": { "$ref": "#/$defs/Id" }
+      },
+      "required": ["conflictId", "message", "severity"],
+      "additionalProperties": false
+    },
+    "StackImportConflictList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackImportConflict" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackImportPreview": {
+      "type": "object",
+      "properties": {
+        "actions": { "$ref": "#/$defs/StackImportActionList" },
+        "requiredInputs": { "$ref": "#/$defs/StackRequiredInputDescriptorList" },
+        "conflicts": { "$ref": "#/$defs/StackImportConflictList" },
+        "warnings": { "$ref": "#/$defs/StringList" }
+      },
+      "required": ["actions", "requiredInputs", "conflicts", "warnings"],
+      "additionalProperties": false
+    },
+    "StackRpcImportRequest": {
+      "type": "object",
+      "properties": {
+        "fragments": { "$ref": "#/$defs/StackRpcFragmentImportList" },
+        "inputValues": { "$ref": "#/$defs/StringMap" },
+        "idRemaps": { "$ref": "#/$defs/StringMap" },
+        "selectedActionIds": { "$ref": "#/$defs/IdList" }
+      },
+      "required": ["fragments", "inputValues", "idRemaps", "selectedActionIds"],
+      "additionalProperties": false
+    },
+    "StackImportedItem": {
+      "type": "object",
+      "properties": {
+        "itemId": { "$ref": "#/$defs/Id" },
+        "displayName": { "$ref": "#/$defs/ShortText" },
+        "kind": { "$ref": "#/$defs/Id" }
+      },
+      "required": ["itemId", "displayName", "kind"],
+      "additionalProperties": false
+    },
+    "StackImportedItemList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StackImportedItem" },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "StackImportResult": {
+      "type": "object",
+      "properties": {
+        "outcome": { "$ref": "#/$defs/StackImportOutcome" },
+        "importedItems": { "$ref": "#/$defs/StackImportedItemList" },
+        "idRemaps": { "$ref": "#/$defs/StringMap" },
+        "warnings": { "$ref": "#/$defs/StringList" },
+        "errors": { "$ref": "#/$defs/StringList" }
+      },
+      "required": ["outcome", "importedItems", "idRemaps", "warnings", "errors"],
+      "additionalProperties": false
+    },
+    "StackImportAppliedContext": {
+      "type": "object",
+      "properties": {
+        "ownerPackageId": { "$ref": "#/$defs/Id" },
+        "contributorId": { "$ref": "#/$defs/Id" },
+        "fragmentIds": { "$ref": "#/$defs/IdList" },
+        "importedItems": { "$ref": "#/$defs/StackImportedItemList" }
+      },
+      "required": ["ownerPackageId", "contributorId", "fragmentIds", "importedItems"],
+      "additionalProperties": false
+    }
+  }
+}

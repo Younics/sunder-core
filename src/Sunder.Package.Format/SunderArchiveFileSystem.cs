@@ -30,6 +30,28 @@ internal static class SunderArchiveFileSystem
         return files;
     }
 
+    public static IReadOnlyList<ArchiveRelativePath> EnumerateDirectories(string rootPath)
+    {
+        var root = Path.GetFullPath(rootPath);
+        EnsureNotLink(root);
+        var directories = new List<ArchiveRelativePath>();
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            foreach (var entryPath in Directory.EnumerateDirectories(directory))
+            {
+                EnsureNotLink(entryPath);
+                var relative = Path.GetRelativePath(root, entryPath).Replace(Path.DirectorySeparatorChar, '/');
+                directories.Add(ArchiveRelativePath.Parse(relative));
+                pending.Push(entryPath);
+            }
+        }
+
+        return directories;
+    }
+
     public static string ResolveFile(string rootPath, ArchiveRelativePath relativePath)
     {
         var root = Path.GetFullPath(rootPath);

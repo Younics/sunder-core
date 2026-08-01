@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Endpoints;
@@ -27,22 +28,22 @@ public sealed class RuntimeProtocolHttpIntegrationTests
     private static readonly PackageRuntimeStream<StreamRequest, StreamEvent> LifecycleStream = new("lifecycle.events");
 
     [Fact]
-    public void ProtocolRevision3_IsACleanBreakFromRevision2()
+    public void ProtocolRevision5_IsACleanBreakFromRevision4()
     {
-        var revision2 = CreateHandshake(
-            protocolRevision: 2,
-            minimumSupportedRevision: 2,
-            maximumSupportedRevision: 2,
+        var revision4 = CreateHandshake(
+            protocolRevision: 4,
+            minimumSupportedRevision: 4,
+            maximumSupportedRevision: 4,
             [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1]);
-        var revision3 = CreateHandshake(
+        var revision5 = CreateHandshake(
             RuntimeProtocol.CurrentRevision,
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             [RuntimeProtocolFeatures.VersionedApiV1]);
 
-        Assert.Equal(3, RuntimeProtocol.CurrentRevision);
-        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(revision2));
-        Assert.Null(RuntimeProtocolCompatibility.GetIncompatibility(revision3));
+        Assert.Equal(5, RuntimeProtocol.CurrentRevision);
+        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(revision4));
+        Assert.Null(RuntimeProtocolCompatibility.GetIncompatibility(revision5));
     }
 
     [Fact]
@@ -197,7 +198,7 @@ public sealed class RuntimeProtocolHttpIntegrationTests
                 _ =>
                 {
                     Assert.True(published);
-                    return Task.FromResult(new PackageLifecycleOperationResult(true, "ready", [], [], [], [], []));
+                    return Task.FromResult(new PackageLifecycleOperationResult(true, "ready", [], [], [], []));
                 },
                 () =>
                 {
@@ -244,6 +245,8 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         Assert.Contains(RuntimeProtocolFeatures.AtomicPackageSnapshotV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.PackageStageStatusV1, first.SupportedFeatures);
         Assert.Contains(RuntimeProtocolFeatures.DevPackageOwnerLeasesV1, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.SchemaFirstRpcV1, first.SupportedFeatures);
+        Assert.Contains(RuntimeProtocolFeatures.RpcPermissionsV1, first.SupportedFeatures);
         Assert.False(string.IsNullOrWhiteSpace(first.Product.ProductVersion));
     }
 
@@ -270,6 +273,49 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         Assert.Equal(
             response.Headers.GetValues(RuntimeProblemDetailsMiddleware.CorrelationHeader).Single(),
             problem.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task RpcManagementEndpoints_ReturnCatalogPermissionsAndRejectUnknownGrant()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-rpc-http-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var server = await RuntimeHttpServer.StartAsync(
+                app => app.MapGroup("/api/v1").MapRuntimeRpcEndpoints(),
+                services =>
+                {
+                    services.AddSingleton(new RuntimePackagePaths(root));
+                    services.AddSingleton<RuntimeEventStreamService>();
+                    services.AddSingleton<RuntimeRpcCatalog>();
+                    services.AddSingleton<RuntimeRpcPermissionStore>();
+                    services.AddSingleton(provider => new RuntimeSessionOwner(
+                        NullLogger<RuntimeSessionOwner>.Instance,
+                        provider.GetRequiredService<RuntimeEventStreamService>(),
+                        rpcCatalog: provider.GetRequiredService<RuntimeRpcCatalog>()));
+                    services.AddSingleton(provider => provider.GetRequiredService<RuntimeSessionOwner>().State);
+                    services.AddSingleton<RuntimeRpcPermissionService>();
+                });
+            using var client = new HttpClient { BaseAddress = server.BaseUri };
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", RuntimeHttpServer.Token);
+
+            var catalog = await client.GetFromJsonAsync<RuntimeRpcCatalogSnapshot>("api/v1/rpc/catalog");
+            var permissions = await client.GetFromJsonAsync<RuntimeRpcPermissionSnapshot>("api/v1/rpc/permissions");
+            using var grant = await client.PostAsJsonAsync(
+                "api/v1/rpc/permissions/grant",
+                new RuntimeRpcPermissionUpdateRequest("missing.package", "example.rpc", "invoke"));
+
+            Assert.NotNull(catalog);
+            Assert.Empty(catalog.Providers);
+            Assert.NotNull(permissions);
+            Assert.Empty(permissions.Permissions);
+            Assert.Equal(HttpStatusCode.NotFound, grant.StatusCode);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -478,6 +524,34 @@ public sealed class RuntimeProtocolHttpIntegrationTests
     }
 
     [Fact]
+    public async Task RuntimeEndpoint_StreamFailureAfterFirstEventDoesNotExposeHandlerMessage()
+    {
+        const string privateMessage = "private provider detail";
+        var state = CreateState(TimeSpan.FromSeconds(2));
+        await state.PublishSessionAsync(CreatePackageSession(new FailingLifecycleHandler(privateMessage)));
+        await using var server = await StartOperationServerAsync(state);
+        using var client = server.CreatePackageClient();
+        var values = new List<int>();
+
+        var exception = await Assert.ThrowsAsync<RuntimePackageStreamException>(async () =>
+        {
+            await foreach (var payload in client.SubscribeAsync(
+                               "test.package",
+                               LifecycleStream.StreamId,
+                               "{}"u8.ToArray()))
+            {
+                values.Add(JsonDocument.Parse(payload).RootElement.GetProperty("value").GetInt32());
+            }
+        });
+
+        Assert.Equal([1], values);
+        Assert.Equal("runtime.package-stream.handler-error", exception.Code);
+        Assert.Equal("Package Runtime stream handler failed.", exception.Message);
+        Assert.DoesNotContain(privateMessage, exception.Message, StringComparison.Ordinal);
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
     public async Task StreamClient_ReceivesHttpErrorWhenHandlerFailsBeforeFirstEvent()
     {
         await using var server = await RuntimeHttpServer.StartAsync(app =>
@@ -675,7 +749,6 @@ public sealed class RuntimeProtocolHttpIntegrationTests
         var services = new ServiceCollection().BuildServiceProvider();
         var registry = new RuntimePackageContributionRegistry(
             services,
-            new RuntimePackageExtensionCatalog(),
             packageId);
         registry.RegisterRuntimeStream(LifecycleStream, handler);
         var root = Path.Combine(Path.GetTempPath(), "sunder-runtime-http-tests", Guid.NewGuid().ToString("N"));
@@ -759,6 +832,19 @@ public sealed class RuntimeProtocolHttpIntegrationTests
             yield return new StreamEvent(1);
             await Task.Yield();
             yield return new StreamEvent(2);
+        }
+    }
+
+    private sealed class FailingLifecycleHandler(string message)
+        : IPackageRuntimeStreamHandler<StreamRequest, StreamEvent>
+    {
+        public async IAsyncEnumerable<StreamEvent> SubscribeAsync(
+            StreamRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new StreamEvent(1);
+            await Task.Yield();
+            throw new InvalidOperationException(message);
         }
     }
 

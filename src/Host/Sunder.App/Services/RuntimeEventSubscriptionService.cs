@@ -30,8 +30,9 @@ public sealed class RuntimeEventSubscriptionService(
     private CancellationTokenSource? _supersededPresentation;
     private TaskCompletionSource? _presentationsDrained;
     private TaskCompletionSource _appliedStampChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Func<RuntimePackageSnapshot, IReadOnlyCollection<string>?, CancellationToken, Task>? _writePresentationAsync;
+    private Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task>? _writePresentationAsync;
     private RuntimePackageSnapshot? _appliedSnapshot;
+    private IReadOnlyList<PackageUiSnapshotDescriptor> _appliedPackageSources = [];
     private RuntimePackageSnapshot? _latestSnapshot;
     private long _latestPresentationRequestId;
     private int _activePresentationCount;
@@ -63,15 +64,18 @@ public sealed class RuntimeEventSubscriptionService(
     public Task StartAsync(
         WindowLauncher windowLauncher,
         RuntimePackageSnapshot initialSnapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
         CancellationToken cancellationToken = default)
         => StartAsync(
             initialSnapshot,
+            initialPackageSources,
             windowLauncher.ApplyPackageLifecycleSnapshotAsync,
             cancellationToken);
 
     internal async Task StartAsync(
         RuntimePackageSnapshot initialSnapshot,
-        Func<RuntimePackageSnapshot, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync,
+        IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
+        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(writePresentationAsync);
@@ -85,7 +89,7 @@ public sealed class RuntimeEventSubscriptionService(
                 return;
             }
 
-            InitializePresentationCore(initialSnapshot, writePresentationAsync);
+            InitializePresentationCore(initialSnapshot, initialPackageSources, writePresentationAsync);
             _started = true;
         }
 
@@ -185,17 +189,26 @@ public sealed class RuntimeEventSubscriptionService(
         PresentationRefreshRequest request,
         CancellationToken cancellationToken = default)
     {
-        using var client = runtimeApiClientFactory.CreateClient<IRuntimeSnapshotClient>();
+        using var client = runtimeApiClientFactory.CreateClient<IRuntimeShellClient>();
         var snapshot = await ShellStartupCoordinator.WaitForReadyRuntimeSnapshotAsync(
             client,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        await ApplySnapshotAsync(snapshot, request.ExplicitRetryPackageIds, cancellationToken).ConfigureAwait(false);
+        var packageSources = await client.GetActivePackageUiSnapshotsAsync(
+            AppPackageTargetEnvironment.CurrentRid,
+            cancellationToken).ConfigureAwait(false);
+        ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+        await ApplySnapshotAsync(
+            snapshot,
+            packageSources,
+            request.ExplicitRetryPackageIds,
+            cancellationToken).ConfigureAwait(false);
     }
 
     internal void InitializePresentation(
         RuntimePackageSnapshot initialSnapshot,
-        Func<RuntimePackageSnapshot, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync)
+        IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
+        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync)
     {
         ArgumentNullException.ThrowIfNull(writePresentationAsync);
         ValidateInitialSnapshot(initialSnapshot);
@@ -203,12 +216,13 @@ public sealed class RuntimeEventSubscriptionService(
         lock (_syncRoot)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
-            InitializePresentationCore(initialSnapshot, writePresentationAsync);
+            InitializePresentationCore(initialSnapshot, initialPackageSources, writePresentationAsync);
         }
     }
 
     internal async Task ApplySnapshotAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? explicitRetryPackageIds = null,
         CancellationToken cancellationToken = default)
     {
@@ -224,7 +238,8 @@ public sealed class RuntimeEventSubscriptionService(
         }
 
         CancellationTokenSource supersededPresentation;
-        Func<RuntimePackageSnapshot, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync;
+        ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync;
         lock (_syncRoot)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -263,7 +278,7 @@ public sealed class RuntimeEventSubscriptionService(
             try
             {
                 supersededPresentation.Token.ThrowIfCancellationRequested();
-                RuntimePackageSnapshot? appliedSnapshot;
+                IReadOnlyList<PackageUiSnapshotDescriptor> previousPackageSources;
                 lock (_syncRoot)
                 {
                     if (!ReferenceEquals(_supersededPresentation, supersededPresentation)
@@ -271,14 +286,18 @@ public sealed class RuntimeEventSubscriptionService(
                     {
                         return;
                     }
-                    appliedSnapshot = _appliedSnapshot;
+                    previousPackageSources = _appliedPackageSources;
                 }
 
                 var retryDisabledPackageIds = GetRetryDisabledPackageIds(
-                    appliedSnapshot,
-                    snapshot,
+                    previousPackageSources,
+                    packageSources,
                     explicitRetryPackageIds);
-                await writePresentationAsync(snapshot, retryDisabledPackageIds, supersededPresentation.Token).ConfigureAwait(false);
+                await writePresentationAsync(
+                    snapshot,
+                    packageSources,
+                    retryDisabledPackageIds,
+                    supersededPresentation.Token).ConfigureAwait(false);
 
                 lock (_syncRoot)
                 {
@@ -289,6 +308,7 @@ public sealed class RuntimeEventSubscriptionService(
                     }
 
                     _appliedSnapshot = snapshot;
+                    _appliedPackageSources = packageSources.ToArray();
                     PrunePresentationHistory(snapshot);
                     var changed = _appliedStampChanged;
                     _appliedStampChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -382,15 +402,18 @@ public sealed class RuntimeEventSubscriptionService(
 
     private void InitializePresentationCore(
         RuntimePackageSnapshot initialSnapshot,
-        Func<RuntimePackageSnapshot, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync)
+        IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
+        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync)
     {
         if (_writePresentationAsync is not null)
         {
             throw new InvalidOperationException("The Runtime presentation writer is already initialized.");
         }
 
+        ShellStartupCoordinator.ValidatePackageSourceGeneration(initialSnapshot, initialPackageSources);
         _writePresentationAsync = writePresentationAsync;
         _appliedSnapshot = initialSnapshot;
+        _appliedPackageSources = initialPackageSources.ToArray();
         _latestSnapshot = initialSnapshot;
     }
 
@@ -399,6 +422,7 @@ public sealed class RuntimeEventSubscriptionService(
         _started = false;
         _writePresentationAsync = null;
         _appliedSnapshot = null;
+        _appliedPackageSources = [];
         _latestSnapshot = null;
         _retiredRuntimeInstances.Clear();
         _retiredRuntimeInstanceOrder.Clear();
@@ -631,18 +655,17 @@ public sealed class RuntimeEventSubscriptionService(
     }
 
     private static IReadOnlyCollection<string> GetRetryDisabledPackageIds(
-        RuntimePackageSnapshot? appliedSnapshot,
-        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> previousPackageSources,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? explicitRetryPackageIds)
     {
         var packageIds = explicitRetryPackageIds is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(explicitRetryPackageIds, StringComparer.OrdinalIgnoreCase);
-        var previousSources = appliedSnapshot?.PackageUiSnapshots
+        var previousSources = previousPackageSources
             .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase)
-            ?? new Dictionary<string, PackageUiSnapshotDescriptor>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in snapshot.PackageUiSnapshots)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (var source in packageSources)
         {
             if (!previousSources.TryGetValue(source.PackageId, out var previous)
                 || !string.Equals(previous.ContentHash, source.ContentHash, StringComparison.OrdinalIgnoreCase))

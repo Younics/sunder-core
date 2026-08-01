@@ -21,13 +21,36 @@ public sealed class RegistryContractGoldenTests
                 "A sample package.",
                 "1.2.3",
                 "assets/icon.png",
-                "Sample.dll",
-                new RegistryPackageCompatibility(1, "0.8.0", ["views.v1", "core.v1"], "net10.0", 1, 1),
                 false,
                 null,
                 [new RegistryPackageDependency("sunder.package.base", ">=1.0.0")],
-                new RegistryPackageArtifact("abc123", 42, "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/download"),
-                DateTimeOffset.Parse("2026-07-11T10:00:00Z")),
+                new RegistryPackageCanonicalArtifact("canonical-sha", 420, "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/canonical"),
+                [
+                    new RegistryPackageTarget("runtime", "win-x64", "dotnet", "lib/Sample.dll", "net10.0", "0.8.0", ["core.v1"]),
+                    new RegistryPackageTarget(
+                        "app",
+                        "win-x64",
+                        "web",
+                        "web/index.html",
+                        null,
+                        "1.1.0",
+                        ["core.v1"],
+                        [new RegistryPackageWebView(
+                            "sunder.package.sample.workspace",
+                            "Workspace",
+                            "/workspace",
+                            "assets/workspace.png",
+                            "rightTop",
+                            true)]),
+                ],
+                [Projection("shared", null, "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download")],
+                [new RegistryPackageContractBundle("sample.contract", "1.0.0", "contracts/sample.json", "contract-sha")],
+                [new RegistryPackageContractUse("base.contract", ">=1.0.0", true, ["discover", "invoke"])],
+                [new RegistryPackageProvider("sample.provider", "sample.contract", "1.0.0", "contract-sha", "runtime")],
+                1,
+                1,
+                DateTimeOffset.Parse("2026-07-11T10:00:00Z"),
+                ["https://artifacts.example"]),
             typeof(RegistryPackageVersionDetails)
         },
         {
@@ -49,6 +72,19 @@ public sealed class RegistryContractGoldenTests
             typeof(RegistryCliTokenResponse)
         },
         {
+            "contract.json",
+            new RegistryContractDescriptorMetadata(
+                "sample.contract",
+                "1.2.3",
+                "contract-sha",
+                420,
+                "https://registry.example/api/v1/contracts/sample.contract/versions/1.2.3/descriptor",
+                "sunder.package.sample",
+                "2.0.0",
+                DateTimeOffset.Parse("2026-07-11T10:00:00Z")),
+            typeof(RegistryContractDescriptorMetadata)
+        },
+        {
             "plan.json",
             new RegistryResolveInstallPlanResponse(
                 true,
@@ -59,11 +95,12 @@ public sealed class RegistryContractGoldenTests
                     false,
                     null,
                     [],
-                    new RegistryPackageArtifact("abc123", 42, "/api/v1/packages/sunder.package.sample/versions/1.2.3/download"),
-                    new RegistryPackageCompatibility(1, "0.8.0", ["core.v1"], "net10.0", 1, 1))],
+                    [new RegistryPackageTarget("runtime", "win-x64", "dotnet", "lib/Sample.dll", "net10.0", "0.8.0", ["core.v1"])],
+                    [Projection("shared", null, "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download")])],
                 [],
                 [],
-                []),
+                [],
+                ["https://artifacts.example"]),
             typeof(RegistryResolveInstallPlanResponse)
         },
         {
@@ -72,13 +109,15 @@ public sealed class RegistryContractGoldenTests
                 [new RegistryPackageChangeRequest(
                     "sunder.package.sample",
                     Version: null,
+                    [new RegistryPackageTargetRequest("runtime", "win-x64")],
                     Tag: "preview",
                     VersionRange: ">=2.3.0",
                     Required: false)],
                 [new RegistryInstalledPackageState(
                     "sunder.package.base",
                     "1.5.0",
-                    [new RegistryPackageDependency("sunder.package.shared", ">=1.0.0")])],
+                    [new RegistryPackageDependency("sunder.package.shared", ">=1.0.0")],
+                    [new RegistryPackageProjectionKey("shared", null), new RegistryPackageProjectionKey("runtime", "win-x64")])],
                 IncludePrerelease: true),
             typeof(RegistryResolvePackageChangesRequest)
         },
@@ -95,7 +134,8 @@ public sealed class RegistryContractGoldenTests
                     ">=2.3.0",
                     null,
                     RegistryV1ErrorCodes.PackageRequirementUnsatisfied,
-                    "Selected package version does not satisfy the Stack requirement.")]),
+                    "Selected package version does not satisfy the Stack requirement.")],
+                []),
             typeof(RegistryResolveInstallPlanResponse)
         },
         {
@@ -143,12 +183,6 @@ public sealed class RegistryContractGoldenTests
         },
     };
 
-    public static TheoryData<string, Type> NMinusOneCases => new()
-    {
-        { "requirements.json", typeof(RegistryResolvePackageChangesRequest) },
-        { "requirement-conflict.json", typeof(RegistryResolveInstallPlanResponse) },
-    };
-
     [Theory]
     [MemberData(nameof(Cases))]
     public void V1Payload_MatchesGoldenJson(string fixtureName, object payload, Type payloadType)
@@ -161,24 +195,15 @@ public sealed class RegistryContractGoldenTests
         Assert.NotNull(JsonSerializer.Deserialize(expected, payloadType, JsonOptions));
     }
 
-    [Theory]
-    [MemberData(nameof(NMinusOneCases))]
-    public void V1Payload_DeserializesNMinusOneJson(string fixtureName, Type payloadType)
-    {
-        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "N-1", fixtureName);
-        var payload = JsonSerializer.Deserialize(File.ReadAllText(fixturePath), payloadType, JsonOptions);
-
-        Assert.NotNull(payload);
-        if (payload is RegistryResolvePackageChangesRequest request)
-        {
-            var package = Assert.Single(request.Packages);
-            Assert.Null(package.VersionRange);
-            Assert.True(package.Required);
-        }
-        else
-        {
-            var response = Assert.IsType<RegistryResolveInstallPlanResponse>(payload);
-            Assert.Equal(RegistryV1ErrorCodes.Conflict, Assert.Single(response.Conflicts).ErrorCode);
-        }
-    }
+    private static RegistryPackageProjectionArtifact Projection(string kind, string? rid, string downloadUrl)
+        => new(
+            kind,
+            rid,
+            "projection-sha",
+            42,
+            downloadUrl,
+            "canonical-sha",
+            "manifest-sha",
+            "projection-content-id",
+            1);
 }

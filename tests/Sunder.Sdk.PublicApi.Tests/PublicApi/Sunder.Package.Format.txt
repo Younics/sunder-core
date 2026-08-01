@@ -40,6 +40,7 @@ type sealed class Sunder.Package.Format.SunderPackageArchiveInspector
   method static System.Void ExtractArchive(System.String packagePath, System.String stagingPath)
 type sealed class Sunder.Package.Format.SunderPackageArchiveValidationResult : System.IEquatable<Sunder.Package.Format.SunderPackageArchiveValidationResult>
   method .ctor(Sunder.Package.Format.SunderPackageManifest? Manifest, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property Sunder.Package.Format.SunderPackageContentIndex? ContentIndex { get; init; }
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
   property Sunder.Package.Format.SunderPackageManifest? Manifest { get; init; }
   property System.Boolean Success { get; }
@@ -61,62 +62,236 @@ type sealed class Sunder.Package.Format.SunderPackageContentIndex : System.IEqua
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Package.Format.SunderPackageContentIndexEntry : System.IEquatable<Sunder.Package.Format.SunderPackageContentIndexEntry>
-  method .ctor(System.String? Path, System.String? Sha256, System.Int64 Size, System.String? Role)
+  method .ctor(System.String? Path, System.String? Sha256, System.Int64 Size)
   property System.String? Path { get; init; }
-  property System.String? Role { get; init; }
   property System.String? Sha256 { get; init; }
   property System.Int64 Size { get; init; }
   method Sunder.Package.Format.SunderPackageContentIndexEntry <Clone>$()
-  method System.Void Deconstruct(out System.String? Path, out System.String? Sha256, out System.Int64 Size, out System.String? Role)
+  method System.Void Deconstruct(out System.String? Path, out System.String? Sha256, out System.Int64 Size)
   method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageContentIndexEntry? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageContractBundleManifest
+  method .ctor()
+  property System.String? ContractId { get; init; }
+  property System.String? DescriptorPath { get; init; }
+  property System.String? Sha256 { get; init; }
+  property System.String? Version { get; init; }
+type sealed class Sunder.Package.Format.SunderPackageContractUseManifest
+  method .ctor()
+  property System.Collections.Generic.IReadOnlyList<System.String?>? Actions { get; init; }
+  property System.String? ContractId { get; init; }
+  property System.Boolean? Required { get; init; }
+  property System.String? VersionRange { get; init; }
 type sealed class Sunder.Package.Format.SunderPackageDependencyManifest
   method .ctor()
   property System.String? PackageId { get; init; }
   property System.String? VersionRange { get; init; }
+type sealed class Sunder.Package.Format.SunderPackageExtractedProjection : System.IEquatable<Sunder.Package.Format.SunderPackageExtractedProjection>
+  method .ctor(System.String RootPath, Sunder.Package.Format.SunderPackageProjectionKey Key, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.ArchiveRelativePath> PayloadPaths)
+  property Sunder.Package.Format.SunderPackageProjectionKey Key { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.ArchiveRelativePath> PayloadPaths { get; init; }
+  property System.String RootPath { get; init; }
+  method Sunder.Package.Format.SunderPackageExtractedProjection <Clone>$()
+  method System.Void Deconstruct(out System.String RootPath, out Sunder.Package.Format.SunderPackageProjectionKey Key, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.ArchiveRelativePath> PayloadPaths)
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageExtractedProjection? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Package.Format.SunderPackageFormat
   field static System.String AppHostRole = "app"
-  field static System.String AssetPayloadRoot = "payload/assets/"
+  field static System.String AppPayloadRoot = "payload/app/"
+  field static System.String AvaloniaTargetKind = "avalonia"
   field static System.String ContentIndexPath = "manifest/content-index.json"
-  field static System.String ContractOnlyHostRole = "contract-only"
   field static System.Int32 CurrentArchiveFormatVersion = 1
   field static System.Int32 CurrentContentIndexVersion = 1
   field static System.Int32 CurrentManifestVersion = 1
-  field static System.Int32 CurrentSdkApiVersion = 1
+  field static System.String DiscoverContractAction = "discover"
+  field static System.String DotnetTargetKind = "dotnet"
   field static System.String Extension = ".sunderpkg"
-  field static System.String LibraryPayloadRoot = "payload/lib/"
+  field static System.String InvokeContractAction = "invoke"
   field static System.String ManifestPath = "manifest/sunder-package.json"
+  field static System.Int32 MaxArchivePathDepth = 32
+  field static System.Int32 MaxArchivePathLength = 240
+  field static System.Int32 MaxContentIndexEntries = 4096
+  field static System.Int32 MaxContractBundles = 128
+  field static System.Int64 MaxContractDescriptorBytes = 4194304
+  field static System.Int32 MaxContractUses = 128
+  field static System.Int32 MaxDependencies = 128
+  field static System.Int32 MaxHostCapabilities = 64
+  field static System.Int32 MaxHostCapabilityLength = 128
   field static System.Int64 MaxIconBytes = 1048576
   field static System.Int32 MaxIconDimension = 8192
+  field static System.Int32 MaxLogicalPathDepth = 24
+  field static System.Int32 MaxLogicalPathLength = 200
+  field static System.Int32 MaxProviders = 128
+  field static System.Int32 MaxTargets = 12
+  field static System.Int32 MaxWebViewDisplayNameLength = 128
+  field static System.Int32 MaxWebViewRouteLength = 200
+  field static System.Int32 MaxWebViewsPerTarget = 32
+  field static System.String ProcessTargetKind = "process"
   field static System.String RuntimeHostRole = "runtime"
+  field static System.String RuntimePayloadRoot = "payload/runtime/"
+  field static System.String SharedPayloadRoot = "payload/shared/"
+  field static System.String SubscribeContractAction = "subscribe"
+  field static System.String WebTargetKind = "web"
+  property static System.Collections.Generic.IReadOnlyList<System.String> SupportedRuntimeIdentifiers { get; }
   method static System.Boolean IsAllowedArchivePath(System.String path)
   method static System.Boolean IsContentIndexPath(System.String path)
+  method static System.Boolean IsContractAction(System.String? value)
+  method static System.Boolean IsHostCapabilityId(System.String? value)
+  method static System.Boolean IsHostRole(System.String? value)
+  method static System.Boolean IsRuntimeIdentifier(System.String? value)
   method static System.Boolean IsSdkCapabilityId(System.String? value)
-  method static System.String? GetContentRole(System.String path)
+  method static System.Boolean IsTargetKind(System.String? role, System.String? kind)
+  method static System.Boolean IsWebViewPlacement(System.String? value)
+  method static System.Boolean IsWebViewRoute(System.String? value)
 type sealed class Sunder.Package.Format.SunderPackageManifest
   method .ctor()
+  property System.Int32? ArchiveFormatVersion { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageContractBundleManifest?>? ContractBundles { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageDependencyManifest>? DependsOn { get; init; }
-  property System.String? EntryAssembly { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String>? HostRoles { get; init; }
   property System.String? Icon { get; init; }
   property System.String? Id { get; init; }
   property System.Int32? ManifestVersion { get; init; }
   property System.String? Name { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String>? RequiredSdkCapabilities { get; init; }
-  property System.Int32? SdkApiVersion { get; init; }
-  property System.String? SdkPackageVersion { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageProviderManifest?>? Provides { get; init; }
   property System.String? Summary { get; init; }
-  property System.String? TargetFramework { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageTargetManifest?>? Targets { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageContractUseManifest?>? UsesContracts { get; init; }
   property System.String? Version { get; init; }
-type enum Sunder.Package.Format.SunderPackageManifestLayout : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Package.Format.SunderPackageManifestLayout Activation = 1
-  field static Sunder.Package.Format.SunderPackageManifestLayout Archive = 0
-  field System.Int32 value__
 type sealed class Sunder.Package.Format.SunderPackageManifestValidator
-  method static System.Collections.Generic.IReadOnlyList<System.String> Validate(Sunder.Package.Format.SunderPackageManifest? manifest, System.String rootPath, Sunder.Package.Format.SunderPackageManifestLayout layout = Archive)
-  method static System.Void Validate(Sunder.Package.Format.SunderPackageManifest? manifest, System.String rootPath, System.Collections.Generic.ICollection<System.String> errors, Sunder.Package.Format.SunderPackageManifestLayout layout = Archive)
+  method static System.Collections.Generic.IReadOnlyList<System.String> Validate(Sunder.Package.Format.SunderPackageManifest? manifest, System.String rootPath)
+  method static System.Void Validate(Sunder.Package.Format.SunderPackageManifest? manifest, System.String rootPath, System.Collections.Generic.ICollection<System.String> errors)
+type enum Sunder.Package.Format.SunderPackagePayloadLayer : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Package.Format.SunderPackagePayloadLayer RoleShared = 1
+  field static Sunder.Package.Format.SunderPackagePayloadLayer Shared = 0
+  field static Sunder.Package.Format.SunderPackagePayloadLayer Target = 2
+  field System.Int32 value__
+type sealed class Sunder.Package.Format.SunderPackageProjectionArchiveInspector
+  method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult> ExtractAndValidateAsync(System.String projectionArchivePath, System.String stagingPath, Sunder.Package.Format.SunderArchiveExtractionOptions options)
+  method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult> ExtractAndValidateAsync(System.String projectionArchivePath, System.String stagingPath, System.Threading.CancellationToken cancellationToken = null)
+  method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult> ValidateExtractedProjectionAsync(System.String stagingPath, System.Int32 maxMetadataJsonBytes, System.Threading.CancellationToken cancellationToken = null)
+  method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult> ValidateExtractedProjectionAsync(System.String stagingPath, System.Threading.CancellationToken cancellationToken = null)
+  method static System.Void ExtractArchive(System.String projectionArchivePath, System.String stagingPath)
+type sealed class Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult : System.IEquatable<Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult>
+  method .ctor(Sunder.Package.Format.SunderPackageProjectionDescriptor? Descriptor, Sunder.Package.Format.SunderPackageManifest? Manifest, Sunder.Package.Format.SunderPackageContentIndex? ContentIndex, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property Sunder.Package.Format.SunderPackageContentIndex? ContentIndex { get; init; }
+  property Sunder.Package.Format.SunderPackageProjectionDescriptor? Descriptor { get; init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
+  property Sunder.Package.Format.SunderPackageExtractedProjection? ExtractedProjection { get; init; }
+  property Sunder.Package.Format.SunderPackageManifest? Manifest { get; init; }
+  property System.Boolean Success { get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; init; }
+  method Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult <Clone>$()
+  method System.Void Deconstruct(out Sunder.Package.Format.SunderPackageProjectionDescriptor? Descriptor, out Sunder.Package.Format.SunderPackageManifest? Manifest, out Sunder.Package.Format.SunderPackageContentIndex? ContentIndex, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageProjectionArchiveValidationResult? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageProjectionArchiveWriter
+  method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderPackageProjectionDescriptor> WriteAsync(System.String extractedPackagePath, Sunder.Package.Format.SunderPackageManifest manifest, Sunder.Package.Format.SunderPackageContentIndex contentIndex, System.String sourceArchiveSha256, Sunder.Package.Format.SunderPackageProjectionKey key, System.String projectionArchivePath, Sunder.Package.Format.SunderArchiveExtractionOptions options)
+  method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderPackageProjectionDescriptor> WriteAsync(System.String extractedPackagePath, Sunder.Package.Format.SunderPackageManifest manifest, Sunder.Package.Format.SunderPackageContentIndex contentIndex, System.String sourceArchiveSha256, Sunder.Package.Format.SunderPackageProjectionKey key, System.String projectionArchivePath, System.Threading.CancellationToken cancellationToken = null)
+type sealed class Sunder.Package.Format.SunderPackageProjectionDescriptor : System.IEquatable<Sunder.Package.Format.SunderPackageProjectionDescriptor>
+  method .ctor()
+  property System.String? Kind { get; init; }
+  property System.String? ManifestSha256 { get; init; }
+  property System.String? PackageId { get; init; }
+  property System.String? PackageVersion { get; init; }
+  property System.Int32 ProjectionFormatVersion { get; init; }
+  property System.String? ProjectionSha256 { get; init; }
+  property System.String? Rid { get; init; }
+  property System.String? SourceArchiveSha256 { get; init; }
+  method Sunder.Package.Format.SunderPackageProjectionDescriptor <Clone>$()
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageProjectionDescriptor? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageProjectionFile : System.IEquatable<Sunder.Package.Format.SunderPackageProjectionFile>
+  method .ctor(Sunder.Package.Format.ArchiveRelativePath PhysicalPath, Sunder.Package.Format.ArchiveRelativePath LogicalPath, Sunder.Package.Format.SunderPackagePayloadLayer Layer)
+  property Sunder.Package.Format.SunderPackagePayloadLayer Layer { get; init; }
+  property Sunder.Package.Format.ArchiveRelativePath LogicalPath { get; init; }
+  property Sunder.Package.Format.ArchiveRelativePath PhysicalPath { get; init; }
+  method Sunder.Package.Format.SunderPackageProjectionFile <Clone>$()
+  method System.Void Deconstruct(out Sunder.Package.Format.ArchiveRelativePath PhysicalPath, out Sunder.Package.Format.ArchiveRelativePath LogicalPath, out Sunder.Package.Format.SunderPackagePayloadLayer Layer)
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageProjectionFile? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageProjectionFormat
+  field static System.String AppKind = "app"
+  field static System.String ContentIndexPath = "manifest/content-index.json"
+  field static System.Int32 CurrentContentIndexVersion = 1
+  field static System.Int32 CurrentProjectionFormatVersion = 1
+  field static System.String DescriptorPath = "manifest/sunder-projection.json"
+  field static System.String ManifestPath = "manifest/sunder-package.json"
+  field static System.String RuntimeKind = "runtime"
+  field static System.String SharedKind = "shared"
+type struct Sunder.Package.Format.SunderPackageProjectionKey : System.IEquatable<Sunder.Package.Format.SunderPackageProjectionKey>
+  method .ctor(System.String kind, System.String? rid)
+  property System.String Kind { get; }
+  property System.String? Rid { get; }
+  property static Sunder.Package.Format.SunderPackageProjectionKey Shared { get; }
+  method System.Boolean TryGetTargetKey(out Sunder.Package.Format.SunderPackageTargetKey targetKey)
+  method static Sunder.Package.Format.SunderPackageProjectionKey App(System.String rid)
+  method static Sunder.Package.Format.SunderPackageProjectionKey Runtime(System.String rid)
+  method static System.Boolean TryCreate(System.String? kind, System.String? rid, out Sunder.Package.Format.SunderPackageProjectionKey key)
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageProjectionKey other)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageProjectionPlan : System.IEquatable<Sunder.Package.Format.SunderPackageProjectionPlan>
+  method .ctor(Sunder.Package.Format.SunderPackageTargetKey Target, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageProjectionFile> Files)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageProjectionFile> Files { get; init; }
+  property Sunder.Package.Format.SunderPackageTargetKey Target { get; init; }
+  method Sunder.Package.Format.SunderPackageProjectionPlan <Clone>$()
+  method System.Boolean TryResolveLogicalPath(Sunder.Package.Format.ArchiveRelativePath logicalPath, out Sunder.Package.Format.ArchiveRelativePath physicalPath)
+  method System.Void Deconstruct(out Sunder.Package.Format.SunderPackageTargetKey Target, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageProjectionFile> Files)
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageProjectionPlan? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageProviderManifest
+  method .ctor()
+  property System.String? ContractId { get; init; }
+  property System.String? ContractSha256 { get; init; }
+  property System.String? ContractVersion { get; init; }
+  property System.String? ProviderId { get; init; }
+  property System.String? Role { get; init; }
+type struct Sunder.Package.Format.SunderPackageTargetKey : System.IEquatable<Sunder.Package.Format.SunderPackageTargetKey>
+  method .ctor(System.String role, System.String rid)
+  property System.String Rid { get; }
+  property System.String Role { get; }
+  method static System.Boolean TryCreate(System.String? role, System.String? rid, out Sunder.Package.Format.SunderPackageTargetKey key)
+  method virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageTargetKey other)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Package.Format.SunderPackageTargetManifest
+  method .ctor()
+  property System.String? EntryPoint { get; init; }
+  property System.String? Kind { get; init; }
+  property System.Collections.Generic.IReadOnlyList<System.String?>? RequiredHostCapabilities { get; init; }
+  property System.String? Rid { get; init; }
+  property System.String? Role { get; init; }
+  property System.String? SdkVersion { get; init; }
+  property System.String? TargetFramework { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageWebViewManifest?>? Views { get; init; }
+type sealed class Sunder.Package.Format.SunderPackageTargetResolver
+  method static Sunder.Package.Format.SunderPackageProjectionPlan CreateProjectionPlan(Sunder.Package.Format.SunderPackageContentIndex contentIndex, Sunder.Package.Format.SunderPackageTargetKey key)
+  method static Sunder.Package.Format.SunderPackageProjectionPlan CreateProjectionPlan(Sunder.Package.Format.SunderPackageManifest manifest, Sunder.Package.Format.SunderPackageContentIndex contentIndex, Sunder.Package.Format.SunderPackageTargetKey key)
+  method static System.Boolean TryMapPhysicalPath(Sunder.Package.Format.SunderPackageTargetKey key, Sunder.Package.Format.ArchiveRelativePath physicalPath, out Sunder.Package.Format.ArchiveRelativePath logicalPath, out Sunder.Package.Format.SunderPackagePayloadLayer layer)
+  method static System.Boolean TryResolveTarget(Sunder.Package.Format.SunderPackageManifest manifest, Sunder.Package.Format.SunderPackageTargetKey key, out Sunder.Package.Format.SunderPackageTargetManifest? target)
+  method static System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageTargetKey> EnumerateTargets(Sunder.Package.Format.SunderPackageManifest manifest)
+type sealed class Sunder.Package.Format.SunderPackageWebViewManifest
+  method .ctor()
+  property System.String? DefaultPlacement { get; init; }
+  property System.String? DisplayName { get; init; }
+  property System.String? Icon { get; init; }
+  property System.String? Route { get; init; }
+  property System.Boolean? ShowInHotbar { get; init; }
+  property System.String? ViewId { get; init; }
 type sealed class Sunder.Package.Format.SunderStackArchiveInspector
   method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderStackArchiveValidationResult> ExtractAndValidateAsync(System.String stackPath, System.String stagingPath, Sunder.Package.Format.SunderArchiveExtractionOptions options)
   method static System.Threading.Tasks.Task<Sunder.Package.Format.SunderStackArchiveValidationResult> ExtractAndValidateAsync(System.String stackPath, System.String stagingPath, System.Threading.CancellationToken cancellationToken = null)

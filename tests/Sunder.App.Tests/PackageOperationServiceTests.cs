@@ -22,6 +22,7 @@ public sealed class PackageOperationServiceTests
                 [CreatePlanItem("agent", "1.0.0")],
                 [],
                 [],
+                [],
                 []),
         };
         var runtimeClient = new FakeRuntimeApiClient();
@@ -49,6 +50,31 @@ public sealed class PackageOperationServiceTests
     }
 
     [Fact]
+    public async Task EnqueueLocalInstall_WhenArchiveChangedAfterReview_DoesNotStageInstall()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient { UploadContentHash = "changed-hash" };
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        using var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+
+        var operation = service.EnqueueLocalInstall(
+            Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"),
+            "reviewed-hash",
+            deleteAfterUse: false);
+
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Failed);
+
+        var failed = queue.GetProcess(operation.ProcessId);
+        Assert.Empty(runtimeClient.InstalledPackageIds);
+        Assert.Empty(runtimeClient.CommittedStageIds);
+        Assert.Contains("changed after review", failed?.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task EnqueueLocalInstall_RunsInBackgroundAndAppliesLifecycleChanges()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -65,7 +91,7 @@ public sealed class PackageOperationServiceTests
             },
             notificationCenter);
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
 
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
@@ -84,8 +110,9 @@ public sealed class PackageOperationServiceTests
         await using var subscription = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
         var presentationCount = 0;
         subscription.InitializePresentation(
-            new RuntimePackageSnapshot(runtimeInstanceId, 0, 0, RuntimeBootstrapState.Ready, [], [], [], [], []),
-            (_, _, _) =>
+            new RuntimePackageSnapshot(runtimeInstanceId, 0, 0, RuntimeBootstrapState.Ready, [], [], [], []),
+            [],
+            (_, _, _, _) =>
             {
                 presentationCount++;
                 return Task.CompletedTask;
@@ -96,13 +123,13 @@ public sealed class PackageOperationServiceTests
             subscription.WaitUntilAppliedAsync,
             notificationCenter);
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
         await WaitForConditionAsync(() => runtimeClient.CommittedStageIds.Count == 1);
         Assert.NotEqual(BackgroundProcessState.Completed, queue.GetProcess(operation.ProcessId)?.State);
 
-        var snapshot = new RuntimePackageSnapshot(runtimeInstanceId, 1, 1, RuntimeBootstrapState.Ready, [], [], [], [], []);
-        await subscription.ApplySnapshotAsync(snapshot, ["agent"]);
-        await subscription.ApplySnapshotAsync(snapshot, ["agent"]);
+        var snapshot = new RuntimePackageSnapshot(runtimeInstanceId, 1, 1, RuntimeBootstrapState.Ready, [], [], [], []);
+        await subscription.ApplySnapshotAsync(snapshot, [], ["agent"]);
+        await subscription.ApplySnapshotAsync(snapshot, [], ["agent"]);
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
         Assert.Equal(1, presentationCount);
@@ -120,7 +147,7 @@ public sealed class PackageOperationServiceTests
             (_, _) => throw new InvalidOperationException("shell refresh failed"),
             notificationCenter);
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
 
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
@@ -147,7 +174,7 @@ public sealed class PackageOperationServiceTests
             waitForPresentationAsync: (_, _) => Task.FromResult(PackagePresentationResult.Unavailable(
                 "Sunder is running in the Core Shell without a live Runtime presentation.")));
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
         var completed = queue.GetProcess(operation.ProcessId);
@@ -176,7 +203,7 @@ public sealed class PackageOperationServiceTests
             },
             presentationWaitTimeout: TimeSpan.FromMilliseconds(25));
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
         var completed = queue.GetProcess(operation.ProcessId);
@@ -204,7 +231,7 @@ public sealed class PackageOperationServiceTests
                 return PackagePresentationResult.Applied;
             });
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
         await presentationWaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(service.CancelOperation(operation.ProcessId));
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Failed);
@@ -239,7 +266,7 @@ public sealed class PackageOperationServiceTests
             },
             notificationCenter);
 
-        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var operation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
 
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
@@ -392,6 +419,7 @@ public sealed class PackageOperationServiceTests
                 [CreatePlanItem("agent", "1.0.0")],
                 [],
                 [],
+                [],
                 []),
         };
         var runtimeClient = new FakeRuntimeApiClient
@@ -471,7 +499,7 @@ public sealed class PackageOperationServiceTests
                 await allowNonPackageCompletion.Task;
             }));
         await nonPackageStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var packageOperation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"));
+        var packageOperation = service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false);
         await WaitForConditionAsync(() => queue.GetProcess(packageOperation.ProcessId)?.State == BackgroundProcessState.Running);
 
         await service.CancelAllAsync();
@@ -517,6 +545,47 @@ public sealed class PackageOperationServiceTests
     }
 
     [Fact]
+    public async Task CancelQueuedLocalInstall_DeletesOwnedReviewSnapshot()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        using var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            notificationCenter);
+        var blockerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBlocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocker = queue.Enqueue(new BackgroundProcessRequest(
+            "Blocking work",
+            "blocking",
+            BackgroundProcessIndicator.Main,
+            BackgroundProcessConcurrencyMode.ParallelWithinGroup,
+            CanCancel: true,
+            async _ =>
+            {
+                blockerStarted.SetResult();
+                await releaseBlocker.Task;
+            }));
+        await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var reviewDirectory = CreateTempDirectory();
+        var reviewPath = Path.Combine(reviewDirectory, "package.sunderpkg");
+        await File.WriteAllBytesAsync(reviewPath, [1, 2, 3]);
+        var operation = service.EnqueueLocalInstall(
+            reviewPath,
+            "test-hash",
+            deleteAfterUse: true);
+        Assert.Equal(BackgroundProcessState.Queued, queue.GetProcess(operation.ProcessId)?.State);
+
+        Assert.True(service.CancelOperation(operation.ProcessId));
+
+        Assert.False(Directory.Exists(reviewDirectory));
+        releaseBlocker.SetResult();
+        await WaitForConditionAsync(() => queue.GetProcess(blocker.ProcessId)?.State == BackgroundProcessState.Completed);
+    }
+
+    [Fact]
     public void Dispose_RejectsFurtherPackageOperations()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -531,7 +600,7 @@ public sealed class PackageOperationServiceTests
         service.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => service.ListOperations());
-        Assert.Throws<ObjectDisposedException>(() => service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg")));
+        Assert.Throws<ObjectDisposedException>(() => service.EnqueueLocalInstall(Path.Combine(CreateTempDirectory(), "agent.1.0.0.sunderpkg"), "test-hash", deleteAfterUse: false));
         Assert.Throws<ObjectDisposedException>(() => service.CancelOperation(Guid.NewGuid()));
     }
 
@@ -570,7 +639,20 @@ public sealed class PackageOperationServiceTests
             IsUpdate: false,
             DeprecatedMessage: null,
             DependsOn: [],
-            new RegistryPackageArtifact("", 0, $"download/{packageId}/{version}"));
+            Targets: [],
+            Artifacts:
+            [
+                new RegistryPackageProjectionArtifact(
+                    "shared",
+                    null,
+                    "",
+                    0,
+                    $"download/{packageId}/{version}",
+                    "",
+                    "",
+                    "",
+                    1),
+            ]);
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
     {
@@ -580,7 +662,7 @@ public sealed class PackageOperationServiceTests
 
     private sealed class FakeRegistryApiClient : IRegistryClient
     {
-        public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
+        public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], [], []);
 
         public Uri RegistryUrl { get; } = new("https://registry.example/");
 
@@ -614,6 +696,8 @@ public sealed class PackageOperationServiceTests
         public bool RequiresAppRestart { get; init; }
 
         public RuntimePackageStamp CommittedStamp { get; init; } = DefaultStamp;
+
+        public string UploadContentHash { get; init; } = "test-hash";
 
         public Exception? CommitException { get; init; }
 
@@ -650,7 +734,7 @@ public sealed class PackageOperationServiceTests
             _uploadedPackageIds[uploadId] = Path.GetFileNameWithoutExtension(packagePath).Split('.')[0];
             return Task.FromResult(new ContentUploadDescriptor(
                 uploadId,
-                "test-hash",
+                UploadContentHash,
                 0,
                 Path.GetFileName(packagePath),
                 "application/vnd.sunder.package"));
@@ -666,7 +750,7 @@ public sealed class PackageOperationServiceTests
             => Task.CompletedTask;
 
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(true, [], [], [], []));
+            => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(true, [], [], [], [], []));
 
         public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(RegistryChangeResult(request.Packages.Select(package => package.PackageId).ToArray()));
@@ -698,8 +782,7 @@ public sealed class PackageOperationServiceTests
                 {
                     ImpactedPackageIds = impactedPackageIds,
                 },
-                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray(),
-                impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray());
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, packageId, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray());
         }
 
         public Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default)

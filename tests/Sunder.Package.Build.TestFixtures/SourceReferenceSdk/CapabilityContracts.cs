@@ -1,5 +1,7 @@
 namespace Sunder.Sdk.Abstractions
 {
+    public interface ISunderRuntimePackageModule;
+
     public interface IPackageStorageKeyMigrator;
 
     public interface IPackageViewNavigationPreparationTarget;

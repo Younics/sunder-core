@@ -18,6 +18,11 @@ x64/
 [Bb]in/
 [Oo]bj/
 artifacts/
+node_modules/
+js/packages/*/dist/
+js/packages/*/dist-test/
+js/fixtures/*/dist/
+js/.cache/
 
 # MSTest test Results
 [Tt]est[Rr]esult*/

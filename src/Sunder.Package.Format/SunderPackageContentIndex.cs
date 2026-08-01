@@ -9,5 +9,4 @@ public sealed record SunderPackageContentIndex(
 public sealed record SunderPackageContentIndexEntry(
     [property: JsonPropertyName("path")] string? Path,
     [property: JsonPropertyName("sha256")] string? Sha256,
-    [property: JsonPropertyName("size")] long Size,
-    [property: JsonPropertyName("role")] string? Role);
+    [property: JsonPropertyName("size"), JsonRequired] long Size);

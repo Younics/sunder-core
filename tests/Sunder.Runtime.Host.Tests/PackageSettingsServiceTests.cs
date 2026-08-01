@@ -122,7 +122,6 @@ public sealed class PackageSettingsServiceTests
         using var services = new ServiceCollection().BuildServiceProvider();
         var registry = new RuntimePackageContributionRegistry(
             services,
-            new RuntimePackageExtensionCatalog(),
             "test.package");
         registry.RegisterSettingsSchema(CreateSdkSchema());
 

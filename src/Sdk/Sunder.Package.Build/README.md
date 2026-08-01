@@ -26,19 +26,20 @@ The NuGet package exposes no compile or runtime assembly asset; its task assembl
 
 `Sunder.Package.Build` adds build targets that:
 
-- Generate `sunder-package.json` from `Sunder.Sdk` metadata attributes, MSBuild properties, and build output.
-- Emit an unpacked `sunder-dev` folder after `dotnet build`.
+- Generate a universal V1 manifest with exact role/RID targets from `Sunder.Sdk` metadata, MSBuild declarations, and build output.
+- Emit an unpacked, content-indexed, consumer-valid `sunder-dev` archive tree after `dotnet build`.
 - Create a `.sunderpkg` archive after `dotnet publish`.
 - Provide an explicit `PackSunderPackage` MSBuild target.
-- Copy package runtime files into `lib`.
-- Copy source assets from `Assets/**` into `assets/**`.
+- Copy common managed output into `payload/shared/lib` and source assets into `payload/shared/assets`.
+- Validate, canonicalize, hash, and copy schema-first RPC descriptors into `payload/shared/contracts`.
+- Project only matching `runtimes/<rid>` content into each declared exact role/RID layer.
 - Exclude host boundary assemblies such as `Sunder.Sdk` and core Avalonia assemblies from private package output.
 
 Package authors do not maintain `sunder-package.json` by hand.
 
 ## Expected Project Shape
 
-A package project should declare package metadata in C# and expose a Runtime role, an App role, both, or neither for a contract-only dependency. Each active role permits at most one public implementation. Build inspects compiled metadata and emits the exact `hostRoles` list; it is not an author-maintained property.
+A package project declares package metadata in C# and normally exposes a Runtime module, an App module, or both. Each active role permits at most one public implementation. Build inspects compiled metadata and, by default, emits one exact target for every supported RID (`win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`). App targets use `avalonia`; Runtime targets use `dotnet`. A project with no module emits zero targets and is valid only when it declares at least one contract bundle.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -80,16 +81,22 @@ The build emits an unpacked dev package next to the build output:
 
 ```text
 bin/Debug/net10.0/sunder-dev/
-  sunder-package.json
-  lib/
-    MyPackage.dll
-    MyPackage.pdb
-    MyPackage.deps.json
-    MyPackage.runtimeconfig.json
-    runtimes/
-      ...
-  assets/
-    icon.png
+  manifest/
+    sunder-package.json
+    content-index.json
+  payload/
+    shared/
+      lib/
+        MyPackage.dll
+        MyPackage.pdb
+      assets/
+        icon.png
+    app/
+      shared/
+      <rid>/
+    runtime/
+      shared/
+      <rid>/
 ```
 
 Load this folder into Sunder App during development:
@@ -127,15 +134,20 @@ manifest/
   sunder-package.json
   content-index.json
 payload/
-  lib/
-  assets/
+  shared/
+  app/
+    shared/
+    <rid>/
+  runtime/
+    shared/
+    <rid>/
 ```
 
-The content index records package file paths, hashes, sizes, and roles. Runtime install and registry publish paths validate the archive before accepting it.
+The content index records canonical physical paths, hashes, and sizes; target role is represented by the physical payload layer rather than duplicated in index metadata. Runtime install and registry publish paths validate the archive before accepting it.
 
 ## Assets And Icons
 
-Place package assets under `Assets/` in the project directory. They are copied into package output under `assets/`.
+Place package assets under `Assets/` in the project directory. They are copied into the global payload with logical paths under `assets/`.
 
 Recommended icon setup:
 
@@ -162,6 +174,8 @@ Common MSBuild properties used by the package targets:
 | Property | Purpose |
 | --- | --- |
 | `Version` | Package version used in generated metadata and default archive name |
+| `SunderPackageRuntimeIdentifiers` | Semicolon-separated inferred target RIDs; defaults to all six supported exact RIDs |
+| `SunderPackageAssetsDirectory` | Physical source directory copied to logical `assets/`; defaults to the project `Assets` directory |
 | `SunderDevOutputPath` | Overrides the generated path only when it normalizes to the direct `TargetDir/sunder-dev` child; existing output must carry the generated marker |
 | `SunderPackageFileName` | Overrides the default archive file name |
 | `SunderPackageOutputPath` | Overrides output path for the explicit `PackSunderPackage` target |
@@ -176,7 +190,54 @@ Compatibility metadata is inferred automatically from authored assemblies, inclu
 </ItemGroup>
 ```
 
-`SunderSdkPackageVersion` is available as a verification-only override: it must match the informational/package version on the resolved `Sunder.Sdk` reference. The V1 build task always emits SDK API version `1`.
+`SunderSdkPackageVersion` is available as a verification-only override: it must match the informational/package version on the resolved `Sunder.Sdk` reference. The resolved version is emitted as `sdkVersion` on every inferred C# target.
+
+Explicit target items replace the inferred role/RID matrix. `Role` and `Rid` identify the exact target; `Kind` and `EntryPoint` default from the C# role but can be declared explicitly:
+
+```xml
+<ItemGroup>
+  <SunderPackageTarget Include="runtime/linux-x64"
+                       Role="runtime"
+                       Rid="linux-x64"
+                       Kind="dotnet"
+                       EntryPoint="lib/MyPackage.dll" />
+</ItemGroup>
+```
+
+Schema-first RPC metadata is authored with strict MSBuild items. Every imported or provided contract must have a local bundle, so validation never depends on another installed package:
+
+```xml
+<ItemGroup>
+  <SunderContractBundle Include="Contracts/chat-provider.rpc.json"
+                        ContractId="example.agent.chat-provider"
+                        Version="1.0.0"
+                        DescriptorPath="contracts/chat-provider.rpc.json" />
+  <SunderUsesContract Include="example.agent.chat-provider"
+                      VersionRange=">=1.0.0 &lt;2.0.0"
+                      Required="false"
+                      Actions="discover;invoke;subscribe" />
+  <SunderRpcProvider Include="example.package.chat"
+                     ContractId="example.agent.chat-provider"
+                     ContractVersion="1.0.0"
+                     Role="runtime" />
+</ItemGroup>
+```
+
+`SunderContractBundle` requires `ContractId` and `Version`; `DescriptorPath` defaults to `contracts/&lt;file name&gt;` and must stay under `contracts/`. `SunderUsesContract` requires a strict `VersionRange`, an explicit Boolean `Required`, and one or more unique `Actions` from `discover`, `invoke`, and `subscribe`. `SunderRpcProvider` requires `ContractId`, `ContractVersion`, and an exact `app` or `runtime` `Role` that exists in the generated target matrix. Provider hashes are always derived from the matching descriptor bundle.
+
+Aggregate projects can combine validated leaf trees without rebuilding them:
+
+```xml
+<PropertyGroup>
+  <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
+</PropertyGroup>
+<ItemGroup>
+  <SunderPackageTargetLeaf Include="Runtime/bin/$(Configuration)/$(TargetFramework)/sunder-dev" />
+  <SunderPackageTargetLeaf Include="App/bin/$(Configuration)/$(TargetFramework)/sunder-dev" />
+</ItemGroup>
+```
+
+`AggregateSunderPackage` verifies package-wide metadata agreement, rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output.
 
 ## Validate Before Publishing
 
@@ -186,7 +247,7 @@ Use the Sunder CLI to validate package artifacts before publishing:
 sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
 ```
 
-Validation checks archive safety, manifest shape, required files, package id format, SemVer version, entry assembly existence, icon existence, content index hashes, content index sizes, and unindexed files.
+Validation checks archive safety, manifest shape, exact target unions, target entry points, package id format, SemVer version, icon existence, content index hashes, content index sizes, and unindexed files.
 
 ## More Documentation
 

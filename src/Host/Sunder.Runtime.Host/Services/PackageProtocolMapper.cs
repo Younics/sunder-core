@@ -63,7 +63,8 @@ internal static class PackageProtocolMapper
             failureOrigin,
             lastError,
             lastError is null ? null : DateTimeOffset.UtcNow,
-            failureCount);
+            failureCount,
+            ToProtocolRpcContractUses(activation.RpcContractUses));
     }
 
     public static SessionPackageDescriptor BuildSessionDescriptor(
@@ -88,8 +89,23 @@ internal static class PackageProtocolMapper
             failureOrigin,
             lastError,
             lastError is null ? null : DateTimeOffset.UtcNow,
-            failureCount);
+            failureCount,
+            ToProtocolRpcContractUses(activation.RpcContractUses));
     }
+
+    private static IReadOnlyList<PackageRpcContractUseDescriptor> ToProtocolRpcContractUses(
+        IReadOnlyList<Sunder.Package.Format.SunderPackageContractUseManifest?>? uses)
+        => (uses ?? [])
+            .Where(static use => use is not null)
+            .Select(static use => new PackageRpcContractUseDescriptor(
+                use!.ContractId!,
+                use.VersionRange!,
+                use.Required!.Value,
+                (use.Actions ?? [])
+                    .Where(static action => action is not null)
+                    .Select(static action => action!)
+                    .ToArray()))
+            .ToArray();
 
     public static PackageSettingsSchemaDescriptor? ToProtocolSettingsSchema(
         string ownerPackageId,

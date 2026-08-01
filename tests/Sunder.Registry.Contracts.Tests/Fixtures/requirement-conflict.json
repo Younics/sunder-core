@@ -12,5 +12,6 @@
       "errorCode": "registry.v1.package.requirement_unsatisfied",
       "message": "Selected package version does not satisfy the Stack requirement."
     }
-  ]
+  ],
+  "trustedArtifactOrigins": []
 }

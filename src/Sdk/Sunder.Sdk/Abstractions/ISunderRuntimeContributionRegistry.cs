@@ -1,5 +1,6 @@
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Settings;
 
 namespace Sunder.Sdk.Abstractions;
@@ -12,10 +13,6 @@ public interface ISunderRuntimeContributionRegistry
     /// <summary>Registers an activation-scoped service that the host starts and stops.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.BackgroundServicesV1)]
     void RegisterBackgroundService<TService>() where TService : class, IPackageBackgroundService;
-
-    /// <summary>Registers a contribution owned by the currently activating package for a typed extension point.</summary>
-    [SunderSdkCapability(SunderSdkCapabilities.ExtensionsV1)]
-    void RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution);
 
     /// <summary>Registers the package's complete host-rendered settings schema.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.SettingsSchemaV1)]
@@ -38,4 +35,10 @@ public interface ISunderRuntimeContributionRegistry
         IPackageRuntimeStreamHandler<TRequest, TEvent> handler)
         where TRequest : class
         where TEvent : class;
+
+    /// <summary>Registers one manifest-declared schema-first RPC provider for this exact activation.</summary>
+    [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+    void RegisterRpcProvider(string providerId, ISunderRpcServiceHandler handler)
+        => throw new NotSupportedException(
+            "This host has not implemented the Sunder schema-first RPC V1 registration adapter.");
 }

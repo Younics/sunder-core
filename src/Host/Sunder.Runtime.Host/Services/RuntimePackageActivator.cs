@@ -6,11 +6,20 @@ using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Rpc;
 using static Sunder.Runtime.Host.Services.PackageProtocolMapper;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePaths paths)
+internal sealed class RuntimePackageActivator(
+    ILogger logger,
+    RuntimePackagePaths paths,
+    RuntimeRpcBroker? rpcBroker = null,
+    RuntimeProcessPolicyOptions? processPolicy = null,
+    CancellationToken hostStopping = default,
+    RuntimeContentTransferStore? contentTransfers = null,
+    PackageSessionState? sessions = null,
+    RuntimeTransportPolicyOptions? transportPolicy = null)
 {
     private static readonly TimeSpan FailedActivationRetirementTimeout = TimeSpan.FromSeconds(5);
     private static readonly Type[] ReservedServiceTypes =
@@ -18,30 +27,111 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
         typeof(IPackageContext),
         typeof(ILoggerFactory),
         typeof(ILogger<>),
-        typeof(IPackageExtensionCatalog),
-        typeof(IPackageExtensionInvocationCatalog),
         typeof(IPackageShellViewService),
         typeof(IPackageSettingsNavigationService),
         typeof(IPackageNotificationService),
         typeof(IPackageRuntimeClient),
         typeof(IPackageCallbackClient),
+        typeof(ISunderRpcClient),
+        typeof(ISunderRpcContentClient),
     ];
 
     public async Task<PackageActivationResult> ActivateAsync(
         PreparedRuntimePackage package,
         RuntimeSharedAssemblyRegistry sharedAssemblies,
-        RuntimePackageExtensionCatalog extensionCatalog,
         ICollection<string> warnings,
         ICollection<string> errors,
         CancellationToken cancellationToken)
     {
         RuntimePackageLoadContext? loadContext = null;
         ServiceProvider? serviceProvider = null;
-        PackageExtensionOwnerActivation? extensionOwner = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            loadContext = new RuntimePackageLoadContext(package.PackageId, package.EntryAssemblyPath, sharedAssemblies);
+            if (package.SelectedTargetKey is not { } targetKey
+                || package.SelectedTarget is not { } target
+                || package.EntryAssemblyPath is null)
+            {
+                throw new InvalidOperationException(
+                    $"Package '{package.PackageId}' does not have a selected exact Runtime target.");
+            }
+            if (string.Equals(target.Kind, SunderPackageFormat.ProcessTargetKind, StringComparison.Ordinal))
+            {
+                if (rpcBroker is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Package '{package.PackageId}' process Runtime target requires the Runtime RPC broker.");
+                }
+                var processActivationId = Guid.NewGuid();
+                var processPackageContext = new RuntimePackageContext(
+                    package.PackageId,
+                    package.Version,
+                    package.ShadowFolder,
+                    paths.PackageDataRootPath);
+                ISunderRpcContentClient processContentClient = contentTransfers is null || sessions is null || transportPolicy is null
+                    ? UnavailableRuntimeRpcContentClient.Instance
+                    : new RuntimeRpcContentClient(
+                        contentTransfers,
+                        sessions,
+                        transportPolicy,
+                        package.PackageId,
+                        processActivationId);
+                var worker = new ProcessRuntimeWorker(
+                    logger,
+                    package,
+                    processPackageContext,
+                    processActivationId,
+                    rpcBroker,
+                    processPolicy,
+                    hostStopping,
+                    processContentClient);
+                var processServices = new ServiceCollection();
+                processServices.AddSingleton(_ => worker);
+                serviceProvider = processServices.BuildServiceProvider();
+                _ = serviceProvider.GetRequiredService<ProcessRuntimeWorker>();
+                var providers = CreateProcessProviderRegistrations(package, worker);
+                var processLoadedPackage = new ActiveLoadedPackage(
+                    BuildDescriptor(package.Activation, true, PackageReadinessState.Ready, []),
+                    package.Source,
+                    SettingsSchema: null,
+                    processPackageContext.Storage.State,
+                    processPackageContext.SecretsStore,
+                    AuthHandler: null,
+                    CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
+                    BackgroundServices: [worker],
+                    serviceProvider,
+                    LoadContext: null,
+                    processPackageContext.Settings)
+                {
+                    RuntimeActivationId = processActivationId,
+                    RpcProviders = providers,
+                    RpcContracts = package.RpcContracts
+                                   ?? new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal),
+                    RpcContractUses = (package.Source.Manifest?.UsesContracts ?? [])
+                        .Where(static use => use is not null)
+                        .Select(static use => use!)
+                        .ToArray(),
+                    RpcManifestSha256 = package.ManifestSha256 ?? string.Empty,
+                };
+                if (providers.Count == 0)
+                {
+                    warnings.Add($"Package '{package.PackageId}' process Runtime target loaded without any declared RPC providers.");
+                }
+                return new PackageActivationResult(
+                    true,
+                    processLoadedPackage,
+                    BuildSessionDescriptor(package.Activation, true, PackageReadinessState.Ready, packageViews: []));
+            }
+            if (!string.Equals(target.Kind, SunderPackageFormat.DotnetTargetKind, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Package '{package.PackageId}' Runtime target '{targetKey}' kind '{target.Kind}' is unsupported; expected '{SunderPackageFormat.DotnetTargetKind}'.");
+            }
+            loadContext = new RuntimePackageLoadContext(
+                package.PackageId,
+                package.EntryAssemblyPath,
+                targetKey.Rid,
+                sharedAssemblies);
             var entryAssembly = loadContext.LoadPackageEntryAssembly();
             var moduleResolution = PackageModuleShapeReader.Read(entryAssembly.Location)
                 .Resolve(PackageHostRoleMetadataValue.Runtime);
@@ -64,7 +154,7 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
                 return Failed(package, message);
             }
             var module = moduleInstance as ISunderRuntimePackageModule;
-            extensionOwner = extensionCatalog.BeginOwnerActivation(package.PackageId);
+            var runtimeActivationId = Guid.NewGuid();
             var packageContext = new RuntimePackageContext(package.PackageId, package.Version, package.ShadowFolder, paths.PackageDataRootPath);
             var packageServices = new ConstrainedPackageServiceCollection(ReservedServiceTypes);
             module?.ConfigureRuntimeServices(packageServices, packageContext);
@@ -73,27 +163,34 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             services.AddSingleton<IPackageContext>(packageContext);
             services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
             services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
-            services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
-            services.AddSingleton<IPackageExtensionInvocationCatalog>(extensionCatalog);
             services.AddSingleton<IPackageShellViewService>(EmptyPackageShellViewService.Instance);
             services.AddSingleton<IPackageSettingsNavigationService>(NullPackageSettingsNavigationService.Instance);
             services.AddSingleton<IPackageNotificationService>(NullPackageNotificationService.Instance);
             services.AddSingleton<IPackageRuntimeClient>(NullPackageRuntimeClient.Instance);
             services.AddSingleton<IPackageCallbackClient>(NullPackageCallbackClient.Instance);
+            services.AddSingleton<ISunderRpcClient>(rpcBroker is null
+                ? UnavailableRuntimeRpcClient.Instance
+                : new RuntimeRpcClient(
+                    rpcBroker,
+                    new RuntimeRpcCallerStamp(package.PackageId, runtimeActivationId)));
+            services.AddSingleton<ISunderRpcContentClient>(
+                contentTransfers is null || sessions is null || transportPolicy is null
+                    ? UnavailableRuntimeRpcContentClient.Instance
+                    : new RuntimeRpcContentClient(
+                        contentTransfers,
+                        sessions,
+                        transportPolicy,
+                        package.PackageId,
+                        runtimeActivationId));
             serviceProvider = services.BuildServiceProvider();
 
             var contributions = new RuntimePackageContributionRegistry(
                 serviceProvider,
-                extensionCatalog,
                 package.PackageId,
-                extensionOwner);
-            using (var extensionBatch = extensionCatalog.BeginBatch(
-                       extensionOwner,
-                       PackageExtensionCatalogChangeReason.PackageActivated))
-            {
-                module?.RegisterRuntimeContributions(contributions, serviceProvider);
-                extensionBatch.Commit();
-            }
+                package.Source.Manifest,
+                package.RpcContracts);
+            module?.RegisterRuntimeContributions(contributions, serviceProvider);
+            contributions.ValidateRpcProviders();
             packageContext.PackageSettings.Schema = contributions.SettingsSchema;
             var loadedPackage = new ActiveLoadedPackage(
                 BuildDescriptor(package.Activation, true, PackageReadinessState.Ready, []),
@@ -108,17 +205,25 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
                 loadContext,
                 packageContext.Settings)
             {
-                ExtensionOwner = extensionOwner,
+                RuntimeActivationId = runtimeActivationId,
                 CanonicalSettingsSchema = contributions.SettingsSchema,
                 RuntimeOperations = contributions.RuntimeOperations,
                 RuntimeStreams = contributions.RuntimeStreams,
+                RpcProviders = contributions.RpcProviders,
+                RpcContracts = package.RpcContracts
+                               ?? new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal),
+                RpcContractUses = (package.Source.Manifest?.UsesContracts ?? [])
+                    .Where(static use => use is not null)
+                    .Select(static use => use!)
+                    .ToArray(),
+                RpcManifestSha256 = package.ManifestSha256 ?? string.Empty,
             };
             var descriptor = BuildSessionDescriptor(package.Activation, true, PackageReadinessState.Ready, packageViews: []);
-            if (!contributions.HasRegisteredExtensions
-                && !contributions.HasRegisteredBackgroundServices
+            if (!contributions.HasRegisteredBackgroundServices
                 && contributions.SettingsSchema is null
                 && contributions.RuntimeOperations.Count == 0
-                && contributions.RuntimeStreams.Count == 0)
+                && contributions.RuntimeStreams.Count == 0
+                && contributions.RpcProviders.Count == 0)
             {
                 warnings.Add($"Package '{package.PackageId}' loaded without any Runtime contributions.");
             }
@@ -126,12 +231,8 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
         }
         catch (Exception exception)
         {
-            var retirement = extensionOwner is null
-                ? PackageExtensionOwnerRetirement.Completed(package.PackageId)
-                : extensionCatalog.BeginOwnerRetirement(extensionOwner, PackageExtensionCatalogChangeReason.PackageFaulted);
             var cleanup = CleanupFailedActivationAsync(
                 package.PackageId,
-                retirement,
                 serviceProvider,
                 loadContext);
             try
@@ -162,11 +263,9 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
 
     private async Task CleanupFailedActivationAsync(
         string packageId,
-        PackageExtensionOwnerRetirement retirement,
         ServiceProvider? serviceProvider,
         RuntimePackageLoadContext? loadContext)
     {
-        await retirement.Completion.ConfigureAwait(false);
         if (serviceProvider is not null)
         {
             try
@@ -215,6 +314,47 @@ internal sealed class RuntimePackageActivator(ILogger logger, RuntimePackagePath
             handlers[authHandler.CallbackHandlerId] = authHandler;
         }
         return handlers;
+    }
+
+    private static IReadOnlyDictionary<string, RuntimeRpcProviderRegistration> CreateProcessProviderRegistrations(
+        PreparedRuntimePackage package,
+        ProcessRuntimeWorker worker)
+    {
+        var contracts = package.RpcContracts
+                        ?? new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
+        var registrations = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal);
+        foreach (var declaration in (package.Source.Manifest?.Provides ?? [])
+                     .Where(static provider => provider is not null
+                                               && string.Equals(
+                                                   provider.Role,
+                                                   SunderPackageFormat.RuntimeHostRole,
+                                                   StringComparison.Ordinal))
+                     .Select(static provider => provider!))
+        {
+            if (!contracts.TryGetValue(
+                    PackageSessionPreparer.ContractKey(declaration.ContractId!, declaration.ContractVersion!),
+                    out var contract)
+                || !string.Equals(contract.Sha256, declaration.ContractSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Process provider '{declaration.ProviderId}' does not resolve its exact validated local RPC contract.");
+            }
+            if (!registrations.TryAdd(
+                    declaration.ProviderId!,
+                    new RuntimeRpcProviderRegistration(
+                        declaration.ProviderId!,
+                        declaration.ContractId!,
+                        declaration.ContractVersion!,
+                        declaration.ContractSha256!,
+                        contract,
+                        new ProcessRpcProviderHandler(worker, declaration.ProviderId!),
+                        declaration)))
+            {
+                throw new InvalidDataException(
+                    $"Process provider id '{declaration.ProviderId}' is declared more than once for the Runtime role.");
+            }
+        }
+        return registrations;
     }
 
 }

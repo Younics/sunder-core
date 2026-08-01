@@ -107,6 +107,7 @@ public sealed class RegistryPackageInstallService
                 .Select(package => new RuntimeRegistryPackageChangeRequest(
                     package.PackageId!,
                     null,
+                    [],
                     string.IsNullOrWhiteSpace(package.InstallTag) ? "latest" : package.InstallTag,
                     string.IsNullOrWhiteSpace(package.MinimumVersion)
                         ? AnySemanticVersionRange

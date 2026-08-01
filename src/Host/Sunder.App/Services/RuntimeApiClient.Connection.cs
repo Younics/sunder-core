@@ -55,8 +55,16 @@ public sealed partial class RuntimeApiClient
     public IAsyncEnumerable<PackageLogEntryDescriptor> StreamPackageLogsAsync(long afterSequenceId, CancellationToken cancellationToken = default)
         => _management.StreamPackageLogsAsync(afterSequenceId, cancellationToken);
 
-    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default)
-        => _management.GetActivePackageUiSnapshotsAsync(cancellationToken);
+    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
+        string appRid,
+        CancellationToken cancellationToken = default)
+        => _management.GetActivePackageUiSnapshotsAsync(appRid, cancellationToken);
+
+    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(
+        string stageId,
+        string appRid,
+        CancellationToken cancellationToken = default)
+        => _management.GetStagedPackageUiSnapshotsAsync(stageId, appRid, cancellationToken);
 
     public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
         => _management.DownloadPackageUiSnapshotAsync(

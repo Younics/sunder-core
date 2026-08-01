@@ -1,0 +1,123 @@
+name: Sunder Node SEA CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sunder-node-sea-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24.18.1"
+
+jobs:
+  typescript:
+    name: TypeScript SDK, tooling, and template
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm pack --workspace @sunder/sdk --workspace @sunder/package-tool --workspace create-sunder-package
+
+  native-sea:
+    name: Native SEA ${{ matrix.rid }}
+    needs: typescript
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-latest
+          - rid: win-arm64
+            runner: windows-11-arm
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          # Upstream Node SEA CI skips macOS x64. This native Sunder smoke is mandatory.
+          - rid: osx-x64
+            runner: macos-15-intel
+          - rid: osx-arm64
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Build pinned exact-RID SEA leaf
+        run: npm run sea:build -- --rid ${{ matrix.rid }} --allow-unsigned-windows
+      - name: Native protocol-handshake smoke
+        run: npm run sea:smoke -- --rid ${{ matrix.rid }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sunder-sea-leaf-${{ matrix.rid }}
+          path: js/fixtures/sea-smoke/dist/targets/${{ matrix.rid }}
+          if-no-files-found: error
+
+  universal-package:
+    name: Six-RID universal package fan-in
+    needs: native-sea
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sunder-sea-leaf-*
+          path: js/artifacts/sea-leaves
+      - name: Aggregate exact-RID leaves
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          for rid in win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64; do
+            args+=(--leaf "$PWD/artifacts/sea-leaves/sunder-sea-leaf-$rid")
+          done
+          node packages/package-tool/dist/cli.js package --project fixtures/sea-smoke "${args[@]}"
+          unzip -t fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
+      - name: Validate universal package with .NET inspector
+        env:
+          SUNDER_NODE_SEA_PACKAGE_PATH: ${{ github.workspace }}/js/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
+          SUNDER_NODE_SEA_EXPECTED_RIDS: win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64
+        run: dotnet test ../tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --configuration Release --filter FullyQualifiedName~NodePackageArchiveCompatibilityTests --disable-build-servers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sunder-sea-smoke-universal-package
+          path: js/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
+          if-no-files-found: error

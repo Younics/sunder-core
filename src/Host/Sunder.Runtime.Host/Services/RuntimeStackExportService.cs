@@ -7,16 +7,19 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class RuntimeStackExportService
 {
     private readonly RuntimeSessionOwner _sessions;
+    private readonly Sunder.Sdk.Rpc.ISunderRpcClient _rpcClient;
     private readonly StackExportArchiveBuilder _archiveBuilder;
 
     public RuntimeStackExportService(
         RuntimeSessionOwner sessions,
         RuntimeContentTransferStore transfers,
         RuntimePackagePaths paths,
+        RuntimeRpcBroker rpcBroker,
         TimeProvider? timeProvider = null,
         RuntimeStackPolicyOptions? policy = null)
     {
         _sessions = sessions;
+        _rpcClient = rpcBroker.CreateStackHostClient();
         _archiveBuilder = new StackExportArchiveBuilder(
             transfers,
             paths,
@@ -30,20 +33,29 @@ internal sealed class RuntimeStackExportService
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
         var items = new List<RuntimeStackExportItemDescriptor>();
         var errors = new List<string>();
-        foreach (var registration in RuntimeStackContributorCatalog.GetExporters(_sessions, lease, errors).Values)
+        var exporters = await RuntimeStackContributorCatalog.GetExportersAsync(
+            _rpcClient,
+            errors,
+            linked.Token).ConfigureAwait(false);
+        foreach (var registration in exporters.Values)
         {
             try
             {
-                var discovered = await registration.Exporter.ListExportItemsAsync(new StackExportDiscoveryContext(registration.PackageId), linked.Token);
-                if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration, errors))
+                var discovered = await registration.Client.ListExportItemsAsync(
+                    new StackExportDiscoveryContext(registration.PackageId),
+                    linked.Token).ConfigureAwait(false);
+                if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration.ContributorId, errors))
                 {
                     continue;
                 }
-                items.AddRange(discovered.Select(item => RuntimeStackContractMapper.ToExportItem(registration.PackageId, registration.Exporter.ContributorId, item)));
+                items.AddRange(discovered.Select(item => RuntimeStackContractMapper.ToExportItem(
+                    registration.PackageId,
+                    registration.ContributorId,
+                    item)));
             }
             catch (Exception) when (!linked.IsCancellationRequested)
             {
-                errors.Add($"Stack exporter '{registration.Exporter.ContributorId}' discovery failed.");
+                errors.Add($"Stack exporter '{registration.ContributorId}' discovery failed.");
             }
         }
         return new RuntimeStackExportDiscoveryResponse(items, [], errors);
@@ -62,7 +74,10 @@ internal sealed class RuntimeStackExportService
         var previews = new Dictionary<string, SunderStackFragmentPreview>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
         var errors = new List<string>();
-        var contributors = RuntimeStackContributorCatalog.GetExporters(_sessions, lease, errors);
+        var contributors = await RuntimeStackContributorCatalog.GetExportersAsync(
+            _rpcClient,
+            errors,
+            linked.Token).ConfigureAwait(false);
         foreach (var group in request.SelectedItems.GroupBy(
                      item => RuntimeStackContributorCatalog.Key(item.OwnerPackageId, item.ContributorId),
                      StringComparer.OrdinalIgnoreCase))
@@ -84,18 +99,23 @@ internal sealed class RuntimeStackExportService
                             detail.ValueOverride,
                             Enum.TryParse<StackValueSensitivity>(detail.SensitivityOverride, true, out var sensitivity) ? sensitivity : null)).ToArray()))
                     .ToArray();
-                var discovered = await registration.Exporter.ListExportItemsAsync(new StackExportDiscoveryContext(registration.PackageId), linked.Token);
-                if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration, errors))
+                var discovered = await registration.Client.ListExportItemsAsync(
+                    new StackExportDiscoveryContext(registration.PackageId),
+                    linked.Token).ConfigureAwait(false);
+                if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration.ContributorId, errors))
                 {
                     continue;
                 }
-                var contribution = await registration.Exporter.ExportAsync(new StackExportRequest(selections), linked.Token);
+                var contribution = await registration.Client.ExportAsync(
+                    new StackExportRequest(selections),
+                    linked.Token).ConfigureAwait(false);
                 packageRequirements.Add(BuildPackageRequirement(lease, registration.PackageId));
                 foreach (var fragment in contribution.Fragments)
                 {
                     var owned = RuntimeStackContractMapper.OwnExportFragment(
                         registration.PackageId,
-                        registration.Exporter.ContributorId,
+                        registration.ContributorId,
+                        registration.Provider,
                         fragment);
                     var ownedFragment = owned.Fragment;
                     fragments.Add(owned);
@@ -113,7 +133,7 @@ internal sealed class RuntimeStackExportService
             }
             catch (Exception) when (!linked.IsCancellationRequested)
             {
-                errors.Add($"Stack exporter '{registration.Exporter.ContributorId}' export failed.");
+                errors.Add($"Stack exporter '{registration.ContributorId}' export failed.");
             }
         }
         if (errors.Count > 0) return new RuntimeStackExportResponse(false, null, warnings, errors);

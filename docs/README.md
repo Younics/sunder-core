@@ -8,7 +8,7 @@ This folder contains current Sunder documentation for the implementation in this
 - [Package development](SUNDER-PACKAGE-DEVELOPMENT.md)
 - [Package standard](SUNDER-PACKAGE-STANDARD.md): normative package and Stack format rules
 - [SDK compatibility](SUNDER-SDK-COMPATIBILITY.md)
-- [Sunder 1.1 breaking baseline](SUNDER-1.1-BREAKING-BASELINE.md)
+- [Sunder V1 baseline](SUNDER-V1-BASELINE.md)
 - [CLI reference](SUNDER-CLI.md)
 - [Desktop app and development arguments](SUNDER-APP.md)
 - [Canonical current-user Host behavior](SUNDER-HOST-SERVICE.md)

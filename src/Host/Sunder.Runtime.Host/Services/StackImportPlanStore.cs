@@ -58,10 +58,8 @@ internal sealed class StackImportPlanStore(
     }
 }
 
-internal sealed record StackImporterRegistration(string PackageId, IPackageStackImporter Importer);
-
 internal sealed record StackContributorBinding(
-    StackImporterRegistration Registration,
+    StackContributorRegistration Registration,
     IReadOnlyList<StackFragmentImport> Fragments,
     IReadOnlyList<RuntimeStackImportActionDescriptor> Actions);
 

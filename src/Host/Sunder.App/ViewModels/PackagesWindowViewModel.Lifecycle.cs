@@ -342,6 +342,7 @@ public sealed partial class PackagesWindowViewModel
         Operations.PropertyChanged -= Operations_OnPropertyChanged;
 
         _marketplaceSearchScheduler.Dispose();
+        _marketplaceVersionDetailsRequest.Dispose();
         _tasks.Dispose();
         CancelMarketplacePackageDetailsSpinnerDelay();
         ObserveSelectedInstalledPackage(null);

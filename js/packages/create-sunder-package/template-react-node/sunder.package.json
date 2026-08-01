@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "SUNDER_PACKAGE_ID",
+  "name": "SUNDER_PACKAGE_NAME",
+  "summary": "A React App and TypeScript process Runtime package for Sunder.",
+  "version": "1.0.0",
+  "entry": "src/worker.ts",
+  "app": {
+    "root": "app",
+    "entryPoint": "index.html",
+    "views": [
+      {
+        "viewId": "SUNDER_PACKAGE_ID.main",
+        "displayName": "SUNDER_PACKAGE_NAME",
+        "route": "/",
+        "icon": "icon.svg",
+        "defaultPlacement": "middle",
+        "showInHotbar": true
+      }
+    ]
+  },
+  "contracts": [
+    {
+      "path": "contracts/example.rpc.json"
+    }
+  ],
+  "providers": [
+    {
+      "providerId": "SUNDER_PACKAGE_ID.provider",
+      "contractId": "example.messages",
+      "contractVersion": "1.0.0"
+    }
+  ],
+  "usesContracts": [
+    {
+      "contractId": "example.messages",
+      "versionRange": "1.0.0",
+      "required": true,
+      "actions": ["discover", "invoke"]
+    }
+  ],
+  "maximumExecutableBytes": 167772160,
+  "maximumPackageBytes": 1073741824
+}

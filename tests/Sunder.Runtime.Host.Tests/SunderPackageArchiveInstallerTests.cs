@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -27,7 +28,7 @@ public sealed class SunderPackageArchiveInstallerTests
         var installedPackage = Assert.Single(installedPackages);
         Assert.Equal("test.package", installedPackage.PackageId);
         Assert.True(File.Exists(installedPackage.ManifestPath));
-        Assert.True(File.Exists(installedPackage.EntryAssemblyPath));
+        Assert.True(File.Exists(GetEntryAssemblyPath(installedPackage)));
     }
 
     [Fact]
@@ -223,6 +224,40 @@ public sealed class SunderPackageArchiveInstallerTests
     }
 
     [Fact]
+    public async Task InstallFromRuntimePathAsync_PublishesCanonicalFinalSourcePaths()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer);
+
+        try
+        {
+            var result = await service.InstallPackageFromRuntimePathAsync(
+                CreatePackageArchive(root, "test.package", "1.0.0"));
+
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+            var installed = Assert.Single(await store.ListAsync());
+            var source = Assert.Single(service.GetActiveRuntimePackageSources());
+            Assert.True(paths.IsCanonicalInstalledPath(installed.PackageId, installed.Version, source.SourceFolder));
+            Assert.Equal(Path.GetFullPath(installed.InstallPath), Path.GetFullPath(source.SourceFolder));
+            Assert.Null(source.SnapshotFolder);
+            var snapshot = Assert.Single(service.GetActivePackageUiSnapshots());
+            using var lease = service.AcquireCurrentUiSnapshot(snapshot.SnapshotId);
+            Assert.NotNull(lease);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task CommitPackageStoreStageAsync_WhenStale_PreservesCurrentGenerationAndStore()
     {
         var root = CreateTempDirectory();
@@ -283,7 +318,7 @@ public sealed class SunderPackageArchiveInstallerTests
         Assert.True(upgradeResult.Success, string.Join(Environment.NewLine, upgradeResult.Errors));
         var installedPackage = Assert.Single(await store.ListAsync());
         Assert.Equal("1.1.0", installedPackage.Version);
-        Assert.True(File.Exists(installedPackage.EntryAssemblyPath));
+        Assert.True(File.Exists(GetEntryAssemblyPath(installedPackage)));
         Assert.False(Directory.Exists(originalInstallPath));
     }
 
@@ -328,23 +363,24 @@ public sealed class SunderPackageArchiveInstallerTests
     {
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "lib"));
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "lib"));
 
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
         {
+            ArchiveFormatVersion = 1,
             ManifestVersion = 1,
             Id = packageId,
             Name = "Test Package",
             Version = version,
-            EntryAssembly = "Test.Package.dll",
-            HostRoles = [SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole],
-            SdkApiVersion = 1,
-            SdkPackageVersion = "1.1.0",
-            RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
+            Targets =
+            [
+                CreateTarget(SunderPackageFormat.AppHostRole, SunderPackageFormat.AvaloniaTargetKind),
+                CreateTarget(SunderPackageFormat.RuntimeHostRole, SunderPackageFormat.DotnetTargetKind),
+            ],
         }));
 
-        var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "lib", "Test.Package.dll");
+        var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "shared", "lib", "Test.Package.dll");
         File.Copy(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, entryAssemblyPath);
 
         var contentIndex = new SunderPackageContentIndex(
@@ -398,9 +434,26 @@ public sealed class SunderPackageArchiveInstallerTests
         return new SunderPackageContentIndexEntry(
             relativePath,
             hash,
-            new FileInfo(path).Length,
-            Role: SunderPackageFormat.GetContentRole(relativePath) ?? "file");
+            new FileInfo(path).Length);
     }
+
+    private static SunderPackageTargetManifest CreateTarget(string role, string kind)
+        => new()
+        {
+            Role = role,
+            Rid = RuntimeInformation.RuntimeIdentifier,
+            Kind = kind,
+            EntryPoint = "lib/Test.Package.dll",
+            TargetFramework = "net10.0",
+            SdkVersion = "1.1.0",
+            RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
+        };
+
+    private static string GetEntryAssemblyPath(InstalledPackageRecord package)
+        => Path.Combine(
+            package.InstallPath,
+            package.ContentInventory.Single(entry => entry.Path.EndsWith(".dll", StringComparison.Ordinal)).Path
+                .Replace('/', Path.DirectorySeparatorChar));
 
     private static string CreateTempDirectory()
     {

@@ -305,8 +305,9 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
     private static bool IsLoadableDevPackageFolder(string folder)
         => Directory.Exists(folder)
-           && File.Exists(Path.Combine(folder, "sunder-package.json"))
-           && Directory.Exists(Path.Combine(folder, "lib"));
+           && File.Exists(Path.Combine(folder, "manifest", "sunder-package.json"))
+           && File.Exists(Path.Combine(folder, "manifest", "content-index.json"))
+           && Directory.Exists(Path.Combine(folder, "payload"));
 
     private static bool TrySnapshotFiles(
         IReadOnlyList<WatchRegistration> registrations,

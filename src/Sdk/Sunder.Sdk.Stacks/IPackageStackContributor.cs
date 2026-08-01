@@ -4,7 +4,7 @@ namespace Sunder.Sdk.Stacks;
 
 /// <summary>Discovers and exports Stack content owned by one package feature.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
 public interface IPackageStackExporter
 {
     /// <summary>Gets the stable package-scoped contributor id.</summary>
@@ -27,7 +27,7 @@ public interface IPackageStackExporter
 /// <summary>Previews and imports Stack content owned by one package feature.</summary>
 /// <remarks>Contributor instances are activation-scoped and may be called concurrently. Preview must be side-effect free. The host binds a preview to an expiring, single-use import plan. Imports are atomic only within the guarantees made by each contributor; the host cannot roll back another contributor.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderSdkCapability(SunderSdkCapabilities.StackContributionsV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
 public interface IPackageStackImporter
 {
     /// <summary>Gets the stable package-scoped contributor id.</summary>

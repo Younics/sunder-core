@@ -1,5 +1,5 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
@@ -10,7 +10,6 @@ internal sealed partial class PackageSessionLifecycleService
     private readonly RuntimeSessionOwner _sessions;
     private readonly RuntimeOperationGate _gate;
     private readonly PackageSessionReconciler _reconciler;
-    private readonly RuntimePackageUiService _ui;
     private readonly InstalledPackageStore _installedPackages;
     private readonly PackageSessionPublisher _publisher;
     private readonly PackageLifecycleStageStore _stages;
@@ -22,7 +21,6 @@ internal sealed partial class PackageSessionLifecycleService
         RuntimeSessionOwner sessions,
         RuntimeOperationGate gate,
         PackageSessionReconciler reconciler,
-        RuntimePackageUiService ui,
         InstalledPackageStore installedPackages,
         PackageSessionPublisher publisher,
         PackageLifecycleStageStore stages,
@@ -33,7 +31,6 @@ internal sealed partial class PackageSessionLifecycleService
         _sessions = sessions;
         _gate = gate;
         _reconciler = reconciler;
-        _ui = ui;
         _installedPackages = installedPackages;
         _publisher = publisher;
         _stages = stages;
@@ -64,7 +61,13 @@ internal sealed partial class PackageSessionLifecycleService
         foreach (var folder in folders)
         {
             operationToken.ThrowIfCancellationRequested();
-            AddDevOverlay(sources, folder, watch: false, PackageSessionOverlayOwner.Startup, errors);
+            await AddDevOverlayAsync(
+                sources,
+                folder,
+                watch: false,
+                PackageSessionOverlayOwner.Startup,
+                errors,
+                operationToken);
         }
         if (errors.Count > 0)
         {
@@ -73,18 +76,21 @@ internal sealed partial class PackageSessionLifecycleService
         return await LoadLifecycleCoreAsync([], operationToken, sources);
     }
 
-    internal Task<PackageSessionOperationResult> LoadDevPackageAsync(
+    internal async Task<PackageSessionOperationResult> LoadDevPackageAsync(
         string folder,
         bool watch = true,
         CancellationToken cancellationToken = default)
     {
         var fullPath = Path.GetFullPath(folder);
-        if (!TryReadDevPackageId(fullPath, out var packageId, out var error))
+        var identity = await ReadDevPackageIdentityAsync(fullPath, cancellationToken);
+        if (identity.PackageId is null)
         {
-            return Task.FromResult(PackageSessionOperationResult.Failed(error ?? "The Runtime dev package input is invalid."));
+            return PackageSessionOperationResult.Failed(
+                identity.Error ?? "The Runtime dev package input is invalid.");
         }
+        var packageId = identity.PackageId;
 
-        return CommitMergedSessionAsync(
+        return await CommitMergedSessionAsync(
             sources =>
             {
                 if (sources.DevOverlays.Any(existing =>
@@ -154,20 +160,18 @@ internal sealed partial class PackageSessionLifecycleService
         {
             return PackageLifecycleStageResult.Failed(
                 $"The Runtime already has {MaxPendingStages} pending package lifecycle stages.",
-                _sessions.State.GetActivePackages(),
-                _ui.GetActiveSnapshots());
+                _sessions.State.GetActivePackages());
         }
         var warnings = new List<string>();
         var errors = new List<string>();
         var baseGeneration = _sessions.Generation;
         var currentPackages = _sessions.State.GetActivePackages();
         var currentSources = _sessions.State.GetActivePackageSources();
-        var currentSnapshots = _ui.GetActiveSnapshots();
         var sources = _sessions.Sources.Snapshot();
         var reloadFolders = ResolveReloadFolders(sources, request.PackageIds, errors);
         if (errors.Count > 0)
         {
-            return PackageLifecycleStageResult.Failed(errors[0], currentPackages, currentSnapshots, warnings, errors);
+            return PackageLifecycleStageResult.Failed(errors[0], currentPackages, warnings, errors);
         }
 
         var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, operationToken);
@@ -179,7 +183,6 @@ internal sealed partial class PackageSessionLifecycleService
             return PackageLifecycleStageResult.Failed(
                 errors.FirstOrDefault() ?? "Package lifecycle stage failed.",
                 currentPackages,
-                currentSnapshots,
                 warnings,
                 errors);
         }
@@ -187,7 +190,7 @@ internal sealed partial class PackageSessionLifecycleService
         {
             await loaded.Session.DisposeAsync();
             const string message = "Package lifecycle stage is stale because the active package session changed while it was being prepared.";
-            return PackageLifecycleStageResult.Failed(message, currentPackages, currentSnapshots, warnings, [message]);
+            return PackageLifecycleStageResult.Failed(message, currentPackages, warnings, [message]);
         }
 
         var stagedPackages = loaded.Session.GetActivePackages();
@@ -208,9 +211,9 @@ internal sealed partial class PackageSessionLifecycleService
         catch (Exception exception)
         {
             await loaded.Session.DisposeAsync();
-            _logger.LogError(exception, "Failed to prepare package UI snapshots for lifecycle stage {StageId}", stageId);
-            const string message = "Package lifecycle stage failed while preparing package UI snapshots.";
-            return PackageLifecycleStageResult.Failed(message, currentPackages, currentSnapshots, warnings, [message]);
+            _logger.LogError(exception, "Failed to prepare package lifecycle stage {StageId}", stageId);
+            const string message = "Package lifecycle stage preparation failed.";
+            return PackageLifecycleStageResult.Failed(message, currentPackages, warnings, [message]);
         }
         var createdAtUtc = _timeProvider.GetUtcNow();
         var expiresAtUtc = createdAtUtc + _lifecyclePolicy.PendingStageLifetime;
@@ -230,7 +233,6 @@ internal sealed partial class PackageSessionLifecycleService
         return new PackageLifecycleStageResult(
             stageId,
             stagedPackages,
-            candidate.UiSnapshots,
             warnings,
             errors,
             impacted);
@@ -249,7 +251,6 @@ internal sealed partial class PackageSessionLifecycleService
             return PackageLifecycleOperationResult.Failed(
                 statusMessage ?? $"Package lifecycle stage '{stageId}' was not found.",
                 _sessions.State.GetActivePackages(),
-                _ui.GetActiveSnapshots(),
                 errors: statusMessage is null ? null : [statusMessage]);
         }
         if (stage.BaseGeneration != _sessions.Generation)
@@ -257,7 +258,7 @@ internal sealed partial class PackageSessionLifecycleService
             await _publisher.DiscardAsync(stage.Candidate);
             var message = $"Package lifecycle stage '{stageId}' is stale because the active package session changed before commit.";
             _sessions.MarkStageFailed(stageId, message);
-            return PackageLifecycleOperationResult.Failed(message, _sessions.State.GetActivePackages(), _ui.GetActiveSnapshots(), errors: [message], impactedPackageIds: stage.ImpactedPackageIds);
+            return PackageLifecycleOperationResult.Failed(message, _sessions.State.GetActivePackages(), errors: [message], impactedPackageIds: stage.ImpactedPackageIds);
         }
 
         _sessions.MarkStageCommitting(stageId);
@@ -271,7 +272,6 @@ internal sealed partial class PackageSessionLifecycleService
                 true,
                 "Package lifecycle stage committed.",
                 committed.ActivePackages,
-                committed.PackageUiSnapshots,
                 warnings,
                 stage.Candidate.Errors,
                 stage.ImpactedPackageIds)
@@ -296,7 +296,7 @@ internal sealed partial class PackageSessionLifecycleService
             _logger.LogError(exception, "Failed to commit package lifecycle stage {StageId}", stageId);
             const string message = "Package lifecycle stage could not be committed.";
             _sessions.MarkStageFailed(stageId, message);
-            return PackageLifecycleOperationResult.Failed(message, _sessions.State.GetActivePackages(), _ui.GetActiveSnapshots(), errors: [message], impactedPackageIds: stage.ImpactedPackageIds);
+            return PackageLifecycleOperationResult.Failed(message, _sessions.State.GetActivePackages(), errors: [message], impactedPackageIds: stage.ImpactedPackageIds);
         }
     }
 
@@ -325,7 +325,6 @@ internal sealed partial class PackageSessionLifecycleService
         var baseGeneration = _sessions.Generation;
         var currentPackages = _sessions.State.GetActivePackages();
         var currentSources = _sessions.State.GetActivePackageSources();
-        var currentSnapshots = _ui.GetActiveSnapshots();
         var sources = candidateSources ?? _sessions.Sources.Snapshot();
         var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, cancellationToken);
         warnings.AddRange(loaded.Warnings);
@@ -333,7 +332,7 @@ internal sealed partial class PackageSessionLifecycleService
         if (loaded.Session is null || errors.Count > 0 && !allowPackageErrors)
         {
             if (loaded.Session is not null) await loaded.Session.DisposeAsync();
-            return PackageLifecycleOperationResult.Failed(errors.FirstOrDefault() ?? "Package lifecycle load failed.", currentPackages, currentSnapshots, warnings, errors);
+            return PackageLifecycleOperationResult.Failed(errors.FirstOrDefault() ?? "Package lifecycle load failed.", currentPackages, warnings, errors);
         }
         if (errors.Count > 0)
         {
@@ -364,14 +363,13 @@ internal sealed partial class PackageSessionLifecycleService
         {
             _logger.LogError(exception, "Failed to start package background services");
             const string message = "Package lifecycle load failed while starting background services.";
-            return PackageLifecycleOperationResult.Failed(message, currentPackages, currentSnapshots, warnings, [message], impacted);
+            return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message], impacted);
         }
         var committed = _sessions.GetSnapshot();
         return new PackageLifecycleOperationResult(
             true,
             "Package lifecycle loaded.",
             committed.ActivePackages,
-            committed.PackageUiSnapshots,
             warnings,
             [],
             impacted)
@@ -429,14 +427,22 @@ internal sealed partial class PackageSessionLifecycleService
         };
     }
 
-    private static void AddDevOverlay(PackageSessionSourceSnapshot sources, string folder, bool watch, PackageSessionOverlayOwner owner, ICollection<string> errors)
+    private static async Task AddDevOverlayAsync(
+        PackageSessionSourceSnapshot sources,
+        string folder,
+        bool watch,
+        PackageSessionOverlayOwner owner,
+        ICollection<string> errors,
+        CancellationToken cancellationToken)
     {
-        if (!TryReadDevPackageId(folder, out var packageId, out var error))
+        var fullPath = Path.GetFullPath(folder);
+        var identity = await ReadDevPackageIdentityAsync(fullPath, cancellationToken);
+        if (identity.PackageId is null)
         {
-            errors.Add(error ?? $"'{folder}' is not a loadable Sunder dev package folder.");
+            errors.Add(identity.Error ?? $"'{folder}' is not a loadable Sunder dev package folder.");
             return;
         }
-        sources.SetDevOverlay(new PackageSessionDevOverlay(packageId, Path.GetFullPath(folder), watch, owner));
+        sources.SetDevOverlay(new PackageSessionDevOverlay(identity.PackageId, fullPath, watch, owner));
     }
 
     private static IReadOnlyList<string> ResolveReloadFolders(PackageSessionSourceSnapshot sources, IReadOnlyList<string>? packageIds, ICollection<string> errors)
@@ -453,37 +459,26 @@ internal sealed partial class PackageSessionLifecycleService
         return folders;
     }
 
-    private static bool TryReadDevPackageId(string folder, out string packageId, out string? error)
+    private static async Task<(string? PackageId, string? Error)> ReadDevPackageIdentityAsync(
+        string folder,
+        CancellationToken cancellationToken)
     {
-        packageId = string.Empty;
-        error = null;
         if (!Directory.Exists(folder))
         {
-            error = "The dev package folder does not exist.";
-            return false;
+            return (null, "The dev package folder does not exist.");
         }
-        var manifestPath = Path.Combine(folder, "sunder-package.json");
-        if (!File.Exists(manifestPath))
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(
+            folder,
+            cancellationToken);
+        if (!validation.Success || validation.Manifest?.Id is null)
         {
-            error = "The dev package folder does not contain sunder-package.json.";
-            return false;
+            return (
+                null,
+                validation.Errors.FirstOrDefault() is { } error
+                    ? $"The dev package folder is not a strict canonical exploded package: {error}"
+                    : "The dev package folder is not a strict canonical exploded package.");
         }
-        try
-        {
-            var manifest = JsonSerializer.Deserialize<Sunder.Package.Format.SunderPackageManifest>(File.ReadAllText(manifestPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (string.IsNullOrWhiteSpace(manifest?.Id))
-            {
-                error = "The dev package manifest is missing id.";
-                return false;
-            }
-            packageId = manifest.Id.Trim();
-            return true;
-        }
-        catch (JsonException)
-        {
-            error = "The dev package manifest is not valid JSON.";
-            return false;
-        }
+        return (validation.Manifest.Id, null);
     }
 
 }

@@ -28,7 +28,10 @@ internal interface IPackageOperationExecutor
 
     BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl);
 
-    BackgroundProcessSnapshot EnqueueLocalInstall(string packagePath);
+    BackgroundProcessSnapshot EnqueueLocalInstall(
+        string packagePath,
+        string expectedSha256,
+        bool deleteAfterUse);
 
     BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName);
 

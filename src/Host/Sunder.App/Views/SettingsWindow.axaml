@@ -259,7 +259,7 @@
                 </StackPanel>
 
                 <StackPanel Spacing="16"
-                            IsVisible="{Binding ShowUpdateSettings}">
+                             IsVisible="{Binding ShowUpdateSettings}">
                   <Border Classes="card-surface">
                     <StackPanel Spacing="14">
                       <StackPanel Spacing="4">

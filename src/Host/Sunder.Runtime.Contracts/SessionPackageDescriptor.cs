@@ -12,4 +12,15 @@ public sealed record SessionPackageDescriptor(
     PackageFailureOrigin? FailureOrigin,
     string? LastError,
     DateTimeOffset? LastFailureAtUtc,
-    int FailureCount);
+    int FailureCount,
+    IReadOnlyList<PackageRpcContractUseDescriptor>? RpcContractUses = null)
+{
+    private IReadOnlyList<PackageRpcContractUseDescriptor> _rpcContractUses =
+        RuntimeContractCollections.Freeze(RpcContractUses ?? []);
+
+    public IReadOnlyList<PackageRpcContractUseDescriptor> RpcContractUses
+    {
+        get => _rpcContractUses;
+        init => _rpcContractUses = RuntimeContractCollections.Freeze(value);
+    }
+}

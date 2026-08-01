@@ -288,6 +288,7 @@
           "AsyncImageLoader.Avalonia": "[3.8.0, )",
           "Avalonia": "[12.0.3, )",
           "Avalonia.AvaloniaEdit": "[12.0.0, )",
+          "Avalonia.Controls.WebView": "[12.0.1, )",
           "Avalonia.Desktop": "[12.0.3, )",
           "Avalonia.Fonts.Inter": "[12.0.3, )",
           "Avalonia.Themes.Fluent": "[12.0.3, )",
@@ -362,7 +363,6 @@
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.0.3, )",
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.8, )",
           "Sunder.Sdk": "[1.1.0, )"
         }
       },
@@ -397,6 +397,15 @@
         "requested": "[12.0.0, )",
         "resolved": "12.0.0",
         "contentHash": "VNfaYdTbiQ2DlSkSMoLg4DhTbQmQR0cFT6nqEqLkaYGLjBWmUdv5BNIuoObK4c9cgzFqnEJXBaOp4R/bxgFKfQ==",
+        "dependencies": {
+          "Avalonia": "12.0.0"
+        }
+      },
+      "Avalonia.Controls.WebView": {
+        "type": "CentralTransitive",
+        "requested": "[12.0.1, )",
+        "resolved": "12.0.1",
+        "contentHash": "GrCIpIIBL7ueFDsNu3lyYc1mgO3QGGl1c1MCK8YAgjaNZwF9PV5PF2UB3lm1uuqj/MWOKNhemLwcSDLyYv0JjQ==",
         "dependencies": {
           "Avalonia": "12.0.0"
         }

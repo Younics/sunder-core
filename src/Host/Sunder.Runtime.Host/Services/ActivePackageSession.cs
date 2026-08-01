@@ -4,6 +4,8 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Settings;
+using Sunder.Sdk.Rpc;
+using Sunder.Package.Format;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -17,11 +19,9 @@ internal sealed record ActiveLoadedPackage(
     IReadOnlyDictionary<string, IPackageCallbackHandler> CallbackHandlers,
     IReadOnlyList<IPackageBackgroundService> BackgroundServices,
     IServiceProvider ServiceProvider,
-    RuntimePackageLoadContext LoadContext,
+    RuntimePackageLoadContext? LoadContext,
     IPackageSettings Settings)
 {
-    public PackageExtensionOwnerActivation? ExtensionOwner { get; init; }
-
     public Guid RuntimeActivationId { get; init; } = Guid.NewGuid();
 
     public PackageSettingsSchema? CanonicalSettingsSchema { get; init; }
@@ -31,6 +31,16 @@ internal sealed record ActiveLoadedPackage(
 
     public IReadOnlyDictionary<string, RuntimePackageStreamRegistration> RuntimeStreams { get; init; }
         = new Dictionary<string, RuntimePackageStreamRegistration>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, RuntimeRpcProviderRegistration> RpcProviders { get; init; }
+        = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, SunderRpcContractDescriptor> RpcContracts { get; init; }
+        = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
+
+    public IReadOnlyList<SunderPackageContractUseManifest> RpcContractUses { get; init; } = [];
+
+    public string RpcManifestSha256 { get; init; } = string.Empty;
 
     public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
         => CallbackHandlers.TryGetValue(callbackHandlerId, out var handler) ? handler : null;
@@ -42,7 +52,6 @@ internal sealed class ActivePackageSession
     private readonly Dictionary<string, ActiveLoadedPackage> _loadedPackageMap;
     private readonly Dictionary<string, SessionPackageDescriptor> _sessionPackageMap;
     private readonly Dictionary<string, RuntimePackageSource> _packageSourceMap;
-    private readonly RuntimePackageExtensionCatalog _extensionCatalog;
     private readonly object _lifecycleSync = new();
     private readonly List<Task> _lifecycleOperations = [];
     private readonly List<Task> _runtimeGenerationActivationOperations = [];
@@ -54,7 +63,6 @@ internal sealed class ActivePackageSession
         string? sessionFolder,
         IDictionary<string, ActiveLoadedPackage> loadedPackages,
         IDictionary<string, SessionPackageDescriptor> sessionPackages,
-        RuntimePackageExtensionCatalog? extensionCatalog = null,
         RuntimeSharedAssemblyRegistry? sharedAssemblyRegistry = null,
         bool backgroundServicesStarted = true,
         IEnumerable<RuntimePackageSource>? readySources = null)
@@ -64,9 +72,17 @@ internal sealed class ActivePackageSession
         _sessionPackageMap = new Dictionary<string, SessionPackageDescriptor>(sessionPackages, StringComparer.OrdinalIgnoreCase);
         _packageSourceMap = (readySources ?? loadedPackages.Values.Select(static package => package.Source))
             .ToDictionary(static source => source.PackageId, StringComparer.OrdinalIgnoreCase);
-        _extensionCatalog = extensionCatalog ?? new RuntimePackageExtensionCatalog();
         SharedAssemblyRegistry = sharedAssemblyRegistry;
         _backgroundServicesStarted = backgroundServicesStarted;
+    }
+
+    private ActivePackageSession()
+        : this(
+            sessionFolder: null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase))
+    {
+        IsEmpty = true;
     }
 
     private bool _backgroundServicesStarted;
@@ -74,11 +90,9 @@ internal sealed class ActivePackageSession
     private bool _runtimeGenerationMonitoringStarted;
     private long? _committedSessionGeneration;
 
-    public static ActivePackageSession Empty { get; } = new(
-        null,
-        new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
-        new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-    );
+    public static ActivePackageSession CreateEmpty() => new();
+
+    public bool IsEmpty { get; }
 
     public string? SessionFolder { get; }
 
@@ -240,6 +254,20 @@ internal sealed class ActivePackageSession
         }
     }
 
+    public void ActivateCommittedRuntimeGeneration()
+    {
+        if (!_runtimeGenerationCommitted)
+        {
+            throw new InvalidOperationException("The Runtime generation must be committed before process workers are activated.");
+        }
+        foreach (var participant in _loadedPackageMap.Values
+                     .SelectMany(static package => package.BackgroundServices)
+                     .OfType<IProcessRuntimeGenerationParticipant>())
+        {
+            participant.ActivateGeneration();
+        }
+    }
+
     public bool OwnsPackageActivation(string packageId, Guid runtimeActivationId)
         => _loadedPackageMap.TryGetValue(packageId, out var package)
            && package.RuntimeActivationId == runtimeActivationId
@@ -283,6 +311,30 @@ internal sealed class ActivePackageSession
             .Where(source => IsPackageEnabled(source.PackageId))
             .ToArray();
 
+    public void FinalizeCommittedInstalledSources()
+    {
+        foreach (var packageId in _packageSourceMap.Keys.ToArray())
+        {
+            var source = _packageSourceMap[packageId];
+            if (source.Kind != PackageSourceKind.Installed)
+            {
+                continue;
+            }
+            if (!Directory.Exists(source.SourceFolder))
+            {
+                throw new InvalidDataException(
+                    $"Committed installed package source '{source.SourceFolder}' for '{source.PackageId}' does not exist.");
+            }
+
+            var committedSource = source.AsCommittedInstalledSource();
+            _packageSourceMap[packageId] = committedSource;
+            if (_loadedPackageMap.TryGetValue(packageId, out var loadedPackage))
+            {
+                _loadedPackageMap[packageId] = loadedPackage with { Source = committedSource };
+            }
+        }
+    }
+
     public IReadOnlyList<RuntimePackageSource> GetAppPackageSources()
     {
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -311,6 +363,9 @@ internal sealed class ActivePackageSession
     public bool TryGetSessionPackage(string packageId, out SessionPackageDescriptor? package)
         => _sessionPackageMap.TryGetValue(packageId, out package);
 
+    public bool TryGetPackageSource(string packageId, out RuntimePackageSource? source)
+        => _packageSourceMap.TryGetValue(packageId, out source);
+
     public bool IsPackageEnabled(string packageId)
     {
         return _sessionPackageMap.TryGetValue(packageId, out var package)
@@ -329,9 +384,6 @@ internal sealed class ActivePackageSession
         loadedPackage = null;
         return false;
     }
-
-    public IReadOnlyList<PackageExtensionContribution<TContract>> GetExtensionContributions<TContract>(PackageExtensionPoint<TContract> extensionPoint)
-        => _extensionCatalog.GetExtensionContributions(extensionPoint);
 
     public string? TryResolvePackageAssetPath(string packageId, string assetPath)
     {
@@ -355,22 +407,14 @@ internal sealed class ActivePackageSession
         string message,
         out ActiveLoadedPackage? packageToDeactivate)
     {
-        var marked = MarkPackageFailedWithoutRetiringExtensions(
+        return MarkPackageFailedInternal(
             packageId,
             origin,
             message,
             out packageToDeactivate);
-        if (marked)
-        {
-            BeginPackageExtensionRetirement(
-                packageId,
-                packageToDeactivate,
-                PackageExtensionCatalogChangeReason.PackageFaulted);
-        }
-        return marked;
     }
 
-    internal bool MarkPackageFailedWithoutRetiringExtensions(
+    internal bool MarkPackageFailedInternal(
         string packageId,
         PackageFailureOrigin origin,
         string message,
@@ -415,10 +459,6 @@ internal sealed class ActivePackageSession
             LastFailureAtUtc = null,
         };
         _loadedPackageMap.Remove(packageId, out packageToDeactivate);
-        BeginPackageExtensionRetirement(
-            packageId,
-            packageToDeactivate,
-            PackageExtensionCatalogChangeReason.PackageDisabled);
         return true;
     }
 
@@ -429,10 +469,6 @@ internal sealed class ActivePackageSession
         _packageSourceMap.Remove(packageId);
         if (removedSessionPackage || removedLoadedPackage)
         {
-            BeginPackageExtensionRetirement(
-                packageId,
-                packageToDeactivate,
-                PackageExtensionCatalogChangeReason.PackageUninstalled);
             return true;
         }
 
@@ -444,7 +480,6 @@ internal sealed class ActivePackageSession
         TimeSpan cleanupTimeout,
         CancellationToken cancellationToken = default)
     {
-        _extensionCatalog.BeginAllOwnerRetirements();
         if (!_backgroundServicesStarted)
         {
             return;
@@ -513,8 +548,7 @@ internal sealed class ActivePackageSession
     {
         try
         {
-            var extensionRetirements = _extensionCatalog.BeginAllOwnerRetirements();
-            await DisposeAfterLifecycleOperationsAsync(extensionRetirements);
+            await DisposeAfterLifecycleOperationsAsync();
             completion.TrySetResult();
         }
         catch (Exception exception)
@@ -523,8 +557,7 @@ internal sealed class ActivePackageSession
         }
     }
 
-    private async Task DisposeAfterLifecycleOperationsAsync(
-        IReadOnlyList<PackageExtensionOwnerRetirement> extensionRetirements)
+    private async Task DisposeAfterLifecycleOperationsAsync()
     {
         Task[] lifecycleOperations;
         lock (_lifecycleSync)
@@ -533,17 +566,8 @@ internal sealed class ActivePackageSession
         }
 
         await Task.WhenAll(lifecycleOperations.Select(ObserveAsync));
-        await Task.WhenAll(extensionRetirements.Select(static retirement => retirement.Completion));
         await DisposeCoreAsync();
     }
-
-    internal PackageExtensionOwnerRetirement BeginPackageExtensionRetirement(
-        string packageId,
-        ActiveLoadedPackage? loadedPackage,
-        PackageExtensionCatalogChangeReason reason)
-        => loadedPackage?.ExtensionOwner is { } owner
-            ? _extensionCatalog.BeginOwnerRetirement(owner, reason)
-            : PackageExtensionOwnerRetirement.Completed(packageId);
 
     private void TrackLifecycleOperation(Task operation)
     {
@@ -582,7 +606,7 @@ internal sealed class ActivePackageSession
 
             try
             {
-                package.LoadContext.Unload();
+                package.LoadContext?.Unload();
             }
             catch (Exception ex)
             {

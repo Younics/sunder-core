@@ -44,6 +44,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
         AvailableVersion = state.AvailableVersion;
         DeprecatedUpdateMessage = state.DeprecatedUpdateMessage;
         OperationHint = state.OperationHint;
+        RpcContractUses = state.RpcContractUses;
         _onSelect = onSelect;
     }
 
@@ -89,6 +90,14 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
 
     public string OperationHint { get; }
 
+    public IReadOnlyList<PackageRpcAccessItemViewModel> RpcContractUses { get; }
+
+    public bool HasRpcContractUses => RpcContractUses.Count > 0;
+
+    public bool HasNoRpcContractUses => !HasRpcContractUses;
+
+    public string RpcAccessSummary => PackageRpcAccessProjection.Summary(RpcContractUses);
+
     [ObservableProperty]
     private bool _isSelected;
 
@@ -113,7 +122,9 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     [RelayCommand]
     private void Select() => _onSelect(this);
 
-    internal bool HasState(PackageCatalogItemState state) => _state == state;
+    internal bool HasState(PackageCatalogItemState state)
+        => _state with { RpcContractUses = state.RpcContractUses } == state
+           && _state.RpcContractUses.SequenceEqual(state.RpcContractUses);
 
     internal static PackageCatalogItemState CreateState(
         SessionPackageDescriptor? sessionPackage,
@@ -142,6 +153,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
             update?.AvailableVersion,
             update?.DeprecatedMessage,
             ToOperationHint(installedPackage, update),
+            PackageRpcAccessProjection.FromRuntime(
+                sessionPackage?.RpcContractUses ?? installedPackage?.RpcContractUses ?? []),
             iconUri);
     }
 
@@ -187,6 +200,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
                 PackageFailureOrigin.RuntimeConfiguration => "runtime configuration",
                 PackageFailureOrigin.RuntimeAuthentication => "runtime auth",
                 PackageFailureOrigin.RuntimeBackgroundService => "runtime background service",
+                PackageFailureOrigin.RuntimeProcess => "runtime process",
+                PackageFailureOrigin.RuntimeRpcProvider => "runtime RPC provider",
                 _ => "package fault",
             };
 
@@ -238,4 +253,5 @@ internal sealed record PackageCatalogItemState(
     string? AvailableVersion,
     string? DeprecatedUpdateMessage,
     string OperationHint,
+    IReadOnlyList<PackageRpcAccessItemViewModel> RpcContractUses,
     Uri? IconUri);

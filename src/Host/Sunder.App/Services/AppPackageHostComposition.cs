@@ -17,6 +17,7 @@ internal sealed class AppPackageHostComposition : IDisposable
     private readonly AppPackagePublicationServices _publicationServices;
     private readonly AppPackageGenerationPublication _publication = new();
     private readonly BackgroundProcessQueueService? _ownedBackgroundProcessQueue;
+    private readonly Guid _generationId;
 
     public AppPackageHostComposition(
         object eventSender,
@@ -24,16 +25,18 @@ internal sealed class AppPackageHostComposition : IDisposable
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
         Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
-        Action<Guid, PackageExtensionOwnerToken, string, PackageFailureOrigin, Exception?> disableExtensionOwner,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry,
-        AppPackageExtensionCatalog? extensionCatalog,
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
         NotificationCenterService? notificationCenter,
         BackgroundProcessQueueService? backgroundProcessQueue,
-        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo)
+        Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
+        IAppWebViewFactory? webViewFactory = null,
+        IAppWebRpcClientFactory? webRpcClientFactory = null,
+        ExternalBrowserService? externalBrowser = null)
     {
         _eventSender = eventSender;
+        _generationId = generationId;
         _state = state;
         AssemblyTracker = new AppPackageAssemblyTracker();
         var faultNotificationService = notificationCenter is null
@@ -51,15 +54,11 @@ internal sealed class AppPackageHostComposition : IDisposable
                 exception));
 
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
-        ExtensionCatalog = extensionCatalog ?? new AppPackageExtensionCatalog();
-        ExtensionCatalog.ConfigureFaultReporting((ownerToken, message, origin, exception) =>
-            disableExtensionOwner(generationId, ownerToken, message, origin, exception));
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _ownedBackgroundProcessQueue = backgroundProcessQueue is null ? resolvedBackgroundProcessQueue : null;
         var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue, generationId);
         _publicationServices = new AppPackagePublicationServices(shellViewService, settingsNavigationService, _publication);
         var serviceProviderFactory = new AppPackageServiceProviderFactory(
-            ExtensionCatalog,
             _publicationServices,
             _publicationServices,
             notificationCenter,
@@ -70,11 +69,12 @@ internal sealed class AppPackageHostComposition : IDisposable
             _sharedAssemblyRegistry,
             serviceProviderFactory,
             viewRegistry,
-            ExtensionCatalog,
-            getRuntimeConnectionInfo: getRuntimeConnectionInfo);
+            getRuntimeConnectionInfo: getRuntimeConnectionInfo,
+            webViewFactory: webViewFactory,
+            webRpcClientFactory: webRpcClientFactory,
+            externalBrowser: externalBrowser);
         _unloadCoordinator = new AppPackageUnloadCoordinator(
             viewRegistry,
-            ExtensionCatalog,
             runtimeWorkStopper,
             AssemblyTracker,
             _sharedAssemblyRegistry,
@@ -83,7 +83,6 @@ internal sealed class AppPackageHostComposition : IDisposable
         _disableCoordinator = new AppPackageDisableCoordinator(
             viewRegistry,
             ViewFacade,
-            ExtensionCatalog,
             runtimeWorkStopper,
             FaultNotifier,
             _state.TryMarkPackageDisabled);
@@ -95,8 +94,6 @@ internal sealed class AppPackageHostComposition : IDisposable
 
     public AppPackageHostedViewFacade ViewFacade { get; }
 
-    public AppPackageExtensionCatalog ExtensionCatalog { get; }
-
     public void PublishServices() => _publication.Publish();
 
     public void UnpublishServices() => _publication.Revoke();
@@ -107,12 +104,10 @@ internal sealed class AppPackageHostComposition : IDisposable
     {
         var viewOperations = ViewFacade.BeginCancelAllViewOperations();
         var backgroundOperations = _unloadCoordinator.StopAllOwnedRuntimeWorkAsync();
-        var ownerRetirements = ExtensionCatalog.BeginAllOwnerRetirements();
         return
         [
             viewOperations,
             backgroundOperations,
-            .. ownerRetirements.Select(static retirement => retirement.Completion),
         ];
     }
 
@@ -131,13 +126,21 @@ internal sealed class AppPackageHostComposition : IDisposable
         {
             await _packageActivator.ActivateAsync(
                 package,
+                source,
                 preparedSource,
                 activation,
+                _generationId,
                 RegisterPackageAssembly,
                 _state.TrackLoadContext,
                 _state.TrackOwnedDisposable,
                 cancellationToken).ConfigureAwait(false);
-            if (activation.PackageInfo is null || activation.ServiceProvider is null || activation.LoadContext is null)
+            var isWeb = string.Equals(
+                source.Target.Kind,
+                Sunder.Package.Format.SunderPackageFormat.WebTargetKind,
+                StringComparison.Ordinal);
+            if (activation.PackageInfo is null
+                || isWeb && activation.TargetLifetime is null
+                || !isWeb && (activation.ServiceProvider is null || activation.LoadContext is null))
             {
                 throw new InvalidOperationException($"Package '{package.PackageId}' activation did not produce a complete app-side package handle.");
             }
@@ -149,10 +152,8 @@ internal sealed class AppPackageHostComposition : IDisposable
                     source,
                     activation.PackageInfo.Folder,
                     activation.ServiceProvider,
-                    activation.LoadContext)
-                {
-                    ExtensionOwner = activation.ExtensionOwner,
-                });
+                    activation.LoadContext,
+                    activation.TargetLifetime));
             activated = true;
         }
         finally
@@ -164,7 +165,7 @@ internal sealed class AppPackageHostComposition : IDisposable
                     activation.PackageInfo,
                     activation.ServiceProvider,
                     activation.LoadContext,
-                    activation.ExtensionOwner).ConfigureAwait(false);
+                    activation.TargetLifetime).ConfigureAwait(false);
             }
         }
     }
@@ -221,7 +222,6 @@ internal sealed class AppPackageHostComposition : IDisposable
 
     public async Task DisposeRemainingOwnedResourcesAsync()
     {
-        await _unloadCoordinator.RetireAllOwnersAsync().ConfigureAwait(false);
         var (ownedDisposables, loadContexts) = _state.SnapshotOwnedResources();
         await _unloadCoordinator.DisposeOwnedResourcesAsync(ownedDisposables, loadContexts).ConfigureAwait(false);
     }

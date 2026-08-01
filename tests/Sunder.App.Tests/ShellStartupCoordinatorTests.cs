@@ -119,7 +119,7 @@ public sealed class ShellStartupCoordinatorTests
         Assert.Contains("GetRuntimePackageSnapshotAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("LoadPackageLifecycleAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("GetActivePackagesAsync", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("GetActivePackageUiSnapshotsAsync", source, StringComparison.Ordinal);
+        Assert.Contains("GetActivePackageUiSnapshotsAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("CancellationToken.None", source, StringComparison.Ordinal);
     }
 
@@ -128,7 +128,7 @@ public sealed class ShellStartupCoordinatorTests
         RuntimeBootstrapState state,
         long generation,
         IReadOnlyList<string>? errors = null)
-        => new(runtimeInstanceId, generation, generation, state, [], [], [], [], errors ?? []);
+        => new(runtimeInstanceId, generation, generation, state, [], [], [], errors ?? []);
 
     private static string GetRepositoryRoot()
     {

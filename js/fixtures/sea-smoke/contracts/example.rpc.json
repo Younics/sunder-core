@@ -1,0 +1,42 @@
+{
+  "descriptorVersion": 1,
+  "contractId": "example.messages",
+  "version": "1.0.0",
+  "services": [
+    {
+      "serviceId": "messages",
+      "methods": [
+        {
+          "methodId": "send",
+          "kind": "unary",
+          "requestSchema": { "$ref": "#/$defs/Request" },
+          "responseSchema": { "$ref": "#/$defs/Response" }
+        },
+        {
+          "methodId": "watch",
+          "kind": "server-stream",
+          "requestSchema": { "$ref": "#/$defs/Request" },
+          "eventSchema": { "$ref": "#/$defs/Response" }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "properties": {
+        "message": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "message": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "sunder-js",
+  "private": true,
+  "version": "1.1.0",
+  "packageManager": "npm@11.6.2",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @sunder/sdk && npm run build --workspace @sunder/package-tool && npm run build --workspace create-sunder-package",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspace @sunder/sdk && npm run test --workspace @sunder/package-tool && npm run test --workspace create-sunder-package && tsc -p packages/create-sunder-package/template-react-node/tsconfig.json",
+    "sea:build": "node packages/package-tool/dist/cli.js build --project fixtures/sea-smoke",
+    "sea:smoke": "node packages/package-tool/dist/cli.js smoke --project fixtures/sea-smoke",
+    "sea:package": "node packages/package-tool/dist/cli.js package --project fixtures/sea-smoke"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
+    "esbuild": "0.28.1",
+    "postject": "1.0.0-alpha.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "6.0.3",
+    "vite": "8.0.10"
+  }
+}

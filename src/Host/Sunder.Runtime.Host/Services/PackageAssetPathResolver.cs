@@ -2,13 +2,11 @@ namespace Sunder.Runtime.Host.Services;
 
 internal static class PackageAssetPathResolver
 {
-    private const string AssetsSegment = "assets";
-
     public static string? TryResolveDevAssetPath(string packageRootPath, string assetPath)
-        => TryResolveAssetPath(Path.Combine(packageRootPath, AssetsSegment), assetPath);
+        => TryResolveAssetPath(Path.Combine(packageRootPath, "payload", "shared"), assetPath);
 
     public static string? TryResolveInstalledAssetPath(string installPath, string assetPath)
-        => TryResolveAssetPath(Path.Combine(installPath, "payload", AssetsSegment), assetPath);
+        => TryResolveAssetPath(Path.Combine(installPath, "payload", "shared"), assetPath);
 
     private static string? TryResolveAssetPath(string assetRootPath, string assetPath)
     {
@@ -29,11 +27,6 @@ internal static class PackageAssetPathResolver
         if (segments.Length == 0 || segments.Any(static segment => segment is "." or ".."))
         {
             return null;
-        }
-
-        if (string.Equals(segments[0], AssetsSegment, StringComparison.OrdinalIgnoreCase))
-        {
-            segments = segments.Skip(1).ToArray();
         }
 
         if (segments.Length == 0)

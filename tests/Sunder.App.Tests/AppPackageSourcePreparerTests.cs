@@ -87,7 +87,7 @@ public sealed class AppPackageSourcePreparerTests
     }
 
     private static PackageUiSnapshotDescriptor CreateSnapshot(string hash)
-        => new("agent", PackageSourceKind.Dev, 1, hash, "snapshot", "packages/ui-snapshots/snapshot");
+        => new("agent", PackageSourceKind.Dev, 1, RuntimeContractTestData.AppTarget(), hash, "snapshot", "packages/ui-snapshots/snapshot");
 
     private static byte[] CreateArchive(params (string Path, string Content, int ExternalAttributes)[] entries)
     {

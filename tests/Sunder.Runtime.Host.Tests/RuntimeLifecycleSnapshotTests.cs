@@ -64,7 +64,7 @@ public sealed class RuntimeLifecycleSnapshotTests
             PackageSessionOverlayOwner.Startup));
         var first = CreateSession("first.package");
 
-        await owner.PublishAsync(first, sources, [], ["first warning"], [], expectedGeneration: 0);
+        await owner.PublishAsync(first, sources, ["first warning"], [], expectedGeneration: 0);
 
         var committed = owner.GetSnapshot();
         var generationEvent = Assert.Single(events.GetSnapshot().Events, item => item.Kind == RuntimeEventKind.SessionGenerationChanged);
@@ -85,7 +85,6 @@ public sealed class RuntimeLifecycleSnapshotTests
         await Assert.ThrowsAsync<RuntimeStaleGenerationException>(() => owner.PublishAsync(
             stale,
             staleSources,
-            [],
             [],
             [],
             expectedGeneration: 0));
@@ -126,29 +125,22 @@ public sealed class RuntimeLifecycleSnapshotTests
                     LastFailureAtUtc: null,
                     FailureCount: 0),
             });
-        var uiSnapshots = new List<PackageUiSnapshotDescriptor>
-        {
-            new("test.package", PackageSourceKind.Dev, 1, "hash", "snapshot", "packages/ui-snapshots/snapshot"),
-        };
         var warnings = new List<string> { "original warning" };
         var errors = new List<string> { "original error" };
 
         await owner.PublishAsync(
             session,
             owner.Sources.Snapshot(),
-            uiSnapshots,
             warnings,
             errors,
             expectedGeneration: 0);
         views[0] = views[0] with { Title = "mutated view" };
-        uiSnapshots[0] = uiSnapshots[0] with { SnapshotId = "mutated-snapshot" };
         warnings[0] = "mutated warning";
         errors[0] = "mutated error";
 
         var committed = owner.GetSnapshot();
         Assert.Equal("First", Assert.Single(Assert.Single(committed.ActivePackages).Views).Title);
         Assert.Equal("First", Assert.Single(Assert.Single(committed.SessionPackages).Views).Title);
-        Assert.Equal("snapshot", Assert.Single(committed.PackageUiSnapshots).SnapshotId);
         Assert.Equal("original warning", Assert.Single(committed.Warnings));
         Assert.Equal("original error", Assert.Single(committed.Errors));
         Assert.Throws<NotSupportedException>(() =>
@@ -171,13 +163,11 @@ public sealed class RuntimeLifecycleSnapshotTests
             owner.Sources.Snapshot(),
             [],
             [],
-            [],
             expectedGeneration: 0);
 
         await owner.PublishAsync(
             CreateSession("replacement.package"),
             owner.Sources.Snapshot(),
-            [],
             [],
             [],
             expectedGeneration: 1);
@@ -210,7 +200,6 @@ public sealed class RuntimeLifecycleSnapshotTests
         await owner.PublishAsync(
             CreateSession("replacement.package"),
             owner.Sources.Snapshot(),
-            [],
             [],
             [],
             expectedGeneration: 0);

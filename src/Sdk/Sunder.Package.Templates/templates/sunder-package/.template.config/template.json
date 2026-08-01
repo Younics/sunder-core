@@ -12,7 +12,8 @@
       "type": "parameter",
       "datatype": "text",
       "isRequired": true,
-      "description": "The lowercase dot-separated runtime package id written into generated package metadata."
+      "description": "The lowercase dot-separated runtime package id written into generated package metadata.",
+      "replaces": "SUNDER_PACKAGE_ID_TEXT"
     },
     "packageName": {
       "type": "parameter",
@@ -69,30 +70,18 @@
       "description": "Add the Stack SDK and a runtime Stack contributor example.",
       "replaces": "SUNDER_WITH_STACKS"
     },
-    "withContracts": {
-      "type": "parameter",
-      "datatype": "bool",
-      "defaultValue": false,
-      "description": "Generate a sibling *.Contracts project for public extension points."
-    },
     "withHostDependency": {
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Scaffold package dependency metadata and integration notes for extending another package."
-    },
-    "withHostContracts": {
-      "type": "parameter",
-      "datatype": "bool",
-      "defaultValue": false,
-      "description": "Add a PackageReference to the host package's published *.Contracts package, host dependency metadata, and a compile-safe extension stub."
+      "description": "Add runtime package dependency metadata for another Sunder package."
     },
     "hostPackageId": {
       "type": "parameter",
       "datatype": "text",
-      "isRequired": "withHostDependency || withHostContracts == true",
-      "isEnabled": "withHostDependency || withHostContracts == true",
-      "description": "The package id of the host package this package extends.",
+      "isRequired": "withHostDependency == true",
+      "isEnabled": "withHostDependency == true",
+      "description": "The package id this package depends on.",
       "replaces": "SUNDER_HOST_PACKAGE_ID_TEXT"
     },
     "hostPackageIdCSharp": {
@@ -101,44 +90,18 @@
       "valueTransform": "csharpString",
       "replaces": "SUNDER_HOST_PACKAGE_ID_CSHARP"
     },
-    "hostContractsPackageId": {
-      "type": "parameter",
-      "datatype": "text",
-      "isRequired": "withHostContracts == true",
-      "isEnabled": "withHostContracts == true",
-      "description": "The NuGet package id of the host package's published contracts package."
-    },
-    "hostContractsPackageIdXml": {
-      "type": "derived",
-      "valueSource": "hostContractsPackageId",
-      "valueTransform": "xmlAttribute",
-      "replaces": "SUNDER_HOST_CONTRACTS_PACKAGE_ID_XML"
-    },
     "hostPackageVersionRange": {
       "type": "parameter",
       "datatype": "text",
       "defaultValue": ">=1.1.0 <1.2.0",
-      "isEnabled": "withHostDependency || withHostContracts == true",
-      "description": "The runtime SemVer range accepted for the host package."
+      "isEnabled": "withHostDependency == true",
+      "description": "The runtime SemVer range accepted for the dependency."
     },
     "hostPackageVersionRangeCSharp": {
       "type": "derived",
       "valueSource": "hostPackageVersionRange",
       "valueTransform": "csharpString",
       "replaces": "SUNDER_HOST_PACKAGE_VERSION_RANGE_CSHARP"
-    },
-    "hostContractsVersionRange": {
-      "type": "parameter",
-      "datatype": "text",
-      "defaultValue": "__SUNDER_DEFAULT_HOST_CONTRACTS_VERSION_RANGE__",
-      "isEnabled": "withHostContracts == true",
-      "description": "The bounded NuGet version range for the host package's published contracts package."
-    },
-    "hostContractsVersionRangeXml": {
-      "type": "derived",
-      "valueSource": "hostContractsVersionRange",
-      "valueTransform": "xmlAttribute",
-      "replaces": "SUNDER_HOST_CONTRACTS_VERSION_RANGE_XML"
     },
     "createInPlace": {
       "type": "parameter",
@@ -222,26 +185,19 @@
         {
           "condition": "(!withAvalonia)",
           "exclude": [
-            "Sunder.Package.Template/Avalonia.PackageReferences.props"
+            "Sunder.Package.Template/Sunder.Package.Template.App/**/*"
           ]
         },
         {
           "condition": "(!withStacks)",
           "exclude": [
-            "Sunder.Package.Template/StackSupport.cs",
-            "Sunder.Package.Template/Stacks.PackageReferences.props"
+            "Sunder.Package.Template/Sunder.Package.Template.Runtime/StackSupport.cs",
+            "Sunder.Package.Template/Sunder.Package.Template.Runtime/Stacks.PackageReferences.props"
           ]
         },
         {
-          "condition": "(!withContracts)",
+          "condition": "(!withHostDependency)",
           "exclude": [
-            "Sunder.Package.Template.Contracts/**/*"
-          ]
-        },
-        {
-          "condition": "(!withHostDependency && withHostContracts != true)",
-          "exclude": [
-            "Sunder.Package.Template/Extensions/**/*",
             "Sunder.Package.Template/PackageMetadata.host.cs"
           ],
           "rename": {
@@ -249,7 +205,7 @@
           }
         },
         {
-          "condition": "(withHostDependency || withHostContracts == true)",
+          "condition": "(withHostDependency)",
           "exclude": [
             "Sunder.Package.Template/PackageMetadata.no-host.cs"
           ],
@@ -258,58 +214,22 @@
           }
         },
         {
-          "condition": "(withHostContracts != true)",
+          "condition": "(withAvalonia && noDefaultView)",
           "exclude": [
-            "Sunder.Package.Template/Sunder.Package.Template.with-host-contracts.csproj",
-            "Sunder.Package.Template/HostContracts.PackageReferences.props",
-            "Sunder.Package.Template/Extensions/HostContractContributionStub.cs"
-          ]
-        },
-        {
-          "condition": "(withHostContracts == true)",
-          "exclude": [
-            "Sunder.Package.Template/Sunder.Package.Template.csproj"
+            "Sunder.Package.Template/Sunder.Package.Template.App/PackageViews/**/*",
+            "Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.with-view.cs"
           ],
           "rename": {
-            "Sunder.Package.Template/Sunder.Package.Template.with-host-contracts.csproj": "Sunder.Package.Template/Sunder.Package.Template.csproj"
+            "Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.no-view.cs": "Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.cs"
           }
         },
         {
-          "condition": "((noDefaultView || !withAvalonia) && !withHostDependency && withHostContracts != true)",
+          "condition": "(withAvalonia && !noDefaultView)",
           "exclude": [
-            "Sunder.Package.Template/PackageViews/**/*",
-            "Sunder.Package.Template/PackageModule.with-view.cs"
+            "Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.no-view.cs"
           ],
           "rename": {
-            "Sunder.Package.Template/PackageModule.no-view.cs": "Sunder.Package.Template/PackageModule.cs"
-          }
-        },
-        {
-          "condition": "(!noDefaultView && withAvalonia && !withHostDependency && withHostContracts != true)",
-          "exclude": [
-            "Sunder.Package.Template/PackageModule.no-view.cs"
-          ],
-          "rename": {
-            "Sunder.Package.Template/PackageModule.with-view.cs": "Sunder.Package.Template/PackageModule.cs"
-          }
-        },
-        {
-          "condition": "((noDefaultView || !withAvalonia) && (withHostDependency || withHostContracts == true))",
-          "exclude": [
-            "Sunder.Package.Template/PackageViews/**/*",
-            "Sunder.Package.Template/PackageModule.with-view.cs"
-          ],
-          "rename": {
-            "Sunder.Package.Template/PackageModule.no-view.cs": "Sunder.Package.Template/PackageModule.cs"
-          }
-        },
-        {
-          "condition": "(!noDefaultView && withAvalonia && (withHostDependency || withHostContracts == true))",
-          "exclude": [
-            "Sunder.Package.Template/PackageModule.no-view.cs"
-          ],
-          "rename": {
-            "Sunder.Package.Template/PackageModule.with-view.cs": "Sunder.Package.Template/PackageModule.cs"
+            "Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.with-view.cs": "Sunder.Package.Template/Sunder.Package.Template.App/PackageModule.cs"
           }
         }
       ]
@@ -322,20 +242,19 @@
         {
           "condition": "(!withAvalonia)",
           "exclude": [
-            "Avalonia.PackageReferences.props"
+            "Sunder.Package.Template.App/**/*"
           ]
         },
         {
           "condition": "(!withStacks)",
           "exclude": [
-            "StackSupport.cs",
-            "Stacks.PackageReferences.props"
+            "Sunder.Package.Template.Runtime/StackSupport.cs",
+            "Sunder.Package.Template.Runtime/Stacks.PackageReferences.props"
           ]
         },
         {
-          "condition": "(!withHostDependency && withHostContracts != true)",
+          "condition": "(!withHostDependency)",
           "exclude": [
-            "Extensions/**/*",
             "PackageMetadata.host.cs"
           ],
           "rename": {
@@ -343,7 +262,7 @@
           }
         },
         {
-          "condition": "(withHostDependency || withHostContracts == true)",
+          "condition": "(withHostDependency)",
           "exclude": [
             "PackageMetadata.no-host.cs"
           ],
@@ -352,72 +271,24 @@
           }
         },
         {
-          "condition": "(withHostContracts != true)",
+          "condition": "(withAvalonia && noDefaultView)",
           "exclude": [
-            "Sunder.Package.Template.with-host-contracts.csproj",
-            "HostContracts.PackageReferences.props",
-            "Extensions/HostContractContributionStub.cs"
-          ]
-        },
-        {
-          "condition": "(withHostContracts == true)",
-          "exclude": [
-            "Sunder.Package.Template.csproj"
+            "Sunder.Package.Template.App/PackageViews/**/*",
+            "Sunder.Package.Template.App/PackageModule.with-view.cs"
           ],
           "rename": {
-            "Sunder.Package.Template.with-host-contracts.csproj": "Sunder.Package.Template.csproj"
+            "Sunder.Package.Template.App/PackageModule.no-view.cs": "Sunder.Package.Template.App/PackageModule.cs"
           }
         },
         {
-          "condition": "((noDefaultView || !withAvalonia) && !withHostDependency && withHostContracts != true)",
+          "condition": "(withAvalonia && !noDefaultView)",
           "exclude": [
-            "PackageViews/**/*",
-            "PackageModule.with-view.cs"
+            "Sunder.Package.Template.App/PackageModule.no-view.cs"
           ],
           "rename": {
-            "PackageModule.no-view.cs": "PackageModule.cs"
-          }
-        },
-        {
-          "condition": "(!noDefaultView && withAvalonia && !withHostDependency && withHostContracts != true)",
-          "exclude": [
-            "PackageModule.no-view.cs"
-          ],
-          "rename": {
-            "PackageModule.with-view.cs": "PackageModule.cs"
-          }
-        },
-        {
-          "condition": "((noDefaultView || !withAvalonia) && (withHostDependency || withHostContracts == true))",
-          "exclude": [
-            "PackageViews/**/*",
-            "PackageModule.with-view.cs"
-          ],
-          "rename": {
-            "PackageModule.no-view.cs": "PackageModule.cs"
-          }
-        },
-        {
-          "condition": "(!noDefaultView && withAvalonia && (withHostDependency || withHostContracts == true))",
-          "exclude": [
-            "PackageModule.no-view.cs"
-          ],
-          "rename": {
-            "PackageModule.with-view.cs": "PackageModule.cs"
+            "Sunder.Package.Template.App/PackageModule.with-view.cs": "Sunder.Package.Template.App/PackageModule.cs"
           }
         }
-      ]
-    },
-    {
-      "condition": "(createInPlace && withContracts)",
-      "include": [
-        "Sunder.Package.Template.Contracts/**/*"
-      ]
-    },
-    {
-      "condition": "(createInPlace)",
-      "include": [
-        "README.md"
       ]
     }
   ]

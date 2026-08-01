@@ -17,16 +17,11 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
         [typeof(IPackageStackExporter).Assembly.GetName().Name!] = typeof(IPackageStackExporter).Assembly,
     };
 
-    private readonly SharedContractAssemblyRegistryCore _core;
-    private readonly Dictionary<string, string> _sharedAssemblyPaths;
-    private readonly Dictionary<string, AssemblyName> _sharedAssemblyNames;
+    private readonly HostSharedAssemblyRegistryCore _core;
 
     public RuntimeSharedAssemblyRegistry(IEnumerable<string> probeDirectories)
     {
-        _core = new SharedContractAssemblyRegistryCore("Runtime", _hostSharedAssemblies);
-        _sharedAssemblyPaths = _core.SharedAssemblyPaths;
-        _sharedAssemblyNames = _core.SharedAssemblyNames;
-        _core.AddProbeDirectories(probeDirectories);
+        _core = new HostSharedAssemblyRegistryCore(_hostSharedAssemblies);
     }
 
     public Assembly? ResolveSharedAssembly(AssemblyName assemblyName)
@@ -35,12 +30,8 @@ internal sealed class RuntimeSharedAssemblyRegistry : IDisposable
     internal static bool IsSharedAssemblyReferenceSatisfiedBy(
         AssemblyName requestedAssemblyName,
         AssemblyName loadedAssemblyName)
-        => SharedContractAssemblyPolicy.IsReferenceSatisfiedBy(requestedAssemblyName, loadedAssemblyName);
+        => HostSharedAssemblyRegistryCore.IsReferenceSatisfiedBy(requestedAssemblyName, loadedAssemblyName);
 
     public void Dispose() => _core.Dispose();
 
-    private void TryRegisterSharedAssemblyPath(AssemblyCandidate candidate, AssemblyName? requestedAssemblyName = null)
-        => _core.RegisterCandidate(new SharedAssemblyCandidate(candidate.Path, candidate.Name), requestedAssemblyName);
-
-    private readonly record struct AssemblyCandidate(string Path, AssemblyName Name);
 }

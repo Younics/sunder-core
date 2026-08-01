@@ -90,6 +90,7 @@ try
         .MapPackageSettingsEndpoints()
         .MapPackageCallbackEndpoints()
         .MapPackageAuthEndpoints()
+        .MapRuntimeRpcEndpoints()
         .MapDevPackageOwnerEndpoints()
         .MapInstalledPackageEndpoints()
         .MapStackEndpoints()

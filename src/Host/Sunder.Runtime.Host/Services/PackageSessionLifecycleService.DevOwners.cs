@@ -19,7 +19,7 @@ internal sealed partial class PackageSessionLifecycleService
         var operationToken = operation.CancellationToken;
         var sources = _sessions.Sources.Snapshot();
         var activeBefore = sources.ActiveDevOverlays;
-        var replacements = CreateAppOwnerOverlays(ownerId, folders);
+        var replacements = await CreateAppOwnerOverlaysAsync(ownerId, folders, operationToken);
         foreach (var replacement in replacements)
         {
             operationToken.ThrowIfCancellationRequested();
@@ -82,9 +82,10 @@ internal sealed partial class PackageSessionLifecycleService
         }
     }
 
-    private static IReadOnlyList<PackageSessionDevOverlay> CreateAppOwnerOverlays(
+    private static async Task<IReadOnlyList<PackageSessionDevOverlay>> CreateAppOwnerOverlaysAsync(
         string ownerId,
-        IReadOnlyList<DevPackageOwnerFolder> folders)
+        IReadOnlyList<DevPackageOwnerFolder> folders,
+        CancellationToken cancellationToken)
     {
         var overlays = new Dictionary<string, PackageSessionDevOverlay>(StringComparer.OrdinalIgnoreCase);
         foreach (var requested in folders)
@@ -95,11 +96,13 @@ internal sealed partial class PackageSessionLifecycleService
             }
 
             var fullPath = Path.GetFullPath(requested.Folder);
-            if (!TryReadDevPackageId(fullPath, out var packageId, out var error))
+            var identity = await ReadDevPackageIdentityAsync(fullPath, cancellationToken);
+            if (identity.PackageId is null)
             {
                 throw new RuntimePackageValidationException(
-                    error ?? $"'{fullPath}' is not a loadable Sunder dev package folder.");
+                    identity.Error ?? $"'{fullPath}' is not a loadable Sunder dev package folder.");
             }
+            var packageId = identity.PackageId;
 
             if (overlays.TryGetValue(packageId, out var existing))
             {

@@ -1,9 +1,0 @@
-<Project>
-  <PropertyGroup>
-    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.3" />
-    <PackageReference Include="Sunder.Sdk.Avalonia" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
-  </ItemGroup>
-</Project>

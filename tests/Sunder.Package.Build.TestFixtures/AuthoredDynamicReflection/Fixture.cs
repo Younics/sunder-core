@@ -1,4 +1,6 @@
 using Sunder.Sdk.Packaging;
+using Microsoft.Extensions.DependencyInjection;
+using Sunder.Sdk.Abstractions;
 
 [assembly: SunderPackage(Id = "test.authored.dynamicreflection", Name = "Authored Dynamic Reflection Fixture")]
 
@@ -21,5 +23,16 @@ public static class AuthoredSdkDynamicReflection
     public static IEnumerable<Type?> ResolveSdkContracts(string assemblyQualifiedTypeName)
     {
         yield return Type.GetType(assemblyQualifiedTypeName);
+    }
+}
+
+public sealed class FixturePackageModule : ISunderRuntimePackageModule
+{
+    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    {
+    }
+
+    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
+    {
     }
 }

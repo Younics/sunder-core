@@ -20,6 +20,7 @@ internal sealed class RuntimeSessionOwner
     private readonly Dictionary<string, RuntimePackageStageStatus> _stageStatuses = new(StringComparer.Ordinal);
     private readonly TimeProvider _timeProvider;
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy;
+    private readonly RuntimeRpcCatalog? _rpcCatalog;
     private readonly TaskCompletionSource _bootstrapCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private RuntimePackageSnapshot _snapshot;
 
@@ -31,19 +32,20 @@ internal sealed class RuntimeSessionOwner
         TimeProvider? timeProvider = null,
         IHostApplicationLifetime? hostLifetime = null,
         PackageUiSnapshotStore? uiSnapshots = null,
-        RuntimeLifecyclePolicyOptions? lifecyclePolicy = null)
+        RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
+        RuntimeRpcCatalog? rpcCatalog = null)
     {
         _logger = logger;
         _events = events;
         _uiSnapshots = uiSnapshots;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
+        _rpcCatalog = rpcCatalog;
         _snapshot = new RuntimePackageSnapshot(
             events.RuntimeInstanceId,
             0,
             0,
             RuntimeBootstrapState.Starting,
-            [],
             [],
             [],
             [],
@@ -94,7 +96,6 @@ internal sealed class RuntimeSessionOwner
     public async Task<IReadOnlyList<string>> PublishAsync(
         ActivePackageSession session,
         PackageSessionSourceSnapshot sources,
-        IReadOnlyList<PackageUiSnapshotDescriptor> uiSnapshots,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
         long expectedGeneration,
@@ -103,7 +104,7 @@ internal sealed class RuntimeSessionOwner
         var prepared = await State.PreparePublicationAsync(session, expectedGeneration, cancellationToken);
         try
         {
-            var publication = await CommitPublicationAsync(prepared, sources, uiSnapshots, warnings, errors);
+            var publication = await CommitPublicationAsync(prepared, sources, warnings, errors);
             State.ActivatePublication(prepared);
             return publication.Warnings;
         }
@@ -126,7 +127,6 @@ internal sealed class RuntimeSessionOwner
     internal async Task<(RuntimePackageStamp Stamp, IReadOnlyList<string> Warnings)> CommitPublicationAsync(
         PackageSessionState.SessionPublication publication,
         PackageSessionSourceSnapshot sources,
-        IReadOnlyList<PackageUiSnapshotDescriptor> uiSnapshots,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors)
     {
@@ -136,7 +136,6 @@ internal sealed class RuntimeSessionOwner
                 generation,
                 publication.Session.GetActivePackages(),
                 publication.Session.GetSessionPackages(),
-                uiSnapshots,
                 sources,
                 warnings,
                 errors));
@@ -168,7 +167,6 @@ internal sealed class RuntimeSessionOwner
             publication,
             generation => CommitGeneration(
                 generation,
-                [],
                 [],
                 [],
                 sources,
@@ -226,6 +224,7 @@ internal sealed class RuntimeSessionOwner
     {
         _stageGenerations.TryRemove(stageId, out _);
         _stageBaseGenerations.TryRemove(stageId, out _);
+        _uiSnapshots?.RemoveStage(stageId);
     }
 
     public void ClearStages()
@@ -271,36 +270,128 @@ internal sealed class RuntimeSessionOwner
         PackageActivationIdentity activationIdentity,
         PackageFailureOrigin origin,
         Exception exception,
-        string action)
-        => CommitPackageFault(
-            packageId,
-            exception.Message,
-            (expectedGeneration, committed) => State.HandlePackageFault(
+        string action,
+        string? rpcFaultCode = null)
+    {
+        PackageSessionLease sessionLease;
+        try
+        {
+            sessionLease = State.AcquireLease();
+        }
+        catch (RuntimeUnavailableException)
+        {
+            return false;
+        }
+
+        using (sessionLease)
+        {
+            var (applied, generation) = CommitPackageFault(
                 packageId,
-                activationIdentity,
-                expectedGeneration,
-                origin,
-                exception,
-                action,
-                committed));
+                exception.Message,
+                (expectedGeneration, committed) => State.HandlePackageFault(
+                    packageId,
+                    activationIdentity,
+                    expectedGeneration,
+                    origin,
+                    exception,
+                    action,
+                    committedGeneration =>
+                    {
+                        committed(committedGeneration);
+                        return _rpcCatalog?.DeactivatePackageWithRetirement(
+                                   packageId,
+                                   activationIdentity.RuntimeActivationId,
+                                   faulted: true,
+                                   rpcFaultCode)
+                               ?? Task.CompletedTask;
+                    }));
+            if (applied)
+            {
+                AlignRpcCatalogAfterPackageFault(sessionLease.Session, generation);
+            }
+            return applied;
+        }
+    }
+
+    internal bool HandleRpcProviderFault(
+        string packageId,
+        PackageActivationIdentity activationIdentity,
+        Exception exception,
+        string faultCode)
+        => HandlePackageFault(
+            packageId,
+            activationIdentity,
+            PackageFailureOrigin.RuntimeRpcProvider,
+            exception,
+            "produce valid schema-first RPC output",
+            faultCode);
 
     internal void HandleRuntimeGenerationFault(
         string packageId,
         PackageRuntimeGeneration runtimeGeneration,
         Exception exception)
-        => _ = CommitPackageFault(
-            packageId,
-            exception.Message,
-            (expectedGeneration, committed) => State.HandleRuntimeGenerationFault(
-                packageId,
-                runtimeGeneration,
-                expectedGeneration,
-                PackageFailureOrigin.RuntimeBackgroundService,
-                exception,
-                "maintain Runtime generation ownership",
-                committed));
+    {
+        PackageSessionLease sessionLease;
+        try
+        {
+            sessionLease = State.AcquireLease();
+        }
+        catch (RuntimeUnavailableException)
+        {
+            return;
+        }
 
-    private bool CommitPackageFault(
+        using (sessionLease)
+        {
+            var (applied, generation) = CommitPackageFault(
+                packageId,
+                exception.Message,
+                (expectedGeneration, committed) => State.HandleRuntimeGenerationFault(
+                    packageId,
+                    runtimeGeneration,
+                    expectedGeneration,
+                    exception is ProcessRuntimeWorkerException
+                        ? PackageFailureOrigin.RuntimeProcess
+                        : PackageFailureOrigin.RuntimeBackgroundService,
+                    exception,
+                    "maintain Runtime generation ownership",
+                    committedGeneration =>
+                    {
+                        committed(committedGeneration);
+                        return _rpcCatalog?.DeactivatePackageWithRetirement(
+                                   packageId,
+                                   runtimeGeneration.ActivationId,
+                                   faulted: true)
+                               ?? Task.CompletedTask;
+                    }));
+            if (applied)
+            {
+                AlignRpcCatalogAfterPackageFault(sessionLease.Session, generation);
+            }
+        }
+    }
+
+    private void AlignRpcCatalogAfterPackageFault(ActivePackageSession session, long generation)
+    {
+        if (_rpcCatalog is null)
+        {
+            return;
+        }
+
+        while (true)
+        {
+            _rpcCatalog.ActivateSession(session, generation);
+            var currentGeneration = State.Generation;
+            if (currentGeneration == generation)
+            {
+                _rpcCatalog.VerifySessionGeneration(generation);
+                return;
+            }
+            generation = currentGeneration;
+        }
+    }
+
+    private (bool Applied, long Generation) CommitPackageFault(
         string packageId,
         string message,
         Func<long, Action<long>, bool> apply)
@@ -308,46 +399,33 @@ internal sealed class RuntimeSessionOwner
         lock (_packageFaultGate)
         {
             var current = GetSnapshot();
-            var nextGeneration = checked(current.SessionGeneration + 1);
             var warnings = current.Warnings;
-            IReadOnlyList<PackageUiSnapshotDescriptor> snapshots;
-            try
-            {
-                snapshots = _uiSnapshots?.CreateSnapshots(
-                    State.GetActivePackageSources()
-                        .Where(source => !string.Equals(source.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
-                        .ToArray(),
-                    nextGeneration) ?? [];
-            }
-            catch (Exception exception)
-            {
-                _logger.LogWarning(exception, "Failed to prepare package UI snapshots while faulting package {PackageId}", packageId);
-                warnings = current.Warnings
-                    .Append($"Package UI snapshots could not be prepared after '{packageId}' failed: {exception.Message}")
-                    .ToArray();
-                snapshots = [];
-            }
-
             var sources = Sources.Snapshot();
             var errors = current.Errors
                 .Append($"Package '{packageId}' failed: {message}")
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            var applied = apply(current.SessionGeneration, committedGeneration => CommitGeneration(
-                committedGeneration,
-                State.GetActivePackages(),
-                State.GetSessionPackages(),
-                snapshots,
-                sources,
-                warnings,
-                errors));
+            var committedGeneration = -1L;
+            var applied = apply(current.SessionGeneration, generation =>
+            {
+                committedGeneration = generation;
+                CommitGeneration(
+                    generation,
+                    State.GetActivePackages(),
+                    State.GetSessionPackages(),
+                    sources,
+                    warnings,
+                    errors);
+            });
             if (!applied)
             {
-                _uiSnapshots?.RemoveSnapshots(snapshots);
-                return false;
+                return (false, current.SessionGeneration);
             }
-
-            return true;
+            if (committedGeneration < 0)
+            {
+                throw new InvalidOperationException("The applied package fault did not commit a Runtime generation.");
+            }
+            return (true, committedGeneration);
         }
     }
 
@@ -355,7 +433,6 @@ internal sealed class RuntimeSessionOwner
         long generation,
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         IReadOnlyList<SessionPackageDescriptor> sessionPackages,
-        IReadOnlyList<PackageUiSnapshotDescriptor> uiSnapshots,
         PackageSessionSourceSnapshot sources,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors)
@@ -366,7 +443,6 @@ internal sealed class RuntimeSessionOwner
             {
                 if (generation < _snapshot.SessionGeneration || generation < State.Generation)
                 {
-                    _uiSnapshots?.RemoveSnapshots(uiSnapshots);
                     return false;
                 }
             }
@@ -386,7 +462,6 @@ internal sealed class RuntimeSessionOwner
                             _snapshot.BootstrapState,
                             activePackages.ToArray(),
                             sessionPackages.ToArray(),
-                            uiSnapshots.ToArray(),
                             NormalizeDiagnostics(warnings),
                             NormalizeDiagnostics(errors));
                         _uiSnapshots?.RemoveOlderGenerations(generation);
@@ -432,7 +507,6 @@ internal sealed class RuntimeSessionOwner
                             state,
                             _snapshot.ActivePackages,
                             _snapshot.SessionPackages,
-                            _snapshot.PackageUiSnapshots,
                             NormalizeDiagnostics(_snapshot.Warnings.Concat(warnings ?? [])),
                             NormalizeDiagnostics(_snapshot.Errors.Concat(errors ?? [])));
                     }
@@ -474,7 +548,6 @@ internal sealed class RuntimeSessionOwner
                                 _snapshot.BootstrapState,
                                 _snapshot.ActivePackages,
                                 _snapshot.SessionPackages,
-                                _snapshot.PackageUiSnapshots,
                                 NormalizeDiagnostics(_snapshot.Warnings.Concat(warnings)),
                                 _snapshot.Errors);
                         }

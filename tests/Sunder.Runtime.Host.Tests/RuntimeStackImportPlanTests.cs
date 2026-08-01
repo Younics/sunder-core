@@ -1,7 +1,12 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Sunder.Package.Format;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 using Xunit;
 
@@ -297,20 +302,27 @@ public sealed class RuntimeStackImportPlanTests
             RuntimePackagePaths paths,
             RuntimeContentTransferStore transfers,
             RuntimeSessionOwner owner,
+            RuntimeRpcCatalog rpcCatalog,
+            RuntimeRpcPermissionStore rpcPermissions,
+            RuntimeRpcBroker rpcBroker,
             TestTimeProvider clock,
             IReadOnlyList<TestContributor> contributors)
         {
             Paths = paths;
             Transfers = transfers;
             Owner = owner;
+            RpcCatalog = rpcCatalog;
+            RpcPermissions = rpcPermissions;
             Clock = clock;
             Contributors = contributors;
-            Service = new RuntimeStackImportService(owner, transfers, clock);
+            Service = new RuntimeStackImportService(owner, transfers, rpcBroker, clock);
         }
 
         public RuntimePackagePaths Paths { get; }
         public RuntimeContentTransferStore Transfers { get; }
         public RuntimeSessionOwner Owner { get; }
+        public RuntimeRpcCatalog RpcCatalog { get; }
+        public RuntimeRpcPermissionStore RpcPermissions { get; }
         public TestTimeProvider Clock { get; }
         public IReadOnlyList<TestContributor> Contributors { get; }
         public RuntimeStackImportService Service { get; }
@@ -319,34 +331,63 @@ public sealed class RuntimeStackImportPlanTests
         {
             var root = Path.Combine(Path.GetTempPath(), "sunder-stack-import-plan-tests", Guid.NewGuid().ToString("N"));
             var paths = new RuntimePackagePaths(root);
-            var transfers = new RuntimeContentTransferStore(paths);
-            var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService());
-            var fixture = new StackImportFixture(paths, transfers, owner, new TestTimeProvider(), contributors);
+            var clock = new TestTimeProvider();
+            var transfers = new RuntimeContentTransferStore(paths, timeProvider: clock);
+            var rpcCatalog = new RuntimeRpcCatalog();
+            var owner = new RuntimeSessionOwner(
+                NullLogger<RuntimeSessionOwner>.Instance,
+                new RuntimeEventStreamService(),
+                timeProvider: clock,
+                rpcCatalog: rpcCatalog);
+            var rpcPermissions = new RuntimeRpcPermissionStore(paths, clock);
+            var rpcBroker = new RuntimeRpcBroker(
+                rpcCatalog,
+                rpcPermissions,
+                owner.State,
+                owner,
+                timeProvider: clock);
+            var fixture = new StackImportFixture(
+                paths,
+                transfers,
+                owner,
+                rpcCatalog,
+                rpcPermissions,
+                rpcBroker,
+                clock,
+                contributors);
             await fixture.PublishSessionAsync(contributors);
             return fixture;
         }
 
         public async Task PublishSessionAsync(params TestContributor[] contributors)
         {
-            var catalog = new RuntimePackageExtensionCatalog();
-            foreach (var contributor in contributors)
-            {
-                catalog.Add(contributor.PackageId, SunderStackExtensionPoints.StackImporters, contributor);
-                catalog.Add(contributor.PackageId, SunderStackExtensionPoints.StackImportAppliedHandlers, contributor);
-            }
-
+            var packages = contributors.Select(CreatePackage).ToArray();
             var session = new ActivePackageSession(
                 sessionFolder: null,
-                new Dictionary<string, ActiveLoadedPackage>(),
-                new Dictionary<string, SessionPackageDescriptor>(),
-                catalog);
+                packages.ToDictionary(static package => package.Descriptor.PackageId, StringComparer.OrdinalIgnoreCase),
+                packages.ToDictionary(
+                    static package => package.Descriptor.PackageId,
+                    static package => new SessionPackageDescriptor(
+                        package.Descriptor.PackageId,
+                        package.Descriptor.DisplayName,
+                        package.Descriptor.Version,
+                        PackageHostRoles.Runtime,
+                        null,
+                        true,
+                        PackageReadinessState.Ready,
+                        [],
+                        null,
+                        null,
+                        null,
+                        0),
+                    StringComparer.OrdinalIgnoreCase));
             await Owner.PublishAsync(
                 session,
                 Owner.Sources.Snapshot(),
                 [],
                 [],
-                [],
                 Owner.Generation);
+            RpcCatalog.ActivateSession(session, Owner.Generation);
         }
 
         public async Task<RuntimeStackImportPreviewResponse> PreviewAsync(IReadOnlyList<string> selectedFragmentIds)
@@ -424,6 +465,8 @@ public sealed class RuntimeStackImportPlanTests
         {
             Service.Dispose();
             Transfers.Dispose();
+            RpcPermissions.Dispose();
+            RpcCatalog.Dispose();
             try
             {
                 Directory.Delete(Paths.RootPath, recursive: true);
@@ -432,6 +475,87 @@ public sealed class RuntimeStackImportPlanTests
             {
             }
             return ValueTask.CompletedTask;
+        }
+
+        private ActiveLoadedPackage CreatePackage(TestContributor contributor)
+        {
+            var descriptor = SunderStackContributorRpc.Descriptor;
+            var providerId = contributor.PackageId + ".stack";
+            var declaration = new SunderPackageProviderManifest
+            {
+                ProviderId = providerId,
+                ContractId = descriptor.ContractId,
+                ContractVersion = descriptor.Version,
+                ContractSha256 = descriptor.Sha256,
+                Role = SunderPackageFormat.RuntimeHostRole,
+            };
+            var manifest = new SunderPackageManifest
+            {
+                Id = contributor.PackageId,
+                Name = contributor.PackageId,
+                Version = "1.0.0",
+                ContractBundles =
+                [
+                    new SunderPackageContractBundleManifest
+                    {
+                        ContractId = descriptor.ContractId,
+                        Version = descriptor.Version,
+                        DescriptorPath = "contracts/sunder.stack.contributor.rpc.json",
+                        Sha256 = descriptor.Sha256,
+                    },
+                ],
+                Provides = [declaration],
+            };
+            var source = new RuntimePackageSource(
+                contributor.PackageId,
+                PackageSourceKind.Dev,
+                Paths.RootPath,
+                Manifest: manifest);
+            return new ActiveLoadedPackage(
+                new ActivePackageDescriptor(
+                    contributor.PackageId,
+                    contributor.PackageId,
+                    "1.0.0",
+                    PackageHostRoles.Runtime,
+                    null,
+                    true,
+                    PackageReadinessState.Ready,
+                    []),
+                source,
+                SettingsSchema: null,
+                new JsonPackageKeyValueStore(Path.Combine(Paths.RootPath, contributor.PackageId + ".state.json")),
+                new JsonPackageSecretsStore(
+                    Path.Combine(Paths.RootPath, contributor.PackageId + ".secrets.json"),
+                    null,
+                    null,
+                    new RestrictedFileMasterKeyProtection()),
+                AuthHandler: null,
+                CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
+                BackgroundServices: [],
+                new ServiceCollection().BuildServiceProvider(),
+                LoadContext: null,
+                EmptyTestPackageSettings.Instance)
+            {
+                RuntimeActivationId = Guid.NewGuid(),
+                RpcProviders = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal)
+                {
+                    [providerId] = new RuntimeRpcProviderRegistration(
+                        providerId,
+                        descriptor.ContractId,
+                        descriptor.Version,
+                        descriptor.Sha256,
+                        descriptor,
+                        SunderStackContributorRpc.CreateHandler(
+                            contributor,
+                            UnavailableRuntimeRpcContentClient.Instance),
+                        declaration),
+                },
+                RpcContracts = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal)
+                {
+                    [PackageSessionPreparer.ContractKey(descriptor.ContractId, descriptor.Version)] = descriptor,
+                },
+                RpcManifestSha256 = new string('a', 64),
+            };
         }
     }
 

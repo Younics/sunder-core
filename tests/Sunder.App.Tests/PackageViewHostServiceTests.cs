@@ -231,7 +231,8 @@ public sealed class PackageViewHostServiceTests
         var packageSourceFolder = Path.Combine(rootPath, "package-source");
         Directory.CreateDirectory(sessionFolder);
         Directory.CreateDirectory(packageSourceFolder);
-        File.WriteAllText(Path.Combine(packageSourceFolder, "sunder-package.json"), "{}");
+        Directory.CreateDirectory(Path.Combine(packageSourceFolder, "manifest"));
+        File.WriteAllText(Path.Combine(packageSourceFolder, "manifest", "sunder-package.json"), "{}");
 
         try
         {
@@ -267,8 +268,8 @@ public sealed class PackageViewHostServiceTests
             Assert.NotNull(prepared);
             Assert.StartsWith(Path.GetFullPath(appRoot), Path.GetFullPath(prepared.Folder), StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(Path.GetFullPath(runtimeRoot), Path.GetFullPath(prepared.Folder), StringComparison.OrdinalIgnoreCase);
-            Assert.True(File.Exists(Path.Combine(runtimeSource, "sunder-package.json")));
-            Assert.True(File.Exists(Path.Combine(prepared.Folder, "sunder-package.json")));
+            Assert.True(File.Exists(Path.Combine(runtimeSource, "manifest", "sunder-package.json")));
+            Assert.True(File.Exists(Path.Combine(prepared.Folder, "manifest", "sunder-package.json")));
         }
         finally
         {
@@ -773,55 +774,6 @@ public sealed class PackageViewHostServiceTests
     }
 
     [Fact]
-    public void AppSharedAssemblyRegistry_WhenSameUnsignedIdentityHasDifferentBinaryDefinition_RejectsIt()
-    {
-        using var registry = new AppSharedAssemblyRegistry([]);
-        var registerMethod = typeof(AppSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
-        var candidateType = typeof(AppSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
-        Assert.NotNull(registerMethod);
-        Assert.NotNull(candidateType);
-        var assemblyName = new AssemblyName("Example.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null");
-        var firstCandidate = Activator.CreateInstance(candidateType, typeof(PackageViewHostServiceTests).Assembly.Location, assemblyName);
-        var secondCandidate = Activator.CreateInstance(candidateType, typeof(ISunderRuntimePackageModule).Assembly.Location, assemblyName);
-
-        registerMethod.Invoke(registry, [firstCandidate, null]);
-        var error = Assert.Throws<TargetInvocationException>(() => registerMethod.Invoke(registry, [secondCandidate, null]));
-        Assert.IsType<InvalidOperationException>(error.InnerException);
-    }
-
-    [Fact]
-    public void AppSharedAssemblyRegistry_WhenHigherVersionContractExists_SelectsHigherVersion()
-    {
-        using var registry = new AppSharedAssemblyRegistry([]);
-        var registerMethod = typeof(AppSharedAssemblyRegistry).GetMethod("TryRegisterSharedAssemblyPath", BindingFlags.Instance | BindingFlags.NonPublic);
-        var candidateType = typeof(AppSharedAssemblyRegistry).GetNestedType("AssemblyCandidate", BindingFlags.NonPublic);
-        var namesField = typeof(AppSharedAssemblyRegistry).GetField("_sharedAssemblyNames", BindingFlags.Instance | BindingFlags.NonPublic);
-        var pathsField = typeof(AppSharedAssemblyRegistry).GetField("_sharedAssemblyPaths", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(registerMethod);
-        Assert.NotNull(candidateType);
-        Assert.NotNull(namesField);
-        Assert.NotNull(pathsField);
-
-        var lowerCandidate = Activator.CreateInstance(
-            candidateType,
-            "/tmp/old/Sunder.Package.Agent.Contracts.dll",
-            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null"));
-        var higherCandidate = Activator.CreateInstance(
-            candidateType,
-            "/tmp/new/Sunder.Package.Agent.Contracts.dll",
-            new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null"));
-
-        registerMethod.Invoke(registry, [lowerCandidate, null]);
-        registerMethod.Invoke(registry, [higherCandidate, null]);
-        registerMethod.Invoke(registry, [lowerCandidate, null]);
-
-        var names = Assert.IsType<Dictionary<string, AssemblyName>>(namesField.GetValue(registry));
-        var paths = Assert.IsType<Dictionary<string, string>>(pathsField.GetValue(registry));
-        Assert.Equal(new Version(1, 0, 3, 0), names["Sunder.Package.Agent.Contracts"].Version);
-        Assert.Equal("/tmp/new/Sunder.Package.Agent.Contracts.dll", paths["Sunder.Package.Agent.Contracts"]);
-    }
-
-    [Fact]
     public void AppSharedAssemblyRegistry_WhenRequestedVersionIsOlderThanLoadedVersion_AllowsBinding()
     {
         var requested = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null");
@@ -1267,6 +1219,7 @@ public sealed class PackageViewHostServiceTests
             await hostService.ApplyPackageDeltaAsync([package], [source]);
             var apply = hostService.ApplyPackageGenerationAsync(
                 CreateRuntimeSnapshot(package, source, generation: 2),
+                [source],
                 retryDisabledPackageIds: null,
                 async (_, _, cancellationToken) =>
                 {
@@ -1505,6 +1458,7 @@ public sealed class PackageViewHostServiceTests
 
             await coordinator.ApplyPackageSnapshotAsync(
                 replacementSnapshot,
+                [replacementSource],
                 ["agent"],
                 activePackages =>
                 {
@@ -1562,7 +1516,7 @@ public sealed class PackageViewHostServiceTests
             var failingSnapshot = CreateRuntimeSnapshot(package, failingSource, generation: 2);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                coordinator.ApplyPackageSnapshotAsync(failingSnapshot, ["agent"]));
+                coordinator.ApplyPackageSnapshotAsync(failingSnapshot, [failingSource], ["agent"]));
 
             Assert.Same(firstImage, hostService.PackageIconCache.GetImage("agent", icon));
             Assert.False(firstImage.IsDisposed);
@@ -1618,7 +1572,7 @@ public sealed class PackageViewHostServiceTests
 
         var bytes = archiveStream.ToArray();
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
-        var snapshot = new PackageUiSnapshotDescriptor(packageId, PackageSourceKind.Dev, 1, hash, "snapshot", "packages/ui-snapshots/snapshot");
+        var snapshot = new PackageUiSnapshotDescriptor(packageId, PackageSourceKind.Dev, 1, RuntimeContractTestData.AppTarget(), hash, "snapshot", "packages/ui-snapshots/snapshot");
         return await preparer.PrepareAsync(
             snapshot,
             async (_, destination, cancellationToken) => await destination.WriteAsync(bytes, cancellationToken),
@@ -1702,7 +1656,6 @@ public sealed class PackageViewHostServiceTests
             RuntimeBootstrapState.Ready,
             [package],
             [],
-            [source],
             [],
             []);
 
@@ -1714,12 +1667,10 @@ public sealed class PackageViewHostServiceTests
 
         var assemblyPath = typeof(ShellLifecycleTestPackageModule).Assembly.Location;
         var entryAssemblyFileName = Path.GetFileName(assemblyPath);
-        File.WriteAllText(Path.Combine(packageSourceFolder, "sunder-package.json"), $$"""
-            {
-              "id": "{{packageId}}",
-              "entryAssembly": "{{entryAssemblyFileName}}"
-            }
-            """);
+        RuntimeContractTestData.WriteAppProjectionManifest(
+            packageSourceFolder,
+            packageId,
+            $"lib/{entryAssemblyFileName}");
         File.WriteAllBytes(Path.Combine(packageSourceFolder, "icon.png"), [1, 2, 3]);
 
         foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))

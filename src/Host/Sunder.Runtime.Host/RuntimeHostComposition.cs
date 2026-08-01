@@ -21,6 +21,8 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeAuthPolicyOptions>();
         services.AddSingleton<RuntimeStackPolicyOptions>();
         services.AddSingleton<RuntimePackageOperationPolicyOptions>();
+        services.AddSingleton<RuntimeRpcPolicyOptions>();
+        services.AddSingleton<RuntimeProcessPolicyOptions>();
         services.AddSingleton<RuntimeLifecyclePolicyOptions>();
         services.AddSingleton<RuntimeProtocolDescriptor>();
         services.AddSingleton<RuntimeOperationGate>();
@@ -33,6 +35,8 @@ internal static class RuntimeHostComposition
         services.AddHostedService<RuntimeContentTransferCleanupService>();
         services.AddSingleton<RuntimeContentTransferService>();
         services.AddSingleton<RuntimeEventStreamService>();
+        services.AddSingleton<RuntimeRpcCatalog>();
+        services.AddSingleton<RuntimeRpcPermissionStore>();
         services.AddSingleton(provider => new PackageLogStreamService(
             provider.GetRequiredService<RuntimePackagePaths>().PackageDataRootPath,
             provider.GetRequiredService<RuntimeProtocolDescriptor>().RuntimeInstanceId));
@@ -44,12 +48,23 @@ internal static class RuntimeHostComposition
             provider.GetRequiredService<TimeProvider>(),
             provider.GetService<IHostApplicationLifetime>(),
             provider.GetRequiredService<PackageUiSnapshotStore>(),
-            provider.GetRequiredService<RuntimeLifecyclePolicyOptions>()));
+            provider.GetRequiredService<RuntimeLifecyclePolicyOptions>(),
+            provider.GetRequiredService<RuntimeRpcCatalog>()));
         services.AddSingleton(provider => provider.GetRequiredService<RuntimeSessionOwner>().State);
+        services.AddSingleton<RuntimeRpcAppSessionManager>();
+        services.AddSingleton<RuntimeRpcBroker>();
+        services.AddSingleton<RuntimeRpcPermissionService>();
         services.AddSingleton<RuntimeSnapshotService>();
         services.AddSingleton(provider => new PackageSessionLoadService(
             provider.GetRequiredService<ILogger<PackageSessionLoadService>>(),
-            provider.GetRequiredService<RuntimePackagePaths>()));
+            provider.GetRequiredService<RuntimePackagePaths>(),
+            rpcBroker: provider.GetRequiredService<RuntimeRpcBroker>(),
+            processPolicy: provider.GetRequiredService<RuntimeProcessPolicyOptions>(),
+            hostStopping: provider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
+                          ?? CancellationToken.None,
+            contentTransfers: provider.GetRequiredService<RuntimeContentTransferStore>(),
+            sessions: provider.GetRequiredService<PackageSessionState>(),
+            transportPolicy: provider.GetRequiredService<RuntimeTransportPolicyOptions>()));
         services.AddSingleton<PackageSessionReconciler>();
         services.AddSingleton<PackageSessionPublisher>();
         services.AddSingleton<PackageLifecycleStageStore>();

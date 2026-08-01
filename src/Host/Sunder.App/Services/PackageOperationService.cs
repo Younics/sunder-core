@@ -82,6 +82,7 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly PackageOperationFinalizer _operationFinalizer;
     private readonly object _operationGate = new();
+    private readonly Dictionary<Guid, string> _temporaryLocalArchives = [];
     private volatile bool _disposed;
 
     public PackageOperationService(
@@ -205,26 +206,54 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             });
     }
 
-    public BackgroundProcessSnapshot EnqueueLocalInstall(string packagePath)
+    public BackgroundProcessSnapshot EnqueueLocalInstall(
+        string packagePath,
+        string expectedSha256,
+        bool deleteAfterUse)
     {
         var displayName = Path.GetFileName(packagePath);
-        return EnqueuePackageStoreOperation(
-            packageId: null,
-            displayName,
-            PackageOperationKind.InstallLocal,
-            $"Install {displayName}",
-            canCancel: true,
-            async context =>
+        BackgroundProcessSnapshot operation;
+        try
+        {
+            operation = EnqueuePackageStoreOperation(
+                packageId: null,
+                displayName,
+                PackageOperationKind.InstallLocal,
+                $"Install {displayName}",
+                canCancel: true,
+                async context =>
+                {
+                    context.ReportIndeterminate($"Installing {displayName}...");
+                    using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
+                    var upload = await runtimeApiClient.UploadPackageAsync(
+                        packagePath,
+                        context.CancellationToken).ConfigureAwait(false);
+                    if (!string.Equals(upload.ContentHash, expectedSha256, StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException(
+                            "The package archive changed after review. Select it again before installing.");
+                    }
+                    var result = await StageCommitPackageStoreAsync(
+                        runtimeApiClient,
+                        new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId)]),
+                        context.CancellationToken).ConfigureAwait(false);
+                    await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package installed", "Package installed from disk.").ConfigureAwait(false);
+                });
+        }
+        catch
+        {
+            if (deleteAfterUse)
             {
-                context.ReportIndeterminate($"Installing {displayName}...");
-                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var upload = await runtimeApiClient.UploadPackageAsync(packagePath, context.CancellationToken).ConfigureAwait(false);
-                var result = await StageCommitPackageStoreAsync(
-                    runtimeApiClient,
-                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId)]),
-                    context.CancellationToken).ConfigureAwait(false);
-                await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package installed", "Package installed from disk.").ConfigureAwait(false);
-            });
+                PackageArchivePicker.DeleteReviewSnapshot(packagePath);
+            }
+            throw;
+        }
+
+        if (deleteAfterUse)
+        {
+            TrackTemporaryLocalArchive(operation.ProcessId, packagePath);
+        }
+        return operation;
     }
 
     public BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
@@ -534,9 +563,38 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
 
     private void BackgroundProcesses_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
     {
+        if (!e.Snapshot.IsActive)
+        {
+            CleanupTemporaryLocalArchive(e.Snapshot.ProcessId);
+        }
         if (!_disposed && IsPackageOperation(e.Snapshot))
         {
             OperationChanged?.Invoke(this, new PackageOperationChangedEventArgs(e.Snapshot));
+        }
+    }
+
+    private void TrackTemporaryLocalArchive(Guid processId, string packagePath)
+    {
+        lock (_operationGate)
+        {
+            _temporaryLocalArchives[processId] = packagePath;
+        }
+        if (_backgroundProcesses.GetProcess(processId) is not { IsActive: true })
+        {
+            CleanupTemporaryLocalArchive(processId);
+        }
+    }
+
+    private void CleanupTemporaryLocalArchive(Guid processId)
+    {
+        string? packagePath;
+        lock (_operationGate)
+        {
+            _temporaryLocalArchives.Remove(processId, out packagePath);
+        }
+        if (packagePath is not null)
+        {
+            PackageArchivePicker.DeleteReviewSnapshot(packagePath);
         }
     }
 

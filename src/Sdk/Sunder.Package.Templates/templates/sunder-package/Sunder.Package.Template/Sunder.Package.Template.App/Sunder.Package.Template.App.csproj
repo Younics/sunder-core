@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SunderPackageProject>true</SunderPackageProject>
+    <Version>1.0.0</Version>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <SunderPackageAssetsDirectory>$(MSBuildProjectDirectory)\..\Assets</SunderPackageAssetsDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.0.3" />
+    <PackageReference Include="Sunder.Sdk" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
+    <PackageReference Include="Sunder.Sdk.Avalonia" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
+    <PackageReference Include="Sunder.Package.Build" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" PrivateAssets="all" />
+    <ProjectReference Include="..\Sunder.Package.Template.Protocol\Sunder.Package.Template.Protocol.csproj"
+                      PrivateAssets="all" />
+    <Compile Include="..\PackageMetadata.cs" Link="PackageMetadata.cs" />
+    <SunderContractBundle Include="..\Sunder.Package.Template.Protocol\Contracts\sample.rpc.json"
+                          ContractId="SUNDER_PACKAGE_ID_TEXT.sample"
+                          Version="1.0.0"
+                          DescriptorPath="contracts/sample.rpc.json" />
+  </ItemGroup>
+
+</Project>

@@ -92,11 +92,15 @@ public sealed class RuntimeHostCompositionTests
             generation: 0,
             CancellationToken.None);
         var source = Path.Combine(root, "snapshot-source");
-        Directory.CreateDirectory(Path.Combine(source, "lib"));
-        File.WriteAllText(Path.Combine(source, "sunder-package.json"), "{}");
-        File.WriteAllText(Path.Combine(source, "lib", "package.dll"), "payload");
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            source,
+            "test.package",
+            "1.0.0",
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
         snapshots.CreateSnapshots([
-            new RuntimePackageSource("test.package", Sunder.Runtime.Contracts.PackageSourceKind.Dev, source, source),
+            CanonicalPackageTestBuilder.CreateTargetSource(
+                source,
+                Sunder.Runtime.Contracts.PackageSourceKind.Dev),
         ], generation: 1);
         Assert.NotEmpty(Directory.EnumerateFiles(paths.TransferRootPath));
 

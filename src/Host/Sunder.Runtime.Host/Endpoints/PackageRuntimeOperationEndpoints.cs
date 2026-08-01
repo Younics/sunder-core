@@ -77,11 +77,10 @@ internal static class PackageRuntimeOperationEndpoints
         {
             throw;
         }
-        catch (Exception exception) when (wroteEvent || response.HasStarted)
+        catch (Exception) when (wroteEvent || response.HasStarted)
         {
-            var message = string.IsNullOrWhiteSpace(exception.Message)
-                ? "Package Runtime stream handler failed."
-                : exception.Message;
+            const string safeMessage = "Package Runtime stream handler failed.";
+            var message = safeMessage;
             if (message.Length > operations.MaxStreamErrorMessageCharacters)
             {
                 message = message[..operations.MaxStreamErrorMessageCharacters];

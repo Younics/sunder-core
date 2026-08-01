@@ -20,7 +20,7 @@ internal sealed class PackageModuleShape
         _implementations = implementations;
         _metadataErrors = metadataErrors;
         Roles = implementations.Aggregate(
-            PackageHostRoleMetadataValue.ContractOnly,
+            PackageHostRoleMetadataValue.None,
             static (roles, implementation) => roles | implementation.Roles);
     }
 
@@ -118,7 +118,7 @@ internal static class PackageModuleShapeReader
             }
 
             var roles = ReadTypeRoles(metadata, handle, [], metadataErrors);
-            if (roles == PackageHostRoleMetadataValue.ContractOnly)
+            if (roles == PackageHostRoleMetadataValue.None)
             {
                 continue;
             }
@@ -149,11 +149,11 @@ internal static class PackageModuleShapeReader
         }
         if (!visited.Add(handle))
         {
-            return PackageHostRoleMetadataValue.ContractOnly;
+            return PackageHostRoleMetadataValue.None;
         }
 
         var type = metadata.GetTypeDefinition(handle);
-        var roles = PackageHostRoleMetadataValue.ContractOnly;
+        var roles = PackageHostRoleMetadataValue.None;
         foreach (var interfaceHandle in type.GetInterfaceImplementations())
         {
             var implementation = metadata.GetInterfaceImplementation(interfaceHandle);
@@ -185,7 +185,7 @@ internal static class PackageModuleShapeReader
                 {
                     metadataErrors.Add(
                         $"Module contract '{ModuleNamespace}.{metadata.GetString(definition.Name)}' must be referenced from '{SdkAssemblyName.FullName}', not defined by the package entry assembly.");
-                    return PackageHostRoleMetadataValue.ContractOnly;
+                    return PackageHostRoleMetadataValue.None;
                 }
                 return ReadTypeRoles(metadata, definitionHandle, visited, metadataErrors);
 
@@ -195,7 +195,7 @@ internal static class PackageModuleShapeReader
                 var typeName = metadata.GetString(reference.Name);
                 if (!TryGetRole(typeNamespace, typeName, out var role))
                 {
-                    return PackageHostRoleMetadataValue.ContractOnly;
+                    return PackageHostRoleMetadataValue.None;
                 }
                 if (TryReadAssemblyName(metadata, reference.ResolutionScope, out var assemblyName)
                     && AssemblyIdentitiesMatch(SdkAssemblyName, assemblyName!))
@@ -205,10 +205,10 @@ internal static class PackageModuleShapeReader
 
                 metadataErrors.Add(
                     $"Module contract '{typeNamespace}.{typeName}' must be referenced from '{SdkAssemblyName.FullName}', not '{assemblyName?.FullName ?? "the package entry assembly"}'.");
-                return PackageHostRoleMetadataValue.ContractOnly;
+                return PackageHostRoleMetadataValue.None;
 
             default:
-                return PackageHostRoleMetadataValue.ContractOnly;
+                return PackageHostRoleMetadataValue.None;
         }
     }
 
@@ -217,7 +217,7 @@ internal static class PackageModuleShapeReader
         string typeName,
         out PackageHostRoleMetadataValue role)
     {
-        role = PackageHostRoleMetadataValue.ContractOnly;
+        role = PackageHostRoleMetadataValue.None;
         if (!string.Equals(typeNamespace, ModuleNamespace, StringComparison.Ordinal))
         {
             return false;
@@ -227,9 +227,9 @@ internal static class PackageModuleShapeReader
         {
             AppModuleName => PackageHostRoleMetadataValue.App,
             RuntimeModuleName => PackageHostRoleMetadataValue.Runtime,
-            _ => PackageHostRoleMetadataValue.ContractOnly,
+            _ => PackageHostRoleMetadataValue.None,
         };
-        return role != PackageHostRoleMetadataValue.ContractOnly;
+        return role != PackageHostRoleMetadataValue.None;
     }
 
     private static TypeDefinitionHandle AsTypeDefinitionHandle(EntityHandle handle)

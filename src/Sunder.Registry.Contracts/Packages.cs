@@ -54,30 +54,88 @@ public sealed record RegistryPackageVersionDetails(
     string? Summary,
     string Version,
     string? Icon,
-    string EntryAssembly,
-    RegistryPackageCompatibility Compatibility,
     bool IsYanked,
     string? DeprecatedMessage,
     IReadOnlyList<RegistryPackageDependency> DependsOn,
-    RegistryPackageArtifact Artifact,
-    DateTimeOffset PublishedAtUtc);
+    RegistryPackageCanonicalArtifact CanonicalArtifact,
+    IReadOnlyList<RegistryPackageTarget> Targets,
+    IReadOnlyList<RegistryPackageProjectionArtifact> Projections,
+    IReadOnlyList<RegistryPackageContractBundle> ContractBundles,
+    IReadOnlyList<RegistryPackageContractUse> UsesContracts,
+    IReadOnlyList<RegistryPackageProvider> Providers,
+    int ManifestFormatVersion,
+    int ArchiveFormatVersion,
+    DateTimeOffset PublishedAtUtc,
+    IReadOnlyList<string> TrustedArtifactOrigins);
 
 public sealed record RegistryPackageDependency(
     string PackageId,
     string VersionRange);
 
-public sealed record RegistryPackageArtifact(
+public sealed record RegistryPackageCanonicalArtifact(
     string Sha256,
-    long? Size,
+    long Size,
     string DownloadUrl);
 
-public sealed record RegistryPackageCompatibility(
-    int SdkApiVersion,
-    string SdkPackageVersion,
-    IReadOnlyList<string> RequiredCapabilities,
+public sealed record RegistryPackageTarget(
+    string Role,
+    string Rid,
+    string Kind,
+    string EntryPoint,
     string? TargetFramework,
-    int ManifestFormatVersion,
-    int ArchiveFormatVersion);
+    string? SdkVersion,
+    IReadOnlyList<string> RequiredHostCapabilities,
+    IReadOnlyList<RegistryPackageWebView>? Views = null)
+{
+    public IReadOnlyList<RegistryPackageWebView> Views { get; }
+        = Array.AsReadOnly((Views ?? []).ToArray());
+}
+
+public sealed record RegistryPackageWebView(
+    string ViewId,
+    string DisplayName,
+    string Route,
+    string? Icon,
+    string DefaultPlacement,
+    bool ShowInHotbar);
+
+public sealed record RegistryPackageTargetRequest(
+    string Role,
+    string Rid);
+
+public sealed record RegistryPackageProjectionKey(
+    string Kind,
+    string? Rid);
+
+public sealed record RegistryPackageProjectionArtifact(
+    string Kind,
+    string? Rid,
+    string Sha256,
+    long Size,
+    string DownloadUrl,
+    string SourceArchiveSha256,
+    string ManifestSha256,
+    string ProjectionContentIdentity,
+    int ProjectionFormatVersion);
+
+public sealed record RegistryPackageContractBundle(
+    string ContractId,
+    string Version,
+    string DescriptorPath,
+    string Sha256);
+
+public sealed record RegistryPackageContractUse(
+    string ContractId,
+    string VersionRange,
+    bool Required,
+    IReadOnlyList<string> Actions);
+
+public sealed record RegistryPackageProvider(
+    string ProviderId,
+    string ContractId,
+    string ContractVersion,
+    string ContractSha256,
+    string Role);
 
 /// <summary>A package that declares a dependency on the package being viewed (a reverse dependency).</summary>
 public sealed record RegistryPackageDependent(
@@ -145,30 +203,36 @@ public sealed record RegistryPackageResolveResponse(
     string PackageId,
     string Version,
     string? DeprecatedMessage,
-    RegistryPackageArtifact Artifact);
+    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts,
+    IReadOnlyList<string> TrustedArtifactOrigins);
 
 public sealed record RegistryResolveUpdatesRequest(
     IReadOnlyList<RegistryInstalledPackage> InstalledPackages,
+    IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     bool IncludePrerelease = false);
 
 public sealed record RegistryInstalledPackage(
     string PackageId,
-    string Version);
+    string Version,
+    IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections);
 
 public sealed record RegistryResolveUpdatesResponse(
-    IReadOnlyList<RegistryPackageUpdate> Updates);
+    IReadOnlyList<RegistryPackageUpdate> Updates,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<string> TrustedArtifactOrigins);
 
 public sealed record RegistryPackageUpdate(
     string PackageId,
     string CurrentVersion,
     string AvailableVersion,
     string? DeprecatedMessage,
-    RegistryPackageArtifact Artifact);
+    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts);
 
 public sealed record RegistryResolveInstallPlanRequest(
     string PackageId,
     string? Version,
     string? Tag,
+    IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
@@ -179,6 +243,7 @@ public sealed record RegistryResolveInstallPlanRequest(
 public sealed record RegistryPackageChangeRequest(
     string PackageId,
     string? Version,
+    IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     string? Tag = null,
     string? VersionRange = null,
     bool Required = true);
@@ -193,7 +258,8 @@ public sealed record RegistryResolvePackageChangesRequest(
 public sealed record RegistryInstalledPackageState(
     string PackageId,
     string Version,
-    IReadOnlyList<RegistryPackageDependency> DependsOn);
+    IReadOnlyList<RegistryPackageDependency> DependsOn,
+    IReadOnlyList<RegistryPackageProjectionKey> AcquiredProjections);
 
 public sealed record RegistryPackageInstallPlanItem(
     string PackageId,
@@ -202,8 +268,8 @@ public sealed record RegistryPackageInstallPlanItem(
     bool IsUpdate,
     string? DeprecatedMessage,
     IReadOnlyList<RegistryPackageDependency> DependsOn,
-    RegistryPackageArtifact Artifact,
-    RegistryPackageCompatibility? Compatibility = null);
+    IReadOnlyList<RegistryPackageTarget> Targets,
+    IReadOnlyList<RegistryPackageProjectionArtifact> Artifacts);
 
 public sealed record RegistryPackageInstallPlanConflict(
     string PackageId,
@@ -218,4 +284,5 @@ public sealed record RegistryResolveInstallPlanResponse(
     IReadOnlyList<RegistryPackageInstallPlanItem> Items,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    IReadOnlyList<RegistryPackageInstallPlanConflict> Conflicts);
+    IReadOnlyList<RegistryPackageInstallPlanConflict> Conflicts,
+    IReadOnlyList<string> TrustedArtifactOrigins);

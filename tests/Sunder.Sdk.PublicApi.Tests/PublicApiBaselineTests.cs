@@ -18,7 +18,7 @@ public sealed class PublicApiBaselineTests
         typeof(IAvaloniaPackageContributionRegistry).Assembly,
         typeof(IPackageStackExporter).Assembly,
         typeof(RuntimeHandshakeResponse).Assembly,
-        typeof(RegistryPackageArtifact).Assembly,
+        typeof(RegistryPackageCanonicalArtifact).Assembly,
         typeof(SunderPackageManifest).Assembly,
     };
 

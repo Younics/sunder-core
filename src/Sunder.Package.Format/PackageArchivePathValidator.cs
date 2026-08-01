@@ -7,9 +7,16 @@ internal static class PackageArchivePathValidator
         string label,
         ICollection<string> errors,
         out ArchiveRelativePath path,
-        bool required = false)
+        bool required = false,
+        int maxLength = SunderPackageFormat.MaxLogicalPathLength,
+        int maxDepth = SunderPackageFormat.MaxLogicalPathDepth)
     {
-        if (ArchiveRelativePath.TryParse(value, int.MaxValue, int.MaxValue, out path, out var error))
+        if (ArchiveRelativePath.TryParse(
+                value,
+                maxLength,
+                maxDepth,
+                out path,
+                out var error))
         {
             return true;
         }

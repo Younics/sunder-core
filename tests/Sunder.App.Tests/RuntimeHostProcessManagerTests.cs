@@ -14,7 +14,8 @@ public sealed class RuntimeHostProcessManagerTests
     [Theory]
     [InlineData("dev.sunder.runtime", 1, 1, 1, false)]
     [InlineData("dev.sunder.runtime", 2, 1, 2, false)]
-    [InlineData("dev.sunder.runtime", 3, 3, 3, true)]
+    [InlineData("dev.sunder.runtime", 4, 4, 4, false)]
+    [InlineData("dev.sunder.runtime", 5, 5, 5, true)]
     [InlineData("dev.sunder.runtime", 0, 0, 0, false)]
     [InlineData("other.runtime", 1, 1, 1, false)]
     public void CanReuseRunningRuntime_UsesProtocolIdentityAndRange(
@@ -318,6 +319,198 @@ public sealed class RuntimeHostProcessManagerTests
         try
         {
             await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(0, shutdownCount);
+            Assert.Equal(0, startCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenDevelopmentManagedHostIsWarm_RestartsItOnlyOnce()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var supervisorPath = Path.Combine(
+                root,
+                OperatingSystem.IsWindows() ? "Sunder.Host.Supervisor.exe" : "Sunder.Host.Supervisor");
+            await File.WriteAllTextAsync(supervisorPath, string.Empty);
+            var runtimeUrl = new Uri("http://127.0.0.1:54321/");
+            var runtimeState = 0;
+            var shutdownCount = 0;
+            var startCount = 0;
+            using var manager = new RuntimeHostProcessManager(
+                new AppStartupOptions(),
+                resolveRuntimeHostPath: () => supervisorPath,
+                tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeState is 0 or 2 ? CreateHandshake() : null),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeState is 0 or 2),
+                shutdownRuntimeAsync: (_, _) =>
+                {
+                    shutdownCount++;
+                    runtimeState = 1;
+                    return Task.CompletedTask;
+                },
+                startProcess: startInfo =>
+                {
+                    Assert.Equal(supervisorPath, startInfo.FileName);
+                    startCount++;
+                    runtimeState = 2;
+                },
+                delayAsync: (_, _) => Task.CompletedTask,
+                connectionInfoPath: Path.Combine(root, "host-connection.json"),
+                isRuntimeLeaseAvailable: () => true,
+                tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
+                    runtimeState is 0 or 2 ? CreateHostHandshake("Development") : null),
+                isHostInstanceLockAvailable: () => true,
+                restartManagedHostOnFirstStart: true);
+
+            await manager.EnsureStartedAsync(runtimeUrl);
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(1, shutdownCount);
+            Assert.Equal(1, startCount);
+            Assert.Equal(2, runtimeState);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenDevelopmentReplacementIsMissing_DoesNotStopManagedHost()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var shutdownCount = 0;
+        var startCount = 0;
+        using var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => null,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(CreateHandshake()),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(true),
+            shutdownRuntimeAsync: (_, _) =>
+            {
+                shutdownCount++;
+                return Task.CompletedTask;
+            },
+            startProcess: _ => startCount++,
+            delayAsync: (_, _) => Task.CompletedTask,
+            connectionInfoPath: Path.Combine(root, "host-connection.json"),
+            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
+                CreateHostHandshake("Development")),
+            restartManagedHostOnFirstStart: true);
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.Contains("before replacing", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, shutdownCount);
+            Assert.Equal(0, startCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenDevelopmentReplacementStartsLate_DoesNotRestartItAgain()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var supervisorPath = Path.Combine(
+                root,
+                OperatingSystem.IsWindows() ? "Sunder.Host.Supervisor.exe" : "Sunder.Host.Supervisor");
+            await File.WriteAllTextAsync(supervisorPath, string.Empty);
+            var runtimeUrl = new Uri("http://127.0.0.1:54321/");
+            var hostRunning = true;
+            var runtimeReady = true;
+            var shutdownCount = 0;
+            var startCount = 0;
+            var timeProvider = new ManualTimeProvider();
+            using var manager = new RuntimeHostProcessManager(
+                new AppStartupOptions(),
+                resolveRuntimeHostPath: () => supervisorPath,
+                tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeReady ? CreateHandshake() : null),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(hostRunning),
+                shutdownRuntimeAsync: (_, _) =>
+                {
+                    shutdownCount++;
+                    hostRunning = false;
+                    runtimeReady = false;
+                    return Task.CompletedTask;
+                },
+                startProcess: _ =>
+                {
+                    startCount++;
+                    hostRunning = true;
+                },
+                delayAsync: (delay, _) =>
+                {
+                    timeProvider.Advance(delay);
+                    return Task.CompletedTask;
+                },
+                connectionInfoPath: Path.Combine(root, "host-connection.json"),
+                timeProvider: timeProvider,
+                startupTimeout: TimeSpan.FromMilliseconds(400),
+                isRuntimeLeaseAvailable: () => true,
+                tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
+                    hostRunning ? CreateHostHandshake("Development") : null),
+                isHostInstanceLockAvailable: () => !hostRunning,
+                restartManagedHostOnFirstStart: true);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureStartedAsync(runtimeUrl));
+
+            runtimeReady = true;
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(1, shutdownCount);
+            Assert.Equal(1, startCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenDevelopmentRuntimeIsUnmanaged_ReusesIt()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var shutdownCount = 0;
+        var startCount = 0;
+        using var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(CreateHandshake()),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(true),
+            shutdownRuntimeAsync: (_, _) =>
+            {
+                shutdownCount++;
+                return Task.CompletedTask;
+            },
+            startProcess: _ => startCount++,
+            delayAsync: (_, _) => Task.CompletedTask,
+            connectionInfoPath: Path.Combine(rootPath, "connection-v1.json"),
+            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(null),
+            restartManagedHostOnFirstStart: true);
+
+        try
+        {
+            await manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/"));
+            await manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/"));
 
             Assert.Equal(0, shutdownCount);
             Assert.Equal(0, startCount);

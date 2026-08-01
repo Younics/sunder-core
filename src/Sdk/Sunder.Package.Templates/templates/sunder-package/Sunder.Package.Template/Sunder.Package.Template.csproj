@@ -4,26 +4,28 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
     <PackageReference Include="Sunder.Package.Build" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj"
-                      Condition="Exists('..\Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
-    <ProjectReference Include="Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj"
-                      Condition="Exists('Sunder.Package.Template.Contracts\Sunder.Package.Template.Contracts.csproj')" />
+    <ProjectReference Include="Sunder.Package.Template.Runtime\Sunder.Package.Template.Runtime.csproj"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Sunder.Package.Template.App\Sunder.Package.Template.App.csproj"
+                      ReferenceOutputAssembly="false"
+                      Condition="Exists('Sunder.Package.Template.App\Sunder.Package.Template.App.csproj')" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="**\*.Contracts\**\*.cs" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Runtime\bin\$(Configuration)\$(TargetFramework)\sunder-dev" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.App\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
+                             Condition="Exists('$(MSBuildProjectDirectory)\Sunder.Package.Template.App\Sunder.Package.Template.App.csproj')" />
+    <SunderPackageTargetLeaf Include="@(SunderNodePackageTargetLeaf)" />
   </ItemGroup>
-
-  <Import Project="Avalonia.PackageReferences.props" Condition="Exists('Avalonia.PackageReferences.props')" />
-  <Import Project="Stacks.PackageReferences.props" Condition="Exists('Stacks.PackageReferences.props')" />
 
 </Project>

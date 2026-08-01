@@ -14,6 +14,10 @@ internal sealed class RuntimeProtocolDescriptor
         RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
         RuntimeProtocolFeatures.PackageStageStatusV1,
         RuntimeProtocolFeatures.DevPackageOwnerLeasesV1,
+        RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
+        RuntimeProtocolFeatures.SchemaFirstRpcV1,
+        RuntimeProtocolFeatures.RpcPermissionsV1,
+        RuntimeProtocolFeatures.AppWebRpcV1,
     });
 
     public RuntimeProtocolDescriptor()

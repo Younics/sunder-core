@@ -293,14 +293,14 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
 
         for (var index = 0; index < 20; index++)
         {
-            await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), index.ToString());
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), index.ToString());
         }
 
         await WaitUntilAsync(() => Volatile.Read(ref commitCount) == 1);
         Assert.Equal(1, stageCount);
 
         await watcher.DisposeAsync();
-        await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "after-dispose");
+        await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "after-dispose");
         await Task.Delay(150);
         Assert.Equal(1, commitCount);
         TryDeleteDirectory(folder);
@@ -321,7 +321,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
 
         await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
         await watcher.SynchronizeAsync([]);
-        await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "unregistered");
+        await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "unregistered");
         await Task.Delay(100);
         Assert.DoesNotContain(
             events.GetSnapshot().Events,
@@ -357,7 +357,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         await WaitUntilAsync(() => Volatile.Read(ref commitCount) >= 1);
         await Task.Delay(250);
         var afterStorm = commitCount;
-        await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "rebound");
+        await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "rebound");
         await WaitUntilAsync(() => Volatile.Read(ref commitCount) > afterStorm);
         TryDeleteDirectory(parent);
     }
@@ -373,7 +373,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             commit: (_, _) => Task.FromResult(CreateReloadResult(success: false, "stage is stale because the session generation changed")));
         await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
 
-        await File.AppendAllTextAsync(Path.Combine(folder, "lib", "package.dll"), "stale");
+        await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "stale");
         await WaitUntilAsync(() => events.GetSnapshot().Events.Any(item => item.Kind == RuntimeEventKind.DevReloadCompleted));
 
         var result = events.GetSnapshot().Events.Last(item => item.Kind == RuntimeEventKind.DevReloadCompleted);
@@ -418,10 +418,10 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             });
 
     private static PackageLifecycleStageResult CreateStage(IReadOnlyList<string> packageIds)
-        => new("stage-1", [], [], [], [], packageIds);
+        => new("stage-1", [], [], [], packageIds);
 
     private static PackageLifecycleOperationResult CreateReloadResult(bool success, string? error = null)
-        => new(success, success ? "reloaded" : error, [], [], [], error is null ? [] : [error], ["test.package"]);
+        => new(success, success ? "reloaded" : error, [], [], error is null ? [] : [error], ["test.package"]);
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
@@ -437,11 +437,21 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     private static string CreateDevPackageFolder(string? path = null)
     {
         path ??= Path.Combine(Path.GetTempPath(), "sunder-runtime-watch-tests", Guid.NewGuid().ToString("N"), "sunder-dev");
-        Directory.CreateDirectory(Path.Combine(path, "lib"));
-        File.WriteAllText(Path.Combine(path, "sunder-package.json"), "{\"id\":\"test.package\"}");
-        File.WriteAllText(Path.Combine(path, "lib", "package.dll"), "test");
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            path,
+            "test.package",
+            "1.0.0",
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
         return path;
     }
+
+    private static string GetDevPackagePayloadPath(string folder)
+        => Path.Combine(
+            folder,
+            "payload",
+            "shared",
+            "lib",
+            Path.GetFileName(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location));
 
     private static string CreateTempDirectory()
     {

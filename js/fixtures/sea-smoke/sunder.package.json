@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "sunder.sea.smoke",
+  "name": "Sunder SEA Smoke",
+  "summary": "Native Node SEA protocol-handshake CI fixture.",
+  "version": "1.0.0",
+  "entry": "src/worker.ts",
+  "contracts": [
+    {
+      "path": "contracts/example.rpc.json"
+    }
+  ],
+  "providers": [
+    {
+      "providerId": "sunder.sea.smoke.provider",
+      "contractId": "example.messages",
+      "contractVersion": "1.0.0"
+    }
+  ],
+  "usesContracts": [],
+  "maximumExecutableBytes": 167772160,
+  "maximumPackageBytes": 1073741824
+}

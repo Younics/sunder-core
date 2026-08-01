@@ -10,8 +10,10 @@ public static class RegistryV1ErrorCodes
     public const string NotFound = "registry.v1.resource.not_found";
     public const string Conflict = "registry.v1.resource.conflict";
     public const string PackageVersionExists = "registry.v1.package.version_exists";
+    public const string ContractDescriptorConflict = "registry.v1.contract.descriptor_conflict";
     public const string PackageRequirementUnavailable = "registry.v1.package.requirement_unavailable";
     public const string PackageRequirementUnsatisfied = "registry.v1.package.requirement_unsatisfied";
+    public const string PackageTargetUnavailable = "registry.v1.package.target_unavailable";
     public const string Internal = "registry.v1.internal";
 }
 

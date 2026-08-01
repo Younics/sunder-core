@@ -8,8 +8,13 @@ internal static class PackageDependencyValidator
         IReadOnlyList<SunderPackageDependencyManifest>? dependencies,
         ICollection<string> errors)
     {
+        if (dependencies is { Count: > SunderPackageFormat.MaxDependencies })
+        {
+            errors.Add($"Package manifest declares {dependencies.Count} dependencies; the limit is {SunderPackageFormat.MaxDependencies}.");
+        }
+
         var seenDependencies = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var dependency in dependencies ?? [])
+        foreach (var dependency in (dependencies ?? []).Take(SunderPackageFormat.MaxDependencies))
         {
             if (dependency is null)
             {

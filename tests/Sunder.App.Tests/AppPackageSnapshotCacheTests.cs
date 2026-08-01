@@ -1,7 +1,9 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Sunder.App.Services;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Xunit;
 
@@ -31,7 +33,7 @@ public sealed class AppPackageSnapshotCacheTests
 
         Assert.Equal(1, downloads);
         Assert.Equal("original", File.ReadAllText(Path.Combine(second.Folder, "lib", "payload.txt")));
-        Assert.Equal("original", File.ReadAllText(Path.Combine(cacheRoot, "objects", snapshot.ContentHash, "content", "lib", "payload.txt")));
+        Assert.Equal("original", File.ReadAllText(Path.Combine(GetOnlyObjectPath(cacheRoot), "content", "lib", "payload.txt")));
     }
 
     [Fact]
@@ -50,7 +52,7 @@ public sealed class AppPackageSnapshotCacheTests
         var firstCache = new AppPackageSnapshotCache(() => root, Download, cacheRoot);
         await firstCache.MaterializeAsync(snapshot, CreateGeneration(root), CancellationToken.None);
         File.WriteAllText(
-            Path.Combine(cacheRoot, "objects", snapshot.ContentHash, "content", "lib", "payload.txt"),
+            Path.Combine(GetOnlyObjectPath(cacheRoot), "content", "lib", "payload.txt"),
             "corrupt");
 
         var secondCache = new AppPackageSnapshotCache(() => root, Download, cacheRoot);
@@ -120,17 +122,56 @@ public sealed class AppPackageSnapshotCacheTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             cache.MaterializeAsync(snapshot, CreateGeneration(root), cancellation.Token));
 
-        Assert.False(Directory.Exists(Path.Combine(cacheRoot, "objects", snapshot.ContentHash)));
+        Assert.True(!Directory.Exists(Path.Combine(cacheRoot, "objects"))
+                    || !Directory.EnumerateFileSystemEntries(Path.Combine(cacheRoot, "objects")).Any());
         Assert.True(!Directory.Exists(Path.Combine(cacheRoot, "staging"))
                     || !Directory.EnumerateFileSystemEntries(Path.Combine(cacheRoot, "staging")).Any());
     }
 
-    private static byte[] CreateArchive(string packageId, string payload)
+    [Fact]
+    public async Task MaterializeAsync_SameContentForTwoAppRidsUsesSeparateCacheIdentities()
+    {
+        var root = CreateTempDirectory();
+        var cacheRoot = Path.Combine(root, "cache");
+        var currentRid = RuntimeInformation.RuntimeIdentifier;
+        var alternateRid = SunderPackageFormat.SupportedRuntimeIdentifiers
+            .First(rid => !string.Equals(rid, currentRid, StringComparison.Ordinal));
+        var archive = CreateArchive("test.package", "payload", [currentRid, alternateRid]);
+        var current = CreateSnapshot(
+            "test.package",
+            archive,
+            RuntimeContractTestData.AppTarget(rid: currentRid));
+        var alternate = CreateSnapshot(
+            "test.package",
+            archive,
+            RuntimeContractTestData.AppTarget(rid: alternateRid));
+        var downloads = 0;
+        async Task Download(PackageUiSnapshotDescriptor _, Stream destination, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref downloads);
+            await destination.WriteAsync(archive, cancellationToken);
+        }
+        var cache = new AppPackageSnapshotCache(() => root, Download, cacheRoot);
+
+        await cache.MaterializeAsync(current, CreateGeneration(root), CancellationToken.None);
+        await cache.MaterializeAsync(alternate, CreateGeneration(root), CancellationToken.None);
+
+        Assert.Equal(2, downloads);
+        Assert.Equal(2, Directory.EnumerateDirectories(Path.Combine(cacheRoot, "objects")).Count());
+    }
+
+    private static byte[] CreateArchive(
+        string packageId,
+        string payload,
+        IReadOnlyList<string>? runtimeIdentifiers = null)
     {
         using var output = new MemoryStream();
         using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
         {
-            WriteEntry(archive, "sunder-package.json", $$"""{"id":"{{packageId}}","entryAssembly":"test.dll"}""");
+            WriteEntry(
+                archive,
+                "manifest/sunder-package.json",
+                RuntimeContractTestData.CreateAppManifestJson(packageId, "lib/test.dll", runtimeIdentifiers));
             WriteEntry(archive, "lib/payload.txt", payload);
         }
         return output.ToArray();
@@ -143,10 +184,13 @@ public sealed class AppPackageSnapshotCacheTests
         writer.Write(content);
     }
 
-    private static PackageUiSnapshotDescriptor CreateSnapshot(string packageId, byte[] archive)
+    private static PackageUiSnapshotDescriptor CreateSnapshot(
+        string packageId,
+        byte[] archive,
+        PackageTargetDescriptor? target = null)
     {
         var hash = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
-        return new PackageUiSnapshotDescriptor(packageId, PackageSourceKind.Dev, 1, hash, Guid.NewGuid().ToString("N"), "snapshot");
+        return new PackageUiSnapshotDescriptor(packageId, PackageSourceKind.Dev, 1, target ?? RuntimeContractTestData.AppTarget(), hash, Guid.NewGuid().ToString("N"), "snapshot");
     }
 
     private static string CreateGeneration(string root)
@@ -155,6 +199,9 @@ public sealed class AppPackageSnapshotCacheTests
         Directory.CreateDirectory(path);
         return path;
     }
+
+    private static string GetOnlyObjectPath(string cacheRoot)
+        => Assert.Single(Directory.EnumerateDirectories(Path.Combine(cacheRoot, "objects")));
 
     private static string CreateTempDirectory()
     {

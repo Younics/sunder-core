@@ -73,10 +73,10 @@ public static class SunderPackageArchiveInspector
         SunderPackageContentIndex? contentIndex;
         try
         {
-            manifest = JsonSerializer.Deserialize(
+            manifest = StrictJsonSerializer.Deserialize(
                 await SunderArchive.ReadMetadataJsonAsync(stagingPath, ManifestPath, maxMetadataJsonBytes, cancellationToken),
                 JsonContext.SunderPackageManifest);
-            contentIndex = JsonSerializer.Deserialize(
+            contentIndex = StrictJsonSerializer.Deserialize(
                 await SunderArchive.ReadMetadataJsonAsync(stagingPath, ContentIndexPath, maxMetadataJsonBytes, cancellationToken),
                 JsonContext.SunderPackageContentIndex);
         }
@@ -92,6 +92,9 @@ public static class SunderPackageArchiveInspector
 
         SunderPackageManifestValidator.Validate(manifest, stagingPath, errors);
         await PackageContentIndexValidator.ValidateAsync(contentIndex, stagingPath, errors, cancellationToken);
-        return new SunderPackageArchiveValidationResult(errors.Count == 0 ? manifest : null, warnings, errors);
+        return new SunderPackageArchiveValidationResult(errors.Count == 0 ? manifest : null, warnings, errors)
+        {
+            ContentIndex = errors.Count == 0 ? contentIndex : null,
+        };
     }
 }

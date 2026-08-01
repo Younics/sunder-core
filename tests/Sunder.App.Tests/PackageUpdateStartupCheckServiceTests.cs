@@ -177,7 +177,19 @@ public sealed class PackageUpdateStartupCheckServiceTests
             currentVersion,
             availableVersion,
             DeprecatedMessage: null,
-            new RegistryPackageArtifact("", 0, $"download/{packageId}/{availableVersion}"));
+            Artifacts:
+            [
+                new RegistryPackageProjectionArtifact(
+                    "shared",
+                    null,
+                    "",
+                    0,
+                    $"download/{packageId}/{availableVersion}",
+                    "",
+                    "",
+                    "",
+                    1),
+            ]);
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
     {
@@ -224,9 +236,20 @@ public sealed class PackageUpdateStartupCheckServiceTests
                     true,
                     update.DeprecatedMessage,
                     [],
-                    new RuntimeRegistryPackageArtifact(update.Artifact.Sha256, update.Artifact.Size, update.Artifact.DownloadUrl))).ToArray(),
+                    [],
+                    update.Artifacts.Select(artifact => new RuntimeRegistryPackageProjectionArtifact(
+                        artifact.Kind,
+                        artifact.Rid,
+                        artifact.Sha256,
+                        artifact.Size,
+                        artifact.DownloadUrl,
+                        artifact.SourceArchiveSha256,
+                        artifact.ManifestSha256,
+                        artifact.ProjectionContentIdentity,
+                        artifact.ProjectionFormatVersion)).ToArray())).ToArray(),
                 [],
                 PlanSuccess ? [] : ["Registry is not reachable."],
+                [],
                 []));
         }
 

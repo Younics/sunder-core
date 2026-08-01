@@ -9,15 +9,18 @@ internal abstract class CollectiblePackageLoadContext : AssemblyLoadContext
     private readonly AssemblyDependencyResolver _dependencyResolver;
     private readonly Func<AssemblyName, Assembly?> _resolveSharedAssembly;
     private readonly Action<Assembly>? _assemblyLoaded;
+    private readonly string _runtimeIdentifier;
 
     protected CollectiblePackageLoadContext(
         string name,
         string entryAssemblyPath,
+        string runtimeIdentifier,
         Func<AssemblyName, Assembly?> resolveSharedAssembly,
         Action<Assembly>? assemblyLoaded = null)
         : base(name, isCollectible: true)
     {
         _entryAssemblyPath = entryAssemblyPath;
+        _runtimeIdentifier = runtimeIdentifier;
         _dependencyResolver = new AssemblyDependencyResolver(entryAssemblyPath);
         _resolveSharedAssembly = resolveSharedAssembly;
         _assemblyLoaded = assemblyLoaded;
@@ -50,7 +53,10 @@ internal abstract class CollectiblePackageLoadContext : AssemblyLoadContext
             return LoadUnmanagedDllFromPath(candidatePath);
         }
 
-        var runtimeCandidatePath = NativeLibraryFallbackResolver.Resolve(_entryAssemblyPath, unmanagedDllName);
+        var runtimeCandidatePath = NativeLibraryFallbackResolver.Resolve(
+            _entryAssemblyPath,
+            unmanagedDllName,
+            _runtimeIdentifier);
         if (runtimeCandidatePath is not null)
         {
             return LoadUnmanagedDllFromPath(runtimeCandidatePath);

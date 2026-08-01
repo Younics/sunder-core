@@ -5,9 +5,9 @@ namespace Sunder.Runtime.Contracts;
 public static class RuntimeProtocol
 {
     public const string Identity = "dev.sunder.runtime";
-    public const int CurrentRevision = 3;
-    public const int MinimumSupportedRevision = 3;
-    public const int MaximumSupportedRevision = 3;
+    public const int CurrentRevision = 5;
+    public const int MinimumSupportedRevision = 5;
+    public const int MaximumSupportedRevision = 5;
 }
 
 public static class RuntimeProtocolFeatures
@@ -19,6 +19,10 @@ public static class RuntimeProtocolFeatures
     public const string AtomicPackageSnapshotV1 = "atomic-package-snapshot.v1";
     public const string PackageStageStatusV1 = "package-stage-status.v1";
     public const string DevPackageOwnerLeasesV1 = "dev-package-owner-leases.v1";
+    public const string TargetAwarePackageSnapshotsV1 = "target-aware-package-snapshots.v1";
+    public const string SchemaFirstRpcV1 = "schema-first-rpc.v1";
+    public const string RpcPermissionsV1 = "rpc-permissions.v1";
+    public const string AppWebRpcV1 = "app-web-rpc.v1";
 }
 
 public sealed record RuntimeProductVersionDiagnostics(

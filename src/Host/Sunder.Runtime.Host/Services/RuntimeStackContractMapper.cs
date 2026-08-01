@@ -1,6 +1,7 @@
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
@@ -10,8 +11,9 @@ internal static class RuntimeStackContractMapper
     public static StackOwnedFragment OwnExportFragment(
         string ownerPackageId,
         string contributorId,
-        StackFragmentExport fragment)
-        => new(ownerPackageId, contributorId, fragment);
+        SunderRpcProviderSnapshot provider,
+        StackRpcFragmentExport fragment)
+        => new(ownerPackageId, contributorId, provider, fragment);
 
     public static StackFragmentImport OwnImportFragment(
         string ownerPackageId,

@@ -3,7 +3,7 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
 
-public sealed partial class RuntimeApiClient : IRuntimeApiClient
+public sealed partial class RuntimeApiClient : IRuntimeApiClient, IRuntimeRpcManagementClient
 {
     private readonly RuntimeClientTransport? _ownedTransport;
     private readonly RuntimeManagementClient _management;

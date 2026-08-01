@@ -7,6 +7,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -22,15 +23,10 @@ public sealed class RuntimeArchitectureRatchetTests
             .Select(static field => (string)field.GetRawConstantValue()!)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var manifest = new SunderPackageManifest
-        {
-            Id = "test.package",
-            SdkApiVersion = SunderSdkApiVersions.V1,
-            SdkPackageVersion = "1.1.0",
-            RequiredSdkCapabilities = publishedCapabilities,
-        };
+        var key = new SunderPackageTargetKey("runtime", "win-x64");
+        var target = CreateTarget("1.1.0", publishedCapabilities);
 
-        Assert.Empty(SunderSdkCompatibilityProfile.Validate(manifest));
+        Assert.Empty(SunderSdkCompatibilityProfile.Validate("test.package", key, target));
     }
 
     [Theory]
@@ -39,15 +35,12 @@ public sealed class RuntimeArchitectureRatchetTests
     [InlineData("1.2.0")]
     public void RuntimeCompatibilityProfile_RejectsPackagesOutsideCoordinated11Baseline(string sdkVersion)
     {
-        var errors = SunderSdkCompatibilityProfile.Validate(new SunderPackageManifest
-        {
-            Id = "test.package",
-            SdkApiVersion = SunderSdkApiVersions.V1,
-            SdkPackageVersion = sdkVersion,
-            RequiredSdkCapabilities = [SunderSdkCapabilities.Baseline11V1],
-        });
+        var errors = SunderSdkCompatibilityProfile.Validate(
+            "test.package",
+            new SunderPackageTargetKey("runtime", "win-x64"),
+            CreateTarget(sdkVersion, [SunderSdkCapabilities.Baseline11V1]));
 
-        Assert.Contains(errors, error => error.Contains("incompatible SDK baseline families cannot be mixed", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("requires >=1.1.0 <1.2.0", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -56,16 +49,27 @@ public sealed class RuntimeArchitectureRatchetTests
     [InlineData("1.1.7+build.42")]
     public void RuntimeCompatibilityProfile_AcceptsCompatible11PackageVersions(string sdkVersion)
     {
-        var errors = SunderSdkCompatibilityProfile.Validate(new SunderPackageManifest
-        {
-            Id = "test.package",
-            SdkApiVersion = SunderSdkApiVersions.V1,
-            SdkPackageVersion = sdkVersion,
-            RequiredSdkCapabilities = [SunderSdkCapabilities.Baseline11V1],
-        });
+        var errors = SunderSdkCompatibilityProfile.Validate(
+            "test.package",
+            new SunderPackageTargetKey("runtime", "win-x64"),
+            CreateTarget(sdkVersion, [SunderSdkCapabilities.Baseline11V1]));
 
         Assert.Empty(errors);
     }
+
+    private static SunderPackageTargetManifest CreateTarget(
+        string sdkVersion,
+        IReadOnlyList<string> capabilities)
+        => new()
+        {
+            Role = "runtime",
+            Rid = "win-x64",
+            Kind = "dotnet",
+            EntryPoint = "lib/test.dll",
+            TargetFramework = "net10.0",
+            SdkVersion = sdkVersion,
+            RequiredHostCapabilities = capabilities.Cast<string?>().ToArray(),
+        };
 
     [Fact]
     public void SecuritySensitiveStorageOrchestrators_StaySmallAndDelegatePlatformAndPersistenceWork()
@@ -303,7 +307,11 @@ public sealed class RuntimeArchitectureRatchetTests
                      "PackageLifecycleLoadRequest", "InstalledPackageSessionReloadRequest",
                      "load-batch", "reload-installed", "PackageRuntimeFaultReporter",
                      "ReportPackageFaultAsync", "ReportPackageFaultRequest", "PackageFaultService",
-                     "MapPackageFaultEndpoints",
+                     "MapPackageFaultEndpoints", "CurrentSdkApiVersion", "ContractOnlyHostRole",
+                     "PackageHostRoles.ContractOnly", "PackageHostRoleMetadataValue.ContractOnly",
+                     "contract-only", "StackContributionsV1", "stacks.contributions.v1",
+                     "IPackageExtensionCatalog", "IPackageExtensionInvocationCatalog",
+                     "PackageExtensionPoint", "SharedContractAssembly",
                  })
         {
             Assert.DoesNotContain(removed, source, StringComparison.Ordinal);
@@ -393,6 +401,44 @@ public sealed class RuntimeProblemDetailsTests
         Assert.Single(logger.Entries);
     }
 
+    [Fact]
+    public async Task InternalRpcError_LogsTypedDiagnosticsWithoutExposingThemInResponse()
+    {
+        const string rpcCode = "rpc.provider-retired";
+        var logger = new CollectingLogger<RuntimeProblemDetailsMiddleware>();
+        var middleware = new RuntimeProblemDetailsMiddleware(
+            _ => throw new InvalidOperationException(
+                "outer failure",
+                new AggregateException(
+                    new InvalidOperationException("private aggregate sibling"),
+                    new SunderRpcException(new SunderRpcError(
+                        SunderRpcErrorKind.Unavailable,
+                        rpcCode,
+                        "private provider detail")))),
+            logger);
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/api/v1/packages/test/runtime/operations/test.run";
+        context.Request.Headers[RuntimeProblemDetailsMiddleware.CorrelationHeader] = "rpc-correlation";
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        Assert.Equal(StatusCodes.Status500InternalServerError, context.Response.StatusCode);
+        Assert.DoesNotContain(rpcCode, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("private provider detail", body, StringComparison.Ordinal);
+        var message = Assert.Single(logger.Messages);
+        Assert.Contains("rpc-correlation", message, StringComparison.Ordinal);
+        Assert.Contains(nameof(SunderRpcErrorKind.Unavailable), message, StringComparison.Ordinal);
+        Assert.Contains(rpcCode, message, StringComparison.Ordinal);
+        Assert.DoesNotContain("outer failure", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("private aggregate sibling", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("private provider detail", message, StringComparison.Ordinal);
+        Assert.Null(Assert.Single(logger.Exceptions));
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -403,8 +449,15 @@ public sealed class RuntimeProblemDetailsTests
     private sealed class CollectingLogger<T> : ILogger<T>
     {
         public List<LogLevel> Entries { get; } = [];
+        public List<string> Messages { get; } = [];
+        public List<Exception?> Exceptions { get; } = [];
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) => Entries.Add(logLevel);
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(logLevel);
+            Messages.Add(formatter(state, exception));
+            Exceptions.Add(exception);
+        }
     }
 }

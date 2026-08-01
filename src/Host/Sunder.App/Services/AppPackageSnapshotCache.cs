@@ -9,7 +9,7 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageSnapshotCache
 {
-    private const int FormatRevision = 1;
+    private const int FormatRevision = 2;
     private const string CompleteMarkerName = "complete";
     private const string MetadataFileName = "metadata.json";
     private const string ContentDirectoryName = "content";
@@ -55,20 +55,21 @@ internal sealed class AppPackageSnapshotCache
 
         await _materializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         var hash = snapshot.ContentHash.ToLowerInvariant();
-        var hashGate = _hashGates.GetOrAdd(hash, static _ => new SemaphoreSlim(1, 1));
+        var cacheIdentity = ComputeCacheIdentity(snapshot, hash);
+        var hashGate = _hashGates.GetOrAdd(cacheIdentity, static _ => new SemaphoreSlim(1, 1));
         try
         {
             await hashGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                var cached = await GetOrFillAsync(snapshot, hash, cancellationToken).ConfigureAwait(false);
+                var cached = await GetOrFillAsync(snapshot, hash, cacheIdentity, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 var packageFolder = Path.Combine(generationFolder, SanitizeFolderName(snapshot.PackageId));
                 try
                 {
                     CopyDirectory(cached.ContentPath, packageFolder, cancellationToken);
-                    _observedHashes.TryAdd(hash, 0);
-                    return new AppPreparedPackageSource(cached.PackageId, packageFolder);
+                    _observedHashes.TryAdd(cacheIdentity, 0);
+                    return new AppPreparedPackageSource(cached.PackageId, packageFolder, cached.Manifest);
                 }
                 catch
                 {
@@ -90,11 +91,12 @@ internal sealed class AppPackageSnapshotCache
     private async Task<CachedPackageContent> GetOrFillAsync(
         PackageUiSnapshotDescriptor snapshot,
         string hash,
+        string cacheIdentity,
         CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
-        var objectPath = GetObjectPath(hash);
-        var validation = await ValidateAsync(objectPath, hash, snapshot.PackageId, cancellationToken).ConfigureAwait(false);
+        var objectPath = GetObjectPath(cacheIdentity);
+        var validation = await ValidateAsync(objectPath, hash, snapshot, cancellationToken).ConfigureAwait(false);
         if (validation.Content is not null)
         {
             Directory.SetLastWriteTimeUtc(objectPath, DateTime.UtcNow);
@@ -111,7 +113,7 @@ internal sealed class AppPackageSnapshotCache
         await _fillGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            validation = await ValidateAsync(objectPath, hash, snapshot.PackageId, cancellationToken).ConfigureAwait(false);
+            validation = await ValidateAsync(objectPath, hash, snapshot, cancellationToken).ConfigureAwait(false);
             if (validation.Content is not null) return validation.Content;
             if (validation.Corrupt) Quarantine(objectPath);
 
@@ -230,19 +232,21 @@ internal sealed class AppPackageSnapshotCache
                 }).ConfigureAwait(false);
             File.Delete(archivePath);
 
-            var manifest = AppPackageManifest.Load(Path.Combine(contentPath, "sunder-package.json"));
-            if (string.IsNullOrWhiteSpace(manifest?.Id))
-            {
-                throw new InvalidDataException("Package UI snapshot contains an invalid app-side manifest.");
-            }
+            var manifest = AppPackageManifestReader.Read(contentPath);
             if (!string.Equals(manifest.Id, snapshot.PackageId, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException(
                     $"Package UI snapshot '{snapshot.SnapshotId}' resolved to package '{manifest.Id}'.");
             }
+            ValidateTarget(manifest, snapshot);
 
             var files = await IndexContentAsync(contentPath, cancellationToken).ConfigureAwait(false);
-            var metadata = new CacheMetadata(FormatRevision, expectedHash, manifest.Id, files);
+            var metadata = new CacheMetadata(
+                FormatRevision,
+                expectedHash,
+                manifest.Id!,
+                snapshot.Target,
+                files);
             await File.WriteAllTextAsync(
                 Path.Combine(stagingPath, MetadataFileName),
                 JsonSerializer.Serialize(metadata),
@@ -256,11 +260,11 @@ internal sealed class AppPackageSnapshotCache
             catch (IOException) when (Directory.Exists(objectPath))
             {
                 AppPackageSourcePreparer.TryDeleteDirectory(stagingPath);
-                var winner = await ValidateAsync(objectPath, expectedHash, snapshot.PackageId, cancellationToken).ConfigureAwait(false);
+                var winner = await ValidateAsync(objectPath, expectedHash, snapshot, cancellationToken).ConfigureAwait(false);
                 if (winner.Content is not null) return winner.Content;
                 throw new InvalidDataException("A concurrently published package content cache object is invalid.");
             }
-            return new CachedPackageContent(manifest.Id, Path.Combine(objectPath, ContentDirectoryName));
+            return new CachedPackageContent(manifest.Id!, Path.Combine(objectPath, ContentDirectoryName), manifest);
         }
         finally
         {
@@ -271,7 +275,7 @@ internal sealed class AppPackageSnapshotCache
     private static async Task<CacheValidation> ValidateAsync(
         string objectPath,
         string expectedHash,
-        string expectedPackageId,
+        PackageUiSnapshotDescriptor snapshot,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(objectPath)) return CacheValidation.Missing;
@@ -293,6 +297,8 @@ internal sealed class AppPackageSnapshotCache
                 || metadata.FormatRevision != FormatRevision
                 || !string.Equals(metadata.ContentHash, expectedHash, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(metadata.PackageId)
+                || metadata.Target is null
+                || !TargetsEqual(metadata.Target, snapshot.Target)
                 || metadata.Files is null
                 || metadata.Files.Count == 0)
             {
@@ -301,17 +307,18 @@ internal sealed class AppPackageSnapshotCache
 
             var actualFiles = await IndexContentAsync(contentPath, cancellationToken).ConfigureAwait(false);
             if (!metadata.Files.SequenceEqual(actualFiles)) return CacheValidation.Invalid;
-            var manifest = AppPackageManifest.Load(Path.Combine(contentPath, "sunder-package.json"));
-            if (!string.Equals(manifest?.Id, metadata.PackageId, StringComparison.OrdinalIgnoreCase))
+            var manifest = AppPackageManifestReader.Read(contentPath);
+            if (!string.Equals(manifest.Id, metadata.PackageId, StringComparison.OrdinalIgnoreCase))
             {
                 return CacheValidation.Invalid;
             }
-            if (!string.Equals(metadata.PackageId, expectedPackageId, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(metadata.PackageId, snapshot.PackageId, StringComparison.OrdinalIgnoreCase))
             {
                 throw new CacheIdentityMismatchException(
-                    $"Package content hash '{expectedHash}' belongs to '{metadata.PackageId}', not '{expectedPackageId}'.");
+                    $"Package content hash '{expectedHash}' belongs to '{metadata.PackageId}', not '{snapshot.PackageId}'.");
             }
-            return new CacheValidation(new CachedPackageContent(metadata.PackageId, contentPath), Corrupt: false);
+            ValidateTarget(manifest, snapshot);
+            return new CacheValidation(new CachedPackageContent(metadata.PackageId, contentPath, manifest), Corrupt: false);
         }
         catch (OperationCanceledException)
         {
@@ -380,7 +387,74 @@ internal sealed class AppPackageSnapshotCache
         }
     }
 
-    private string GetObjectPath(string hash) => Path.Combine(_objectRoot, hash);
+    private string GetObjectPath(string cacheIdentity) => Path.Combine(_objectRoot, cacheIdentity);
+
+    private static string ComputeCacheIdentity(PackageUiSnapshotDescriptor snapshot, string hash)
+    {
+        var target = snapshot.Target;
+        var value = string.Join(
+            '\0',
+            hash,
+            target.Role,
+            target.Rid,
+            target.Kind,
+            target.EntryPoint,
+            target.TargetFramework,
+            target.SdkVersion,
+            string.Join('\0', target.RequiredHostCapabilities),
+            string.Join('\0', target.Views.Select(static view => string.Join(
+                '\u001f',
+                view.ViewId,
+                view.DisplayName,
+                view.Route,
+                view.Icon,
+                view.DefaultPlacement,
+                view.ShowInHotbar))));
+        return Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
+    private static void ValidateTarget(
+        SunderPackageManifest manifest,
+        PackageUiSnapshotDescriptor snapshot)
+    {
+        var descriptor = snapshot.Target;
+        if (!SunderPackageTargetKey.TryCreate(descriptor.Role, descriptor.Rid, out var key)
+            || !SunderPackageTargetResolver.TryResolveTarget(manifest, key, out var target)
+            || target is null)
+        {
+            throw new InvalidDataException(
+                $"Package UI snapshot '{snapshot.SnapshotId}' target metadata does not match its strict manifest.");
+        }
+        if (!string.Equals(target.Kind, descriptor.Kind, StringComparison.Ordinal)
+            || !string.Equals(target.EntryPoint, descriptor.EntryPoint, StringComparison.Ordinal)
+            || !string.Equals(target.TargetFramework, descriptor.TargetFramework, StringComparison.Ordinal)
+            || !string.Equals(target.SdkVersion, descriptor.SdkVersion, StringComparison.Ordinal)
+            || !(target.RequiredHostCapabilities ?? []).Select(static value => value!)
+                .SequenceEqual(descriptor.RequiredHostCapabilities, StringComparer.Ordinal)
+            || !(target.Views ?? []).Where(static view => view is not null)
+                .Select(static view => new PackageWebViewDescriptor(
+                    view!.ViewId!,
+                    view.DisplayName!,
+                    view.Route!,
+                    view.Icon,
+                    view.DefaultPlacement!,
+                    view.ShowInHotbar!.Value))
+                .SequenceEqual(descriptor.Views))
+        {
+            throw new InvalidDataException(
+                $"Package UI snapshot '{snapshot.SnapshotId}' target metadata does not match its strict manifest.");
+        }
+    }
+
+    private static bool TargetsEqual(PackageTargetDescriptor left, PackageTargetDescriptor right)
+        => string.Equals(left.Role, right.Role, StringComparison.Ordinal)
+           && string.Equals(left.Rid, right.Rid, StringComparison.Ordinal)
+           && string.Equals(left.Kind, right.Kind, StringComparison.Ordinal)
+           && string.Equals(left.EntryPoint, right.EntryPoint, StringComparison.Ordinal)
+           && string.Equals(left.TargetFramework, right.TargetFramework, StringComparison.Ordinal)
+           && string.Equals(left.SdkVersion, right.SdkVersion, StringComparison.Ordinal)
+           && left.RequiredHostCapabilities.SequenceEqual(right.RequiredHostCapabilities, StringComparer.Ordinal)
+           && left.Views.SequenceEqual(right.Views);
 
     private static bool IsCanonicalHash(string value)
         => value.Length == 64 && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
@@ -440,7 +514,10 @@ internal sealed class AppPackageSnapshotCache
         return length;
     }
 
-    private sealed record CachedPackageContent(string PackageId, string ContentPath);
+    private sealed record CachedPackageContent(
+        string PackageId,
+        string ContentPath,
+        SunderPackageManifest Manifest);
     private sealed record CacheValidation(CachedPackageContent? Content, bool Corrupt)
     {
         public static CacheValidation Missing { get; } = new(null, Corrupt: false);
@@ -450,6 +527,7 @@ internal sealed class AppPackageSnapshotCache
         int FormatRevision,
         string ContentHash,
         string PackageId,
+        PackageTargetDescriptor Target,
         IReadOnlyList<CacheFileMetadata> Files);
     private sealed record CacheFileMetadata(string Path, long Length, string Sha256);
     private sealed record CacheObject(string Path, string Hash, DateTime LastAccessUtc, long Length);

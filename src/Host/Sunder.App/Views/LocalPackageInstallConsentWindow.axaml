@@ -1,0 +1,136 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        x:Class="Sunder.App.Views.LocalPackageInstallConsentWindow"
+        x:DataType="vm:LocalPackageInstallConsentViewModel"
+        mc:Ignorable="d"
+        Width="680"
+        Height="640"
+        MinWidth="600"
+        MinHeight="560"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Install Sunder Package"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        ShowInTaskbar="False"
+        Classes="secondary-window">
+  <Grid RowDefinitions="52,*,Auto"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="Review Local Package" />
+      </controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
+
+    <ScrollViewer Grid.Row="1"
+                  Margin="20,12,20,8"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="14">
+        <Border Classes="card-surface">
+          <StackPanel Spacing="8">
+            <TextBlock FontSize="26"
+                       FontWeight="SemiBold"
+                       Text="{Binding PackageName}"
+                       TextWrapping="Wrap" />
+            <TextBlock Classes="caption"
+                       Text="{Binding PackageIdentity}"
+                       TextWrapping="Wrap" />
+            <TextBlock Classes="muted"
+                       Text="{Binding Summary}"
+                       TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+              <TextBlock Classes="caption" Text="Targets" />
+              <TextBlock Grid.Column="1" Text="{Binding TargetText}" TextWrapping="Wrap" />
+            </Grid>
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+              <TextBlock Classes="caption" Text="Archive" />
+              <TextBlock Grid.Column="1" Text="{Binding FileName}" TextWrapping="Wrap" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="settings-note-card">
+          <StackPanel Spacing="5">
+            <TextBlock FontWeight="SemiBold"
+                       Text="Package trust"
+                       IsVisible="{Binding IsValid}" />
+            <TextBlock Classes="muted"
+                       Text="Installing runs package code with your user account's operating-system access. Install only packages and sources you trust."
+                       IsVisible="{Binding IsValid}"
+                       TextWrapping="Wrap" />
+            <TextBlock FontWeight="SemiBold"
+                       Foreground="{DynamicResource Sunder.Brush.Danger}"
+                       Text="Validation failed"
+                       IsVisible="{Binding IsInvalid}" />
+            <TextBlock Classes="muted"
+                       Text="{Binding ValidationMessage}"
+                       TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card-surface" IsVisible="{Binding IsValid}">
+          <Expander IsExpanded="False">
+            <Expander.Header>
+              <StackPanel Spacing="2">
+                <TextBlock Classes="section-title" Text="RPC Access" />
+                <TextBlock Classes="caption" Text="{Binding RpcAccessSummary}" />
+              </StackPanel>
+            </Expander.Header>
+            <StackPanel Margin="0,12,0,0" Spacing="10">
+              <TextBlock Classes="muted"
+                         IsVisible="{Binding HasNoRpcContractUses}"
+                         Text="This package does not declare access to another package's RPC contract."
+                         TextWrapping="Wrap" />
+              <ItemsControl ItemsSource="{Binding RpcContractUses}"
+                            IsVisible="{Binding HasRpcContractUses}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PackageRpcAccessItemViewModel">
+                    <Border Classes="settings-note-card" Margin="0,0,0,8">
+                      <StackPanel Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                          <TextBlock FontWeight="SemiBold" Text="{Binding ContractId}" />
+                          <TextBlock Grid.Column="1" Classes="caption" Text="{Binding VersionRange}" />
+                          <TextBlock Grid.Column="2" Classes="caption" Text="{Binding RequirementText}" />
+                        </Grid>
+                        <TextBlock Classes="muted" Text="{Binding ActionsText}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Expander>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <Border Grid.Row="2"
+            Padding="20,14"
+            BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource Sunder.Brush.Border.Subtle}">
+      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+        <TextBlock Classes="caption"
+                   VerticalAlignment="Center"
+                   Text="Install and update grant every RPC action declared above."
+                   IsVisible="{Binding IsValid}"
+                   TextWrapping="Wrap" />
+        <Button Grid.Column="1"
+                Classes="secondary-action"
+                Content="{Binding DismissButtonText}"
+                Click="CancelButton_OnClick" />
+        <Button Grid.Column="2"
+                Classes="primary-action"
+                Content="Install Package"
+                IsVisible="{Binding IsValid}"
+                Click="InstallButton_OnClick" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

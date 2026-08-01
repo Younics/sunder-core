@@ -36,11 +36,13 @@ public sealed class AppPackageLifecycleCoordinator
 
     public Task<IReadOnlyList<ActivePackageDescriptor>> ApplyPackageSnapshotAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds = null,
         Action<IReadOnlyList<ActivePackageDescriptor>>? commitPresentation = null,
         CancellationToken cancellationToken = default)
         => Target.ApplyPackageSnapshotCoreAsync(
             snapshot,
+            packageSources,
             retryDisabledPackageIds,
             commitPresentation is null
                 ? null
@@ -49,11 +51,13 @@ public sealed class AppPackageLifecycleCoordinator
 
     internal Task<IReadOnlyList<ActivePackageDescriptor>> ApplyPackageSnapshotAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         Func<PackageViewHostService.AppPackagePresentationCandidate, IReadOnlyList<ActivePackageDescriptor>, CancellationToken, Task<Action?>>? preparePresentation,
         CancellationToken cancellationToken)
         => Target.ApplyPackageSnapshotCoreAsync(
             snapshot,
+            packageSources,
             retryDisabledPackageIds,
             preparePresentation,
             cancellationToken);
@@ -98,6 +102,7 @@ public sealed class AppPackageLifecycleCoordinator
 
     private Task<IReadOnlyList<ActivePackageDescriptor>> ApplyPackageSnapshotCoreAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         Func<PackageViewHostService.AppPackagePresentationCandidate, IReadOnlyList<ActivePackageDescriptor>, CancellationToken, Task<Action?>>? preparePresentation,
         CancellationToken cancellationToken)
@@ -108,7 +113,7 @@ public sealed class AppPackageLifecycleCoordinator
             : new HashSet<string>(retryDisabledPackageIds, StringComparer.OrdinalIgnoreCase);
         return ApplyGenerationCoreAsync(
             snapshot.ActivePackages,
-            snapshot.PackageUiSnapshots,
+            packageSources,
             retryDisabledPackages,
             snapshot,
             preparePresentation,

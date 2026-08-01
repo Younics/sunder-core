@@ -4,18 +4,6 @@
   "summary": "A sample package.",
   "version": "1.2.3",
   "icon": "assets/icon.png",
-  "entryAssembly": "Sample.dll",
-  "compatibility": {
-    "sdkApiVersion": 1,
-    "sdkPackageVersion": "0.8.0",
-    "requiredCapabilities": [
-      "views.v1",
-      "core.v1"
-    ],
-    "targetFramework": "net10.0",
-    "manifestFormatVersion": 1,
-    "archiveFormatVersion": 1
-  },
   "isYanked": false,
   "deprecatedMessage": null,
   "dependsOn": [
@@ -24,10 +12,91 @@
       "versionRange": "\u003E=1.0.0"
     }
   ],
-  "artifact": {
-    "sha256": "abc123",
-    "size": 42,
-    "downloadUrl": "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/download"
+  "canonicalArtifact": {
+    "sha256": "canonical-sha",
+    "size": 420,
+    "downloadUrl": "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/canonical"
   },
-  "publishedAtUtc": "2026-07-11T10:00:00+00:00"
+  "targets": [
+    {
+      "role": "runtime",
+      "rid": "win-x64",
+      "kind": "dotnet",
+      "entryPoint": "lib/Sample.dll",
+      "targetFramework": "net10.0",
+      "sdkVersion": "0.8.0",
+      "requiredHostCapabilities": [
+        "core.v1"
+      ],
+      "views": []
+    },
+    {
+      "role": "app",
+      "rid": "win-x64",
+      "kind": "web",
+      "entryPoint": "web/index.html",
+      "targetFramework": null,
+      "sdkVersion": "1.1.0",
+      "requiredHostCapabilities": [
+        "core.v1"
+      ],
+      "views": [
+        {
+          "viewId": "sunder.package.sample.workspace",
+          "displayName": "Workspace",
+          "route": "/workspace",
+          "icon": "assets/workspace.png",
+          "defaultPlacement": "rightTop",
+          "showInHotbar": true
+        }
+      ]
+    }
+  ],
+  "projections": [
+    {
+      "kind": "shared",
+      "rid": null,
+      "sha256": "projection-sha",
+      "size": 42,
+      "downloadUrl": "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download",
+      "sourceArchiveSha256": "canonical-sha",
+      "manifestSha256": "manifest-sha",
+      "projectionContentIdentity": "projection-content-id",
+      "projectionFormatVersion": 1
+    }
+  ],
+  "contractBundles": [
+    {
+      "contractId": "sample.contract",
+      "version": "1.0.0",
+      "descriptorPath": "contracts/sample.json",
+      "sha256": "contract-sha"
+    }
+  ],
+  "usesContracts": [
+    {
+      "contractId": "base.contract",
+      "versionRange": "\u003E=1.0.0",
+      "required": true,
+      "actions": [
+        "discover",
+        "invoke"
+      ]
+    }
+  ],
+  "providers": [
+    {
+      "providerId": "sample.provider",
+      "contractId": "sample.contract",
+      "contractVersion": "1.0.0",
+      "contractSha256": "contract-sha",
+      "role": "runtime"
+    }
+  ],
+  "manifestFormatVersion": 1,
+  "archiveFormatVersion": 1,
+  "publishedAtUtc": "2026-07-11T10:00:00+00:00",
+  "trustedArtifactOrigins": [
+    "https://artifacts.example"
+  ]
 }

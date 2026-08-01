@@ -18,6 +18,8 @@ internal sealed class RuntimePackageSessionTestHost
     private readonly DevPackageWatchService _devWatcher;
     private readonly DevPackageOwnerLeaseService _devOwners;
     private readonly RuntimeProtocolDescriptor _protocol;
+    private readonly RuntimeRpcCatalog _rpcCatalog;
+    private readonly RuntimeRpcPermissionStore _rpcPermissions;
 
     public RuntimePackageSessionTestHost(
         ILogger<RuntimePackageSessionTestHost> logger,
@@ -40,25 +42,40 @@ internal sealed class RuntimePackageSessionTestHost
         var storeCoordinator = packageStoreCoordinator
             ?? new PackageStoreCoordinator(packageArchiveInstaller.Paths, installedPackageStore, packageArchiveInstaller);
         timeProvider ??= TimeProvider.System;
+        _rpcCatalog = new RuntimeRpcCatalog();
+        _rpcPermissions = new RuntimeRpcPermissionStore(packageArchiveInstaller.Paths, timeProvider);
         _owner = new RuntimeSessionOwner(
             NullLogger<RuntimeSessionOwner>.Instance,
             events,
             timeProvider: timeProvider,
             uiSnapshots: snapshots,
-            lifecyclePolicy: lifecyclePolicy);
-        _ui = new RuntimePackageUiService(_owner, snapshots, installedPackageStore);
-        var loader = new PackageSessionLoadService(logger, packageArchiveInstaller.Paths);
+            lifecyclePolicy: lifecyclePolicy,
+            rpcCatalog: _rpcCatalog);
+        var transportPolicy = new RuntimeTransportPolicyOptions();
+        var rpcBroker = new RuntimeRpcBroker(
+            _rpcCatalog,
+            _rpcPermissions,
+            _owner.State,
+            _owner,
+            timeProvider: timeProvider);
+        var loader = new PackageSessionLoadService(
+            logger,
+            packageArchiveInstaller.Paths,
+            rpcBroker: rpcBroker,
+            contentTransfers: transfers,
+            sessions: _owner.State,
+            transportPolicy: transportPolicy);
         var reconciler = new PackageSessionReconciler(installedPackageStore, loader);
         var publisher = new PackageSessionPublisher(
             _owner,
-            _ui,
             NullLogger<PackageSessionPublisher>.Instance,
-            lifecyclePolicy);
+            lifecyclePolicy,
+            _rpcCatalog,
+            _rpcPermissions);
         _sessions = new PackageSessionLifecycleService(
             _owner,
             gate,
             reconciler,
-            _ui,
             installedPackageStore,
             publisher,
             new PackageLifecycleStageStore(),
@@ -84,18 +101,29 @@ internal sealed class RuntimePackageSessionTestHost
             installedPackageStore,
             storeCoordinator,
             reconciler,
-            _ui,
             transfers,
             publisher,
             NullLogger<InstalledPackageLifecycleService>.Instance,
             lifecycleFaultInjector,
             lifecyclePolicy,
-            timeProvider);
+            timeProvider,
+            _rpcCatalog);
+        _ui = new RuntimePackageUiService(
+            _owner,
+            snapshots,
+            installedPackageStore,
+            _sessions,
+            _installed);
         _data = new RuntimePackageDataService(_owner.State);
         _settings = new PackageSettingsAccessService(_owner);
         _auth = new PackageAuthAccessService(_owner);
-        _stackExport = new RuntimeStackExportService(_owner, transfers, packageArchiveInstaller.Paths);
-        _stackImport = new RuntimeStackImportService(_owner, transfers);
+        _stackExport = new RuntimeStackExportService(_owner, transfers, packageArchiveInstaller.Paths, rpcBroker);
+        _stackImport = new RuntimeStackImportService(
+            _owner,
+            transfers,
+            rpcBroker,
+            timeProvider,
+            transportPolicy: transportPolicy);
     }
 
     public long SessionGeneration => _owner.Generation;
@@ -103,7 +131,10 @@ internal sealed class RuntimePackageSessionTestHost
     public void MarkBootstrapReady() => _owner.MarkReady();
     public IReadOnlyList<ActivePackageDescriptor> GetActivePackages() => _sessions.GetActivePackages();
     public IReadOnlyList<SessionPackageDescriptor> GetSessionPackages() => _sessions.GetSessionPackages();
-    public IReadOnlyList<PackageUiSnapshotDescriptor> GetActivePackageUiSnapshots() => _ui.GetActiveSnapshots();
+    public IReadOnlyList<PackageUiSnapshotDescriptor> GetActivePackageUiSnapshots(string? appRid = null)
+        => _ui.GetActiveSnapshots(appRid ?? PackageTargetSelection.GetCurrentRuntimeIdentifier());
+    public IReadOnlyList<PackageUiSnapshotDescriptor> GetStagedPackageUiSnapshots(string stageId, string? appRid = null)
+        => _ui.GetStageSnapshots(stageId, appRid ?? PackageTargetSelection.GetCurrentRuntimeIdentifier());
     internal IReadOnlyList<RuntimePackageSource> GetActiveRuntimePackageSources() => _sessions.GetActiveSources();
     public PackageUiSnapshotLease? AcquireCurrentUiSnapshot(string snapshotId) => _ui.AcquireCurrent(snapshotId);
     public PackageUiSnapshotLease? AcquireStageUiSnapshot(string stageId, string snapshotId) => _ui.AcquireStage(stageId, snapshotId);
@@ -140,6 +171,7 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken token = default) => _installed.SetEnabledAsync(packageId, isEnabled, token);
     public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken token = default) => _installed.UninstallAsync(packageId, token);
     internal ActivePackageSession ActiveSession => _owner.State.ActiveSession;
+    internal RuntimeRpcCatalog RpcCatalog => _rpcCatalog;
     internal ActivePackageSession? GetStagedLifecycleSession(string stageId) => _sessions.GetStagedSession(stageId);
     internal ActivePackageSession? GetStagedStoreSession(string stageId) => _installed.GetStagedSession(stageId);
     public Task InitializeAsync(CancellationToken token = default) => _installed.InitializeAsync(token);
@@ -148,6 +180,8 @@ internal sealed class RuntimePackageSessionTestHost
         _stackImport.Dispose();
         await _devWatcher.DisposeAsync();
         await _installed.ShutdownAsync(_sessions);
+        _rpcPermissions.Dispose();
+        _rpcCatalog.Dispose();
     }
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token = default) => _stackExport.ListItemsAsync(token);
     public Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token = default) => _stackExport.ExportAsync(request, token);

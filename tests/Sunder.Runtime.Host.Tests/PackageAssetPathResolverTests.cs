@@ -9,7 +9,7 @@ public sealed class PackageAssetPathResolverTests
     public void TryResolveDevAssetPath_ResolvesAssetsPrefixUnderAssetsRoot()
     {
         var root = CreateTempDirectory();
-        var iconPath = Path.Combine(root, "assets", "icons", "agent.svg");
+        var iconPath = Path.Combine(root, "payload", "shared", "assets", "icons", "agent.svg");
         Directory.CreateDirectory(Path.GetDirectoryName(iconPath)!);
         File.WriteAllText(iconPath, "<svg />");
 

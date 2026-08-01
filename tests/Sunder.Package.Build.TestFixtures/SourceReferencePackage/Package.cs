@@ -20,3 +20,5 @@ public static class PackageMarker
 
     public static IPackageViewNavigationPreparationTarget? NavigationPreparation => null;
 }
+
+public sealed class FixturePackageModule : ISunderRuntimePackageModule;

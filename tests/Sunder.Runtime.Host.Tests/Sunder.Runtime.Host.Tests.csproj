@@ -8,6 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
     <ProjectReference Include="..\..\src\Host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

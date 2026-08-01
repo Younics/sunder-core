@@ -1,5 +1,9 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Logging;
+using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -58,7 +62,16 @@ internal sealed class RuntimePackageOperationService
                 $"Package Runtime operation '{operationId}' is not registered for '{packageId}'.");
         }
 
-        var response = await operation.InvokeAsync(payload, linkedCancellation.Token);
+        byte[] response;
+        try
+        {
+            response = await operation.InvokeAsync(payload, linkedCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            await LogRpcFailureAsync(package, "operation", operationId, exception).ConfigureAwait(false);
+            throw;
+        }
         if (response.Length > _policy.MaxResponseBytes)
         {
             throw new RuntimeUploadLimitException(
@@ -96,17 +109,113 @@ internal sealed class RuntimePackageOperationService
                 $"Package Runtime stream '{streamId}' is not registered for '{packageId}'.");
         }
 
-        await foreach (var value in stream.SubscribeAsync(payload, handlerToken)
-                           .WithCancellation(handlerToken))
+        var enumerator = stream.SubscribeAsync(payload, handlerToken).GetAsyncEnumerator(handlerToken);
+        try
         {
-            if (value.Length > _policy.MaxEventBytes)
+            while (true)
             {
-                throw new RuntimeUploadLimitException(
-                    $"Package Runtime stream event exceeds the {_policy.MaxEventBytes} byte limit.");
+                byte[] value;
+                try
+                {
+                    if (!await enumerator.MoveNextAsync())
+                    {
+                        break;
+                    }
+                    value = enumerator.Current;
+                }
+                catch (Exception exception)
+                {
+                    await LogRpcFailureAsync(package, "stream", streamId, exception).ConfigureAwait(false);
+                    throw;
+                }
+                if (value.Length > _policy.MaxEventBytes)
+                {
+                    throw new RuntimeUploadLimitException(
+                        $"Package Runtime stream event exceeds the {_policy.MaxEventBytes} byte limit.");
+                }
+                yield return value;
             }
-            yield return value;
+        }
+        finally
+        {
+            try
+            {
+                await enumerator.DisposeAsync();
+            }
+            catch (Exception exception)
+            {
+                await LogRpcFailureAsync(package, "stream", streamId, exception).ConfigureAwait(false);
+                throw;
+            }
         }
 
         handlerToken.ThrowIfCancellationRequested();
     }
+
+    private static async ValueTask LogRpcFailureAsync(
+        ActiveLoadedPackage package,
+        string operationKind,
+        string operationId,
+        Exception exception)
+    {
+        var rpcException = FindRpcException(exception);
+        if (rpcException is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var eventLogger = package.ServiceProvider.GetService<IPackageContext>()?.Logging.Events;
+            if (eventLogger is null)
+            {
+                return;
+            }
+            await eventLogger.WriteAsync(
+                PackageLogLevel.Error,
+                $"runtime.{operationKind}.rpc-failed",
+                $"A package Runtime {operationKind} failed because an internal RPC call was rejected.",
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["runtime.operation_kind"] = operationKind,
+                    ["runtime.operation_id"] = operationId,
+                    ["rpc.error_kind"] = rpcException.Error.Kind.ToString(),
+                    ["rpc.error_code"] = Bound(rpcException.Error.Code, 256),
+                }).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Diagnostics must not replace the original package failure.
+        }
+    }
+
+    private static SunderRpcException? FindRpcException(Exception exception)
+    {
+        var pending = new Stack<Exception>();
+        pending.Push(exception);
+        while (pending.TryPop(out var current))
+        {
+            if (current is SunderRpcException rpcException)
+            {
+                return rpcException;
+            }
+            if (current is AggregateException aggregate)
+            {
+                for (var index = aggregate.InnerExceptions.Count - 1; index >= 0; index--)
+                {
+                    pending.Push(aggregate.InnerExceptions[index]);
+                }
+            }
+            else if (current.InnerException is not null)
+            {
+                pending.Push(current.InnerException);
+            }
+        }
+        return null;
+    }
+
+    private static string Bound(string? value, int maximumLength)
+        => string.IsNullOrWhiteSpace(value)
+            ? "rpc.unknown"
+            : value[..Math.Min(value.Length, maximumLength)];
 }

@@ -36,7 +36,7 @@ Important related concepts:
 | Package | Runtime unit installed, loaded, enabled, disabled, updated, and uninstalled by the Runtime worker (`Sunder.Runtime.Host`) |
 | Dev package | Unpacked `sunder-dev` build output used for local package development |
 | `.sunderpkg` | Distributable package archive produced from the dev output |
-| Contracts package | NuGet package used by developers when one package exposes typed extension contracts |
+| Protocol helper package | NuGet package that distributes RPC descriptors and optional compile-time DTOs, bindings, or package-local adapters |
 | Bundle | Registry install recipe that points to multiple packages, not a runtime package kind |
 | Theme | App-side UI styling data, not managed by the Runtime worker as a runtime package |
 

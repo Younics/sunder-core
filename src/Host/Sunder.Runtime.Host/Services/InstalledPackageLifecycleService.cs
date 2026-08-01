@@ -11,13 +11,13 @@ internal sealed partial class InstalledPackageLifecycleService
     private readonly InstalledPackageStore _installedPackages;
     private readonly PackageStoreCoordinator _storeCoordinator;
     private readonly PackageSessionReconciler _reconciler;
-    private readonly RuntimePackageUiService _ui;
     private readonly RuntimeContentTransferStore _transfers;
     private readonly PackageSessionPublisher _publisher;
     private readonly ILogger<InstalledPackageLifecycleService> _logger;
     private readonly IInstalledPackageLifecycleFaultInjector? _faultInjector;
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy;
     private readonly TimeProvider _timeProvider;
+    private readonly RuntimeRpcCatalog? _rpcCatalog;
     private readonly Dictionary<string, PendingStoreStage> _stages = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _reconciliationPendingStages = new(StringComparer.OrdinalIgnoreCase);
 
@@ -27,26 +27,26 @@ internal sealed partial class InstalledPackageLifecycleService
         InstalledPackageStore installedPackages,
         PackageStoreCoordinator storeCoordinator,
         PackageSessionReconciler reconciler,
-        RuntimePackageUiService ui,
         RuntimeContentTransferStore transfers,
         PackageSessionPublisher publisher,
         ILogger<InstalledPackageLifecycleService> logger,
         IInstalledPackageLifecycleFaultInjector? faultInjector = null,
         RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        RuntimeRpcCatalog? rpcCatalog = null)
     {
         _sessions = sessions;
         _gate = gate;
         _installedPackages = installedPackages;
         _storeCoordinator = storeCoordinator;
         _reconciler = reconciler;
-        _ui = ui;
         _transfers = transfers;
         _publisher = publisher;
         _logger = logger;
         _faultInjector = faultInjector;
         _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _rpcCatalog = rpcCatalog;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -84,7 +84,6 @@ internal sealed partial class InstalledPackageLifecycleService
         var operationToken = operation.CancellationToken;
         var baseGeneration = _sessions.Generation;
         var currentPackages = _sessions.State.GetActivePackages();
-        var currentSnapshots = _ui.GetActiveSnapshots();
         var sources = _sessions.Sources.Snapshot();
         sources.RemoveDevOverlaysOwnedBy(PackageSessionOverlayOwner.Startup, PackageSessionOverlayOwner.HotReload, PackageSessionOverlayOwner.Sdk);
         var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, operationToken);
@@ -94,20 +93,19 @@ internal sealed partial class InstalledPackageLifecycleService
             return PackageLifecycleOperationResult.Failed(
                 loaded.Errors.FirstOrDefault() ?? "Installed package lifecycle load failed.",
                 currentPackages,
-                currentSnapshots,
                 warnings,
                 loaded.Errors);
         }
 
-        if (ReferenceEquals(loaded.Session, ActivePackageSession.Empty)
-            && currentPackages.Count == 0)
+        if (loaded.Session.IsEmpty && _sessions.State.ActiveSession.IsEmpty)
         {
+            _rpcCatalog?.DeactivateAll(_sessions.Generation);
+            _rpcCatalog?.VerifySessionGeneration(_sessions.Generation);
             ResolvePendingReconciliations(_sessions.Stamp);
             return new PackageLifecycleOperationResult(
                 true,
                 "No installed packages to load.",
                 currentPackages,
-                currentSnapshots,
                 warnings,
                 [],
                 [])
@@ -138,7 +136,6 @@ internal sealed partial class InstalledPackageLifecycleService
                 true,
                 "Installed packages loaded.",
                 committed.ActivePackages,
-                committed.PackageUiSnapshots,
                 warnings,
                 loaded.Errors,
                 impacted)
@@ -154,7 +151,7 @@ internal sealed partial class InstalledPackageLifecycleService
         {
             _logger.LogError(exception, "Failed to start background services for installed package lifecycle load");
             const string message = "Installed package lifecycle load failed while starting background services.";
-            return PackageLifecycleOperationResult.Failed(message, currentPackages, currentSnapshots, warnings, [message]);
+            return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message]);
         }
         throw new InvalidOperationException("Installed package publication did not complete.");
     }
@@ -176,12 +173,10 @@ internal sealed partial class InstalledPackageLifecycleService
         {
             return PackageStoreStageResult.Failed(
                 $"The Runtime already has {MaxPendingStages} pending package store stages.",
-                _sessions.State.GetActivePackages(),
-                _ui.GetActiveSnapshots());
+                _sessions.State.GetActivePackages());
         }
         var baseSessionGeneration = _sessions.Generation;
         var currentPackages = _sessions.State.GetActivePackages();
-        var currentSnapshots = _ui.GetActiveSnapshots();
         var sources = _sessions.Sources.Snapshot();
         var leases = new List<RuntimeUploadLease>();
         PackageStoreStagePreparation preparation;
@@ -191,7 +186,7 @@ internal sealed partial class InstalledPackageLifecycleService
         }
         catch (InvalidDataException exception)
         {
-            return PackageStoreStageResult.Failed(exception.Message, currentPackages, currentSnapshots);
+            return PackageStoreStageResult.Failed(exception.Message, currentPackages);
         }
         finally
         {
@@ -201,7 +196,6 @@ internal sealed partial class InstalledPackageLifecycleService
             preparation,
             baseSessionGeneration,
             currentPackages,
-            currentSnapshots,
             sources,
             operationToken);
     }
@@ -210,14 +204,13 @@ internal sealed partial class InstalledPackageLifecycleService
         PackageStoreStagePreparation preparation,
         long baseSessionGeneration,
         IReadOnlyList<ActivePackageDescriptor> currentPackages,
-        IReadOnlyList<PackageUiSnapshotDescriptor> currentSnapshots,
         PackageSessionSourceSnapshot sources,
         CancellationToken cancellationToken)
     {
         if (!preparation.Success || preparation.Stage is null)
         {
             var failure = preparation.Failure ?? PackageOperationResults.Failure("Package store stage failed.");
-            return PackageStoreStageResult.Failed(failure.Message ?? "Package store stage failed.", currentPackages, currentSnapshots, failure.Warnings, failure.Errors, failure.ImpactedPackageIds);
+            return PackageStoreStageResult.Failed(failure.Message ?? "Package store stage failed.", currentPackages, failure.Warnings, failure.Errors, failure.ImpactedPackageIds);
         }
 
         if (preparation.Stage.Result.ImpactedPackageIds.Count == 0)
@@ -240,8 +233,7 @@ internal sealed partial class InstalledPackageLifecycleService
             return new PackageStoreStageResult(
                 preparation.Stage.StageId,
                 preparation.Stage.Result,
-                currentPackages,
-                currentSnapshots);
+                currentPackages);
         }
 
         PackageSessionLoadResult loaded;
@@ -250,6 +242,7 @@ internal sealed partial class InstalledPackageLifecycleService
             loaded = await _reconciler.LoadMergedSessionAsync(
                 preparation.Stage.ProspectivePackages,
                 sources.ActiveDevOverlays,
+                preparation.Stage.PreparationSourcePaths,
                 cancellationToken);
         }
         catch
@@ -257,13 +250,13 @@ internal sealed partial class InstalledPackageLifecycleService
             await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
             throw;
         }
-        if (loaded.Session is null)
+        if (loaded.Session is null || loaded.Errors.Count > 0)
         {
+            if (loaded.Session is not null) await loaded.Session.DisposeAsync();
             await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
             return PackageStoreStageResult.Failed(
                 loaded.Errors.FirstOrDefault() ?? "Package store stage failed while loading the prospective package session.",
                 currentPackages,
-                currentSnapshots,
                 preparation.Stage.Result.Warnings.Concat(loaded.Warnings).ToArray(),
                 loaded.Errors,
                 preparation.Stage.Result.ImpactedPackageIds);
@@ -275,7 +268,6 @@ internal sealed partial class InstalledPackageLifecycleService
             return PackageStoreStageResult.Failed(
                 "Package store stage is stale because the active package session changed while it was being prepared.",
                 currentPackages,
-                currentSnapshots,
                 impactedPackageIds: preparation.Stage.Result.ImpactedPackageIds);
         }
 
@@ -301,11 +293,10 @@ internal sealed partial class InstalledPackageLifecycleService
         {
             await loaded.Session.DisposeAsync();
             await _storeCoordinator.DiscardStageAsync(preparation.Stage.StageId);
-            _logger.LogError(exception, "Failed to prepare package UI snapshots for store stage {StageId}", preparation.Stage.StageId);
+            _logger.LogError(exception, "Failed to prepare package store stage {StageId}", preparation.Stage.StageId);
             return PackageStoreStageResult.Failed(
-                "Package store stage failed while preparing package UI snapshots.",
+                "Package store stage candidate preparation failed.",
                 currentPackages,
-                currentSnapshots,
                 result.Warnings,
                 impactedPackageIds: result.ImpactedPackageIds);
         }
@@ -327,8 +318,7 @@ internal sealed partial class InstalledPackageLifecycleService
         return new PackageStoreStageResult(
             preparation.Stage.StageId,
             result,
-            loaded.Session.GetActivePackages(),
-            candidate.UiSnapshots);
+            loaded.Session.GetActivePackages());
     }
 
     public async Task<PackageOperationResult> CommitStageAsync(string stageId, CancellationToken cancellationToken = default)
@@ -418,6 +408,7 @@ internal sealed partial class InstalledPackageLifecycleService
                 return noOpResult;
             }
 
+            stage.Candidate!.Session.FinalizeCommittedInstalledSources();
             _faultInjector?.Hit(InstalledPackageLifecycleFaultPoint.StoreCommittedBeforeSessionPublication);
             var committed = await _publisher.CommitAsync(publication, operationToken);
             publication = null;
@@ -553,14 +544,12 @@ internal sealed partial class InstalledPackageLifecycleService
             var operationToken = operation.CancellationToken;
             var baseSessionGeneration = _sessions.Generation;
             var currentPackages = _sessions.State.GetActivePackages();
-            var currentSnapshots = _ui.GetActiveSnapshots();
             var sources = _sessions.Sources.Snapshot();
             var preparation = await _storeCoordinator.PrepareStageAsync([mutation], operationToken);
             var stage = await PrepareCandidateAsync(
                 preparation,
                 baseSessionGeneration,
                 currentPackages,
-                currentSnapshots,
                 sources,
                 operationToken);
             return !stage.Success || stage.StageId is null

@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 namespace Sunder.Package.Hosting;
 
 internal static class NativeLibraryFallbackResolver
@@ -7,7 +5,7 @@ internal static class NativeLibraryFallbackResolver
     public static string? Resolve(
         string entryAssemblyPath,
         string unmanagedDllName,
-        string? runtimeIdentifier = null)
+        string runtimeIdentifier)
     {
         if (string.IsNullOrWhiteSpace(unmanagedDllName)
             || !string.Equals(Path.GetFileName(unmanagedDllName), unmanagedDllName, StringComparison.Ordinal))
@@ -15,9 +13,8 @@ internal static class NativeLibraryFallbackResolver
             return null;
         }
 
-        var currentRuntimeIdentifier = runtimeIdentifier ?? RuntimeInformation.RuntimeIdentifier;
-        if (string.IsNullOrWhiteSpace(currentRuntimeIdentifier)
-            || currentRuntimeIdentifier.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        if (string.IsNullOrWhiteSpace(runtimeIdentifier)
+            || runtimeIdentifier.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
         {
             return null;
         }
@@ -31,14 +28,14 @@ internal static class NativeLibraryFallbackResolver
         var runtimeDirectories = Directory.EnumerateDirectories(runtimesDirectory, "*", SearchOption.TopDirectoryOnly)
             .Where(path => string.Equals(
                 Path.GetFileName(path),
-                currentRuntimeIdentifier,
+                runtimeIdentifier,
                 PathComparison))
             .OrderBy(static path => path, PathComparer)
             .ToArray();
         if (runtimeDirectories.Length > 1)
         {
             throw new InvalidOperationException(
-                $"Native fallback for RID '{currentRuntimeIdentifier}' is ambiguous because multiple matching runtime directories exist.");
+                $"Native fallback for selected RID '{runtimeIdentifier}' is ambiguous because multiple matching runtime directories exist.");
         }
         if (runtimeDirectories.Length == 0)
         {
@@ -61,7 +58,7 @@ internal static class NativeLibraryFallbackResolver
             0 => null,
             1 => candidates[0],
             _ => throw new InvalidOperationException(
-                $"Native fallback for '{unmanagedDllName}' and RID '{currentRuntimeIdentifier}' is ambiguous: "
+                $"Native fallback for '{unmanagedDllName}' and selected RID '{runtimeIdentifier}' is ambiguous: "
                 + string.Join(", ", candidates.Select(Path.GetFullPath)) + "."),
         };
     }

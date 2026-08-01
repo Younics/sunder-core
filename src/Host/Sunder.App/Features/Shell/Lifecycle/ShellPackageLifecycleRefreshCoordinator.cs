@@ -18,6 +18,7 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
 
     public async Task ApplyPackageLifecycleChangesAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds = null,
         CancellationToken cancellationToken = default,
         Action? detachAuxiliaryPackageViews = null)
@@ -33,6 +34,7 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
         {
             await packageLifecycleCoordinator.ApplyPackageSnapshotAsync(
                 snapshot,
+                packageSources,
                 retryDisabledPackageIds,
                 async (candidate, activePackages, prepareCancellationToken) =>
                 {

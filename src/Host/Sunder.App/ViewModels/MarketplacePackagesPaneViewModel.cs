@@ -4,9 +4,12 @@ using Sunder.Registry.Contracts;
 
 namespace Sunder.App.ViewModels;
 
-public sealed class MarketplacePackagesPaneViewModel : IDisposable
+public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposable
 {
     private readonly MarketplacePackageProfileViewModel _profile = new();
+    private bool _rpcAccessLoaded;
+    private bool _rpcAccessLoading;
+    private string _rpcAccessError = string.Empty;
 
     internal MarketplacePackagesPaneViewModel(PackagesMarketplaceCatalog catalog)
     {
@@ -48,6 +51,8 @@ public sealed class MarketplacePackagesPaneViewModel : IDisposable
 
     public ObservableCollection<RegistryUserAttributionViewModel> Maintainers { get; } = [];
 
+    public ObservableCollection<PackageRpcAccessItemViewModel> RpcContractUses { get; } = [];
+
     public ObservableStringBuilder ReadmeMarkdownBuilder => _profile.ReadmeMarkdownBuilder;
 
     public bool HasPackages => Packages.Count > 0;
@@ -71,6 +76,26 @@ public sealed class MarketplacePackagesPaneViewModel : IDisposable
     public bool HasCreators => Creators.Count > 0;
 
     public bool HasMaintainers => Maintainers.Count > 0;
+
+    public bool RpcAccessLoaded => _rpcAccessLoaded;
+
+    public bool RpcAccessLoading => _rpcAccessLoading;
+
+    public bool HasRpcAccessError => !string.IsNullOrWhiteSpace(_rpcAccessError);
+
+    public string RpcAccessError => _rpcAccessError;
+
+    public bool HasRpcContractUses => RpcAccessLoaded && RpcContractUses.Count > 0;
+
+    public bool HasNoRpcContractUses => RpcAccessLoaded && !HasRpcContractUses;
+
+    public string RpcAccessSummary => RpcAccessLoading
+        ? "Loading declared access..."
+        : HasRpcAccessError
+            ? "Declared access unavailable"
+            : RpcAccessLoaded
+                ? PackageRpcAccessProjection.Summary(RpcContractUses)
+                : "Select a package version";
 
     public void ReplacePackages(IReadOnlyList<RegistryPackageSearchItemViewModel> packages)
     {
@@ -101,6 +126,45 @@ public sealed class MarketplacePackagesPaneViewModel : IDisposable
     public void ClearVersions()
     {
         Versions.Clear();
+    }
+
+    public void BeginRpcContractUseLoad()
+    {
+        SetRpcContractUses([], loaded: false, loading: true, error: null);
+    }
+
+    public void CompleteRpcContractUseLoad(IReadOnlyList<PackageRpcAccessItemViewModel> uses)
+    {
+        SetRpcContractUses(uses, loaded: true, loading: false, error: null);
+    }
+
+    public void FailRpcContractUseLoad(string error)
+    {
+        SetRpcContractUses([], loaded: false, loading: false, error);
+    }
+
+    public void ClearRpcContractUses()
+    {
+        SetRpcContractUses([], loaded: false, loading: false, error: null);
+    }
+
+    private void SetRpcContractUses(
+        IReadOnlyList<PackageRpcAccessItemViewModel> uses,
+        bool loaded,
+        bool loading,
+        string? error)
+    {
+        RpcContractUses.ReplaceWith(uses);
+        _rpcAccessLoaded = loaded;
+        _rpcAccessLoading = loading;
+        _rpcAccessError = error ?? string.Empty;
+        OnPropertyChanged(nameof(RpcAccessLoaded));
+        OnPropertyChanged(nameof(RpcAccessLoading));
+        OnPropertyChanged(nameof(HasRpcAccessError));
+        OnPropertyChanged(nameof(RpcAccessError));
+        OnPropertyChanged(nameof(HasRpcContractUses));
+        OnPropertyChanged(nameof(HasNoRpcContractUses));
+        OnPropertyChanged(nameof(RpcAccessSummary));
     }
 
     public RegistryPackageSearchItemViewModel? ResolvePackageSelection(string? selectedPackageId)

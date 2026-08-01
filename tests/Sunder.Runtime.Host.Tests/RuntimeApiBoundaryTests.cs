@@ -1,5 +1,8 @@
+using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -58,13 +61,6 @@ public sealed class RuntimeApiBoundaryTests
             RuntimeBootstrapState.Ready,
             [active],
             [session],
-            [new PackageUiSnapshotDescriptor(
-                active.PackageId,
-                PackageSourceKind.Dev,
-                SessionGeneration: 7,
-                new string('a', 64),
-                "snapshot-1",
-                "packages/ui-snapshots/snapshot-1")],
             ["warning"],
             []);
         var actual = JsonSerializer.SerializeToNode(snapshot, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -128,7 +124,7 @@ public sealed class RuntimeApiBoundaryTests
         using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(root));
 
         var descriptor = Assert.Single(store.CreateSnapshots([
-            new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source),
+            CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev),
         ], generation: 7));
         var json = JsonSerializer.Serialize(descriptor, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
@@ -145,7 +141,7 @@ public sealed class RuntimeApiBoundaryTests
         var source = CreateSnapshotSource(root);
         using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(root));
         var descriptor = Assert.Single(store.CreateSnapshots([
-            new RuntimePackageSource("test.package", PackageSourceKind.Installed, source, source),
+            CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Installed),
         ], generation: 3));
 
         Assert.Null(store.Acquire(descriptor.SnapshotId, generation: 4, stageId: null));
@@ -158,7 +154,7 @@ public sealed class RuntimeApiBoundaryTests
         var paths = new RuntimePackagePaths(root);
         var source = CreateSnapshotSource(root);
         using var store = new PackageUiSnapshotStore(paths);
-        var runtimeSource = new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source);
+        var runtimeSource = CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev);
         var first = Assert.Single(store.CreateSnapshots([runtimeSource], generation: 5));
         var second = Assert.Single(store.CreateSnapshots([runtimeSource], generation: 5));
 
@@ -177,7 +173,7 @@ public sealed class RuntimeApiBoundaryTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(root);
         var source = CreateSnapshotSource(root);
-        var runtimeSource = new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source);
+        var runtimeSource = CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev);
         PackageUiSnapshotDescriptor first;
         using (var firstStore = new PackageUiSnapshotStore(paths))
         {
@@ -189,8 +185,18 @@ public sealed class RuntimeApiBoundaryTests
             Assert.Equal(first.ContentHash, reused.ContentHash);
             Assert.Single(Directory.EnumerateFiles(paths.CacheRootPath, "*.snapshot", SearchOption.AllDirectories));
 
-            File.WriteAllBytes(Path.Combine(source, "lib", "test.dll"), [3, 2, 1]);
-            var changed = Assert.Single(secondStore.CreateSnapshots([runtimeSource], generation: 3));
+            File.WriteAllBytes(
+                Path.Combine(
+                    source,
+                    "payload",
+                    "shared",
+                    "lib",
+                    Path.GetFileName(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location)),
+                [3, 2, 1]);
+            CanonicalPackageTestBuilder.WriteContentIndex(source);
+            var changed = Assert.Single(secondStore.CreateSnapshots([
+                CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev),
+            ], generation: 3));
             Assert.NotEqual(first.ContentHash, changed.ContentHash);
             Assert.Equal(2, Directory.EnumerateFiles(paths.CacheRootPath, "*.snapshot", SearchOption.AllDirectories).Count());
         }
@@ -202,7 +208,7 @@ public sealed class RuntimeApiBoundaryTests
         var root = CreateTempDirectory();
         var paths = new RuntimePackagePaths(root);
         var source = CreateSnapshotSource(root);
-        var runtimeSource = new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source);
+        var runtimeSource = CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev);
         PackageUiSnapshotDescriptor first;
         using (var store = new PackageUiSnapshotStore(paths))
         {
@@ -220,12 +226,70 @@ public sealed class RuntimeApiBoundaryTests
     }
 
     [Fact]
+    public void PackageUiSnapshotStore_KeepsSimultaneousAppRidProjectionsIsolated()
+    {
+        var root = CreateTempDirectory();
+        var source = Path.Combine(root, "multi-rid-source");
+        var currentRid = RuntimeInformation.RuntimeIdentifier;
+        var alternateRid = SunderPackageFormat.SupportedRuntimeIdentifiers
+            .First(rid => !string.Equals(rid, currentRid, StringComparison.Ordinal));
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            source,
+            "test.package",
+            "1.0.0",
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            roles: [SunderPackageFormat.AppHostRole],
+            runtimeIdentifiers: [currentRid, alternateRid]);
+        WriteTargetVariant(currentRid, "current");
+        WriteTargetVariant(alternateRid, "alternate");
+        CanonicalPackageTestBuilder.WriteContentIndex(source);
+        using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(root));
+
+        var current = Assert.Single(store.CreateSnapshots([
+            CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev, rid: currentRid),
+        ], generation: 4));
+        var alternate = Assert.Single(store.CreateSnapshots([
+            CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev, rid: alternateRid),
+        ], generation: 4));
+
+        Assert.Equal(currentRid, current.Target.Rid);
+        Assert.Equal(alternateRid, alternate.Target.Rid);
+        Assert.NotEqual(current.ContentHash, alternate.ContentHash);
+        using var currentLease = store.Acquire(current.SnapshotId, generation: 4, stageId: null);
+        using var alternateLease = store.Acquire(alternate.SnapshotId, generation: 4, stageId: null);
+        Assert.Equal("current", ReadArchiveText(currentLease!, "variant.txt"));
+        Assert.Equal("alternate", ReadArchiveText(alternateLease!, "variant.txt"));
+
+        void WriteTargetVariant(string rid, string value)
+        {
+            var folder = Path.Combine(source, "payload", "app", rid);
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "variant.txt"), value);
+        }
+    }
+
+    [Fact]
+    public void LifecycleContracts_DoNotExposeTargetlessPackageUiSnapshots()
+    {
+        var contractTypes = new[]
+        {
+            typeof(RuntimePackageSnapshot),
+            typeof(PackageLifecycleStageResult),
+            typeof(PackageLifecycleOperationResult),
+            typeof(PackageStoreStageResult),
+        };
+
+        Assert.All(contractTypes, type => Assert.Null(type.GetProperty("PackageUiSnapshots")));
+        Assert.Equal(typeof(PackageTargetDescriptor), typeof(PackageUiSnapshotDescriptor).GetProperty(nameof(PackageUiSnapshotDescriptor.Target))?.PropertyType);
+    }
+
+    [Fact]
     public void ActivePackageSession_AppSourcesContainOnlyAppDependencyClosureInLoadOrder()
     {
         var sources = new[]
         {
-            new RuntimePackageSource("contracts", PackageSourceKind.Installed, SourceFolder: "/contracts", HostRoles: PackageHostRoles.ContractOnly),
-            new RuntimePackageSource("runtime.dependency", PackageSourceKind.Installed, SourceFolder: "/runtime-dependency", HostRoles: PackageHostRoles.Runtime, Dependencies: [new PackageDependencyDescriptor("contracts", ">=0.0.0-0")]),
+            new RuntimePackageSource("shared", PackageSourceKind.Installed, SourceFolder: "/shared", HostRoles: PackageHostRoles.None),
+            new RuntimePackageSource("runtime.dependency", PackageSourceKind.Installed, SourceFolder: "/runtime-dependency", HostRoles: PackageHostRoles.Runtime, Dependencies: [new PackageDependencyDescriptor("shared", ">=0.0.0-0")]),
             new RuntimePackageSource("app", PackageSourceKind.Installed, SourceFolder: "/app", HostRoles: PackageHostRoles.App, Dependencies: [new PackageDependencyDescriptor("runtime.dependency", ">=0.0.0-0")]),
             new RuntimePackageSource("runtime.independent", PackageSourceKind.Installed, SourceFolder: "/runtime-independent", HostRoles: PackageHostRoles.Runtime),
         };
@@ -251,7 +315,7 @@ public sealed class RuntimeApiBoundaryTests
             descriptors,
             readySources: sources);
 
-        Assert.Equal(["contracts", "runtime.dependency", "app"], session.GetAppPackageSources().Select(static source => source.PackageId));
+        Assert.Equal(["shared", "runtime.dependency", "app"], session.GetAppPackageSources().Select(static source => source.PackageId));
     }
 
     [Fact]
@@ -261,7 +325,7 @@ public sealed class RuntimeApiBoundaryTests
         var source = CreateSnapshotSource(root);
         using var store = new PackageUiSnapshotStore(new RuntimePackagePaths(root));
         var descriptor = Assert.Single(store.CreateSnapshots([
-            new RuntimePackageSource("test.package", PackageSourceKind.Dev, source, source),
+            CanonicalPackageTestBuilder.CreateTargetSource(source, PackageSourceKind.Dev),
         ], generation: 6));
         await using var lease = store.Acquire(descriptor.SnapshotId, generation: 6, stageId: null);
         Assert.NotNull(lease);
@@ -473,12 +537,24 @@ public sealed class RuntimeApiBoundaryTests
     private static string CreateSnapshotSource(string root)
     {
         var source = Path.Combine(root, "private-runtime-source");
-        Directory.CreateDirectory(Path.Combine(source, "lib"));
-        Directory.CreateDirectory(Path.Combine(source, "assets"));
-        File.WriteAllText(Path.Combine(source, "sunder-package.json"), "{\"id\":\"test.package\",\"entryAssembly\":\"test.dll\"}");
-        File.WriteAllBytes(Path.Combine(source, "lib", "test.dll"), [1, 2, 3]);
-        File.WriteAllBytes(Path.Combine(source, "assets", "icon.png"), [4, 5, 6]);
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            source,
+            "test.package",
+            "1.0.0",
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
+        var assets = Path.Combine(source, "payload", "shared", "assets");
+        Directory.CreateDirectory(assets);
+        File.WriteAllBytes(Path.Combine(assets, "icon.png"), [4, 5, 6]);
+        CanonicalPackageTestBuilder.WriteContentIndex(source);
         return source;
+    }
+
+    private static string ReadArchiveText(PackageUiSnapshotLease lease, string path)
+    {
+        using var archive = new ZipArchive(lease.Stream, ZipArchiveMode.Read, leaveOpen: true);
+        using var reader = new StreamReader(archive.GetEntry(path)?.Open()
+                                            ?? throw new InvalidDataException($"Snapshot entry '{path}' was not found."));
+        return reader.ReadToEnd();
     }
 
     private static string CreateTempDirectory()

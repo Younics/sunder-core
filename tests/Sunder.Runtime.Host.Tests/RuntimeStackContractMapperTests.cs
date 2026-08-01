@@ -2,6 +2,7 @@ using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 using Xunit;
 
@@ -13,14 +14,13 @@ public sealed class RuntimeStackContractMapperTests
     public void ContributorCatalog_RejectsDuplicateExporterItemIds()
     {
         var errors = new List<string>();
-        var registration = new StackExporterRegistration("test.package", new DuplicateItemExporter());
 
         var valid = RuntimeStackContributorCatalog.ValidateExportItemIds(
             [
                 new StackExportItemDescriptor("same", "One", "test"),
                 new StackExportItemDescriptor("SAME", "Two", "test"),
             ],
-            registration,
+            "test.exporter",
             errors);
 
         Assert.False(valid);
@@ -87,6 +87,7 @@ public sealed class RuntimeStackContractMapperTests
             new RuntimeRegistryPackageChangeRequest(
                 "test.package",
                 Version: null,
+                DesiredTargets: [],
                 Tag: "preview",
                 VersionRange: ">=2.3.0",
                 Required: false),
@@ -107,7 +108,8 @@ public sealed class RuntimeStackContractMapperTests
                 ">=2.3.0",
                 null,
                 RegistryV1ErrorCodes.PackageRequirementUnsatisfied,
-                "The selected version is too old.")]));
+                "The selected version is too old.")],
+            []));
 
         var conflict = Assert.Single(runtimeResponse.Conflicts);
         Assert.Equal(RegistryV1ErrorCodes.PackageRequirementUnsatisfied, conflict.ErrorCode);
@@ -120,7 +122,8 @@ public sealed class RuntimeStackContractMapperTests
         var exported = RuntimeStackContractMapper.OwnExportFragment(
             "host.package",
             "host.contributor",
-            new StackFragmentExport(
+            Provider(),
+            new StackRpcFragmentExport(
                 "fragment",
                 "schema",
                 1,
@@ -152,7 +155,18 @@ public sealed class RuntimeStackContractMapperTests
         using var transfers = new RuntimeContentTransferStore(paths);
         var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System);
         var payload = new byte[] { 1, 2, 3, 4 };
-        var fragment = new StackFragmentExport(
+        var content = await transfers.RegisterRpcContentAsync(
+            new MemoryStream(payload, writable: false),
+            payload.Length,
+            "application/octet-stream",
+            "value.bin",
+            "host.package",
+            RuntimeRpcHostCallerActivation.StackPrincipalId,
+            generation: 4,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            SunderRpcContentRepeatability.SingleUse,
+            maximumUses: 1);
+        var fragment = new StackRpcFragmentExport(
             "fragment",
             "schema",
             1,
@@ -160,16 +174,13 @@ public sealed class RuntimeStackContractMapperTests
             "{}",
             Files:
             [
-                new StackExportPayloadHandle(
-                    "nested/value.bin",
-                    _ => ValueTask.FromResult<Stream>(new MemoryStream(payload, writable: false)),
-                    payload.Length),
+                new StackRpcPayloadFile("nested/value.bin", content),
             ]);
 
         var response = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
-            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", fragment)],
+            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(4), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
             generation: 4,
             [],
@@ -267,12 +278,12 @@ public sealed class RuntimeStackContractMapperTests
         var paths = new RuntimePackagePaths(root);
         using var transfers = new RuntimeContentTransferStore(paths);
         var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System);
-        var fragment = new StackFragmentExport(fragmentId, "schema", 1, "Fragment", "{}");
+        var fragment = new StackRpcFragmentExport(fragmentId, "schema", 1, "Fragment", "{}");
 
         var response = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
-            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", fragment)],
+            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
             generation: 1,
             [],
@@ -290,30 +301,24 @@ public sealed class RuntimeStackContractMapperTests
         var paths = new RuntimePackagePaths(root);
         using var transfers = new RuntimeContentTransferStore(paths);
         var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System);
-        var opened = false;
-        var fragment = new StackFragmentExport(
+        var fragment = new StackRpcFragmentExport(
             "fragment",
             "schema",
             1,
             "Fragment",
             "{}",
-            Files: [new StackExportPayloadHandle("../escape", _ =>
-            {
-                opened = true;
-                return ValueTask.FromResult<Stream>(new MemoryStream());
-            })]);
+            Files: [new StackRpcPayloadFile("../escape", ContentReference())]);
 
         var response = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
-            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", fragment)],
+            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
             generation: 1,
             [],
             CancellationToken.None);
 
         Assert.False(response.Success);
-        Assert.False(opened);
         Assert.Contains(response.Errors, error => error.Contains("unsafe", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -325,30 +330,24 @@ public sealed class RuntimeStackContractMapperTests
         using var transfers = new RuntimeContentTransferStore(paths);
         var policy = new RuntimeStackPolicyOptions { MaxExportPayloadFileBytes = 4, MaxExportPayloadTotalBytes = 8 };
         var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System, policy);
-        var opened = false;
-        var fragment = new StackFragmentExport(
+        var fragment = new StackRpcFragmentExport(
             "fragment",
             "schema",
             1,
             "Fragment",
             "{}",
-            Files: [new StackExportPayloadHandle("value.bin", _ =>
-            {
-                opened = true;
-                return ValueTask.FromResult<Stream>(new MemoryStream());
-            }, length: 5)]);
+            Files: [new StackRpcPayloadFile("value.bin", ContentReference(length: 5))]);
 
         var response = await builder.BuildAsync(
             new RuntimeStackExportRequest("test.stack", "Test Stack", null, []),
             [],
-            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", fragment)],
+            [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
             generation: 1,
             [],
             CancellationToken.None);
 
         Assert.False(response.Success);
-        Assert.False(opened);
         Assert.Contains(response.Errors, error => error.Contains("per-file limit", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -362,19 +361,28 @@ public sealed class RuntimeStackContractMapperTests
         return path;
     }
 
-    private sealed class DuplicateItemExporter : IPackageStackExporter
-    {
-        public string ContributorId => "test.exporter";
-        public string DisplayName => "Test";
+    private static SunderRpcProviderSnapshot Provider(long generation = 1)
+        => new(
+            "host.package",
+            "1.0.0",
+            "host.stack",
+            SunderStackContributorRpc.ContractId,
+            SunderStackContributorRpc.ContractVersion,
+            SunderStackContributorRpc.Descriptor.Sha256,
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            1,
+            generation,
+            new SunderRpcEndpointReference("rpc1_test"),
+            1,
+            SunderRpcProviderState.Active);
 
-        public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
-            StackExportDiscoveryContext context,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>([]);
-
-        public ValueTask<StackExportContribution> ExportAsync(
-            StackExportRequest request,
-            CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(new StackExportContribution([], [], []));
-    }
+    private static SunderRpcContentReference ContentReference(long length = 0)
+        => new(
+            "rpc-content-test",
+            length,
+            new string('0', 64),
+            "application/octet-stream",
+            "value.bin",
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            SunderRpcContentRepeatability.SingleUse);
 }

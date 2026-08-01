@@ -1,0 +1,9 @@
+<Project>
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Stacks" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
+    <SunderRpcProvider Include="SUNDER_PACKAGE_ID_TEXT.stack"
+                       ContractId="sunder.stack.contributor"
+                       ContractVersion="1.0.0"
+                       Role="runtime" />
+  </ItemGroup>
+</Project>

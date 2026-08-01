@@ -208,7 +208,6 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         {
             return await SaveUpdateSettingsAsync();
         }
-
         var selectedSection = _selection.SelectedSection;
         if (!ShowGenericPackageSettings || selectedSection?.PackageId is null)
         {

@@ -16,27 +16,43 @@ internal static class PackageContentIndexer
 
     public static void Write(string stagingPath)
     {
-        var files = Directory.EnumerateFiles(stagingPath, "*", SearchOption.AllDirectories)
-            .Where(path => !SunderPackageFormat.IsContentIndexPath(ToArchivePath(stagingPath, path)))
-            .Select(path => CreateEntry(stagingPath, path))
+        var files = SunderArchive.EnumerateFiles(stagingPath)
+            .Where(file => !SunderPackageFormat.IsContentIndexPath(file.Path.ToString()))
+            .Select(file => CreateEntry(file.Path, file.FullPath))
             .OrderBy(static entry => entry.Path, StringComparer.Ordinal)
             .ToArray();
-        var outputPath = Path.Combine(stagingPath, "manifest", "content-index.json");
-        File.WriteAllText(outputPath, JsonSerializer.Serialize(new SunderPackageContentIndex(1, files), JsonOptions) + "\n");
+        foreach (var entry in files)
+        {
+            if (!SunderPackageFormat.IsAllowedArchivePath(entry.Path!))
+            {
+                throw new InvalidDataException($"Package staging contains file outside canonical archive roots: '{entry.Path}'.");
+            }
+        }
+
+        var outputPath = ArchiveRelativePath.Parse(SunderPackageFormat.ContentIndexPath).ToPlatformPath(stagingPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        var temporaryPath = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(
+                temporaryPath,
+                JsonSerializer.Serialize(
+                    new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, files),
+                    JsonOptions) + "\n");
+            File.Move(temporaryPath, outputPath, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
     }
 
-    private static SunderPackageContentIndexEntry CreateEntry(string stagingPath, string filePath)
+    private static SunderPackageContentIndexEntry CreateEntry(ArchiveRelativePath path, string filePath)
     {
         using var stream = File.OpenRead(filePath);
-        var relativePath = Path.GetRelativePath(stagingPath, filePath).Replace('\\', '/');
         return new SunderPackageContentIndexEntry(
-            relativePath,
+            path.ToString(),
             Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
-            stream.Length,
-            SunderPackageFormat.GetContentRole(relativePath)
-                ?? throw new InvalidDataException($"Package staging contains file outside canonical archive roots: '{relativePath}'."));
+            stream.Length);
     }
-
-    private static string ToArchivePath(string stagingPath, string filePath)
-        => Path.GetRelativePath(stagingPath, filePath).Replace('\\', '/');
 }

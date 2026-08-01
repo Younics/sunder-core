@@ -31,6 +31,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private readonly PackagesSelectedOperationCommands _selectedOperationCommands;
     private readonly SelectedPackageIconObserver _selectedPackageIconObserver;
     private readonly MarketplaceSearchScheduler _marketplaceSearchScheduler;
+    private readonly LatestAsyncRequest _marketplaceVersionDetailsRequest = new();
     private readonly TimeSpan _marketplaceDetailSpinnerDelay;
     private readonly IUiDispatcher _uiDispatcher;
     private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindowViewModel));
@@ -268,11 +269,18 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && ShowMarketplaceInstallAction
         && Marketplace.SelectedPackage is { IsYanked: false }
         && Marketplace.SelectedVersion is { IsYanked: false }
+        && Marketplace.RpcAccessLoaded
         && !Operations.SelectedPackageHasActiveOperation;
 
     public bool CanUninstallSelectedMarketplacePackage => ShowMarketplaceInstalledActions && !Operations.SelectedPackageHasActiveOperation;
 
-    public bool CanUpdateSelectedMarketplacePackage => IsMarketplaceMode && Marketplace.SelectedPackage?.HasUpdate == true && !Operations.SelectedPackageHasActiveOperation;
+    public bool CanUpdateSelectedMarketplacePackage => IsMarketplaceMode
+        && Marketplace.SelectedPackage?.HasUpdate == true
+        && Marketplace.SelectedVersion is { } selectedVersion
+        && GetPackageUpdate(Marketplace.SelectedPackage.PackageId) is { } update
+        && string.Equals(selectedVersion.Version, update.AvailableVersion, StringComparison.Ordinal)
+        && Marketplace.RpcAccessLoaded
+        && !Operations.SelectedPackageHasActiveOperation;
 
     public bool CanUpdateAllPackages => !Operations.IsBusy && AvailableUpdateCount > 0;
 
@@ -392,6 +400,15 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             Marketplace.SearchText = value;
             QueueMarketplaceSearch();
         }
+    }
+
+    partial void OnRegistryUrlTextChanged(string value)
+    {
+        if (Marketplace.SelectedPackage is not null)
+        {
+            ClearMarketplaceSelection();
+        }
+        NotifyCommandStateChanged();
     }
 
     partial void OnSelectedMarketplaceSortOptionChanged(RegistrySearchSortOptionViewModel? value)

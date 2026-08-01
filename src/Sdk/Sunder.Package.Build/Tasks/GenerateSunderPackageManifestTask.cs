@@ -3,8 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Build.Framework;
 using Sunder.Package.Format;
-using Sunder.Sdk.Compatibility;
-using Sunder.Sdk.Packaging;
 
 namespace Sunder.Package.Build.Tasks;
 
@@ -24,13 +22,26 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
     [Required] public string EntryAssembly { get; set; } = string.Empty;
     [Required] public string PackageVersion { get; set; } = string.Empty;
     [Required] public string ProjectDirectory { get; set; } = string.Empty;
-    public string? TargetFramework { get; set; }
+    [Required] public string TargetFramework { get; set; } = string.Empty;
     public string? SdkPackageVersion { get; set; }
+    public string? AssetsDirectory { get; set; }
     public ITaskItem[] SdkCapabilities { get; set; } = [];
     public ITaskItem[] ReferencePaths { get; set; } = [];
     public ITaskItem[] RuntimeCopyLocalPaths { get; set; } = [];
     public ITaskItem[] AuthoredAssemblyPaths { get; set; } = [];
     public ITaskItem[] DynamicAccessAcknowledgements { get; set; } = [];
+    public ITaskItem[] RuntimeIdentifiers { get; set; } = [];
+    public ITaskItem[] PackageTargets { get; set; } = [];
+    public ITaskItem[] PackageViews { get; set; } = [];
+    public ITaskItem[] ContractBundles { get; set; } = [];
+    public ITaskItem[] UsesContracts { get; set; } = [];
+    public ITaskItem[] RpcProviders { get; set; } = [];
+
+    [Output]
+    public ITaskItem[] ResolvedTargets { get; private set; } = [];
+
+    [Output]
+    public ITaskItem[] ResolvedContractFiles { get; private set; } = [];
 
     public override bool Execute()
     {
@@ -71,7 +82,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             return false;
         }
 
-        var assets = new PackageAssetDiscovery(ProjectDirectory);
+        var assets = new PackageAssetDiscovery(ProjectDirectory, AssetsDirectory);
         if (!new PackageManifestValidator(
                 PackageVersion,
                 EntryAssembly,
@@ -83,21 +94,44 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             return false;
         }
 
+        var targets = PackageTargetBuilder.Build(
+            metadata.ImplementedRoles,
+            RuntimeIdentifiers,
+            PackageTargets,
+            PackageViews,
+            metadata.Id,
+            EntryAssembly,
+            TargetFramework,
+            sdkPackageVersion,
+            metadata.RequiredSdkCapabilities,
+            Log);
+        if (targets is null)
+        {
+            return false;
+        }
+        var contracts = PackageContractBuilder.Build(
+            ManifestOutputPath,
+            targets,
+            ContractBundles,
+            UsesContracts,
+            RpcProviders,
+            Log);
+        if (contracts is null) return false;
+
         var manifest = new SunderPackageManifest
         {
-            ManifestVersion = 1,
+            ArchiveFormatVersion = SunderPackageFormat.CurrentArchiveFormatVersion,
+            ManifestVersion = SunderPackageFormat.CurrentManifestVersion,
             Id = metadata.Id,
             Name = metadata.Name,
             Summary = string.IsNullOrWhiteSpace(metadata.Summary) ? null : metadata.Summary,
             Version = PackageVersion,
-            EntryAssembly = EntryAssembly,
-            HostRoles = metadata.HostRoles,
             Icon = string.IsNullOrWhiteSpace(metadata.Icon) ? null : PackageAssetDiscovery.NormalizePath(metadata.Icon),
-            DependsOn = metadata.Dependencies.Count == 0 ? null : metadata.Dependencies,
-            SdkApiVersion = SunderSdkApiVersions.Current,
-            SdkPackageVersion = sdkPackageVersion,
-            RequiredSdkCapabilities = metadata.RequiredSdkCapabilities.Count == 0 ? null : metadata.RequiredSdkCapabilities,
-            TargetFramework = string.IsNullOrWhiteSpace(TargetFramework) ? null : TargetFramework,
+            DependsOn = metadata.Dependencies,
+            Targets = targets,
+            ContractBundles = contracts.Bundles,
+            UsesContracts = contracts.Uses,
+            Provides = contracts.Providers,
         };
 
         var manifestDirectory = Path.GetDirectoryName(ManifestOutputPath);
@@ -106,6 +140,8 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             Directory.CreateDirectory(manifestDirectory);
         }
         PackageManifestSerializer.Write(ManifestOutputPath, manifest, JsonOptions);
+        ResolvedTargets = PackageTargetBuilder.ToTaskItems(targets);
+        ResolvedContractFiles = contracts.Files;
         Log.LogMessage(MessageImportance.High, $"Generated Sunder package manifest at {ManifestOutputPath}");
         return !Log.HasLoggedErrors;
     }

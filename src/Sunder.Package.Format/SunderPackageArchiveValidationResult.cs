@@ -5,5 +5,7 @@ public sealed record SunderPackageArchiveValidationResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors)
 {
-    public bool Success => Manifest is not null && Errors.Count == 0;
+    public SunderPackageContentIndex? ContentIndex { get; init; }
+
+    public bool Success => Manifest is not null && ContentIndex is not null && Errors.Count == 0;
 }

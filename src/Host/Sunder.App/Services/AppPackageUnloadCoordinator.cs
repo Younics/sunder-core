@@ -1,12 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
-using Sunder.Package.Hosting;
-using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageUnloadCoordinator(
     AppPackageViewRegistry viewRegistry,
-    AppPackageExtensionCatalog extensionCatalog,
     AppPackageRuntimeWorkStopper runtimeWorkStopper,
     AppPackageAssemblyTracker assemblyTracker,
     AppSharedAssemblyRegistry sharedAssemblyRegistry,
@@ -19,13 +16,10 @@ internal sealed class AppPackageUnloadCoordinator(
         AppLoadedPackageInfo? packageInfo,
         ServiceProvider? serviceProvider,
         AppPackageLoadContext? loadContext,
-        PackageExtensionOwnerActivation? extensionOwner,
+        IAsyncDisposable? targetLifetime = null,
         bool stopRuntimeWork = true)
     {
-        var retirement = extensionOwner is null
-            ? PackageExtensionOwnerRetirement.Completed(packageId)
-            : extensionCatalog.BeginOwnerRetirement(extensionOwner, PackageExtensionCatalogChangeReason.PackageDeactivated);
-        if (extensionOwner is not null)
+        if (packageInfo is not null || targetLifetime is not null)
         {
             await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
             if (stopRuntimeWork)
@@ -47,12 +41,12 @@ internal sealed class AppPackageUnloadCoordinator(
             packageId,
             CleanupRetiredPackageAsync(
                 packageId,
-                retirement,
                 packageInfo?.Folder,
                 packageInfo?.LibraryFolder,
                 serviceProvider,
                 loadContext,
-                removeWholePackageTracking: extensionOwner is not null));
+                targetLifetime,
+                removeWholePackageTracking: packageInfo is not null || targetLifetime is not null));
     }
 
     public async Task UnloadPackageAsync(
@@ -60,21 +54,24 @@ internal sealed class AppPackageUnloadCoordinator(
         AppLoadedPackageHandle handle,
         bool useRetirementDeadline = true)
     {
-        var retirement = handle.ExtensionOwner is null
-            ? PackageExtensionOwnerRetirement.Completed(packageId)
-            : extensionCatalog.BeginOwnerRetirement(handle.ExtensionOwner, PackageExtensionCatalogChangeReason.PackageDeactivated);
         await viewRegistry.UnregisterPackageAsync(packageId, CancellationToken.None);
         await runtimeWorkStopper.StopPackageWorkAsync(packageId, CancellationToken.None);
 
-        removeOwnedDisposable(handle.ServiceProvider);
-        removeLoadContext(handle.LoadContext);
+        if (handle.ServiceProvider is not null)
+        {
+            removeOwnedDisposable(handle.ServiceProvider);
+        }
+        if (handle.LoadContext is not null)
+        {
+            removeLoadContext(handle.LoadContext);
+        }
         var cleanup = CleanupRetiredPackageAsync(
             packageId,
-            retirement,
             handle.Folder,
             Path.Combine(handle.Folder, "lib"),
             handle.ServiceProvider,
             handle.LoadContext,
+            handle.TargetLifetime,
             removeWholePackageTracking: true);
         if (useRetirementDeadline)
         {
@@ -85,11 +82,6 @@ internal sealed class AppPackageUnloadCoordinator(
             await cleanup;
         }
     }
-
-    public async Task RetireAllOwnersAsync()
-        => await Task.WhenAll(extensionCatalog
-            .BeginAllOwnerRetirements()
-            .Select(static retirement => retirement.Completion));
 
     public Task StopAllOwnedRuntimeWorkAsync()
         => runtimeWorkStopper.StopAllOwnedWorkAsync(CancellationToken.None);
@@ -112,14 +104,13 @@ internal sealed class AppPackageUnloadCoordinator(
 
     private async Task CleanupRetiredPackageAsync(
         string packageId,
-        PackageExtensionOwnerRetirement retirement,
         string? packageFolder,
         string? libraryFolder,
         object? serviceProvider,
         AppPackageLoadContext? loadContext,
+        IAsyncDisposable? targetLifetime,
         bool removeWholePackageTracking)
     {
-        await retirement.Completion.ConfigureAwait(false);
         if (removeWholePackageTracking)
         {
             assemblyTracker.RemovePackage(packageId);
@@ -141,6 +132,20 @@ internal sealed class AppPackageUnloadCoordinator(
                 CancellationToken.None);
         }
 
+        if (targetLifetime is not null)
+        {
+            try
+            {
+                await targetLifetime.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                AppSessionLog.WriteError(
+                    $"Failed to dispose app-side target resources for package '{packageId}'.",
+                    exception);
+            }
+        }
+
         if (loadContext is not null)
         {
             AppPackageResourceDisposer.TryUnloadLoadContext(loadContext, packageId);
@@ -160,9 +165,9 @@ internal sealed class AppPackageUnloadCoordinator(
         catch (TimeoutException exception)
         {
             AppSessionLog.WriteError(
-                $"App package '{packageId}' owner retirement exceeded its {AppShutdownBudgets.GenerationRetirement.TotalSeconds:0.###} second budget; its provider and load context were quarantined without forced disposal.",
+                $"App package '{packageId}' retirement exceeded its {AppShutdownBudgets.GenerationRetirement.TotalSeconds:0.###} second budget; its provider and load context were quarantined without forced disposal.",
                 exception);
-            AppCleanupQuarantine.Retain(cleanup, $"retiring App package '{packageId}' extension owner");
+            AppCleanupQuarantine.Retain(cleanup, $"retiring App package '{packageId}'");
         }
     }
 

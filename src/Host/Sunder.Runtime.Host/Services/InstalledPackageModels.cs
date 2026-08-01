@@ -11,43 +11,19 @@ internal sealed record InstalledPackageRecord(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("summary")] string? Summary,
     [property: JsonPropertyName("version")] string Version,
-    [property: JsonPropertyName("entryAssembly")] string EntryAssembly,
     [property: JsonPropertyName("icon")] string? Icon,
-    [property: JsonPropertyName("dependsOn")] IReadOnlyList<InstalledPackageDependencyRecord> DependsOn,
     [property: JsonPropertyName("installPath")] string InstallPath,
+    [property: JsonPropertyName("manifestPath")] string ManifestPath,
+    [property: JsonPropertyName("contentIdentity")] string ContentIdentity,
+    [property: JsonPropertyName("contentInventory")] IReadOnlyList<InstalledPackageContentRecord> ContentInventory,
+    [property: JsonPropertyName("dependsOn")] IReadOnlyList<InstalledPackageDependencyRecord> DependsOn,
     [property: JsonPropertyName("isEnabled")] bool IsEnabled,
-    [property: JsonPropertyName("installedAtUtc")] DateTimeOffset InstalledAtUtc)
-{
-    public string ManifestPath => TryResolveManifestPath(InstallPath) ?? Path.Combine(InstallPath, "manifest", "sunder-package.json");
+    [property: JsonPropertyName("installedAtUtc")] DateTimeOffset InstalledAtUtc);
 
-    public string LibraryFolder => TryResolveLibraryFolder(InstallPath) ?? Path.Combine(InstallPath, "payload", "lib");
-
-    public string EntryAssemblyPath => Path.Combine(LibraryFolder, EntryAssembly);
-
-    public static string? TryResolveManifestPath(string installPath)
-    {
-        var packagedManifestPath = Path.Combine(installPath, "manifest", "sunder-package.json");
-        if (File.Exists(packagedManifestPath))
-        {
-            return packagedManifestPath;
-        }
-
-        var devManifestPath = Path.Combine(installPath, "sunder-package.json");
-        return File.Exists(devManifestPath) ? devManifestPath : null;
-    }
-
-    public static string? TryResolveLibraryFolder(string installPath)
-    {
-        var packagedLibraryFolder = Path.Combine(installPath, "payload", "lib");
-        if (Directory.Exists(packagedLibraryFolder))
-        {
-            return packagedLibraryFolder;
-        }
-
-        var devLibraryFolder = Path.Combine(installPath, "lib");
-        return Directory.Exists(devLibraryFolder) ? devLibraryFolder : null;
-    }
-}
+internal sealed record InstalledPackageContentRecord(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("sha256")] string Sha256,
+    [property: JsonPropertyName("size")] long Size);
 
 internal sealed record InstalledPackageDependencyRecord(
     [property: JsonPropertyName("packageId")] string PackageId,
@@ -56,7 +32,6 @@ internal sealed record InstalledPackageDependencyRecord(
 internal sealed record PreparedPackageArchiveMutation(
     string StagingPath,
     string InstalledPath,
-    InstalledPackageRecord StagedRecord,
     InstalledPackageRecord InstalledRecord);
 
 internal sealed record PackageArchiveMutationPreparationResult(

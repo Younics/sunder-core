@@ -254,7 +254,7 @@ public sealed partial class PackagesWindowViewModel
             ApplyMarketplacePackageStats(details.Stats);
             ApplyMarketplaceAttributions(details.Creator, details.Maintainers);
             _marketplace.ReplaceVersions(details.Versions);
-            SelectMarketplaceVersion(Marketplace.Versions.FirstOrDefault(version => string.Equals(version.Version, details.Package.LatestVersion, StringComparison.OrdinalIgnoreCase))
+            SelectMarketplaceVersion(Marketplace.Versions.FirstOrDefault(version => string.Equals(version.Version, details.Package.LatestVersion, StringComparison.Ordinal))
                 ?? Marketplace.Versions.FirstOrDefault());
             CompleteMarketplacePackageDetailsLoad();
             Operations.StatusText = $"Loaded {details.Versions.Count} version(s) for {item.PackageId}.";
@@ -280,6 +280,8 @@ public sealed partial class PackagesWindowViewModel
         Marketplace.SelectedVersion = null;
         OnPropertyChanged(nameof(SelectedMarketplaceVersion));
         _marketplace.ClearVersions();
+        _marketplaceVersionDetailsRequest.Invalidate();
+        Marketplace.ClearRpcContractUses();
         ApplyMarketplaceProfile(null);
         ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);
@@ -365,6 +367,19 @@ public sealed partial class PackagesWindowViewModel
         Marketplace.SelectedVersion = item;
         OnPropertyChanged(nameof(SelectedMarketplaceVersion));
         MarketplaceSelectedVersion = item?.Version ?? "Latest";
+        if (item is null || Marketplace.SelectedPackage is null)
+        {
+            _marketplaceVersionDetailsRequest.Invalidate();
+            Marketplace.ClearRpcContractUses();
+        }
+        else
+        {
+            Marketplace.BeginRpcContractUseLoad();
+            _tasks.Observe(
+                LoadSelectedMarketplaceVersionDetailsAsync(Marketplace.SelectedPackage, item),
+                "loading selected marketplace package version details");
+        }
+
         ClearWarnings();
         if (item is { IsYanked: true })
         {
@@ -379,6 +394,56 @@ public sealed partial class PackagesWindowViewModel
         NotifyCommandStateChanged();
     }
 
+    private async Task LoadSelectedMarketplaceVersionDetailsAsync(
+        RegistryPackageSearchItemViewModel package,
+        RegistryPackageVersionItemViewModel version)
+    {
+        using var request = _marketplaceVersionDetailsRequest.Start(_tasks.Token);
+        try
+        {
+            var details = await Marketplace.Catalog.LoadVersionDetailsAsync(
+                package.PackageId,
+                version.Version,
+                request.Token);
+            if (!request.IsCurrent
+                || !ReferenceEquals(Marketplace.SelectedPackage, package)
+                || !ReferenceEquals(Marketplace.SelectedVersion, version))
+            {
+                return;
+            }
+
+            if (details is null
+                || !string.Equals(details.PackageId, package.PackageId, StringComparison.Ordinal)
+                || !string.Equals(details.Version, version.Version, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Registry details for '{package.PackageId}' version '{version.Version}' were unavailable or mismatched.");
+            }
+
+            Marketplace.CompleteRpcContractUseLoad(
+                PackageRpcAccessProjection.FromRegistry(details.UsesContracts));
+            request.Complete();
+            NotifyCommandStateChanged();
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            request.Fail(ex);
+            if (request.IsCurrent
+                && ReferenceEquals(Marketplace.SelectedPackage, package)
+                && ReferenceEquals(Marketplace.SelectedVersion, version))
+            {
+                Marketplace.FailRpcContractUseLoad(ex.Message);
+                NotifyCommandStateChanged();
+            }
+            AppSessionLog.WriteError(
+                $"Failed to load RPC access for marketplace package '{package.PackageId}' version '{version.Version}'.",
+                ex);
+        }
+    }
+
     private void ClearMarketplaceSelection()
     {
         InvalidateMarketplaceSelectionLoad();
@@ -389,6 +454,8 @@ public sealed partial class PackagesWindowViewModel
         ObserveSelectedInstalledPackage(null);
         ObserveSelectedMarketplacePackage(null);
         _marketplace.ClearVersions();
+        _marketplaceVersionDetailsRequest.Invalidate();
+        Marketplace.ClearRpcContractUses();
         ApplyMarketplaceProfile(null);
         ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);

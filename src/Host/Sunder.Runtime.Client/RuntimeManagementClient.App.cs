@@ -103,8 +103,22 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
         => ReadSseAsync<PackageLogEntryDescriptor>("package-logs/stream", afterSequenceId, token);
 
-    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken token = default)
-        => GetRequiredAsync<IReadOnlyList<PackageUiSnapshotDescriptor>>("packages/ui-snapshots", token);
+    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
+        string appRid,
+        CancellationToken token = default)
+        => GetRequiredAsync<IReadOnlyList<PackageUiSnapshotDescriptor>>(
+            $"packages/ui-snapshots?appRid={Uri.EscapeDataString(appRid)}",
+            RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
+            token);
+
+    public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(
+        string stageId,
+        string appRid,
+        CancellationToken token = default)
+        => GetRequiredAsync<IReadOnlyList<PackageUiSnapshotDescriptor>>(
+            $"packages/session/stage/{Uri.EscapeDataString(stageId)}/ui-snapshots?appRid={Uri.EscapeDataString(appRid)}",
+            RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
+            token);
 
     public async Task DownloadPackageUiSnapshotAsync(
         PackageUiSnapshotDescriptor snapshot,

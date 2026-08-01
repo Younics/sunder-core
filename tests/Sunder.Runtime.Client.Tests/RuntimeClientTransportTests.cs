@@ -217,6 +217,86 @@ public sealed class RuntimeClientTransportTests
         Assert.Equal(["/api/handshake", "/api/v1/content"], handler.Paths);
     }
 
+    [Fact]
+    public async Task PackageUiSnapshotRequests_IncludeExactAppRidAndEscapedStageId()
+    {
+        var handshake = CreateHandshake() with
+        {
+            SupportedFeatures =
+            [
+                RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
+            ],
+        };
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(handshake),
+            "/api/v1/packages/ui-snapshots" => Json(Array.Empty<PackageUiSnapshotDescriptor>()),
+            "/api/v1/packages/session/stage/stage%20one/ui-snapshots" => Json(Array.Empty<PackageUiSnapshotDescriptor>()),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var management = new RuntimeManagementClient(() => connection, handler);
+
+        await management.GetActivePackageUiSnapshotsAsync("linux-arm64");
+        await management.GetStagedPackageUiSnapshotsAsync("stage one", "osx-x64");
+
+        Assert.Equal(
+            "/api/v1/packages/ui-snapshots?appRid=linux-arm64",
+            handler.PathAndQueries[1]);
+        Assert.Equal(
+            "/api/v1/packages/session/stage/stage%20one/ui-snapshots?appRid=osx-x64",
+            handler.PathAndQueries[2]);
+    }
+
+    [Fact]
+    public async Task RpcManagement_QueriesCatalogAndManagesPermissions()
+    {
+        var handshake = CreateHandshake() with
+        {
+            SupportedFeatures =
+            [
+                RuntimeProtocolFeatures.VersionedApiV1,
+                RuntimeProtocolFeatures.SchemaFirstRpcV1,
+                RuntimeProtocolFeatures.RpcPermissionsV1,
+            ],
+        };
+        var permission = new RuntimeRpcPermissionDescriptor(
+            "caller.package",
+            "1.0.0",
+            new string('a', 64),
+            "example.rpc",
+            "invoke",
+            Requested: true,
+            RuntimeRpcPermissionState.Granted,
+            Effective: true,
+            DateTimeOffset.UtcNow);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(handshake),
+            "/api/v1/rpc/catalog" => Json(new RuntimeRpcCatalogSnapshot(2, 3, [], false)),
+            "/api/v1/rpc/catalog/events" => Json(new RuntimeRpcCatalogEventPage(2, 3, [], false)),
+            "/api/v1/rpc/permissions" => Json(new RuntimeRpcPermissionSnapshot(4, [permission])),
+            "/api/v1/rpc/permissions/grant" => Json(new RuntimeRpcPermissionSnapshot(5, [permission])),
+            "/api/v1/rpc/permissions/revoke" => Json(new RuntimeRpcPermissionSnapshot(6, [permission with
+            {
+                State = RuntimeRpcPermissionState.Denied,
+                Effective = false,
+            }])),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var connection = new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret");
+        using var client = new RuntimeManagementClient(() => connection, handler);
+
+        Assert.Equal(2, (await client.GetRpcCatalogAsync()).Revision);
+        Assert.Equal(3, (await client.GetRpcCatalogEventsAsync(2, 1)).Sequence);
+        Assert.True(Assert.Single((await client.GetRpcPermissionsAsync()).Permissions).Effective);
+        Assert.Equal(5, (await client.GrantRpcPermissionAsync("caller.package", "example.rpc", "invoke")).Revision);
+        Assert.Equal(6, (await client.RevokeRpcPermissionAsync("caller.package", "example.rpc", "invoke")).Revision);
+        Assert.Contains(handler.PathAndQueries, path =>
+            path.EndsWith("afterRevision=2&afterSequence=1", StringComparison.Ordinal));
+    }
+
     private static HttpResponseMessage Json<T>(T value)
         => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
 
@@ -238,11 +318,13 @@ public sealed class RuntimeClientTransportTests
         Action<HttpRequestMessage>? observe = null) : HttpMessageHandler
     {
         public List<string> Paths { get; } = [];
+        public List<string> PathAndQueries { get; } = [];
         public List<string?> Authorizations { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Paths.Add(request.RequestUri!.AbsolutePath);
+            PathAndQueries.Add(request.RequestUri.PathAndQuery);
             Authorizations.Add(request.Headers.Authorization?.ToString());
             observe?.Invoke(request);
             return Task.FromResult(send(request));

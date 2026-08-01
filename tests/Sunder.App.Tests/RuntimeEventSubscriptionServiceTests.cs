@@ -29,17 +29,17 @@ public sealed class RuntimeEventSubscriptionServiceTests
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
         var writes = new List<RuntimePackageSnapshot>();
         var impactedWrites = new List<IReadOnlyCollection<string>?>();
-        service.InitializePresentation(CreateSnapshot(firstRuntime, 1), (snapshot, impacted, _) =>
+        service.InitializePresentation(CreateSnapshot(firstRuntime, 1), [], (snapshot, _, impacted, _) =>
         {
             writes.Add(snapshot);
             impactedWrites.Add(impacted);
             return Task.CompletedTask;
         });
 
-        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 2), ["agent"]);
-        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 1), ["stale"]);
-        await service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 1), ["replacement"]);
-        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 3), ["retired"]);
+        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 2), [], ["agent"]);
+        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 1), [], ["stale"]);
+        await service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 1), [], ["replacement"]);
+        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 3), [], ["retired"]);
 
         Assert.Equal([(firstRuntime, 2L), (secondRuntime, 1L)], writes.Select(write => (write.RuntimeInstanceId, write.SessionGeneration)).ToArray());
         Assert.Contains("agent", Assert.IsAssignableFrom<IReadOnlyCollection<string>>(impactedWrites[0]));
@@ -54,7 +54,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var committedGenerations = new List<long>();
-        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), async (snapshot, _, cancellationToken) =>
+        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), [], async (snapshot, _, _, cancellationToken) =>
         {
             if (snapshot.SessionGeneration == 2)
             {
@@ -73,15 +73,15 @@ public sealed class RuntimeEventSubscriptionServiceTests
             committedGenerations.Add(snapshot.SessionGeneration);
         });
 
-        var second = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2));
+        var second = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2), []);
         await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var third = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3));
+        var third = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3), []);
         await Task.WhenAll(second, third).WaitAsync(TimeSpan.FromSeconds(2));
 
         await secondCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal([3], committedGenerations);
 
-        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3));
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3), []);
         Assert.Equal([3], committedGenerations);
     }
 
@@ -91,7 +91,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var runtimeInstanceId = Guid.NewGuid();
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
         var attempts = 0;
-        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), (snapshot, _, _) =>
+        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), [], (snapshot, _, _, _) =>
         {
             attempts++;
             return attempts == 1
@@ -101,13 +101,13 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var snapshot = CreateSnapshot(runtimeInstanceId, 2);
         var waiter = service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 2));
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplySnapshotAsync(snapshot));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplySnapshotAsync(snapshot, []));
 
         Assert.Equal("presentation failed", exception.Message);
         var waiterException = await Assert.ThrowsAsync<InvalidOperationException>(() => waiter);
         Assert.Contains("generation 2", waiterException.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("presentation failed", waiterException.Message, StringComparison.OrdinalIgnoreCase);
-        await service.ApplySnapshotAsync(snapshot);
+        await service.ApplySnapshotAsync(snapshot, []);
         Assert.Equal(2, attempts);
         await service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 2));
     }
@@ -117,7 +117,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
     {
         var initialRuntime = Guid.NewGuid();
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
-        service.InitializePresentation(CreateSnapshot(initialRuntime, 1), (_, _, _) => Task.CompletedTask);
+        service.InitializePresentation(CreateSnapshot(initialRuntime, 1), [], (_, _, _, _) => Task.CompletedTask);
 
         for (var index = 0; index < 80; index++)
         {
@@ -129,16 +129,15 @@ public sealed class RuntimeEventSubscriptionServiceTests
                 [],
                 [],
                 [],
-                [],
                 ["bootstrap failed"]);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplySnapshotAsync(failed));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplySnapshotAsync(failed, []));
         }
 
         var currentRuntime = initialRuntime;
         for (var index = 0; index < 12; index++)
         {
             currentRuntime = Guid.NewGuid();
-            await service.ApplySnapshotAsync(CreateSnapshot(currentRuntime, 1));
+            await service.ApplySnapshotAsync(CreateSnapshot(currentRuntime, 1), []);
         }
 
         Assert.InRange(service.TerminalOutcomeCount, 0, 64);
@@ -153,7 +152,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var factory = new StreamingRuntimeClientFactory(initial);
         factory.Client.SnapshotFailuresRemaining = 1;
         await using var service = new RuntimeEventSubscriptionService(factory, new DeveloperLogService());
-        await service.StartAsync(initial, (_, _, _) => Task.CompletedTask);
+        await service.StartAsync(initial, [], (_, _, _, _) => Task.CompletedTask);
         service.ReleasePresentation();
         await factory.Client.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -170,17 +169,19 @@ public sealed class RuntimeEventSubscriptionServiceTests
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
         var retries = new List<IReadOnlyCollection<string>?>();
         service.InitializePresentation(
-            CreateSnapshot(runtimeInstanceId, 1, CreateSource("hash-a", 1)),
-            (_, retryDisabledPackageIds, _) =>
+            CreateSnapshot(runtimeInstanceId, 1),
+            [CreateSource("hash-a", 1)],
+            (_, _, retryDisabledPackageIds, _) =>
             {
                 retries.Add(retryDisabledPackageIds);
                 return Task.CompletedTask;
             });
 
-        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2, CreateSource("hash-a", 2)));
-        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3, CreateSource("hash-b", 3)));
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2), [CreateSource("hash-a", 2)]);
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3), [CreateSource("hash-b", 3)]);
         await service.ApplySnapshotAsync(
-            CreateSnapshot(runtimeInstanceId, 4, CreateSource("hash-b", 4)),
+            CreateSnapshot(runtimeInstanceId, 4),
+            [CreateSource("hash-b", 4)],
             ["agent"]);
 
         Assert.Empty(Assert.IsAssignableFrom<IReadOnlyCollection<string>>(retries[0]));
@@ -195,7 +196,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var secondRuntime = Guid.NewGuid();
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
         var attemptedStamps = new List<(Guid RuntimeInstanceId, long Generation)>();
-        service.InitializePresentation(CreateSnapshot(firstRuntime, 1), (snapshot, _, _) =>
+        service.InitializePresentation(CreateSnapshot(firstRuntime, 1), [], (snapshot, _, _, _) =>
         {
             attemptedStamps.Add((snapshot.RuntimeInstanceId, snapshot.SessionGeneration));
             return snapshot.RuntimeInstanceId == secondRuntime
@@ -205,10 +206,10 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var oldRuntimeWaiter = service.WaitUntilAppliedAsync(new RuntimePackageStamp(firstRuntime, 2));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 1)));
+            () => service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 1), []));
 
         Assert.False(oldRuntimeWaiter.IsCompleted);
-        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 2));
+        await service.ApplySnapshotAsync(CreateSnapshot(firstRuntime, 2), []);
         await oldRuntimeWaiter.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal([(secondRuntime, 1L), (firstRuntime, 2L)], attemptedStamps);
     }
@@ -222,12 +223,12 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var releaseThird = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var visibleGenerations = new List<long>();
         Task? third = null;
-        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), async (snapshot, _, cancellationToken) =>
+        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), [], async (snapshot, _, _, cancellationToken) =>
         {
             if (snapshot.SessionGeneration == 2)
             {
                 visibleGenerations.Add(2);
-                third = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3));
+                third = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 3), []);
                 return;
             }
 
@@ -237,7 +238,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
         });
         var secondWaiter = service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 2));
 
-        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2));
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2), []);
         await thirdStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         await secondWaiter.WaitAsync(TimeSpan.FromSeconds(2));
@@ -259,7 +260,8 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var writerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await service.StartAsync(
             initial,
-            (_, _, _) =>
+            [],
+            (_, _, _, _) =>
             {
                 writerStarted.TrySetResult();
                 return Task.CompletedTask;
@@ -287,7 +289,8 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var committedGenerations = new List<long>();
         await service.StartAsync(
             initial,
-            async (snapshot, _, cancellationToken) =>
+            [],
+            async (snapshot, _, _, cancellationToken) =>
             {
                 if (snapshot.SessionGeneration == 2)
                 {
@@ -322,16 +325,16 @@ public sealed class RuntimeEventSubscriptionServiceTests
     {
         var runtimeInstanceId = Guid.NewGuid();
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
-        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), (_, _, _) => Task.CompletedTask);
+        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), [], (_, _, _, _) => Task.CompletedTask);
 
         var exact = service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 2));
         Assert.False(exact.IsCompleted);
-        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2));
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2), []);
         await exact.WaitAsync(TimeSpan.FromSeconds(2));
 
         var superseded = service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 3));
         Assert.False(superseded.IsCompleted);
-        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 4));
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 4), []);
         await superseded.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
@@ -341,15 +344,15 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var firstRuntime = Guid.NewGuid();
         var secondRuntime = Guid.NewGuid();
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
-        service.InitializePresentation(CreateSnapshot(firstRuntime, 10), (_, _, _) => Task.CompletedTask);
+        service.InitializePresentation(CreateSnapshot(firstRuntime, 10), [], (_, _, _, _) => Task.CompletedTask);
 
         var oldRuntimeWaiter = service.WaitUntilAppliedAsync(new RuntimePackageStamp(firstRuntime, 11));
-        await service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 1));
+        await service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 1), []);
         await oldRuntimeWaiter.WaitAsync(TimeSpan.FromSeconds(2));
 
         var replacementWaiter = service.WaitUntilAppliedAsync(new RuntimePackageStamp(secondRuntime, 2));
         Assert.False(replacementWaiter.IsCompleted);
-        await service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 2));
+        await service.ApplySnapshotAsync(CreateSnapshot(secondRuntime, 2), []);
         await replacementWaiter.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
@@ -360,13 +363,13 @@ public sealed class RuntimeEventSubscriptionServiceTests
         var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
         var writerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseWriter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), async (_, _, _) =>
+        service.InitializePresentation(CreateSnapshot(runtimeInstanceId, 1), [], async (_, _, _, _) =>
         {
             writerStarted.SetResult();
             await releaseWriter.Task;
         });
 
-        var apply = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2));
+        var apply = service.ApplySnapshotAsync(CreateSnapshot(runtimeInstanceId, 2), []);
         await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         var dispose = service.DisposeAsync().AsTask();
         try
@@ -382,8 +385,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
 
     private static RuntimePackageSnapshot CreateSnapshot(
         Guid runtimeInstanceId,
-        long generation,
-        PackageUiSnapshotDescriptor? source = null)
+        long generation)
         => new(
             runtimeInstanceId,
             generation,
@@ -391,12 +393,11 @@ public sealed class RuntimeEventSubscriptionServiceTests
             RuntimeBootstrapState.Ready,
             [],
             [],
-            source is null ? [] : [source],
             [],
             []);
 
     private static PackageUiSnapshotDescriptor CreateSource(string contentHash, long generation)
-        => new("agent", PackageSourceKind.Dev, generation, contentHash, $"snapshot-{generation}", $"snapshots/{generation}");
+        => new("agent", PackageSourceKind.Dev, generation, RuntimeContractTestData.AppTarget(), contentHash, $"snapshot-{generation}", $"snapshots/{generation}");
 
     private sealed class ThrowingRuntimeClientFactory : IRuntimeApiClientFactory
     {
@@ -409,12 +410,12 @@ public sealed class RuntimeEventSubscriptionServiceTests
         public StreamingRuntimeClient Client { get; } = new(initialSnapshot);
 
         public TClient CreateClient<TClient>() where TClient : class, IRuntimeClient
-            => typeof(TClient) == typeof(IRuntimeEventClient) || typeof(TClient) == typeof(IRuntimeSnapshotClient)
+            => typeof(TClient) == typeof(IRuntimeEventClient) || typeof(TClient) == typeof(IRuntimeShellClient)
                 ? (TClient)(object)Client
                 : throw new InvalidOperationException($"Unexpected Runtime client type {typeof(TClient).Name}.");
     }
 
-    private sealed class StreamingRuntimeClient(RuntimePackageSnapshot initialSnapshot) : IRuntimeEventClient, IRuntimeSnapshotClient
+    private sealed class StreamingRuntimeClient(RuntimePackageSnapshot initialSnapshot) : IRuntimeEventClient, IRuntimeShellClient
     {
         private readonly Channel<RuntimeEventDescriptor> _events = Channel.CreateUnbounded<RuntimeEventDescriptor>();
         private RuntimePackageSnapshot _snapshot = initialSnapshot;
@@ -476,6 +477,40 @@ public sealed class RuntimeEventSubscriptionServiceTests
             }
             return Task.FromResult(Volatile.Read(ref _snapshot));
         }
+
+        public Task<SystemStatusResponse?> GetSystemStatusAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<SystemStatusResponse?>(null);
+
+        public Task<bool> IsRuntimeHealthyAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task ShutdownAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<ActivePackageDescriptor>> GetActivePackagesAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ActivePackageDescriptor>>([]);
+
+        public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
+
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
+            string appRid,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(
+            string stageId,
+            string appRid,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+
+        public Task DownloadPackageUiSnapshotAsync(
+            PackageUiSnapshotDescriptor snapshot,
+            Stream destination,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Uri CreatePackageAssetUri(string packageId, string assetPath)
+            => new($"https://runtime.test/packages/{packageId}/assets/{assetPath}");
 
         public void Dispose()
         {

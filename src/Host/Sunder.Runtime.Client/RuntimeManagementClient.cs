@@ -32,6 +32,23 @@ public sealed partial class RuntimeManagementClient : IDisposable
         return await _responses.ReadRequiredJsonAsync<TResponse>(response, token).ConfigureAwait(false);
     }
 
+    private async Task<TResponse> PostAsync<TRequest, TResponse>(
+        string path,
+        TRequest request,
+        string requiredFeature,
+        CancellationToken token)
+    {
+        using var message = new HttpRequestMessage(HttpMethod.Post, CreateUri(path))
+        {
+            Content = JsonContent.Create(request),
+        };
+        message.Options.Set(
+            RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
+            new[] { requiredFeature });
+        using var response = await _httpClient.SendAsync(message, token).ConfigureAwait(false);
+        return await _responses.ReadRequiredJsonAsync<TResponse>(response, token).ConfigureAwait(false);
+    }
+
     private Uri CreateUri(string path)
     {
         var connection = _getConnectionInfo()

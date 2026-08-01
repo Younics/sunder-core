@@ -34,7 +34,8 @@ public interface IRuntimeSnapshotClient : IRuntimeClient
 public interface IRuntimeStartupClient :
     IRuntimeConnectionClient,
     IRuntimeSnapshotClient,
-    IRuntimeDevPackageOwnerClient;
+    IRuntimeDevPackageOwnerClient,
+    IRuntimePackageUiClient;
 
 public interface IRuntimeLogClient : IRuntimeClient
 {
@@ -50,7 +51,8 @@ public interface IRuntimePackageSessionClient : IRuntimeClient
 
 public interface IRuntimePackageUiClient : IRuntimeClient
 {
-    Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(string appRid, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(string stageId, string appRid, CancellationToken cancellationToken = default);
     Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default);
     Uri CreatePackageAssetUri(string packageId, string assetPath);
 }
@@ -87,6 +89,15 @@ public interface IRuntimePackageAuthClient : IRuntimeClient
     Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default);
 }
 
+public interface IRuntimeRpcManagementClient : IRuntimeClient
+{
+    Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken cancellationToken = default);
+    Task<RuntimeRpcCatalogEventPage> GetRpcCatalogEventsAsync(long afterRevision, long afterSequence, CancellationToken cancellationToken = default);
+    Task<RuntimeRpcPermissionSnapshot> GetRpcPermissionsAsync(CancellationToken cancellationToken = default);
+    Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(string callerPackageId, string contractId, string action, CancellationToken cancellationToken = default);
+    Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(string callerPackageId, string contractId, string action, CancellationToken cancellationToken = default);
+}
+
 public interface IRuntimeStackClient : IRuntimeClient
 {
     Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken cancellationToken = default);
@@ -121,6 +132,7 @@ public interface IRuntimeRegistryStackClient : IRuntimeClient
 
 public interface IRuntimeShellClient :
     IRuntimeConnectionClient,
+    IRuntimeSnapshotClient,
     IRuntimePackageSessionClient,
     IRuntimePackageUiClient;
 

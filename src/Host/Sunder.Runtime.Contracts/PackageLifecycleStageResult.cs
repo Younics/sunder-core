@@ -3,7 +3,6 @@ namespace Sunder.Runtime.Contracts;
 public sealed record PackageLifecycleStageResult(
     string? StageId,
     IReadOnlyList<ActivePackageDescriptor> ActivePackages,
-    IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds)
@@ -11,9 +10,6 @@ public sealed record PackageLifecycleStageResult(
     public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; }
         = RuntimeContractCollections.Freeze(ActivePackages.Select(
             package => package with { Views = RuntimeContractCollections.Freeze(package.Views) }));
-
-    public IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots { get; }
-        = RuntimeContractCollections.Freeze(PackageUiSnapshots);
 
     public IReadOnlyList<string> Warnings { get; } = RuntimeContractCollections.Freeze(Warnings);
 
@@ -27,8 +23,7 @@ public sealed record PackageLifecycleStageResult(
     public static PackageLifecycleStageResult Failed(
         string message,
         IReadOnlyList<ActivePackageDescriptor>? activePackages = null,
-        IReadOnlyList<PackageUiSnapshotDescriptor>? packageUiSnapshots = null,
         IReadOnlyList<string>? warnings = null,
         IReadOnlyList<string>? errors = null)
-        => new(null, activePackages ?? [], packageUiSnapshots ?? [], warnings ?? [], errors ?? [message], []);
+        => new(null, activePackages ?? [], warnings ?? [], errors ?? [message], []);
 }

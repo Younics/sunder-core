@@ -410,7 +410,7 @@ public sealed class AppPackageRuntimeClientTests
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":3,\"minimumSupportedRevision\":3,\"maximumSupportedRevision\":3,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"package-runtime-operations.v1\",\"package-runtime-stream-envelopes.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
+                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":5,\"minimumSupportedRevision\":5,\"maximumSupportedRevision\":5,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"package-runtime-operations.v1\",\"package-runtime-stream-envelopes.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
                         Encoding.UTF8,
                         "application/json"),
                 };

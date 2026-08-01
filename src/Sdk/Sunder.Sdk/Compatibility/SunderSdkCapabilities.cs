@@ -23,12 +23,6 @@ public static class SunderSdkCapabilities
     public const string RuntimeGenerationsV1 = "runtime-generations.v1";
     /// <summary>Background process contracts.</summary>
     public const string BackgroundProcessesV1 = "background-processes.v1";
-    /// <summary>Extension contribution contracts.</summary>
-    public const string ExtensionsV1 = "extensions.v1";
-    /// <summary>Extension change contracts.</summary>
-    public const string ExtensionChangesV1 = "extensions.changes.v1";
-    /// <summary>Owner-activation-scoped extension invocation leases.</summary>
-    public const string ExtensionInvocationsV1 = "extensions.invocations.v1";
     /// <summary>Host-rendered settings schema contracts.</summary>
     public const string SettingsSchemaV1 = "settings.schema.v1";
     /// <summary>Writable package settings contracts.</summary>
@@ -53,10 +47,12 @@ public static class SunderSdkCapabilities
     public const string RuntimeOperationsV1 = "runtime-operations.v1";
     /// <summary>Sanitized package-visible Runtime invocation failure contracts.</summary>
     public const string RuntimeInvocationErrorsV1 = "runtime-invocation-errors.v1";
+    /// <summary>Schema-first cross-package RPC contracts, discovery, invocation, and provider registration.</summary>
+    public const string RpcV1 = "rpc.v1";
     /// <summary>Stack data contracts.</summary>
     public const string StacksV1 = "stacks.v1";
-    /// <summary>Stack contribution contracts.</summary>
-    public const string StackContributionsV1 = "stacks.contributions.v1";
+    /// <summary>Stack RPC provider and adapter contracts.</summary>
+    public const string StacksRpcV1 = "stacks.rpc.v1";
     /// <summary>Callback contracts.</summary>
     public const string CallbacksV1 = "callbacks.v1";
     /// <summary>Authentication contracts.</summary>

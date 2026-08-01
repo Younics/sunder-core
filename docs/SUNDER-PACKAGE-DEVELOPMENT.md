@@ -1,13 +1,13 @@
 # Sunder Package Development
 
-> **Current developer line:** Sunder SDK `1.1.x` (`[1.1.0,1.2.0)`), package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Current developer line:** unreleased Sunder V1, coordinated SDK `1.1.x` (`[1.1.0,1.2.0)`), .NET 10, and Runtime protocol revision 3.
 
-This is the canonical landing page for public Sunder package development. The focused guides below are source material for the developer documentation site and describe the implementation in this repository after the 1.1 architecture cleanup.
+This is the canonical landing page for public Sunder package development. The focused guides describe the current universal-package implementation in this repository.
 
 ## Start Here
 
 1. [Getting Started](package-development/GETTING-STARTED.md): create, build, run, and validate a package.
-2. [Package Anatomy](package-development/PACKAGE-ANATOMY.md): choose App, Runtime, both, or contract-only roles.
+2. [Package Anatomy](package-development/PACKAGE-ANATOMY.md): choose exact App/Runtime targets or a shared-only protocol package.
 3. [Activation, DI, And Disposal](package-development/ACTIVATION-AND-DI.md): lifecycle, host services, availability, threading, and unload behavior.
 4. [Data And Logging](package-development/DATA-AND-LOGGING.md): storage, settings, secrets, logging, exact limits, and errors.
 5. [Avalonia Views](package-development/AVALONIA.md): views, settings UI, navigation, warmup, caching, and theme resources.
@@ -23,7 +23,7 @@ This is the canonical landing page for public Sunder package development. The fo
 
 | NuGet package | Use it for |
 | --- | --- |
-| `Sunder.Sdk` | Package metadata, Runtime/App modules, DI contracts, data, logging, extensions, callbacks/auth, and typed Runtime operations. |
+| `Sunder.Sdk` | Package metadata, Runtime/App modules, DI contracts, data, logging, RPC, callbacks/auth, and typed Runtime operations. |
 | `Sunder.Sdk.Avalonia` | Avalonia package views, settings views, and semantic Sunder theme resources. |
 | `Sunder.Sdk.Stacks` | Stack exporter, importer, payload, and post-import contracts. |
 | `Sunder.Package.Build` | Generated manifest, `sunder-dev`, and `.sunderpkg`; reference with `PrivateAssets="all"`. |
@@ -33,9 +33,10 @@ This is the canonical landing page for public Sunder package development. The fo
 
 ## Architecture In One Minute
 
-- Runtime package code runs in `Sunder.Runtime.Host` and owns persistent package data, headless work, settings schemas, auth handlers, and typed operations.
-- App package code runs separately in `Sunder.App` and owns Avalonia views and shell-facing behavior.
-- Each role receives a separate module instance, collectible load context, service provider, and activation lifetime.
+- One universal archive carries package-wide metadata, shared content, and exact App/Runtime RID targets.
+- Runtime target code runs in `Sunder.Runtime.Host` and owns persistent package data, headless work, settings schemas, auth handlers, typed operations, and RPC providers.
+- App target code runs separately in `Sunder.App` and owns Avalonia or web views and shell-facing behavior.
+- Each selected target receives a separate module/process activation, service provider where applicable, and lifetime.
 - App talks to its own Runtime role through authenticated package-scoped APIs; objects and local paths never cross the process boundary.
 - Runtime activates dependencies before dependents and publishes package graphs as atomic generations.
 - Generation retirement cancels leased work and waits for it to drain before providers or load contexts are disposed.
@@ -43,8 +44,8 @@ This is the canonical landing page for public Sunder package development. The fo
 ## Authoritative References
 
 - [Sunder Package Standard](SUNDER-PACKAGE-STANDARD.md) is the normative source for package identity, metadata, generated manifests, output layout, archive validation, and package/Stack format limits. Developer guides link to it instead of redefining the format.
-- [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) defines the 1.1 Host/SDK/package compatibility boundary and capabilities.
-- [Sunder 1.1 Breaking Baseline](SUNDER-1.1-BREAKING-BASELINE.md) records the clean break from the unused 1.0 developer line.
+- [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) defines the Host/SDK/target compatibility boundary and capabilities.
+- [Sunder V1 Baseline](SUNDER-V1-BASELINE.md) defines the coordinated unreleased baseline and no-shim policy.
 - [Sunder CLI](SUNDER-CLI.md) is the command reference.
 
 ## Drift Protection

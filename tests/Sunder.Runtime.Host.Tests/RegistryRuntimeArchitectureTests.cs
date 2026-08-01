@@ -395,7 +395,7 @@ public sealed class RegistryRuntimeArchitectureTests
             var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
             var request = new RuntimeRegistryPackageBatchRequest(
                 "http://localhost:5288/",
-                [new RuntimeRegistryPackageChangeRequest("agent", null, "latest")]);
+                [new RuntimeRegistryPackageChangeRequest("agent", null, [], "latest")]);
             var plan = await orchestrator.ResolveAsync(request, CancellationToken.None);
 
             Assert.False(plan.Success);
@@ -420,7 +420,7 @@ public sealed class RegistryRuntimeArchitectureTests
         {
             var handler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
             {
-                Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(true, [], [], [], [])),
+                Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(true, [], [], [], [], [])),
             });
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(
@@ -434,12 +434,89 @@ public sealed class RegistryRuntimeArchitectureTests
             var plan = await orchestrator.ResolveAsync(
                 new RuntimeRegistryPackageBatchRequest(
                     "https://registry.example/",
-                    [new RuntimeRegistryPackageChangeRequest("agent", null, "latest")]),
+                    [new RuntimeRegistryPackageChangeRequest("agent", null, [], "latest")]),
                 CancellationToken.None);
 
             Assert.False(plan.Success);
             Assert.Empty(plan.Items);
             Assert.Equal(["Registry rejected the request."], plan.Errors);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, "1.0.0", false, false)]
+    [InlineData("1.0.0", "2.0.0", false, false)]
+    [InlineData("1.0.0", "1.0.0", false, true)]
+    [InlineData("1.0.0", "2.0.0", true, true)]
+    public void RegistryPackageExecution_ReinstallsSameVersionProjectionAcquisition(
+        string? currentVersion,
+        string version,
+        bool requested,
+        bool expected)
+        => Assert.Equal(
+            expected,
+            RegistryPackageChangeOrchestrator.RequiresReinstall(currentVersion, version, requested));
+
+    [Fact]
+    public async Task RegistryPackageExecution_RejectsUnadvertisedArtifactOriginBeforeDownload()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var requestCount = 0;
+            var handler = new DelegateHandler(_ =>
+            {
+                requestCount++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(
+                        true,
+                        [new RegistryPackageInstallPlanItem(
+                            "agent",
+                            null,
+                            "1.0.0",
+                            false,
+                            null,
+                            [],
+                            [],
+                            [new RegistryPackageProjectionArtifact(
+                                "shared",
+                                null,
+                                new string('a', 64),
+                                1,
+                                "https://untrusted.example/agent.shared.sunderpkg",
+                                new string('b', 64),
+                                new string('c', 64),
+                                new string('d', 64),
+                                1)])],
+                        [],
+                        [],
+                        [],
+                        [])),
+                };
+            });
+            var services = new ServiceCollection();
+            services.AddRuntimeHostServices(
+                new RuntimePackagePaths(root),
+                new RuntimeBearerTokenValidator("test-runtime-token"));
+            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
+
+            await using var provider = services.BuildServiceProvider();
+            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
+            var result = await provider.GetRequiredService<RegistryPackageChangeOrchestrator>().ExecuteAsync(
+                new RuntimeRegistryPackageBatchRequest(
+                    "https://registry.example/",
+                    [new RuntimeRegistryPackageChangeRequest("agent", null, [], "latest")]),
+                CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal(RuntimeRegistryErrorCode.ArtifactVerificationFailed, result.ErrorCode);
+            Assert.Contains("explicitly advertised trusted artifact origin", result.Message, StringComparison.Ordinal);
+            Assert.Equal(1, requestCount);
         }
         finally
         {

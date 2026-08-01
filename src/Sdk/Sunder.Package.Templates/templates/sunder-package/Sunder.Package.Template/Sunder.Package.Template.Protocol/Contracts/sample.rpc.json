@@ -1,0 +1,53 @@
+{
+  "descriptorVersion": 1,
+  "contractId": "SUNDER_PACKAGE_ID_TEXT.sample",
+  "version": "1.0.0",
+  "services": [
+    {
+      "serviceId": "sample",
+      "methods": [
+        {
+          "methodId": "greet",
+          "kind": "unary",
+          "requestSchema": {
+            "$ref": "#/$defs/SampleRequest"
+          },
+          "responseSchema": {
+            "$ref": "#/$defs/SampleResponse"
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "String": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 4096
+    },
+    "SampleRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/String"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "SampleResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/String"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

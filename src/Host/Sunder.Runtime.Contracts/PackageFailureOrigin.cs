@@ -10,4 +10,6 @@ public enum PackageFailureOrigin
     RuntimeConfiguration = 5,
     RuntimeAuthentication = 6,
     RuntimeBackgroundService = 7,
+    RuntimeRpcProvider = 8,
+    RuntimeProcess = 9,
 }

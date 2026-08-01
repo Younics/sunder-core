@@ -27,7 +27,7 @@
 
 Add `Sunder.Sdk.Avalonia` or `Sunder.Sdk.Stacks` with the same coordinated minor range only when used. App projects also reference the Avalonia packages they use directly. `Sunder.Package.Build` has no consumer compile/runtime asset and must remain private build tooling.
 
-Declare identity and display metadata in the entry assembly:
+Declare identity and display metadata in the target assemblies. Aggregate leaves must compile the same metadata:
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -52,12 +52,20 @@ After a successful build, tooling removes and recreates the direct output child:
 
 ```text
 bin/Debug/net10.0/sunder-dev/
-  sunder-package.json
-  lib/
-  assets/
+  manifest/
+    sunder-package.json
+    content-index.json
+  payload/
+    shared/
+    app/
+      shared/
+      <rid>/
+    runtime/
+      shared/
+      <rid>/
 ```
 
-It contains a generated-output marker, inferred metadata/capabilities, authored assemblies, eligible copy-local runtime dependencies, native runtime assets, and files copied from source `Assets/**`. Host-provided SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
+It contains generated metadata, exact target requirements, authored assemblies, eligible copy-local runtime dependencies, native runtime assets, package-local RPC descriptors, and files copied from source `Assets/**`. Host-provided SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
 
 `SunderDevOutputPath` may override only the direct `TargetDir/sunder-dev` child. This restriction lets the build safely delete stale generated output without accepting an arbitrary directory.
 
@@ -85,7 +93,7 @@ The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative so
 
 ## Capability Inference
 
-Build tooling scans the entry assembly and authored project-reference outputs, including compiler-generated async, iterator, and lambda bodies. It reads capability annotations from the resolved `Sunder.Sdk*` assemblies, closes capability dependencies, and detects Sunder theme resources in source/compiled Avalonia XAML.
+Build tooling scans each managed target assembly and its authored project-reference outputs, including compiler-generated async, iterator, and lambda bodies. It reads capability annotations from the resolved `Sunder.Sdk*` assemblies, closes capability dependencies, and detects Sunder theme resources in source/compiled Avalonia XAML.
 
 Inference fails closed for unreadable metadata, unresolved IL, or unclassified dynamic/reflection access. For a genuine dynamic call site, declare the capability and acknowledge the exact diagnostic location:
 
@@ -141,7 +149,7 @@ Package versions are strict SemVer 2.0 values. Use:
 
 Keep operation/stream ids, view ids, settings keys, callback handler ids, Stack contributor/schema ids, and package ids stable. Version serialized DTOs and persisted data additively where possible. If a bad immutable version is published, publish a fixed version and deprecate or yank the bad version; never replace its bytes.
 
-Sunder SDK compatibility is capability-based, with `[1.1.0,1.2.0)` as the current coordinated package line. Do not widen the range across an untested SDK minor. See [Sunder SDK Compatibility](../SUNDER-SDK-COMPATIBILITY.md) before changing SDK references or public `*.Contracts` assemblies.
+Sunder SDK compatibility is capability-based, with `[1.1.0,1.2.0)` as the current coordinated package line. Do not widen the range across an untested SDK minor. See [Sunder SDK Compatibility](../SUNDER-SDK-COMPATIBILITY.md) before changing SDK references, RPC descriptors, or package-local generated bindings.
 
 ## Release Checklist
 

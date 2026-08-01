@@ -82,7 +82,8 @@ public sealed class PackageHostingPolicyTests
 
             var resolved = NativeLibraryFallbackResolver.Resolve(
                 Path.Combine(libraryFolder, "Package.dll"),
-                "sunder_native_test");
+                "sunder_native_test",
+                RuntimeInformation.RuntimeIdentifier);
 
             Assert.Equal(expectedPath, resolved);
         }
@@ -112,7 +113,8 @@ public sealed class PackageHostingPolicyTests
             var error = Assert.Throws<InvalidOperationException>(() =>
                 NativeLibraryFallbackResolver.Resolve(
                     Path.Combine(libraryFolder, "Package.dll"),
-                    "sunder_native_test"));
+                    "sunder_native_test",
+                    RuntimeInformation.RuntimeIdentifier));
 
             Assert.Contains("ambiguous", error.Message, StringComparison.OrdinalIgnoreCase);
         }
@@ -120,146 +122,6 @@ public sealed class PackageHostingPolicyTests
         {
             TryDeleteDirectory(root);
         }
-    }
-
-    [Fact]
-    public void SharedContracts_RemoveUnloadedDirectory_RebindsToRemainingIdenticalCandidate()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var firstDirectory = CopyRuntimeContracts(root, "first");
-            var secondDirectory = CopyRuntimeContracts(root, "second");
-            using var registry = new SharedContractAssemblyRegistryCore("Test", []);
-            registry.AddProbeDirectories([firstDirectory, secondDirectory]);
-            var assemblyName = typeof(PackageHostRoles).Assembly.GetName().Name!;
-            var selectedPath = registry.SharedAssemblyPaths[assemblyName];
-            var selectedDirectory = Path.GetDirectoryName(selectedPath)!;
-            var remainingDirectory = SharedContractAssemblyPolicy.PathsEqual(selectedDirectory, firstDirectory)
-                ? secondDirectory
-                : firstDirectory;
-
-            var removed = registry.TryRemoveProbeDirectories([selectedDirectory]);
-
-            Assert.True(removed);
-            Assert.True(SharedContractAssemblyPolicy.PathsEqual(
-                Path.Combine(remainingDirectory, Path.GetFileName(selectedPath)),
-                registry.SharedAssemblyPaths[assemblyName]));
-        }
-        finally
-        {
-            TryDeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void SharedContracts_RemoveLoadedOnlyCandidate_IsRefusedAndMappingIsPreserved()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var directory = CopyRuntimeContracts(root, "only");
-            using var registry = new SharedContractAssemblyRegistryCore("Test", []);
-            registry.AddProbeDirectories([directory]);
-            var requested = typeof(PackageHostRoles).Assembly.GetName();
-            var selectedPath = registry.SharedAssemblyPaths[requested.Name!];
-            Assert.NotNull(registry.ResolveSharedAssembly(requested));
-
-            var removed = registry.TryRemoveProbeDirectories([directory]);
-
-            Assert.False(removed);
-            Assert.Equal(selectedPath, registry.SharedAssemblyPaths[requested.Name!]);
-        }
-        finally
-        {
-            TryDeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void SharedContracts_FailedCandidateRefresh_RollsBackSelection()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var firstDirectory = CopyRuntimeContracts(root, "first");
-            var conflictingDirectory = CopyRuntimeContracts(root, "conflicting");
-            var conflictingPath = Path.Combine(
-                conflictingDirectory,
-                Path.GetFileName(typeof(PackageHostRoles).Assembly.Location));
-            using (var stream = new FileStream(conflictingPath, FileMode.Append, FileAccess.Write, FileShare.None))
-            {
-                stream.WriteByte(0x42);
-            }
-
-            using var registry = new SharedContractAssemblyRegistryCore("Test", []);
-            registry.AddProbeDirectories([firstDirectory]);
-            var assemblyName = typeof(PackageHostRoles).Assembly.GetName().Name!;
-            var selectedPath = registry.SharedAssemblyPaths[assemblyName];
-
-            Assert.Throws<InvalidOperationException>(() =>
-                registry.AddProbeDirectories([conflictingDirectory]));
-
-            Assert.Equal(selectedPath, registry.SharedAssemblyPaths[assemblyName]);
-        }
-        finally
-        {
-            TryDeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void SharedContracts_LoadedCandidateOverwrittenInPlace_RejectsRefresh()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var directory = CopyRuntimeContracts(root, "loaded");
-            using var registry = new SharedContractAssemblyRegistryCore("Test", []);
-            registry.AddProbeDirectories([directory]);
-            var requested = typeof(PackageHostRoles).Assembly.GetName();
-            Assert.NotNull(registry.ResolveSharedAssembly(requested));
-            var path = registry.SharedAssemblyPaths[requested.Name!];
-            using (var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.None))
-            {
-                stream.WriteByte(0x42);
-            }
-
-            Assert.Throws<InvalidOperationException>(() => registry.AddProbeDirectories([directory]));
-        }
-        finally
-        {
-            TryDeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void SharedContractPaths_UseOperatingSystemCaseSemantics()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var upper = Path.Combine(root, "Contracts.dll");
-            var lower = Path.Combine(root, "contracts.dll");
-
-            Assert.Equal(
-                OperatingSystem.IsWindows(),
-                SharedContractAssemblyPolicy.PathsEqual(upper, lower));
-        }
-        finally
-        {
-            TryDeleteDirectory(root);
-        }
-    }
-
-    private static string CopyRuntimeContracts(string root, string folderName)
-    {
-        var directory = Path.Combine(root, folderName);
-        Directory.CreateDirectory(directory);
-        File.Copy(
-            typeof(PackageHostRoles).Assembly.Location,
-            Path.Combine(directory, Path.GetFileName(typeof(PackageHostRoles).Assembly.Location)));
-        return directory;
     }
 
     private static string CreateTempDirectory()

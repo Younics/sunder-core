@@ -48,20 +48,32 @@ internal static class CliRenderers
         output.Line($"Name: {version.Name}");
         output.Line($"Version: {version.Version}");
         if (!string.IsNullOrWhiteSpace(version.Summary)) output.Line($"Summary: {version.Summary}");
-        output.Line($"Entry Assembly: {version.EntryAssembly}");
-        output.Line($"Target Framework: {version.Compatibility.TargetFramework ?? "-"}");
-        output.Line($"SDK API Version: {version.Compatibility.SdkApiVersion}");
-        output.Line($"SDK Package Version: {version.Compatibility.SdkPackageVersion}");
-        output.Line($"Required Capabilities: {string.Join(", ", version.Compatibility.RequiredCapabilities.Order(StringComparer.Ordinal))}");
-        output.Line($"Manifest Format Version: {version.Compatibility.ManifestFormatVersion}");
-        output.Line($"Archive Format Version: {version.Compatibility.ArchiveFormatVersion}");
+        output.Line($"Manifest Format Version: {version.ManifestFormatVersion}");
+        output.Line($"Archive Format Version: {version.ArchiveFormatVersion}");
         if (!string.IsNullOrWhiteSpace(version.DeprecatedMessage)) output.Line($"Deprecated: {version.DeprecatedMessage}");
+        output.Line("Targets:");
+        foreach (var target in version.Targets
+                     .OrderBy(target => target.Role == "runtime" ? 0 : 1)
+                     .ThenBy(target => target.Rid, StringComparer.Ordinal))
+        {
+            output.Line($"  {target.Role}/{target.Rid}  {target.Kind}  {target.EntryPoint}  {target.TargetFramework ?? "-"}");
+        }
+        if (version.Targets.Count == 0) output.Line("  none (shared content and contract bundles only)");
         output.Line("Dependencies:");
         foreach (var dependency in version.DependsOn.OrderBy(item => item.PackageId, StringComparer.OrdinalIgnoreCase))
             output.Line($"  {dependency.PackageId} {dependency.VersionRange}");
         if (version.DependsOn.Count == 0) output.Line("  none");
-        output.Line($"Artifact SHA-256: {version.Artifact.Sha256}");
-        output.Line($"Artifact Size: {(version.Artifact.Size is { } packageSize ? $"{packageSize} bytes" : "unknown")}");
+        output.Line("Contracts:");
+        foreach (var contract in version.ContractBundles.OrderBy(item => item.ContractId, StringComparer.Ordinal))
+            output.Line($"  bundle {contract.ContractId} {contract.Version}");
+        foreach (var contract in version.UsesContracts.OrderBy(item => item.ContractId, StringComparer.Ordinal))
+            output.Line($"  uses {contract.ContractId} {contract.VersionRange} ({(contract.Required ? "required" : "optional")})");
+        foreach (var provider in version.Providers.OrderBy(item => item.ProviderId, StringComparer.Ordinal))
+            output.Line($"  provides {provider.ProviderId} -> {provider.ContractId} {provider.ContractVersion} ({provider.Role})");
+        if (version.ContractBundles.Count == 0 && version.UsesContracts.Count == 0 && version.Providers.Count == 0) output.Line("  none");
+        output.Line($"Canonical SHA-256: {version.CanonicalArtifact.Sha256}");
+        output.Line($"Canonical Size: {version.CanonicalArtifact.Size} bytes");
+        output.Line($"Projection Artifacts: {version.Projections.Count}");
     }
 
     public static void StackSummaries(CliOutput output, IReadOnlyList<RegistryStackSummary> stacks)

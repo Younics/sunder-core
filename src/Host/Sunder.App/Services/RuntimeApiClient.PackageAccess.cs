@@ -33,4 +33,30 @@ public sealed partial class RuntimeApiClient
 
     public async Task<PackageAuthStatusResponse?> DisconnectPackageAuthAsync(string packageId, CancellationToken cancellationToken = default)
         => await _management.DisconnectPackageAuthAsync(packageId, cancellationToken).ConfigureAwait(false);
+
+    public Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken cancellationToken = default)
+        => _management.GetRpcCatalogAsync(cancellationToken);
+
+    public Task<RuntimeRpcCatalogEventPage> GetRpcCatalogEventsAsync(
+        long afterRevision,
+        long afterSequence,
+        CancellationToken cancellationToken = default)
+        => _management.GetRpcCatalogEventsAsync(afterRevision, afterSequence, cancellationToken);
+
+    public Task<RuntimeRpcPermissionSnapshot> GetRpcPermissionsAsync(CancellationToken cancellationToken = default)
+        => _management.GetRpcPermissionsAsync(cancellationToken);
+
+    public Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(
+        string callerPackageId,
+        string contractId,
+        string action,
+        CancellationToken cancellationToken = default)
+        => _management.GrantRpcPermissionAsync(callerPackageId, contractId, action, cancellationToken);
+
+    public Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(
+        string callerPackageId,
+        string contractId,
+        string action,
+        CancellationToken cancellationToken = default)
+        => _management.RevokeRpcPermissionAsync(callerPackageId, contractId, action, cancellationToken);
 }

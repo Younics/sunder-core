@@ -52,7 +52,7 @@ internal sealed class PackageMetadataDecoder(
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Name)) ?? string.Empty,
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Summary)),
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Icon)),
-                PackageHostRoleMetadata.ToManifestRoles(moduleShape.Roles),
+                PackageHostRoleMetadata.ToImplementedRoles(moduleShape.Roles),
                 dependencyExtractor.Extract(attributes),
                 capabilityInference.Infer(assemblyPath));
         }

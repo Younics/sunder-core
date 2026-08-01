@@ -28,17 +28,8 @@
       "failureOrigin": null,
       "lastError": null,
       "lastFailureAtUtc": null,
-      "failureCount": 0
-    }
-  ],
-  "packageUiSnapshots": [
-    {
-      "packageId": "test.package",
-      "sourceKind": 0,
-      "sessionGeneration": 7,
-      "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "snapshotId": "snapshot-1",
-      "snapshotUri": "packages/ui-snapshots/snapshot-1"
+      "failureCount": 0,
+      "rpcContractUses": []
     }
   ],
   "warnings": [

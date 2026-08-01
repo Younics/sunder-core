@@ -3,6 +3,12 @@
     {
       "packageId": "sunder.package.sample",
       "version": null,
+      "desiredTargets": [
+        {
+          "role": "runtime",
+          "rid": "win-x64"
+        }
+      ],
       "tag": "preview",
       "versionRange": "\u003E=2.3.0",
       "required": false
@@ -16,6 +22,16 @@
         {
           "packageId": "sunder.package.shared",
           "versionRange": "\u003E=1.0.0"
+        }
+      ],
+      "acquiredProjections": [
+        {
+          "kind": "shared",
+          "rid": null
+        },
+        {
+          "kind": "runtime",
+          "rid": "win-x64"
         }
       ]
     }

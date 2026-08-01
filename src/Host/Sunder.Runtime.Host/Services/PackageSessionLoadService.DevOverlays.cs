@@ -10,6 +10,7 @@ internal sealed partial class PackageSessionLoadService
     public async Task<PackageSessionLoadResult> LoadInstalledWithDevOverlaysAsync(
         IReadOnlyList<InstalledPackageRecord> packages,
         IReadOnlyList<string> devFolders,
+        IReadOnlyDictionary<string, string>? preparationSourcePaths = null,
         CancellationToken cancellationToken = default)
     {
         var started = Stopwatch.GetTimestamp();
@@ -19,7 +20,6 @@ internal sealed partial class PackageSessionLoadService
         RuntimePackageSessionDirectories.ScheduleStaleSessionCleanup();
         var sessionFolder = RuntimePackageSessionDirectories.CreateInstalledSessionFolder();
         Directory.CreateDirectory(sessionFolder);
-        var fileMaterializer = new PackageSessionFileMaterializer();
         var preparedCandidates = new List<PreparedRuntimePackage>();
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase);
         var devPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -28,7 +28,12 @@ internal sealed partial class PackageSessionLoadService
         foreach (var devFolder in devFolders)
         {
             ThrowIfCancellationRequested(cancellationToken, sessionFolder);
-            var preparedPackage = _preparer.PrepareDevPackage(index++, devFolder, sessionFolder, fileMaterializer, errors);
+            var preparedPackage = await _preparer.PrepareDevPackageAsync(
+                index++,
+                devFolder,
+                sessionFolder,
+                errors,
+                cancellationToken);
             if (preparedPackage is null)
             {
                 continue;
@@ -46,7 +51,30 @@ internal sealed partial class PackageSessionLoadService
                 continue;
             }
 
-            var activation = PackageSessionPreparer.ToActivationState(package);
+            var physicalSourceRoot = preparationSourcePaths?.GetValueOrDefault(package.PackageId)
+                ?? package.InstallPath;
+            var errorCount = errors.Count;
+            var activation = await _preparer.ReadInstalledActivationStateAsync(
+                package,
+                physicalSourceRoot,
+                errors,
+                cancellationToken);
+            if (activation is null)
+            {
+                sessionPackages[package.PackageId] = BuildSessionDescriptor(
+                    new RuntimePackageActivationState(
+                        package.PackageId,
+                        package.Name,
+                        package.Version,
+                        PackageHostRoles.None,
+                        package.Icon),
+                    isEnabled: false,
+                    readiness: PackageReadinessState.Failed,
+                    failureOrigin: PackageFailureOrigin.RuntimeActivation,
+                    lastError: errors.Skip(errorCount).LastOrDefault() ?? "Installed package failed strict validation.",
+                    failureCount: 1);
+                continue;
+            }
             if (!package.IsEnabled)
             {
                 sessionPackages[package.PackageId] = BuildSessionDescriptor(
@@ -56,8 +84,14 @@ internal sealed partial class PackageSessionLoadService
                 continue;
             }
 
-            var errorCount = errors.Count;
-            var preparedPackage = _preparer.PrepareInstalledPackage(index++, package, sessionFolder, fileMaterializer, errors);
+            errorCount = errors.Count;
+            var preparedPackage = await _preparer.PrepareInstalledPackageAsync(
+                index++,
+                package,
+                physicalSourceRoot,
+                sessionFolder,
+                errors,
+                cancellationToken);
             if (preparedPackage is not null)
             {
                 preparedCandidates.Add(preparedPackage);
@@ -82,7 +116,7 @@ internal sealed partial class PackageSessionLoadService
         if (preparedCandidates.Count == 0 && sessionPackages.Count == 0)
         {
             TryDeleteDirectory(sessionFolder);
-            return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings, errors);
+            return new PackageSessionLoadResult(ActivePackageSession.CreateEmpty(), warnings, errors);
         }
 
         ThrowIfCancellationRequested(cancellationToken, sessionFolder);

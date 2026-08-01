@@ -44,7 +44,6 @@ public sealed class RuntimeApiClientTests
             [],
             [],
             [],
-            [],
             []);
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {

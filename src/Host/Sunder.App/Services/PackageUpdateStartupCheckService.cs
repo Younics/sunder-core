@@ -51,7 +51,7 @@ public sealed class PackageUpdateStartupCheckService(
             var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
                 new RuntimeRegistryPackageBatchRequest(
                     _registryUrlProvider().AbsoluteUri,
-                    installedPackages.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, "latest")).ToArray()),
+                    installedPackages.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, [], "latest")).ToArray()),
                 context.CancellationToken).ConfigureAwait(false);
             if (!plan.Success)
             {

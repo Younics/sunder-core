@@ -15,7 +15,6 @@ public sealed record RuntimePackageSnapshot(
     RuntimeBootstrapState BootstrapState,
     IReadOnlyList<ActivePackageDescriptor> ActivePackages,
     IReadOnlyList<SessionPackageDescriptor> SessionPackages,
-    IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors)
 {
@@ -24,8 +23,6 @@ public sealed record RuntimePackageSnapshot(
 
     public IReadOnlyList<SessionPackageDescriptor> SessionPackages { get; }
         = Freeze(SessionPackages.Select(package => package with { Views = Freeze(package.Views) }));
-
-    public IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots { get; } = Freeze(PackageUiSnapshots);
 
     public IReadOnlyList<string> Warnings { get; } = Freeze(Warnings);
 

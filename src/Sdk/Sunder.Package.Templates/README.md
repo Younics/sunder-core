@@ -1,143 +1,100 @@
 # Sunder.Package.Templates
 
-`Sunder.Package.Templates` provides the `dotnet new sunder-package` template for creating Sunder package projects.
-
-The template scaffolds a headless package project with exact V1 SDK/build references, package metadata, separate Runtime/App role examples, and async package storage usage. Avalonia, Stacks, public contracts, runtime host dependencies, and typed host contracts are explicit opt-ins.
+`Sunder.Package.Templates` provides `dotnet new sunder-package`, an aggregate .NET scaffold for one universal Sunder package.
 
 ## Install
-
-Install the template package from NuGet.org:
 
 ```powershell
 dotnet new install Sunder.Package.Templates
 ```
 
-Install a specific version:
+## Create
 
-```powershell
-dotnet new install Sunder.Package.Templates::<version>
-```
-
-## Create A Package
-
-Create a headless Runtime package:
+Headless Runtime package:
 
 ```powershell
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
 ```
 
-Create package files directly in the specified output folder:
+Avalonia App plus Runtime targets:
 
 ```powershell
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --createInPlace --output .\MyPackage
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withAvalonia
 ```
 
-Create a package with an Avalonia App view:
+Stack provider example:
 
 ```powershell
-dotnet new sunder-package --name MyUiPackage --packageId my.company.ui --packageName "My UI Package" --withAvalonia
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withStacks
 ```
 
-Create a package that exposes public contracts:
-
-```powershell
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withContracts
-```
-
-Create an extension package that depends on a host package:
+Package dependency metadata:
 
 ```powershell
 dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0"
 ```
 
-Create an extension package that also references a host contracts NuGet package:
+Use `--createInPlace --output .\MyPackage` to write directly into an existing empty package root.
 
-```powershell
-dotnet new sunder-package --name MyTypedExtension --packageId my.company.typedextension --packageName "My Typed Extension" --withHostContracts --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0" --hostContractsPackageId Sunder.Package.Agent.Contracts --hostContractsVersionRange "[1.1.0,1.2.0)"
-```
-
-## Template Options
+## Options
 
 | Option | Meaning |
 | --- | --- |
-| `--packageId <id>` | Required runtime package id written into generated metadata. |
-| `--packageName <name>` | Required display name written into generated metadata and starter view. |
-| `--withAvalonia` | Adds Avalonia and `Sunder.Sdk.Avalonia`; includes a default App package view unless `--noDefaultView` is set. |
-| `--noDefaultView` | With `--withAvalonia`, omits the default view while retaining Avalonia references for settings or custom contributions. |
-| `--withStacks` | Adds `Sunder.Sdk.Stacks` and separate Runtime Stack exporter/importer registrations. |
-| `--withContracts` | Adds a `*.Contracts` project for public extension points. |
-| `--createInPlace` | Creates package files directly in the specified output folder instead of under a child project folder. |
-| `--withHostDependency` | Adds runtime dependency metadata for another package. |
-| `--hostPackageId <id>` | Required with `--withHostDependency` or `--withHostContracts`; runtime package id that this package depends on. |
-| `--hostPackageVersionRange <range>` | Runtime SemVer range for the host dependency; defaults to `>=1.1.0 <1.2.0`. |
-| `--withHostContracts` | Adds host dependency metadata, a NuGet reference to the host package's contracts package, and a compile-safe extension stub. |
-| `--hostContractsPackageId <id>` | Required with `--withHostContracts`; NuGet package id for host contracts. |
-| `--hostContractsVersionRange <range>` | Bounded NuGet range for host contracts; defaults to the generated Sunder SDK minor range. |
+| `--packageId <id>` | Required lowercase dot-separated package id. |
+| `--packageName <name>` | Required user-facing package name. |
+| `--withAvalonia` | Adds an Avalonia App leaf and default package view. |
+| `--noDefaultView` | Retains the Avalonia leaf but omits its starter shell view. |
+| `--withStacks` | Adds `Sunder.Sdk.Stacks` and a Stack RPC provider example. |
+| `--withHostDependency` | Adds `[SunderPackageDependency]` metadata. |
+| `--hostPackageId <id>` | Required package id for `--withHostDependency`. |
+| `--hostPackageVersionRange <range>` | Dependency range; defaults to `>=1.1.0 <1.2.0`. |
+| `--createInPlace` | Uses the output directory itself as the package root. |
 
-## Generated Project
+## Generated Shape
 
-A standard generated package includes:
+Every generated package contains:
 
 ```text
 MyPackage/
   MyPackage.csproj
   PackageMetadata.cs
-  PackageModule.cs
   Assets/
     icon.png
-  PackageRuntimeState.cs
+  MyPackage.Protocol/
+    MyPackage.Protocol.csproj
+    Contracts/
+      sample.rpc.json
+    Generated/
+      SampleRpc.g.cs
+    PackageProtocol.cs
+  MyPackage.Runtime/
+    MyPackage.Runtime.csproj
+    PackageModule.cs
+  MyPackage.App/                 # only with --withAvalonia
+    MyPackage.App.csproj
+    PackageModule.cs
 ```
 
-Without `--createInPlace`, the template keeps the project under a child `MyPackage/` folder in the selected output. With `--createInPlace`, the project files above are written directly into the selected output folder.
+`MyPackage.Protocol` is always generated, non-packable, and package-local. It embeds the language-neutral descriptor and checked-in generated DTO, client, and provider adapter source. Runtime and App reference it with `PrivateAssets="all"`; it is not a separately published ABI.
 
-Generated package projects reference:
+Both role leaves bundle the same descriptor through `SunderContractBundle`. The aggregate project validates package-wide metadata agreement, combines exact RID targets, and factors identical content into `payload/shared`.
 
-- `Sunder.Sdk`
-- `Sunder.Package.Build`
-- `Sunder.Sdk.Avalonia` and Avalonia only with `--withAvalonia`
-- `Sunder.Sdk.Stacks` only with `--withStacks`
+Coordinated Sunder references use the bounded minor range derived from the template package version. Avalonia and Stack dependencies appear only when selected. The dependency option adds only installed-package metadata; it does not add a NuGet reference to another package's implementation or protocol helpers.
 
-Generated projects use a bounded minor range derived from the template package version for all coordinated Sunder SDK and build packages. A 1.1 template emits `[1.1.0,1.2.0)`.
-
-With `--withContracts`, the sibling `*.Contracts` project is packable, carries a public `Sunder.Sdk` dependency because its API exposes `PackageExtensionPoint<T>`, and starts at contracts package version `1.0.0`. Version and publish that contracts package independently when other packages consume it.
-
-Package identity and dependencies are emitted from `PackageMetadata.cs`; `Sunder.Package.Build` generates `sunder-package.json` during build.
-
-Generated code can use `Sunder.Sdk.Packaging.PackageId`, `SemanticVersion`, and `PackageVersionRange` as the canonical validators. `context.ContentRootPath` is read-only package content. Writable local-path integrations use `context.Storage.RoleLocalWorkspace`; the host activation owns its lifecycle and package code does not dispose it.
-
-## Build And Run
-
-Build the generated package project:
+## Build And Package
 
 ```powershell
-dotnet build .\MyPackage\MyPackage.csproj
+dotnet restore .\MyPackage\MyPackage.csproj
+dotnet build .\MyPackage\MyPackage.csproj --no-restore
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage
 ```
 
-The build emits an unpacked development package under `bin/Debug/net10.0/sunder-dev/`.
+Build emits `bin/Debug/net10.0/sunder-dev` with the canonical manifest, content index, shared descriptor, and exact target layers. The pack target emits one validated `.sunderpkg` beside it.
 
-Load the dev package into an installed Sunder App:
+Package identity and dependencies come from `PackageMetadata.cs`; authors do not maintain a source package manifest. Use `context.Storage.RoleLocalWorkspace` for writable local paths and treat `context.ContentRootPath` as read-only.
 
-```powershell
-& "C:\Path\To\Sunder.App.exe" --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev"
-```
+## Documentation
 
-## Publish
-
-Publish the generated package project to create a `.sunderpkg` archive:
-
-```powershell
-dotnet publish .\MyPackage\MyPackage.csproj -c Release
-```
-
-Validate before publishing to a registry:
-
-```powershell
-sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
-```
-
-## More Documentation
-
-- Package author manual: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
-- Getting started: https://github.com/Younics/sunder-core/blob/main/docs/package-development/GETTING-STARTED.md
+- Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
-- Sunder SDK: https://www.nuget.org/packages/Sunder.Sdk
+- SDK compatibility: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-SDK-COMPATIBILITY.md

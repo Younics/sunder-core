@@ -52,20 +52,32 @@ internal sealed class StackExportArchiveBuilder(
                         owned.Fragment.FragmentId,
                         Guid.NewGuid().ToString("N"));
                     Directory.CreateDirectory(Path.GetDirectoryName(materializedPath)!);
-                    await using var source = await file.OpenReadAsync(cancellationToken);
-                    if (!source.CanRead)
+                    var contentLease = transfers.AcquireRpcContent(
+                        file.Content,
+                        owned.Provider.PackageId,
+                        RuntimeRpcHostCallerActivation.StackPrincipalId,
+                        generation);
+                    if (contentLease is null)
                     {
                         throw new InvalidDataException(
-                            $"Stack payload '{file.RelativePath}' did not provide a readable stream.");
+                            $"Stack payload '{file.RelativePath}' content is stale, exhausted, or unavailable to the Host.");
                     }
-                    await using (var destination = new FileStream(
-                        materializedPath,
-                        FileMode.CreateNew,
-                        FileAccess.Write,
-                        FileShare.None,
-                        64 * 1024,
-                        FileOptions.Asynchronous | FileOptions.SequentialScan))
+                    try
                     {
+                        await using var source = new FileStream(
+                            contentLease.FilePath,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.Read | FileShare.Delete,
+                            64 * 1024,
+                            FileOptions.Asynchronous | FileOptions.SequentialScan);
+                        await using var destination = new FileStream(
+                            materializedPath,
+                            FileMode.CreateNew,
+                            FileAccess.Write,
+                            FileShare.None,
+                            64 * 1024,
+                            FileOptions.Asynchronous | FileOptions.SequentialScan);
                         copiedPayloadBytes += await CopyBoundedAsync(
                             source,
                             destination,
@@ -74,7 +86,11 @@ internal sealed class StackExportArchiveBuilder(
                             cancellationToken);
                         await destination.FlushAsync(cancellationToken);
                     }
-                    if (file.Length is not null && new FileInfo(materializedPath).Length != file.Length)
+                    finally
+                    {
+                        transfers.ReleaseRpcContent(contentLease);
+                    }
+                    if (new FileInfo(materializedPath).Length != file.Content.Length)
                     {
                         throw new InvalidDataException(
                             $"Stack payload '{file.RelativePath}' length did not match its declared length.");
@@ -183,8 +199,9 @@ internal sealed class StackExportArchiveBuilder(
                     $"payload/files/{fragment.FragmentId}/{relativePath}",
                     archivePaths,
                     errors);
-                if (file.Length is > 0 and var length)
+                if (file.Content.Length > 0)
                 {
+                    var length = file.Content.Length;
                     if (length > _policy.MaxExportPayloadFileBytes)
                     {
                         errors.Add($"Stack payload '{file.RelativePath}' exceeds the {_policy.MaxExportPayloadFileBytes} byte per-file limit.");
@@ -360,4 +377,8 @@ internal sealed class StackExportArchiveBuilder(
     private static void TryDeleteDirectory(string path) { try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); } catch { } }
 }
 
-internal sealed record StackOwnedFragment(string OwnerPackageId, string ContributorId, StackFragmentExport Fragment);
+internal sealed record StackOwnedFragment(
+    string OwnerPackageId,
+    string ContributorId,
+    Sunder.Sdk.Rpc.SunderRpcProviderSnapshot Provider,
+    StackRpcFragmentExport Fragment);

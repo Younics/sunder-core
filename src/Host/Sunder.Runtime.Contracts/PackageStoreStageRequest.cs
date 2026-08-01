@@ -26,15 +26,11 @@ public sealed record PackageStoreStageRequest(
 public sealed record PackageStoreStageResult(
     string? StageId,
     PackageOperationResult OperationResult,
-    IReadOnlyList<ActivePackageDescriptor> ActivePackages,
-    IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots)
+    IReadOnlyList<ActivePackageDescriptor> ActivePackages)
 {
     public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; }
         = RuntimeContractCollections.Freeze(ActivePackages.Select(
             package => package with { Views = RuntimeContractCollections.Freeze(package.Views) }));
-
-    public IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots { get; }
-        = RuntimeContractCollections.Freeze(PackageUiSnapshots);
 
     public bool Success => OperationResult.Success && !string.IsNullOrWhiteSpace(StageId);
 
@@ -47,7 +43,6 @@ public sealed record PackageStoreStageResult(
     public static PackageStoreStageResult Failed(
         string message,
         IReadOnlyList<ActivePackageDescriptor>? activePackages = null,
-        IReadOnlyList<PackageUiSnapshotDescriptor>? packageUiSnapshots = null,
         IReadOnlyList<string>? warnings = null,
         IReadOnlyList<string>? errors = null,
         IReadOnlyList<string>? impactedPackageIds = null)
@@ -63,6 +58,5 @@ public sealed record PackageStoreStageResult(
             {
                 ImpactedPackageIds = impactedPackageIds ?? [],
             },
-            activePackages ?? [],
-            packageUiSnapshots ?? []);
+            activePackages ?? []);
 }

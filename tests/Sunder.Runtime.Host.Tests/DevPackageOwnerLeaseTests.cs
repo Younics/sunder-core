@@ -301,43 +301,13 @@ public sealed class DevPackageOwnerLeaseTests
         string version)
     {
         var packageFolder = Path.Combine(rootPath, folderName, packageId, version);
-        var libraryFolder = Path.Combine(packageFolder, "lib");
-        Directory.CreateDirectory(libraryFolder);
         var assemblyPath = typeof(PackageSessionOverlayTestPackageModule).Assembly.Location;
-        var entryAssemblyFileName = Path.GetFileName(assemblyPath);
-        File.WriteAllText(Path.Combine(packageFolder, "sunder-package.json"), $$"""
-            {
-              "manifestVersion": 1,
-              "id": "{{packageId}}",
-              "name": "{{packageId}}",
-              "version": "{{version}}",
-              "hostRoles": ["app", "runtime"],
-              "sdkApiVersion": 1,
-              "sdkPackageVersion": "1.1.0",
-              "requiredSdkCapabilities": ["sdk-baseline-1-1.v1", "core.v1"],
-              "entryAssembly": "{{entryAssemblyFileName}}"
-            }
-            """);
-        foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
-        {
-            File.Copy(file, Path.Combine(libraryFolder, Path.GetFileName(file)), overwrite: true);
-        }
-        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
-        if (File.Exists(depsPath))
-        {
-            File.Copy(depsPath, Path.Combine(libraryFolder, Path.GetFileName(depsPath)), overwrite: true);
-        }
-        return new InstalledPackageRecord(
-            packageId,
-            packageId,
-            Summary: null,
-            version,
-            entryAssemblyFileName,
-            Icon: null,
-            DependsOn: [],
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
             packageFolder,
-            IsEnabled: true,
-            DateTimeOffset.UtcNow);
+            packageId,
+            version,
+            assemblyPath);
+        return CanonicalPackageTestBuilder.CreateInstalledRecord(packageFolder, packageId, version);
     }
 
     private static async Task AddInstalledPackageAsync(InstalledPackageStore store, InstalledPackageRecord package)

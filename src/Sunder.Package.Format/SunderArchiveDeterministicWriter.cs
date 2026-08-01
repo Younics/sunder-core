@@ -157,6 +157,7 @@ internal static class SunderArchiveDeterministicWriter
     private static bool IsMetadataPath(ArchiveRelativePath path)
         => path.ToString() is SunderPackageFormat.ManifestPath
             or SunderPackageFormat.ContentIndexPath
+            or SunderPackageProjectionFormat.DescriptorPath
             or SunderStackFormat.ManifestPath
             or SunderStackFormat.ContentIndexPath;
 

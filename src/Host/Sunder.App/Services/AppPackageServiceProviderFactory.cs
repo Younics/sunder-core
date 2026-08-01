@@ -5,11 +5,11 @@ using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Rpc;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageServiceProviderFactory(
-    AppPackageExtensionCatalog extensionCatalog,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
     NotificationCenterService? notificationCenter,
@@ -24,8 +24,7 @@ internal sealed class AppPackageServiceProviderFactory(
         typeof(IPackageCallbackClient),
         typeof(ILoggerFactory),
         typeof(ILogger<>),
-        typeof(IPackageExtensionCatalog),
-        typeof(IPackageExtensionInvocationCatalog),
+        typeof(ISunderRpcClient),
         typeof(IPackageShellViewService),
         typeof(IPackageSettingsNavigationService),
         typeof(IBackgroundProcessQueue),
@@ -37,7 +36,8 @@ internal sealed class AppPackageServiceProviderFactory(
     public ServiceProvider Create(
         ActivePackageDescriptor package,
         AppPackageContext packageContext,
-        ISunderAppPackageModule? module)
+        ISunderAppPackageModule? module,
+        ISunderRpcClient rpcClient)
     {
         var packageServices = new ConstrainedPackageServiceCollection(ReservedServiceTypes);
         module?.ConfigureAppServices(packageServices, packageContext);
@@ -49,9 +49,7 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<IPackageCallbackClient>(packageContext.Callbacks);
         services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
-        services.AddSingleton<IPackageExtensionCatalog>(extensionCatalog);
-        services.AddSingleton<IPackageExtensionInvocationCatalog>(
-            extensionCatalog.CreateInvocationCatalog(package.PackageId));
+        services.AddSingleton(rpcClient);
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
         services.AddSingleton<IPackageSettingsNavigationService>(settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
         services.AddSingleton<IBackgroundProcessQueue>(_ =>

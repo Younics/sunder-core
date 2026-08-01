@@ -1,6 +1,6 @@
 namespace Sunder.Package.Build.Tasks;
 
-internal sealed class PackageAssetDiscovery(string projectDirectory)
+internal sealed class PackageAssetDiscovery(string projectDirectory, string? assetsDirectory = null)
 {
     public bool Exists(string assetPath)
     {
@@ -18,8 +18,9 @@ internal sealed class PackageAssetDiscovery(string projectDirectory)
         }
 
         var sourceAssetPath = Path.Combine(
-            projectDirectory,
-            "Assets",
+            string.IsNullOrWhiteSpace(assetsDirectory)
+                ? Path.Combine(projectDirectory, "Assets")
+                : assetsDirectory,
             forwardPath[assetsPrefix.Length..].Replace('/', Path.DirectorySeparatorChar));
         return File.Exists(sourceAssetPath);
     }

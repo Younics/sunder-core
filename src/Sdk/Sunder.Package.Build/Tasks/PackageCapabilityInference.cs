@@ -740,23 +740,6 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "BackgroundProcessIndicator"):
                 capabilities.Add(SunderSdkCapabilities.BackgroundProcessesV1);
                 break;
-            case ("Sunder.Sdk.Abstractions", "IPackageExtensionCatalog"):
-            case ("Sunder.Sdk.Abstractions", "PackageExtensionContribution`1"):
-            case ("Sunder.Sdk.Abstractions", "PackageExtensionPoint`1"):
-                capabilities.Add(SunderSdkCapabilities.ExtensionsV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageExtensionCatalogMonitor"):
-            case ("Sunder.Sdk.Abstractions", "PackageExtensionCatalogChangedEventArgs"):
-            case ("Sunder.Sdk.Abstractions", "PackageExtensionCatalogChangeReason"):
-            case ("Sunder.Sdk.Abstractions", "PackageExtensionChangeKind"):
-            case ("Sunder.Sdk.Abstractions", "PackageExtensionChange"):
-                capabilities.Add(SunderSdkCapabilities.ExtensionChangesV1);
-                break;
-            case ("Sunder.Sdk.Abstractions", "IPackageExtensionInvocationCatalog"):
-            case ("Sunder.Sdk.Abstractions", "IPackageExtensionReference`1"):
-            case ("Sunder.Sdk.Abstractions", "IPackageExtensionLease`1"):
-                capabilities.Add(SunderSdkCapabilities.ExtensionInvocationsV1);
-                break;
             case ("Sunder.Sdk.Settings", _):
                 capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
                 break;
@@ -805,8 +788,7 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Stacks", "IPackageStackExporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
-            case ("Sunder.Sdk.Stacks", "SunderStackExtensionPoints"):
-                capabilities.UnionWith([SunderSdkCapabilities.StacksV1, SunderSdkCapabilities.StackContributionsV1]);
+                capabilities.UnionWith([SunderSdkCapabilities.StacksV1, SunderSdkCapabilities.StacksRpcV1]);
                 break;
             case ("Sunder.Sdk.Stacks", _):
                 capabilities.Add(SunderSdkCapabilities.StacksV1);
@@ -876,9 +858,6 @@ internal sealed class PackageCapabilityInference(
                     break;
                 case "RegisterBackgroundService":
                     capabilities.Add(SunderSdkCapabilities.BackgroundServicesV1);
-                    break;
-                case "RegisterExtension":
-                    capabilities.Add(SunderSdkCapabilities.ExtensionsV1);
                     break;
                 case "RegisterSettingsSchema":
                     capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);

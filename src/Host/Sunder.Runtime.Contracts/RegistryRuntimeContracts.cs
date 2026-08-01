@@ -70,11 +70,13 @@ public sealed record RuntimeRegistryPackageRequest(
     bool AllowDowngrade = false,
     bool Reinstall = false,
     string? VersionRange = null,
-    bool Required = true);
+    bool Required = true,
+    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null);
 
 public sealed record RuntimeRegistryPackageChangeRequest(
     string PackageId,
     string? Version,
+    IReadOnlyList<RuntimeRegistryPackageTargetRequest> DesiredTargets,
     string? Tag = null,
     string? VersionRange = null,
     bool Required = true);
@@ -93,28 +95,55 @@ public sealed record RuntimeRegistryPackageBatchRequest(
 public sealed record RuntimeRegistryUpdateRequest(
     string RegistryOrigin,
     string? PackageId = null,
-    bool IncludePrerelease = false);
+    bool IncludePrerelease = false,
+    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null);
 
 public sealed record RuntimeRegistryPackageDependency(
     string PackageId,
     string VersionRange);
 
-public sealed record RuntimeRegistryPackageArtifact(
-    string Sha256,
-    long? Size,
-    string DownloadUrl);
+public sealed record RuntimeRegistryPackageTargetRequest(
+    string Role,
+    string Rid);
 
-public sealed record RuntimeRegistryPackageCompatibility(
-    int SdkApiVersion,
-    string SdkPackageVersion,
-    IReadOnlyList<string> RequiredCapabilities,
+public sealed record RuntimeRegistryPackageProjectionKey(
+    string Kind,
+    string? Rid);
+
+public sealed record RuntimeRegistryPackageProjectionArtifact(
+    string Kind,
+    string? Rid,
+    string Sha256,
+    long Size,
+    string DownloadUrl,
+    string SourceArchiveSha256,
+    string ManifestSha256,
+    string ProjectionContentIdentity,
+    int ProjectionFormatVersion);
+
+public sealed record RuntimeRegistryPackageTarget(
+    string Role,
+    string Rid,
+    string Kind,
+    string EntryPoint,
     string? TargetFramework,
-    int ManifestFormatVersion,
-    int ArchiveFormatVersion)
+    string? SdkVersion,
+    IReadOnlyList<string> RequiredHostCapabilities,
+    IReadOnlyList<RuntimeRegistryPackageWebView>? Views = null)
 {
-    public IReadOnlyList<string> RequiredCapabilities { get; }
-        = Array.AsReadOnly(RequiredCapabilities.ToArray());
+    public IReadOnlyList<string> RequiredHostCapabilities { get; }
+        = Array.AsReadOnly(RequiredHostCapabilities.ToArray());
+    public IReadOnlyList<RuntimeRegistryPackageWebView> Views { get; }
+        = Array.AsReadOnly((Views ?? []).ToArray());
 }
+
+public sealed record RuntimeRegistryPackageWebView(
+    string ViewId,
+    string DisplayName,
+    string Route,
+    string? Icon,
+    string DefaultPlacement,
+    bool ShowInHotbar);
 
 public sealed record RuntimeRegistryPackageInstallPlanItem(
     string PackageId,
@@ -123,11 +152,15 @@ public sealed record RuntimeRegistryPackageInstallPlanItem(
     bool IsUpdate,
     string? DeprecatedMessage,
     IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn,
-    RuntimeRegistryPackageArtifact Artifact,
-    RuntimeRegistryPackageCompatibility? Compatibility = null)
+    IReadOnlyList<RuntimeRegistryPackageTarget> Targets,
+    IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> Artifacts)
 {
     public IReadOnlyList<RuntimeRegistryPackageDependency> DependsOn { get; }
         = Array.AsReadOnly(DependsOn.ToArray());
+    public IReadOnlyList<RuntimeRegistryPackageTarget> Targets { get; }
+        = Array.AsReadOnly(Targets.ToArray());
+    public IReadOnlyList<RuntimeRegistryPackageProjectionArtifact> Artifacts { get; }
+        = Array.AsReadOnly(Artifacts.ToArray());
 }
 
 public sealed record RuntimeRegistryPackageInstallPlanConflict(
@@ -143,7 +176,8 @@ public sealed record RuntimeRegistryResolveInstallPlanResponse(
     IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts)
+    IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts,
+    IReadOnlyList<string> TrustedArtifactOrigins)
 {
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items { get; }
         = Array.AsReadOnly(Items.ToArray());
@@ -151,6 +185,8 @@ public sealed record RuntimeRegistryResolveInstallPlanResponse(
     public IReadOnlyList<string> Errors { get; } = Array.AsReadOnly(Errors.ToArray());
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts { get; }
         = Array.AsReadOnly(Conflicts.ToArray());
+    public IReadOnlyList<string> TrustedArtifactOrigins { get; }
+        = Array.AsReadOnly(TrustedArtifactOrigins.ToArray());
 }
 
 public sealed record RuntimeRegistryPackageChangeResult(

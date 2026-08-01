@@ -50,7 +50,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
         IReadOnlyList<AppPackageLoadContext> loadContexts,
         string? sessionFolder,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry = null,
-        AppPackageExtensionCatalog? extensionCatalog = null,
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
         NotificationCenterService? notificationCenter = null,
@@ -99,7 +98,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
             _snapshotCache,
             EnsureSessionFolder,
             DisablePackageForGeneration,
-            DisableExtensionOwnerForGeneration,
             shellViewService,
             settingsNavigationService,
             notificationCenter,
@@ -111,8 +109,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             disabledPackageIds,
             ownedDisposables,
             loadContexts,
-            sharedAssemblyRegistry,
-            extensionCatalog);
+            sharedAssemblyRegistry);
         _iconCoordinator = new PackageIconGenerationCoordinator(
             () => CurrentGeneration,
             loadPackageIconImageAsync);
@@ -271,11 +268,13 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     internal async Task<IReadOnlyList<ActivePackageDescriptor>> ApplyPackageGenerationAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         Func<AppPackagePresentationCandidate, IReadOnlyList<ActivePackageDescriptor>, CancellationToken, Task<Action?>>? preparePresentation,
         CancellationToken cancellationToken)
         => await _lifecycleCoordinator.ApplyPackageSnapshotAsync(
             snapshot,
+            packageSources,
             retryDisabledPackageIds,
             preparePresentation,
             cancellationToken).ConfigureAwait(false);
@@ -701,42 +700,6 @@ public sealed class PackageViewHostService : IAsyncDisposable
                     cancellationToken).ConfigureAwait(false);
             },
             $"disabling package '{packageId}' for generation '{generationId:N}'");
-    }
-
-    private void DisableExtensionOwnerForGeneration(
-        Guid generationId,
-        PackageExtensionOwnerToken ownerToken,
-        string message,
-        PackageFailureOrigin origin,
-        Exception? exception)
-    {
-        var faultedGeneration = CurrentGeneration;
-        if (faultedGeneration.Id != generationId
-            || !faultedGeneration.Composition.ExtensionCatalog.IsActiveOwner(ownerToken))
-        {
-            return;
-        }
-
-        var packageId = ownerToken.PackageId;
-        _faultTasks.Run(
-            async cancellationToken =>
-            {
-                using var lifecycle = await _lifecycleGate.EnterAsync(cancellationToken).ConfigureAwait(false);
-                var currentGeneration = CurrentGeneration;
-                if (currentGeneration.Id != generationId
-                    || !currentGeneration.Composition.ExtensionCatalog.IsActiveOwner(ownerToken))
-                {
-                    return;
-                }
-
-                await currentGeneration.Composition.DisablePackageAsync(
-                    packageId,
-                    message,
-                    origin,
-                    exception,
-                    cancellationToken).ConfigureAwait(false);
-            },
-            $"disabling extension owner '{packageId}' for generation '{generationId:N}'");
     }
 
     internal async Task DisablePackageAsync(

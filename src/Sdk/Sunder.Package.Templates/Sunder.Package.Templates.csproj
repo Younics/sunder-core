@@ -100,7 +100,6 @@
       <_SunderTemplateConfigurationSource>$(MSBuildProjectDirectory)\templates\sunder-package\.template.config\template.json</_SunderTemplateConfigurationSource>
       <_SunderTemplateConfigurationDirectory>$(IntermediateOutputPath)sunder-template-content\sunder-package\.template.config</_SunderTemplateConfigurationDirectory>
       <_SunderTemplateConfigurationVersioned>$(_SunderTemplateConfigurationDirectory)\template.versioned.json</_SunderTemplateConfigurationVersioned>
-      <_SunderTemplateConfigurationRanged>$(_SunderTemplateConfigurationDirectory)\template.ranged.json</_SunderTemplateConfigurationRanged>
       <_SunderTemplateConfigurationOutput>$(_SunderTemplateConfigurationDirectory)\template.json</_SunderTemplateConfigurationOutput>
     </PropertyGroup>
 
@@ -114,13 +113,9 @@
                                 Token="__SUNDER_COORDINATED_PACKAGE_VERSION__"
                                 Value="$(PackageVersion)" />
     <ReplaceSunderTemplateToken SourceFile="$(_SunderTemplateConfigurationVersioned)"
-                                DestinationFile="$(_SunderTemplateConfigurationRanged)"
-                                Token="__SUNDER_COORDINATED_PACKAGE_VERSION_RANGE__"
-                                Value="$(_SunderTemplatePackageVersionRange)" />
-    <ReplaceSunderTemplateToken SourceFile="$(_SunderTemplateConfigurationRanged)"
-                                DestinationFile="$(_SunderTemplateConfigurationOutput)"
-                                Token="__SUNDER_DEFAULT_HOST_CONTRACTS_VERSION_RANGE__"
-                                Value="$(_SunderTemplatePackageVersionRange)" />
+                                 DestinationFile="$(_SunderTemplateConfigurationOutput)"
+                                 Token="__SUNDER_COORDINATED_PACKAGE_VERSION_RANGE__"
+                                 Value="$(_SunderTemplatePackageVersionRange)" />
     <ItemGroup>
       <Content Include="$(_SunderTemplateConfigurationOutput)"
                Pack="true"

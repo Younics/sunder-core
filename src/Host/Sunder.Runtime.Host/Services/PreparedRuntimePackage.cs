@@ -1,4 +1,6 @@
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -11,5 +13,14 @@ internal sealed record PreparedRuntimePackage(
     string Version,
     PackageHostRoles HostRoles,
     RuntimePackageActivationState Activation,
-    string EntryAssemblyPath,
-    IReadOnlyList<PackageDependencyDescriptor> Dependencies);
+    string? EntryAssemblyPath,
+    SunderPackageTargetKey? SelectedTargetKey,
+    SunderPackageTargetManifest? SelectedTarget,
+    IReadOnlyList<PackageDependencyDescriptor> Dependencies,
+    IReadOnlyDictionary<string, SunderRpcContractDescriptor>? RpcContracts = null,
+    string? ManifestSha256 = null)
+{
+    public DevProcessLaunchMetadata? DevProcessLaunch { get; init; }
+
+    public string SessionId { get; init; } = Guid.NewGuid().ToString("N");
+}

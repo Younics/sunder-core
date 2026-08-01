@@ -340,6 +340,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     internal async Task ApplyPackageLifecycleSnapshotAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds,
         CancellationToken cancellationToken)
     {
@@ -348,6 +349,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         {
             await _mainWindowViewModel.ApplyPackageLifecycleSnapshotAsync(
                 snapshot,
+                packageSources,
                 retryDisabledPackageIds,
                 cancellationToken,
                 detachAuxiliaryPackageViews: DetachSettingsWindowPackageView).ConfigureAwait(false);

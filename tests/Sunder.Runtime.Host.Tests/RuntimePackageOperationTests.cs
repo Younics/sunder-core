@@ -1,12 +1,15 @@
 using System.Text.Json;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Callbacks;
+using Sunder.Sdk.Logging;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Runtime;
 using Xunit;
 
@@ -14,6 +17,8 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class RuntimePackageOperationTests
 {
+    private const string RpcFailureCode = "rpc.provider-retired";
+    private const string RpcFailureMessage = "private provider detail";
     private static readonly PackageRuntimeOperation<EchoRequest, EchoResponse> EchoOperation = new("echo.run");
     private static readonly PackageRuntimeStream<CountRequest, CountEvent> CountStream = new("count.events");
 
@@ -44,7 +49,6 @@ public sealed class RuntimePackageOperationTests
         var services = new ServiceCollection().BuildServiceProvider();
         var registry = new RuntimePackageContributionRegistry(
             services,
-            new RuntimePackageExtensionCatalog(),
             packageId);
         registry.RegisterRuntimeOperation(EchoOperation, new EchoHandler());
         var state = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
@@ -63,11 +67,46 @@ public sealed class RuntimePackageOperationTests
     }
 
     [Fact]
+    public async Task OperationService_RpcFailurePersistsOnlySafeTypedDiagnostics()
+    {
+        const string packageId = "test.package";
+        var eventLogger = new RecordingEventLogger();
+        var serviceProvider = new ServiceCollection()
+            .AddSingleton<IPackageContext>(new TestPackageContext(packageId, eventLogger))
+            .BuildServiceProvider();
+        var registry = new RuntimePackageContributionRegistry(serviceProvider, packageId);
+        registry.RegisterRuntimeOperation(EchoOperation, new RpcFailureHandler());
+        var state = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
+        await state.PublishSessionAsync(CreateSession(
+            packageId,
+            registry.RuntimeOperations,
+            serviceProvider: serviceProvider));
+        var service = new RuntimePackageOperationService(state);
+
+        await Assert.ThrowsAsync<AggregateException>(async () =>
+            await service.InvokeAsync(
+                packageId,
+                EchoOperation.OperationId,
+                JsonSerializer.SerializeToUtf8Bytes(new EchoRequest("hello")),
+                CancellationToken.None));
+
+        var entry = Assert.Single(eventLogger.Entries);
+        Assert.Equal("runtime.operation.rpc-failed", entry.EventName);
+        Assert.Equal(EchoOperation.OperationId, entry.Attributes["runtime.operation_id"]);
+        Assert.Equal(nameof(SunderRpcErrorKind.Unavailable), entry.Attributes["rpc.error_kind"]);
+        Assert.Equal(RpcFailureCode, entry.Attributes["rpc.error_code"]);
+        Assert.Null(entry.Exception);
+        Assert.DoesNotContain(RpcFailureMessage, entry.Message, StringComparison.Ordinal);
+        Assert.All(entry.Attributes.Values, value =>
+            Assert.DoesNotContain(RpcFailureMessage, value?.ToString() ?? string.Empty, StringComparison.Ordinal));
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
     public void ContributionRegistry_RejectsDuplicateOperationId()
     {
         var registry = new RuntimePackageContributionRegistry(
             new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageExtensionCatalog(),
             "test.package");
         registry.RegisterRuntimeOperation(EchoOperation, new EchoHandler());
 
@@ -81,7 +120,6 @@ public sealed class RuntimePackageOperationTests
         const string packageId = "test.package";
         var registry = new RuntimePackageContributionRegistry(
             new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageExtensionCatalog(),
             packageId);
         registry.RegisterRuntimeStream(CountStream, new CountHandler());
         var state = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
@@ -103,13 +141,81 @@ public sealed class RuntimePackageOperationTests
     }
 
     [Fact]
+    public async Task StreamService_RpcFailurePersistsOnlySafeTypedDiagnostics()
+    {
+        const string packageId = "test.package";
+        var eventLogger = new RecordingEventLogger();
+        var serviceProvider = new ServiceCollection()
+            .AddSingleton<IPackageContext>(new TestPackageContext(packageId, eventLogger))
+            .BuildServiceProvider();
+        var registry = new RuntimePackageContributionRegistry(serviceProvider, packageId);
+        registry.RegisterRuntimeStream(CountStream, new RpcFailureStreamHandler());
+        var state = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
+        await state.PublishSessionAsync(CreateSession(
+            packageId,
+            streams: registry.RuntimeStreams,
+            serviceProvider: serviceProvider));
+        var service = new RuntimePackageOperationService(state);
+        await using var enumerator = service.SubscribeAsync(
+            packageId,
+            CountStream.StreamId,
+            JsonSerializer.SerializeToUtf8Bytes(new CountRequest(1)),
+            CancellationToken.None).GetAsyncEnumerator();
+
+        await Assert.ThrowsAsync<SunderRpcException>(() => enumerator.MoveNextAsync().AsTask());
+
+        var entry = Assert.Single(eventLogger.Entries);
+        Assert.Equal("runtime.stream.rpc-failed", entry.EventName);
+        Assert.Equal(CountStream.StreamId, entry.Attributes["runtime.operation_id"]);
+        Assert.Equal(nameof(SunderRpcErrorKind.Unavailable), entry.Attributes["rpc.error_kind"]);
+        Assert.Equal(RpcFailureCode, entry.Attributes["rpc.error_code"]);
+        Assert.Null(entry.Exception);
+        Assert.DoesNotContain(RpcFailureMessage, entry.Message, StringComparison.Ordinal);
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
+    public async Task StreamService_DisposeRpcFailurePersistsOnlySafeTypedDiagnostics()
+    {
+        const string packageId = "test.package";
+        var eventLogger = new RecordingEventLogger();
+        var serviceProvider = new ServiceCollection()
+            .AddSingleton<IPackageContext>(new TestPackageContext(packageId, eventLogger))
+            .BuildServiceProvider();
+        var registry = new RuntimePackageContributionRegistry(serviceProvider, packageId);
+        registry.RegisterRuntimeStream(CountStream, new RpcFailureOnDisposeStreamHandler());
+        var state = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
+        await state.PublishSessionAsync(CreateSession(
+            packageId,
+            streams: registry.RuntimeStreams,
+            serviceProvider: serviceProvider));
+        var service = new RuntimePackageOperationService(state);
+        var enumerator = service.SubscribeAsync(
+            packageId,
+            CountStream.StreamId,
+            JsonSerializer.SerializeToUtf8Bytes(new CountRequest(1)),
+            CancellationToken.None).GetAsyncEnumerator();
+
+        Assert.True(await enumerator.MoveNextAsync());
+        await Assert.ThrowsAsync<SunderRpcException>(() => enumerator.DisposeAsync().AsTask());
+
+        var entry = Assert.Single(eventLogger.Entries);
+        Assert.Equal("runtime.stream.rpc-failed", entry.EventName);
+        Assert.Equal(CountStream.StreamId, entry.Attributes["runtime.operation_id"]);
+        Assert.Equal(nameof(SunderRpcErrorKind.Unavailable), entry.Attributes["rpc.error_kind"]);
+        Assert.Equal(RpcFailureCode, entry.Attributes["rpc.error_code"]);
+        Assert.Null(entry.Exception);
+        Assert.DoesNotContain(RpcFailureMessage, entry.Message, StringComparison.Ordinal);
+        await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
     public async Task InfiniteStream_RetirementCancellationAllowsReloadToComplete()
     {
         const string packageId = "test.package";
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var registry = new RuntimePackageContributionRegistry(
             new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageExtensionCatalog(),
             packageId);
         registry.RegisterRuntimeStream(CountStream, new CancellableInfiniteHandler(started));
         var state = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
@@ -140,7 +246,6 @@ public sealed class RuntimePackageOperationTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var registry = new RuntimePackageContributionRegistry(
             new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageExtensionCatalog(),
             packageId);
         registry.RegisterRuntimeStream(CountStream, new IgnoringCancellationHandler(started, release));
         var state = new PackageSessionState(
@@ -186,7 +291,6 @@ public sealed class RuntimePackageOperationTests
     {
         var registry = new RuntimePackageContributionRegistry(
             new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageExtensionCatalog(),
             "test.package");
         registry.RegisterRuntimeStream(CountStream, new CountHandler());
 
@@ -197,7 +301,8 @@ public sealed class RuntimePackageOperationTests
     private static ActivePackageSession CreateSession(
         string packageId,
         IReadOnlyDictionary<string, RuntimePackageOperationRegistration>? operations = null,
-        IReadOnlyDictionary<string, RuntimePackageStreamRegistration>? streams = null)
+        IReadOnlyDictionary<string, RuntimePackageStreamRegistration>? streams = null,
+        IServiceProvider? serviceProvider = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-runtime-operation-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -215,7 +320,7 @@ public sealed class RuntimePackageOperationTests
             AuthHandler: null,
             CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
             BackgroundServices: [],
-            new ServiceCollection().BuildServiceProvider(),
+            serviceProvider ?? new ServiceCollection().BuildServiceProvider(),
             new RuntimePackageLoadContext(
                 packageId,
                 assemblyPath,
@@ -267,6 +372,14 @@ public sealed class RuntimePackageOperationTests
         }
     }
 
+    private sealed class RpcFailureHandler : IPackageRuntimeOperationHandler<EchoRequest, EchoResponse>
+    {
+        public ValueTask<EchoResponse> HandleAsync(EchoRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromException<EchoResponse>(new AggregateException(
+                new InvalidOperationException(RpcFailureMessage),
+                CreateRpcFailure()));
+    }
+
     private sealed class CountHandler : IPackageRuntimeStreamHandler<CountRequest, CountEvent>
     {
         public async IAsyncEnumerable<CountEvent> SubscribeAsync(
@@ -281,6 +394,90 @@ public sealed class RuntimePackageOperationTests
             }
         }
     }
+
+    private sealed class RpcFailureStreamHandler : IPackageRuntimeStreamHandler<CountRequest, CountEvent>
+    {
+        public async IAsyncEnumerable<CountEvent> SubscribeAsync(
+            CountRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            if (request.Count >= 0)
+            {
+                throw CreateRpcFailure();
+            }
+            yield break;
+        }
+    }
+
+    private sealed class RpcFailureOnDisposeStreamHandler : IPackageRuntimeStreamHandler<CountRequest, CountEvent>
+    {
+        public async IAsyncEnumerable<CountEvent> SubscribeAsync(
+            CountRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                yield return new CountEvent(1);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            finally
+            {
+                throw CreateRpcFailure();
+            }
+        }
+    }
+
+    private static SunderRpcException CreateRpcFailure()
+        => new(new SunderRpcError(
+            SunderRpcErrorKind.Unavailable,
+            RpcFailureCode,
+            RpcFailureMessage));
+
+    private sealed class TestPackageContext(string packageId, IPackageEventLogger eventLogger) : IPackageContext
+    {
+        public string PackageId { get; } = packageId;
+        public string Version => "1.0.0";
+        public string ContentRootPath => string.Empty;
+        public IPackageStorageContext Storage => throw new NotSupportedException();
+        public IPackageSettings Settings => throw new NotSupportedException();
+        public IPackageSecrets Secrets => throw new NotSupportedException();
+        public IPackageLogging Logging { get; } = new TestPackageLogging(eventLogger);
+    }
+
+    private sealed class TestPackageLogging(IPackageEventLogger events) : IPackageLogging
+    {
+        public ILoggerFactory LoggerFactory => NullLoggerFactory.Instance;
+        public IPackageEventLogger Events { get; } = events;
+    }
+
+    private sealed class RecordingEventLogger : IPackageEventLogger
+    {
+        public List<RecordedEvent> Entries { get; } = [];
+
+        public ValueTask WriteAsync(
+            PackageLogLevel level,
+            string eventName,
+            string message,
+            IReadOnlyDictionary<string, object?>? attributes = null,
+            Exception? exception = null,
+            CancellationToken cancellationToken = default)
+        {
+            Entries.Add(new RecordedEvent(
+                eventName,
+                message,
+                attributes?.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal)
+                    ?? new Dictionary<string, object?>(StringComparer.Ordinal),
+                exception));
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed record RecordedEvent(
+        string EventName,
+        string Message,
+        IReadOnlyDictionary<string, object?> Attributes,
+        Exception? Exception);
 
     private sealed class CancellableInfiniteHandler(TaskCompletionSource started)
         : IPackageRuntimeStreamHandler<CountRequest, CountEvent>

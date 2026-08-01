@@ -108,5 +108,7 @@ public sealed class PackageLoadPlannerTests
             HostRoles: PackageHostRoles.Runtime,
             Activation: new RuntimePackageActivationState(packageId, packageId, version, PackageHostRoles.Runtime, null),
             EntryAssemblyPath: "/shadow/" + packageId + "/lib/" + packageId + ".dll",
+            SelectedTargetKey: null,
+            SelectedTarget: null,
             Dependencies: dependencies);
 }

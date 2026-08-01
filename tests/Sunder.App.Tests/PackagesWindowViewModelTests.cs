@@ -161,12 +161,52 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task InstalledPackageDetails_ProjectDeclaredRpcAccess()
+    {
+        var runtimeClient = new FakeRuntimeApiClient(
+        [
+            CreateInstalledPackage(
+                "agent",
+                isEnabled: true,
+                rpcContractUses:
+                [
+                    new PackageRpcContractUseDescriptor(
+                        "dev.sunder.execution",
+                        ">=1.0.0 <2.0.0",
+                        Required: true,
+                        Actions: ["invoke", "discover"]),
+                ]),
+        ]);
+        using var viewModel = CreateViewModel(runtimeClient);
+
+        await viewModel.InitializeAsync();
+
+        var package = Assert.IsType<PackageCatalogItemViewModel>(viewModel.SelectedInstalledPackage);
+        var access = Assert.Single(package.RpcContractUses);
+        Assert.Equal("dev.sunder.execution", access.ContractId);
+        Assert.Equal(">=1.0.0 <2.0.0", access.VersionRange);
+        Assert.Equal("Required", access.RequirementText);
+        Assert.Equal("discover | invoke", access.ActionsText);
+        Assert.Equal("1 contract | 2 actions", package.RpcAccessSummary);
+    }
+
+    [Fact]
     public async Task RefreshInstalledPackages_PreservesUnchangedRowsAndReplacesChangedRows()
     {
         var runtimeClient = new FakeRuntimeApiClient(
             [
                 CreateInstalledPackage("agent", isEnabled: true),
-                CreateInstalledPackage("tools", isEnabled: true),
+                CreateInstalledPackage(
+                    "tools",
+                    isEnabled: true,
+                    rpcContractUses:
+                    [
+                        new PackageRpcContractUseDescriptor(
+                            "dev.sunder.tools",
+                            "1.0.0",
+                            Required: true,
+                            Actions: ["invoke"]),
+                    ]),
             ]
         );
         using var viewModel = CreateViewModel(runtimeClient);
@@ -179,6 +219,58 @@ public sealed class PackagesWindowViewModelTests
 
         Assert.NotSame(originalAgent, Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "agent"));
         Assert.Same(originalTools, Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "tools"));
+    }
+
+    [Fact]
+    public async Task DevOverlayDetails_UseActiveSessionRpcAccessInsteadOfInstalledManifest()
+    {
+        var runtimeClient = new FakeRuntimeApiClient(
+        [
+            CreateInstalledPackage(
+                "agent",
+                isEnabled: true,
+                rpcContractUses:
+                [
+                    new PackageRpcContractUseDescriptor(
+                        "example.installed",
+                        "1.0.0",
+                        Required: true,
+                        Actions: ["invoke"]),
+                ]),
+        ])
+        {
+            SessionPackages =
+            [
+                new SessionPackageDescriptor(
+                    "agent",
+                    "Agent",
+                    "1.0.0",
+                    PackageHostRoles.Runtime,
+                    null,
+                    IsEnabled: true,
+                    PackageReadinessState.Ready,
+                    Views: [],
+                    FailureOrigin: null,
+                    LastError: null,
+                    LastFailureAtUtc: null,
+                    FailureCount: 0,
+                    RpcContractUses:
+                    [
+                        new PackageRpcContractUseDescriptor(
+                            "example.development",
+                            "2.0.0",
+                            Required: true,
+                            Actions: ["discover", "invoke"]),
+                    ]),
+            ],
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+
+        await viewModel.InitializeAsync();
+
+        var access = Assert.Single(viewModel.SelectedInstalledPackage!.RpcContractUses);
+        Assert.Equal("example.development", access.ContractId);
+        Assert.Equal("discover | invoke", access.ActionsText);
     }
 
     [Fact]
@@ -488,6 +580,80 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task MarketplaceVersionSelection_LoadsDeclaredRpcAccess()
+    {
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            VersionDetails = (packageId, version, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult<RegistryPackageVersionDetails?>(CreateRegistryPackageVersionDetails(
+                    packageId,
+                    version,
+                    [
+                        new RegistryPackageContractUse(
+                            "dev.sunder.execution",
+                            ">=1.0.0 <2.0.0",
+                            Required: true,
+                            Actions: ["invoke", "discover"]),
+                    ]));
+            },
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => viewModel.Marketplace.RpcContractUses.Count == 1);
+
+        var access = Assert.Single(viewModel.Marketplace.RpcContractUses);
+        Assert.Equal("dev.sunder.execution", access.ContractId);
+        Assert.Equal("discover | invoke", access.ActionsText);
+        Assert.Equal("1 contract | 2 actions", viewModel.Marketplace.RpcAccessSummary);
+    }
+
+    [Fact]
+    public async Task MarketplaceVersionAccess_WhileLoadingOrUnavailable_DisablesInstallWithoutClaimingNoAccess()
+    {
+        var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registryClient = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            VersionDetails = async (packageId, version, cancellationToken) =>
+            {
+                requestStarted.TrySetResult();
+                await releaseRequest.Task.WaitAsync(cancellationToken);
+                return null;
+            },
+        };
+        using var viewModel = CreateViewModel(
+            new FakeRuntimeApiClient([]),
+            _ => registryClient,
+            TimeSpan.FromMilliseconds(40));
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.Marketplace.RpcAccessLoading);
+        Assert.False(viewModel.Marketplace.HasNoRpcContractUses);
+        Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
+        Assert.Equal("Loading declared access...", viewModel.Marketplace.RpcAccessSummary);
+
+        releaseRequest.SetResult();
+        await WaitForConditionAsync(() => viewModel.Marketplace.HasRpcAccessError);
+
+        Assert.False(viewModel.Marketplace.RpcAccessLoaded);
+        Assert.False(viewModel.Marketplace.HasNoRpcContractUses);
+        Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
+        Assert.Equal("Declared access unavailable", viewModel.Marketplace.RpcAccessSummary);
+    }
+
+    [Fact]
     public async Task MarketplaceSelection_WhenDetailsContainProfile_PopulatesProfileSections()
     {
         var profile = new RegistryPackageProfile(
@@ -607,6 +773,7 @@ public sealed class PackagesWindowViewModelTests
             InstallPlan = new RegistryResolveInstallPlanResponse(
                 true,
                 [CreatePlanItem("sunder.package.agent", "1.5.0")],
+                [],
                 [],
                 [],
                 []),
@@ -749,7 +916,8 @@ public sealed class PackagesWindowViewModelTests
     private static InstalledPackageDescriptor CreateInstalledPackage(
         string packageId,
         bool isEnabled,
-        PackageIconDescriptor? icon = null
+        PackageIconDescriptor? icon = null,
+        IReadOnlyList<PackageRpcContractUseDescriptor>? rpcContractUses = null
     ) =>
         new(
             packageId,
@@ -761,7 +929,8 @@ public sealed class PackagesWindowViewModelTests
             isEnabled,
             DependsOn: [],
             DateTimeOffset.UtcNow,
-            StatusMessage: isEnabled ? null : "Disabled"
+            StatusMessage: isEnabled ? null : "Disabled",
+            RpcContractUses: rpcContractUses
         );
 
     private static RegistryPackageSummary CreateRegistryPackage(string packageId, string latestVersion = "1.0.0") =>
@@ -792,6 +961,30 @@ public sealed class PackagesWindowViewModelTests
             profile
         );
 
+    private static RegistryPackageVersionDetails CreateRegistryPackageVersionDetails(
+        string packageId,
+        string version,
+        IReadOnlyList<RegistryPackageContractUse>? usesContracts = null)
+        => new(
+            PackageId: packageId,
+            Name: ToDisplayName(packageId),
+            Summary: null,
+            Version: version,
+            Icon: null,
+            IsYanked: false,
+            DeprecatedMessage: null,
+            DependsOn: [],
+            CanonicalArtifact: new RegistryPackageCanonicalArtifact("", 0, ""),
+            Targets: [],
+            Projections: [],
+            ContractBundles: [],
+            UsesContracts: usesContracts ?? [],
+            Providers: [],
+            ManifestFormatVersion: 1,
+            ArchiveFormatVersion: 1,
+            PublishedAtUtc: DateTimeOffset.UtcNow,
+            TrustedArtifactOrigins: []);
+
     private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
         => new(
             packageId,
@@ -800,7 +993,8 @@ public sealed class PackagesWindowViewModelTests
             IsUpdate: false,
             DeprecatedMessage: null,
             DependsOn: [],
-            new RegistryPackageArtifact("", 0, $"download/{packageId}/{version}"));
+            Targets: [],
+            Artifacts: [CreateProjectionArtifact($"download/{packageId}/{version}")]);
 
     private static RegistryPackageUpdate CreateUpdate(string packageId, string currentVersion, string availableVersion)
         => new(
@@ -808,7 +1002,10 @@ public sealed class PackagesWindowViewModelTests
             currentVersion,
             availableVersion,
             DeprecatedMessage: null,
-            new RegistryPackageArtifact("", 0, $"download/{packageId}/{availableVersion}"));
+            Artifacts: [CreateProjectionArtifact($"download/{packageId}/{availableVersion}")]);
+
+    private static RegistryPackageProjectionArtifact CreateProjectionArtifact(string downloadUrl)
+        => new("shared", null, "", 0, downloadUrl, "", "", "", 1);
 
     private static string ToDisplayName(string packageId) =>
         string.Concat(packageId[..1].ToUpperInvariant(), packageId[1..]);
@@ -821,8 +1018,8 @@ public sealed class PackagesWindowViewModelTests
 
     private sealed class FakePackageArchivePicker : IPackageArchivePicker
     {
-        public Task<string?> PickPackagePathAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<string?>(null);
+        public Task<PackageArchiveSelection?> PickPackageAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<PackageArchiveSelection?>(null);
     }
 
     private sealed class FakePackageOperationExecutor : IPackageOperationExecutor
@@ -867,7 +1064,10 @@ public sealed class PackagesWindowViewModelTests
         public BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl)
             => CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages");
 
-        public BackgroundProcessSnapshot EnqueueLocalInstall(string packagePath)
+        public BackgroundProcessSnapshot EnqueueLocalInstall(
+            string packagePath,
+            string expectedSha256,
+            bool deleteAfterUse)
             => CreateSnapshot(null, PackageOperationKind.InstallLocal, Path.GetFileName(packagePath));
 
         public BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName)
@@ -944,7 +1144,11 @@ public sealed class PackagesWindowViewModelTests
         public Func<string, CancellationToken, Task<RegistryPackageDetails?>> PackageDetails { get; init; } =
             (packageId, _) => Task.FromResult<RegistryPackageDetails?>(CreateRegistryPackageDetails(packageId, "1.0.0"));
 
-        public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], []);
+        public Func<string, string, CancellationToken, Task<RegistryPackageVersionDetails?>> VersionDetails { get; init; } =
+            (packageId, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(
+                CreateRegistryPackageVersionDetails(packageId, version));
+
+        public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], [], []);
 
         public IReadOnlyList<RegistryPackageUpdate> Updates { get; init; } = [];
 
@@ -997,7 +1201,7 @@ public sealed class PackagesWindowViewModelTests
             string packageId,
             string version,
             CancellationToken cancellationToken = default
-        ) => Task.FromResult<RegistryPackageVersionDetails?>(null);
+        ) => VersionDetails(packageId, version, cancellationToken);
 
         public Task<RegistryPackageStarResponse> StarPackageAsync(
             string packageId,
@@ -1025,7 +1229,7 @@ public sealed class PackagesWindowViewModelTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new RegistryResolveUpdatesResponse(Updates));
+            return Task.FromResult(new RegistryResolveUpdatesResponse(Updates, [], []));
         }
 
         public Task<RegistryResolveInstallPlanResponse> ResolveInstallPlanAsync(
@@ -1036,18 +1240,6 @@ public sealed class PackagesWindowViewModelTests
             cancellationToken.ThrowIfCancellationRequested();
             LastInstallPlanRequest = request;
             return Task.FromResult(InstallPlan);
-        }
-
-        public Task DownloadArtifactAsync(
-            RegistryPackageArtifact artifact,
-            string packageId,
-            string version,
-            string destinationPath,
-            CancellationToken cancellationToken = default
-        )
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
         }
 
         public void Dispose() { }
@@ -1075,6 +1267,8 @@ public sealed class PackagesWindowViewModelTests
 
         public IReadOnlyList<RegistryPackageUpdate> RegistryUpdates { get; init; } = [];
 
+        public IReadOnlyList<SessionPackageDescriptor> SessionPackages { get; init; } = [];
+
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
                 true,
@@ -1085,7 +1279,18 @@ public sealed class PackagesWindowViewModelTests
                     true,
                     update.DeprecatedMessage,
                     [],
-                    new RuntimeRegistryPackageArtifact(update.Artifact.Sha256, update.Artifact.Size, update.Artifact.DownloadUrl))).ToArray(),
+                    [],
+                    update.Artifacts.Select(artifact => new RuntimeRegistryPackageProjectionArtifact(
+                        artifact.Kind,
+                        artifact.Rid,
+                        artifact.Sha256,
+                        artifact.Size,
+                        artifact.DownloadUrl,
+                        artifact.SourceArchiveSha256,
+                        artifact.ManifestSha256,
+                        artifact.ProjectionContentIdentity,
+                        artifact.ProjectionFormatVersion)).ToArray())).ToArray(),
+                [],
                 [],
                 [],
                 []));
@@ -1122,11 +1327,25 @@ public sealed class PackagesWindowViewModelTests
 
         public Task<IReadOnlyList<SessionPackageDescriptor>> GetSessionPackagesAsync(
             CancellationToken cancellationToken = default
-        ) => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
+        ) => Task.FromResult(SessionPackages);
 
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
+            string appRid,
             CancellationToken cancellationToken = default
         ) => Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([]);
+
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(
+            string stageId,
+            string appRid,
+            CancellationToken cancellationToken = default)
+        {
+            var request = _pendingStages[stageId];
+            return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>(
+                request.Mutations
+                    .Select(GetMutationPackageId)
+                    .Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId))
+                    .ToArray());
+        }
 
         public Task DownloadPackageUiSnapshotAsync(PackageUiSnapshotDescriptor snapshot, Stream destination, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
@@ -1165,7 +1384,7 @@ public sealed class PackagesWindowViewModelTests
             cancellationToken.ThrowIfCancellationRequested();
             if (EnableResult is not null && request.Mutations.Any(mutation => mutation.Kind == PackageStoreMutationKind.Enable))
             {
-                return Task.FromResult(new PackageStoreStageResult(null, EnableResult, [], []));
+                return Task.FromResult(new PackageStoreStageResult(null, EnableResult, []));
             }
 
             var stageId = Guid.NewGuid().ToString("N");
@@ -1177,8 +1396,7 @@ public sealed class PackagesWindowViewModelTests
                 {
                     ImpactedPackageIds = impactedPackageIds,
                 },
-                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, ToDisplayName(packageId), "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray(),
-                impactedPackageIds.Select(packageId => RuntimeContractTestData.Snapshot(packageId, PackageSourceKind.Installed, packageId)).ToArray()));
+                impactedPackageIds.Select(packageId => new ActivePackageDescriptor(packageId, ToDisplayName(packageId), "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, [])).ToArray()));
         }
 
         public Task<PackageOperationResult> CommitPackageStoreStageAsync(

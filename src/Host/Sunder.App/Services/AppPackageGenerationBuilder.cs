@@ -10,7 +10,6 @@ internal sealed class AppPackageGenerationBuilder(
     AppPackageSnapshotCache snapshotCache,
     Func<string> ensureSessionFolder,
     Action<Guid, string, string, PackageFailureOrigin, Exception?> disablePackage,
-    Action<Guid, PackageExtensionOwnerToken, string, PackageFailureOrigin, Exception?> disableExtensionOwner,
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
     NotificationCenterService? notificationCenter,
@@ -23,16 +22,14 @@ internal sealed class AppPackageGenerationBuilder(
         HashSet<string> disabledPackageIds,
         IReadOnlyList<object> ownedDisposables,
         IReadOnlyList<AppPackageLoadContext> loadContexts,
-        AppSharedAssemblyRegistry? sharedAssemblyRegistry,
-        AppPackageExtensionCatalog? extensionCatalog)
+        AppSharedAssemblyRegistry? sharedAssemblyRegistry)
         => CreateGeneration(
             Guid.NewGuid(),
             folder: null,
             activePackages: [],
             viewRegistry,
             new AppPackageHostState(disabledPackageIds, ownedDisposables, loadContexts),
-            sharedAssemblyRegistry,
-            extensionCatalog);
+            sharedAssemblyRegistry);
 
     public async Task<AppPackageGeneration> BuildAsync(
         AppPackageGeneration currentGeneration,
@@ -67,8 +64,7 @@ internal sealed class AppPackageGenerationBuilder(
             activePackages,
             viewRegistry,
             state,
-            sharedAssemblyRegistry: null,
-            extensionCatalog: null);
+            sharedAssemblyRegistry: null);
 
         try
         {
@@ -208,8 +204,7 @@ internal sealed class AppPackageGenerationBuilder(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
-        AppSharedAssemblyRegistry? sharedAssemblyRegistry,
-        AppPackageExtensionCatalog? extensionCatalog)
+        AppSharedAssemblyRegistry? sharedAssemblyRegistry)
     {
         var composition = new AppPackageHostComposition(
             eventSender,
@@ -217,14 +212,15 @@ internal sealed class AppPackageGenerationBuilder(
             viewRegistry,
             state,
             disablePackage,
-            disableExtensionOwner,
             sharedAssemblyRegistry,
-            extensionCatalog,
             shellViewService,
             settingsNavigationService,
             notificationCenter,
             backgroundProcessQueue,
-            getRuntimeConnectionInfo);
+            getRuntimeConnectionInfo,
+            webRpcClientFactory: getRuntimeConnectionInfo is null
+                ? null
+                : new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo));
         return new AppPackageGeneration(
             generationId,
             folder,

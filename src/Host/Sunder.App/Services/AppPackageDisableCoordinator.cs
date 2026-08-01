@@ -6,7 +6,6 @@ namespace Sunder.App.Services;
 internal sealed class AppPackageDisableCoordinator(
     AppPackageViewRegistry viewRegistry,
     AppPackageHostedViewFacade viewFacade,
-    AppPackageExtensionCatalog extensionCatalog,
     AppPackageRuntimeWorkStopper runtimeWorkStopper,
     AppPackageFaultNotifier faultNotifier,
     Func<string, bool> markPackageDisabled)
@@ -116,7 +115,6 @@ internal sealed class AppPackageDisableCoordinator(
         }
 
         await viewFacade.CancelPackageViewOperationsAsync(packageId).ConfigureAwait(false);
-        extensionCatalog.RemovePackage(packageId, PackageExtensionCatalogChangeReason.PackageFaulted);
         await viewRegistry.RemoveCachedViewsAsync(packageId, CancellationToken.None);
         await faultNotifier.NotifyPackageDisabledAsync(sender, packageId, message, origin, exception);
         return true;

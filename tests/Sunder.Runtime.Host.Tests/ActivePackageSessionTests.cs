@@ -11,6 +11,22 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class ActivePackageSessionTests
 {
     [Fact]
+    public void CreateEmpty_ReturnsFreshExplicitlyEmptySessions()
+    {
+        var first = ActivePackageSession.CreateEmpty();
+        var second = ActivePackageSession.CreateEmpty();
+        var regular = new ActivePackageSession(
+            sessionFolder: null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.True(first.IsEmpty);
+        Assert.True(second.IsEmpty);
+        Assert.NotSame(first, second);
+        Assert.False(regular.IsEmpty);
+    }
+
+    [Fact]
     public void MarkPackageFailed_DisablesSessionPackageAndReturnsLoadedPackageForDeactivation()
     {
         var loadedPackage = CreateLoadedPackage("test.package");
@@ -43,40 +59,6 @@ public sealed class ActivePackageSessionTests
         Assert.Equal("Activation failed.", failedPackage.LastError);
         Assert.Equal(1, failedPackage.FailureCount);
         Assert.NotNull(failedPackage.LastFailureAtUtc);
-    }
-
-    [Fact]
-    public void MarkPackageFailed_RemovesPackageContributionsFromRuntimeCatalog()
-    {
-        var extensionPoint = new PackageExtensionPoint<ITestContribution>("test:contribution");
-        var extensionCatalog = new RuntimePackageExtensionCatalog();
-        var extensionOwner = extensionCatalog.BeginOwnerActivation("test.package");
-        extensionCatalog.Add(extensionOwner, extensionPoint, new TestContribution("test"));
-        extensionCatalog.Add("other.package", extensionPoint, new TestContribution("other"));
-        var loadedPackage = CreateLoadedPackage("test.package") with
-        {
-            ExtensionOwner = extensionOwner,
-        };
-        var session = new ActivePackageSession(
-            sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = loadedPackage,
-            },
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = CreateSessionPackage("test.package", isEnabled: true),
-            },
-            extensionCatalog);
-
-        session.MarkPackageFailed(
-            "TEST.PACKAGE",
-            PackageFailureOrigin.RuntimeActivation,
-            "Activation failed.",
-            out _);
-
-        var contribution = Assert.Single(extensionCatalog.GetExtensions(extensionPoint));
-        Assert.Equal("other", contribution.Name);
     }
 
     [Fact]
@@ -160,8 +142,7 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             events,
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
-        var publisher = new PackageSessionPublisher(owner, ui, NullLogger<PackageSessionPublisher>.Instance);
+        var publisher = new PackageSessionPublisher(owner, NullLogger<PackageSessionPublisher>.Instance);
         var startEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowStart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var backgroundService = new GenerationAwareBackgroundService(
@@ -213,6 +194,355 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
+    public async Task PackageSessionPublisher_ActivatesProcessAfterSessionAndRpcCatalogPublication()
+    {
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            rpcCatalog: rpcCatalog);
+        var process = new PublicationObservingProcessParticipant(owner.State, rpcCatalog);
+        var session = CreateRpcSession("process.package", process);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
+
+        try
+        {
+            await publisher.PublishAsync(
+                session,
+                null,
+                [],
+                [],
+                owner.Generation,
+                CancellationToken.None);
+
+            Assert.True(process.Activated);
+            Assert.Equal(owner.Generation, process.ObservedGeneration);
+            Assert.Equal(1, process.ObservedProviderCount);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task SessionRetirement_CallbackFailureCannotInterruptDrain()
+    {
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        var session = CreateSession("test.package", new TestBackgroundService());
+        await owner.PublishAsync(session, owner.Sources.Snapshot(), [], [], owner.Generation);
+        using var lease = owner.State.AcquireLease();
+        using var callback = lease.RetirementToken.Register(
+            static () => throw new InvalidOperationException("retirement callback failed"));
+        lease.Dispose();
+
+        await owner.State.ClearActiveSessionAsync();
+
+        Assert.True(owner.State.ActiveSession.IsEmpty);
+    }
+
+    [Fact]
+    public async Task SessionRetirement_WaitsForCallbacksBeforeStoppingPackageCode()
+    {
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        var service = new RecordingGenerationBackgroundService();
+        var session = CreateSession("test.package", service);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance);
+        await publisher.PublishAsync(
+            session,
+            null,
+            [],
+            [],
+            owner.Generation,
+            CancellationToken.None);
+        using var lease = owner.State.AcquireLease();
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        using var callback = lease.RetirementToken.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+            releaseCallback.Wait();
+        });
+        lease.Dispose();
+
+        var retirement = owner.State.ClearActiveSessionAsync();
+        await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(50);
+
+        Assert.Equal(0, service.StopCount);
+        releaseCallback.Set();
+        await retirement;
+        Assert.Equal(1, service.StopCount);
+    }
+
+    [Fact]
+    public async Task SessionRetirement_AfterAbortedDrainStillWaitsForEarlierCallbacks()
+    {
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService());
+        var service = new RecordingGenerationBackgroundService();
+        var session = CreateSession("test.package", service);
+        var candidate = ActivePackageSession.CreateEmpty();
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance);
+        await publisher.PublishAsync(session, null, [], [], owner.Generation, CancellationToken.None);
+        var lease = owner.State.AcquireLease();
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        using var callback = lease.RetirementToken.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+            releaseCallback.Wait();
+        });
+        using var cancellation = new CancellationTokenSource();
+
+        try
+        {
+            var prepare = owner.State.PreparePublicationAsync(
+                candidate,
+                owner.Generation,
+                cancellation.Token);
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => prepare);
+            lease.Dispose();
+
+            var retirement = owner.State.ClearActiveSessionAsync();
+            await Task.Delay(50);
+
+            Assert.Equal(0, service.StopCount);
+            releaseCallback.Set();
+            await retirement;
+            Assert.Equal(1, service.StopCount);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            lease.Dispose();
+            if (!owner.State.ActiveSession.IsEmpty)
+            {
+                await owner.State.ClearActiveSessionAsync();
+            }
+            await candidate.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PackageFault_WaitsForRpcRetirementCallbacksBeforeStoppingPackageCode()
+    {
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            rpcCatalog: rpcCatalog);
+        var service = new FaultingGenerationBackgroundService();
+        var session = CreateRpcSession("faulting.package", service);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
+        await publisher.PublishAsync(session, null, [], [], owner.Generation, CancellationToken.None);
+        var loadedPackage = session.LoadedPackageMap["faulting.package"];
+        Assert.True(rpcCatalog.TryGetPackage(
+            "faulting.package",
+            loadedPackage.RuntimeActivationId,
+            out var rpcActivation));
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        using var callback = rpcActivation!.RetirementToken.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+            releaseCallback.Wait();
+        });
+
+        try
+        {
+            service.Fail(new InvalidOperationException("Generation failed."));
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await WaitForPackageAsync(
+                owner,
+                "faulting.package",
+                package => package.Readiness == PackageReadinessState.Failed);
+            await Task.Delay(50);
+
+            Assert.Equal(0, service.StopCount);
+            releaseCallback.Set();
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
+            while (service.StopCount == 0 && DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(20);
+            }
+            Assert.Equal(1, service.StopCount);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            await owner.State.ClearActiveSessionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PackageSessionPublisher_PublishesPackagesAndFreshEmptySessionsRepeatedly()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var paths = new RuntimePackagePaths(rootPath);
+        using var snapshots = new PackageUiSnapshotStore(paths);
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            uiSnapshots: snapshots,
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
+        var firstPackages = CreateRpcSession("first.package");
+        var firstEmpty = ActivePackageSession.CreateEmpty();
+        var secondPackages = CreateRpcSession("second.package");
+        var secondEmpty = ActivePackageSession.CreateEmpty();
+
+        try
+        {
+            await publisher.PublishAsync(firstPackages, null, [], [], owner.Generation, CancellationToken.None);
+            Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
+            Assert.Single(rpcCatalog.GetSnapshot().Providers);
+
+            await publisher.PublishAsync(firstEmpty, null, [], [], owner.Generation, CancellationToken.None);
+            Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
+            Assert.Empty(rpcCatalog.GetSnapshot().Providers);
+
+            await publisher.PublishAsync(secondPackages, null, [], [], owner.Generation, CancellationToken.None);
+            Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
+            Assert.Single(rpcCatalog.GetSnapshot().Providers);
+
+            var publication = await publisher.PublishAsync(
+                secondEmpty,
+                null,
+                [],
+                [],
+                owner.Generation,
+                CancellationToken.None);
+
+            Assert.Equal(4, publication.Stamp.SessionGeneration);
+            Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
+            Assert.Empty(rpcCatalog.GetSnapshot().Providers);
+            Assert.True(owner.State.ActiveSession.IsEmpty);
+            Assert.Same(secondEmpty, owner.State.ActiveSession);
+            Assert.NotSame(firstEmpty, secondEmpty);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+            await firstPackages.DisposeAsync();
+            await firstEmpty.DisposeAsync();
+            await secondPackages.DisposeAsync();
+            await secondEmpty.DisposeAsync();
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task PackageSessionPublisher_GenerationActivationFailureClearsStaleRpcProvidersAtFinalGeneration()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var paths = new RuntimePackagePaths(rootPath);
+        using var snapshots = new PackageUiSnapshotStore(paths);
+        using var rpcCatalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            new RuntimeEventStreamService(),
+            uiSnapshots: snapshots,
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            new RuntimeLifecyclePolicyOptions
+            {
+                PackageRuntimeGenerationActivationAttempts = 1,
+            },
+            rpcCatalog);
+        var activeSession = CreateRpcSession("active.package");
+        var failingSession = CreateSession(
+            "failing.package",
+            new RepeatedlyFailingGenerationBackgroundService());
+
+        try
+        {
+            await publisher.PublishAsync(activeSession, null, [], [], owner.Generation, CancellationToken.None);
+            var staleEndpoint = Assert.Single(rpcCatalog.GetSnapshot().Providers).Endpoint;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.PublishAsync(
+                failingSession,
+                null,
+                [],
+                [],
+                owner.Generation,
+                CancellationToken.None));
+
+            Assert.Equal(3, owner.Generation);
+            Assert.True(owner.State.ActiveSession.IsEmpty);
+            Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
+            Assert.Empty(rpcCatalog.GetSnapshot().Providers);
+            Assert.False(rpcCatalog.TryGetActiveEndpoint(staleEndpoint, out _, out var stale));
+            Assert.True(stale);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+            await activeSession.DisposeAsync();
+            await failingSession.DisposeAsync();
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task LoadInstalledPackagesAsync_EmptyNoOpRepairsStaleRpcCatalog()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
+        var paths = new RuntimePackagePaths(rootPath);
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var service = new RuntimePackageSessionTestHost(
+            NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store,
+            installer);
+        var staleSession = CreateRpcSession("stale.package");
+
+        try
+        {
+            service.RpcCatalog.ActivateSession(staleSession, service.SessionGeneration);
+            Assert.Single(service.RpcCatalog.GetSnapshot().Providers);
+
+            var result = await service.LoadInstalledPackagesAsync();
+
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+            Assert.Equal(0, service.SessionGeneration);
+            Assert.True(service.ActiveSession.IsEmpty);
+            Assert.Equal(service.SessionGeneration, service.RpcCatalog.SessionGeneration);
+            Assert.Empty(service.RpcCatalog.GetSnapshot().Providers);
+        }
+        finally
+        {
+            await service.ShutdownAsync();
+            await staleSession.DisposeAsync();
+            TryDeleteDirectory(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task PackageSessionPublisher_StartupTimeoutDoesNotPublishAndStopsAttemptedService()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
@@ -222,7 +552,6 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
         var policy = new RuntimeLifecyclePolicyOptions
         {
             PackageBackgroundServiceStartupTimeout = TimeSpan.FromMilliseconds(50),
@@ -230,7 +559,6 @@ public sealed class ActivePackageSessionTests
         };
         var publisher = new PackageSessionPublisher(
             owner,
-            ui,
             NullLogger<PackageSessionPublisher>.Instance,
             policy);
         var backgroundService = new HangingStartBackgroundService();
@@ -263,14 +591,18 @@ public sealed class ActivePackageSessionTests
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         var paths = new RuntimePackagePaths(rootPath);
         using var snapshots = new PackageUiSnapshotStore(paths);
+        using var rpcCatalog = new RuntimeRpcCatalog();
         var owner = new RuntimeSessionOwner(
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
-            uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
-        var publisher = new PackageSessionPublisher(owner, ui, NullLogger<PackageSessionPublisher>.Instance);
+            uiSnapshots: snapshots,
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
         var activeService = new RecordingGenerationBackgroundService();
-        var activeSession = CreateSession("active.package", activeService);
+        var activeSession = CreateRpcSession("active.package", activeService);
         var failingService = new ImmediateFailingGenerationBackgroundService();
         var candidateSession = CreateSession("candidate.package", failingService);
 
@@ -279,6 +611,8 @@ public sealed class ActivePackageSessionTests
             var initial = publisher.Prepare(activeSession, owner.Sources.Snapshot(), [], [], baseGeneration: 0);
             var initialPending = await publisher.BeginPublishAsync(initial, CancellationToken.None);
             await publisher.CommitAsync(initialPending);
+            var catalogBeforeFailure = rpcCatalog.GetSnapshot();
+            var endpointBeforeFailure = Assert.Single(catalogBeforeFailure.Providers).Endpoint;
 
             var candidate = publisher.Prepare(candidateSession, owner.Sources.Snapshot(), [], [], baseGeneration: 1);
             var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
@@ -291,6 +625,9 @@ public sealed class ActivePackageSessionTests
             Assert.Equal(1, failingService.StartCount);
             Assert.Equal(0, failingService.CommitCount);
             Assert.Equal(1, failingService.StopCount);
+            var catalogAfterFailure = rpcCatalog.GetSnapshot();
+            Assert.Equal(catalogBeforeFailure.Revision, catalogAfterFailure.Revision);
+            Assert.Equal(endpointBeforeFailure, Assert.Single(catalogAfterFailure.Providers).Endpoint);
             using var lease = owner.State.AcquireLease();
             Assert.Same(activeSession, lease.Session);
         }
@@ -311,8 +648,7 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
-        var publisher = new PackageSessionPublisher(owner, ui, NullLogger<PackageSessionPublisher>.Instance);
+        var publisher = new PackageSessionPublisher(owner, NullLogger<PackageSessionPublisher>.Instance);
         var service = new FaultingGenerationBackgroundService();
         var session = CreateSession("test.package", service);
 
@@ -378,9 +714,6 @@ public sealed class ActivePackageSessionTests
             replacementSource.SourceFolder,
             Watch: false,
             PackageSessionOverlayOwner.Startup));
-        var initialUi = snapshots.CreateSnapshots([initialSource], generation: 1);
-        IReadOnlyList<PackageUiSnapshotDescriptor> faultUi = [];
-        IReadOnlyList<PackageUiSnapshotDescriptor> replacementUi = [];
         var faultCommitEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFaultCommit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool>? faultTask = null;
@@ -393,12 +726,9 @@ public sealed class ActivePackageSessionTests
             await owner.PublishAsync(
                 initialSession,
                 initialSources,
-                initialUi,
                 [],
                 [],
                 expectedGeneration: 0);
-            faultUi = snapshots.CreateSnapshots([initialSource], generation: 2);
-            replacementUi = snapshots.CreateSnapshots([replacementSource], generation: 3);
             PackageActivationIdentity activationIdentity;
             using (var lease = owner.State.AcquireLease())
             {
@@ -424,10 +754,10 @@ public sealed class ActivePackageSessionTests
                         generation,
                         activePackages,
                         faultedPackages,
-                        faultUi,
                         initialSources,
                         [],
                         ["Package 'fault.package' failed: Exact activation fault."]);
+                    return Task.CompletedTask;
                 }));
             await faultCommitEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -440,7 +770,6 @@ public sealed class ActivePackageSessionTests
             replacementPublication = owner.PublishAsync(
                 replacementSession,
                 replacementSources,
-                replacementUi,
                 ["newer warning"],
                 ["newer error"],
                 expectedGeneration: 2);
@@ -449,18 +778,9 @@ public sealed class ActivePackageSessionTests
             var newerSnapshot = owner.GetSnapshot();
             Assert.Equal(3, newerSnapshot.SessionGeneration);
             Assert.Equal("replacement.package", Assert.Single(newerSnapshot.ActivePackages).PackageId);
-            Assert.Equal("replacement.package", Assert.Single(newerSnapshot.PackageUiSnapshots).PackageId);
             Assert.Equal("replacement.package", Assert.Single(owner.Sources.Snapshot().ActiveDevOverlays).PackageId);
             Assert.Contains("newer warning", newerSnapshot.Warnings);
             Assert.Contains("newer error", newerSnapshot.Errors);
-            using (var newerUiLease = snapshots.Acquire(
-                       Assert.Single(replacementUi).SnapshotId,
-                       generation: 3,
-                       stageId: null))
-            {
-                Assert.NotNull(newerUiLease);
-            }
-
             releaseFaultCommit.TrySetResult();
             Assert.True(await faultTask.WaitAsync(TimeSpan.FromSeconds(5)));
             await replacementPublication.WaitAsync(TimeSpan.FromSeconds(5));
@@ -470,7 +790,6 @@ public sealed class ActivePackageSessionTests
             Assert.Equal("replacement.package", Assert.Single(owner.State.GetActivePackages()).PackageId);
             Assert.Equal(newerSnapshot.SessionGeneration, finalSnapshot.SessionGeneration);
             Assert.Equal(newerSnapshot.ActivePackages, finalSnapshot.ActivePackages);
-            Assert.Equal(newerSnapshot.PackageUiSnapshots, finalSnapshot.PackageUiSnapshots);
             Assert.False(staleCommitApplied);
             Assert.Equal(3, events.GetSnapshot().SessionGeneration);
             var publishedGenerations = events.GetSnapshot().Events
@@ -479,12 +798,6 @@ public sealed class ActivePackageSessionTests
                 .ToArray();
             Assert.Equal([1L, 3L], publishedGenerations);
             Assert.Equal(publishedGenerations.Order(), publishedGenerations);
-            Assert.Null(snapshots.Acquire(Assert.Single(faultUi).SnapshotId, generation: 2, stageId: null));
-            using var finalUiLease = snapshots.Acquire(
-                Assert.Single(replacementUi).SnapshotId,
-                generation: 3,
-                stageId: null);
-            Assert.NotNull(finalUiLease);
             Assert.Equal("replacement.package", Assert.Single(owner.Sources.Snapshot().ActiveDevOverlays).PackageId);
         }
         finally
@@ -517,7 +830,6 @@ public sealed class ActivePackageSessionTests
                 SessionDrainTimeout = TimeSpan.FromMilliseconds(50),
             },
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
         var policy = new RuntimeLifecyclePolicyOptions
         {
             PackageRuntimeGenerationActivationTimeout = TimeSpan.FromMilliseconds(50),
@@ -525,7 +837,6 @@ public sealed class ActivePackageSessionTests
         };
         var publisher = new PackageSessionPublisher(
             owner,
-            ui,
             NullLogger<PackageSessionPublisher>.Instance,
             policy);
         var service = new BlockingGenerationBackgroundService();
@@ -546,10 +857,10 @@ public sealed class ActivePackageSessionTests
             await service.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.Equal(2, owner.Generation);
-            Assert.Same(ActivePackageSession.Empty, owner.State.ActiveSession);
+            Assert.True(owner.State.ActiveSession.IsEmpty);
             Assert.Empty(owner.GetSnapshot().ActivePackages);
             using var lease = owner.State.AcquireLease();
-            Assert.Same(ActivePackageSession.Empty, lease.Session);
+            Assert.True(lease.Session.IsEmpty);
             Assert.Equal(1, service.CommitCount);
             Assert.Equal(0, service.StopCount);
 
@@ -577,8 +888,7 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
-        var publisher = new PackageSessionPublisher(owner, ui, NullLogger<PackageSessionPublisher>.Instance);
+        var publisher = new PackageSessionPublisher(owner, NullLogger<PackageSessionPublisher>.Instance);
         var service = new BlockingGenerationBackgroundService();
         var session = CreateSession("test.package", service);
 
@@ -621,10 +931,8 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
         var publisher = new PackageSessionPublisher(
             owner,
-            ui,
             NullLogger<PackageSessionPublisher>.Instance,
             new RuntimeLifecyclePolicyOptions
             {
@@ -645,7 +953,7 @@ public sealed class ActivePackageSessionTests
             Assert.Equal(2, service.CommitCount);
             Assert.Equal(1, service.StopCount);
             Assert.Equal(2, owner.Generation);
-            Assert.Same(ActivePackageSession.Empty, owner.State.ActiveSession);
+            Assert.True(owner.State.ActiveSession.IsEmpty);
             Assert.Empty(owner.GetSnapshot().ActivePackages);
         }
         finally
@@ -657,30 +965,36 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
-    public async Task PackageSessionPublisher_SequentialGenerationFaultsDisableEachExactPackageOwner()
+    public async Task PackageSessionPublisher_ConcurrentGenerationFaultsKeepCatalogAtLatestGeneration()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
         var paths = new RuntimePackagePaths(rootPath);
         using var snapshots = new PackageUiSnapshotStore(paths);
+        using var rpcCatalog = new RuntimeRpcCatalog();
         var owner = new RuntimeSessionOwner(
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
-            uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
-        var publisher = new PackageSessionPublisher(owner, ui, NullLogger<PackageSessionPublisher>.Instance);
+            uiSnapshots: snapshots,
+            rpcCatalog: rpcCatalog);
+        var publisher = new PackageSessionPublisher(
+            owner,
+            NullLogger<PackageSessionPublisher>.Instance,
+            rpcCatalog: rpcCatalog);
         var firstService = new FaultingGenerationBackgroundService();
         var secondService = new FaultingGenerationBackgroundService();
         var session = new ActivePackageSession(
             sessionFolder: null,
             new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
             {
-                ["first.package"] = CreateLoadedPackage("first.package", firstService),
-                ["second.package"] = CreateLoadedPackage("second.package", secondService),
+                ["first.package"] = CreateRpcLoadedPackage("first.package", "first.provider", firstService),
+                ["second.package"] = CreateRpcLoadedPackage("second.package", "second.provider", secondService),
+                ["survivor.package"] = CreateRpcLoadedPackage("survivor.package", "survivor.provider"),
             },
             new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
             {
                 ["first.package"] = CreateSessionPackage("first.package", isEnabled: true),
                 ["second.package"] = CreateSessionPackage("second.package", isEnabled: true),
+                ["survivor.package"] = CreateSessionPackage("survivor.package", isEnabled: true),
             },
             backgroundServicesStarted: false);
 
@@ -691,23 +1005,31 @@ public sealed class ActivePackageSessionTests
             var publication = await publisher.CommitAsync(pending);
 
             firstService.Fail(new InvalidOperationException("First generation failed."));
-            var first = await WaitForPackageAsync(
+            secondService.Fail(new InvalidOperationException("Second generation failed concurrently."));
+            var firstTask = WaitForPackageAsync(
                 owner,
                 "first.package",
                 package => package.Readiness == PackageReadinessState.Failed);
-
-            secondService.Fail(new InvalidOperationException("Second generation failed later."));
-            var second = await WaitForPackageAsync(
+            var secondTask = WaitForPackageAsync(
                 owner,
                 "second.package",
                 package => package.Readiness == PackageReadinessState.Failed);
+            await Task.WhenAll(firstTask, secondTask);
+            var first = await firstTask;
+            var second = await secondTask;
 
             Assert.Equal(PackageFailureOrigin.RuntimeBackgroundService, first.FailureOrigin);
             Assert.Equal(PackageFailureOrigin.RuntimeBackgroundService, second.FailureOrigin);
             Assert.Contains("First generation failed.", first.LastError, StringComparison.Ordinal);
-            Assert.Contains("Second generation failed later.", second.LastError, StringComparison.Ordinal);
+            Assert.Contains("Second generation failed concurrently.", second.LastError, StringComparison.Ordinal);
             Assert.Equal(publication.Stamp.SessionGeneration + 2, owner.Generation);
-            Assert.Empty(owner.State.GetActivePackages());
+            Assert.Collection(
+                owner.State.GetActivePackages(),
+                package => Assert.Equal("survivor.package", package.PackageId));
+            Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
+            var survivor = Assert.Single(rpcCatalog.GetSnapshot().Providers);
+            Assert.Equal("survivor.provider", survivor.ProviderId);
+            Assert.Equal(owner.Generation, survivor.SessionGeneration);
         }
         finally
         {
@@ -728,7 +1050,6 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
         var policy = new RuntimeLifecyclePolicyOptions
         {
             PackageBackgroundServiceStartupTimeout = TimeSpan.FromMilliseconds(40),
@@ -736,7 +1057,6 @@ public sealed class ActivePackageSessionTests
         };
         var publisher = new PackageSessionPublisher(
             owner,
-            ui,
             NullLogger<PackageSessionPublisher>.Instance,
             policy);
         var backgroundService = new CancellationIgnoringStartBackgroundService();
@@ -828,85 +1148,6 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
-    public async Task DisposeAsync_LeakedExtensionLeaseQuarantinesProviderAndLoadContextUntilCallbackExits()
-    {
-        var extensionPoint = new PackageExtensionPoint<ITestContribution>("test:leased-callback");
-        var extensionCatalog = new RuntimePackageExtensionCatalog();
-        var extensionOwner = extensionCatalog.BeginOwnerActivation("test.package");
-        extensionCatalog.Add(extensionOwner, extensionPoint, new TestContribution("leased"));
-        var reference = Assert.Single(extensionCatalog.GetExtensionReferences(extensionPoint));
-        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var callbackExited = false;
-        var providerDisposedDuringCallback = false;
-        var loadContextUnloadedDuringCallback = false;
-        var provider = new TrackingServiceProvider(() => providerDisposedDuringCallback = !Volatile.Read(ref callbackExited));
-        var loadedPackage = CreateLoadedPackageCore(
-            "test.package",
-            sessionFolder: null,
-            provider,
-            backgroundServices: []) with
-        {
-            ExtensionOwner = extensionOwner,
-        };
-        loadedPackage.LoadContext.Unloading += _ =>
-            loadContextUnloadedDuringCallback = !Volatile.Read(ref callbackExited);
-        var session = new ActivePackageSession(
-            sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = loadedPackage,
-            },
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = CreateSessionPackage("test.package", isEnabled: true),
-            },
-            extensionCatalog);
-        CancellationToken retirementToken = default;
-        var callback = Task.Run(async () =>
-        {
-            Assert.True(reference.TryAcquire(out var lease));
-            using (lease)
-            {
-                retirementToken = lease.RetirementToken;
-                Assert.Equal("leased", lease.Contribution.Name);
-                callbackStarted.TrySetResult();
-                await releaseCallback.Task;
-                Assert.Equal("leased", lease.Contribution.Name);
-                Volatile.Write(ref callbackExited, true);
-            }
-        });
-
-        try
-        {
-            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-
-            await Assert.ThrowsAsync<TimeoutException>(
-                () => session.DisposeAsync(TimeSpan.FromMilliseconds(40)));
-
-            Assert.True(retirementToken.IsCancellationRequested);
-            Assert.False(reference.TryAcquire(out _));
-            Assert.False(provider.IsDisposed);
-            Assert.False(providerDisposedDuringCallback);
-            Assert.False(loadContextUnloadedDuringCallback);
-
-            releaseCallback.TrySetResult();
-            await callback.WaitAsync(TimeSpan.FromSeconds(2));
-            await session.DisposeAsync(TimeSpan.FromSeconds(2));
-
-            Assert.True(provider.IsDisposed);
-            Assert.False(providerDisposedDuringCallback);
-            Assert.False(loadContextUnloadedDuringCallback);
-        }
-        finally
-        {
-            releaseCallback.TrySetResult();
-            await callback.WaitAsync(TimeSpan.FromSeconds(2));
-            await session.DisposeAsync(TimeSpan.FromSeconds(2));
-        }
-    }
-
-    [Fact]
     public async Task DisposeAsync_InFlightGenerationCommitQuarantinesProviderUntilCallbackExits()
     {
         var sessionFolder = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
@@ -943,43 +1184,6 @@ public sealed class ActivePackageSessionTests
     }
 
     [Fact]
-    public async Task DisposeAsync_ChangedReentrancyUsesInstalledSingleFlightTask()
-    {
-        var extensionPoint = new PackageExtensionPoint<ITestContribution>("test:dispose-reentrancy");
-        var extensionCatalog = new RuntimePackageExtensionCatalog();
-        var extensionOwner = extensionCatalog.BeginOwnerActivation("test.package");
-        extensionCatalog.Add(extensionOwner, extensionPoint, new TestContribution("active"));
-        var loadedPackage = CreateLoadedPackage("test.package") with
-        {
-            ExtensionOwner = extensionOwner,
-        };
-        var session = new ActivePackageSession(
-            sessionFolder: null,
-            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = loadedPackage,
-            },
-            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["test.package"] = CreateSessionPackage("test.package", isEnabled: true),
-            },
-            extensionCatalog);
-        Task? reentrantDisposal = null;
-        extensionCatalog.Changed += (_, change) =>
-        {
-            if (change.Changes.Any(static item => item.Kind == PackageExtensionChangeKind.Removed))
-            {
-                reentrantDisposal = session.DisposeAsync(TimeSpan.FromSeconds(2));
-            }
-        };
-
-        var disposal = session.DisposeAsync(TimeSpan.FromSeconds(2));
-
-        await disposal.WaitAsync(TimeSpan.FromSeconds(2));
-        await Assert.IsAssignableFrom<Task>(reentrantDisposal).WaitAsync(TimeSpan.FromSeconds(2));
-    }
-
-    [Fact]
     public async Task PackageSessionPublisher_FailingServiceCleanupAttemptsAllServicesAndIsBounded()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-runtime-host-tests", Guid.NewGuid().ToString("N"));
@@ -989,7 +1193,6 @@ public sealed class ActivePackageSessionTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService(),
             uiSnapshots: snapshots);
-        var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
         var policy = new RuntimeLifecyclePolicyOptions
         {
             PackageBackgroundServiceStartupTimeout = TimeSpan.FromSeconds(1),
@@ -997,7 +1200,6 @@ public sealed class ActivePackageSessionTests
         };
         var publisher = new PackageSessionPublisher(
             owner,
-            ui,
             NullLogger<PackageSessionPublisher>.Instance,
             policy);
         var startedService = new TestBackgroundService();
@@ -1078,6 +1280,56 @@ public sealed class ActivePackageSessionTests
             },
             backgroundServicesStarted: backgroundServicesStarted);
     }
+
+    private static ActivePackageSession CreateRpcSession(
+        string packageId,
+        params IPackageBackgroundService[] backgroundServices)
+    {
+        var loadedPackage = CreateLoadedPackage(packageId, backgroundServices) with
+        {
+            RpcProviders = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal)
+            {
+                ["example.provider"] = new RuntimeRpcProviderRegistration(
+                    "example.provider",
+                    "example.rpc",
+                    "1.0.0",
+                    new string('a', 64),
+                    Contract: null!,
+                    Handler: null!,
+                    Manifest: null!),
+            },
+        };
+        return new ActivePackageSession(
+            sessionFolder: null,
+            new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
+            {
+                [packageId] = loadedPackage,
+            },
+            new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase)
+            {
+                [packageId] = CreateSessionPackage(packageId, isEnabled: true),
+            },
+            backgroundServicesStarted: false);
+    }
+
+    private static ActiveLoadedPackage CreateRpcLoadedPackage(
+        string packageId,
+        string providerId,
+        params IPackageBackgroundService[] backgroundServices)
+        => CreateLoadedPackage(packageId, backgroundServices) with
+        {
+            RpcProviders = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal)
+            {
+                [providerId] = new RuntimeRpcProviderRegistration(
+                    providerId,
+                    "example.rpc",
+                    "1.0.0",
+                    new string('a', 64),
+                    Contract: null!,
+                    Handler: null!,
+                    Manifest: null!),
+            },
+        };
 
     private static ActiveLoadedPackage CreateLoadedPackage(
         string packageId,
@@ -1222,6 +1474,33 @@ public sealed class ActivePackageSessionTests
         }
     }
 
+    private sealed class PublicationObservingProcessParticipant(
+        PackageSessionState sessions,
+        RuntimeRpcCatalog catalog) : IPackageRuntimeGenerationParticipant, IProcessRuntimeGenerationParticipant
+    {
+        public bool Activated { get; private set; }
+        public long? ObservedGeneration { get; private set; }
+        public int ObservedProviderCount { get; private set; }
+
+        public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task CommitGenerationAsync(
+            PackageRuntimeGeneration generation,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public void ActivateGeneration()
+        {
+            using var lease = sessions.AcquireLease();
+            catalog.VerifySessionGeneration(lease.Generation);
+            Activated = true;
+            ObservedGeneration = lease.Generation;
+            ObservedProviderCount = catalog.GetSnapshot().Providers.Count;
+        }
+    }
+
     private sealed class RecordingGenerationBackgroundService : IPackageRuntimeGenerationParticipant
     {
         public int StartCount { get; private set; }
@@ -1359,6 +1638,8 @@ public sealed class ActivePackageSessionTests
 
         public Task GenerationCompletion => _completion.Task;
 
+        public int StopCount { get; private set; }
+
         public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task CommitGenerationAsync(
@@ -1367,6 +1648,7 @@ public sealed class ActivePackageSessionTests
 
         public Task StopAsync(CancellationToken cancellationToken = default)
         {
+            StopCount++;
             _completion.TrySetResult();
             return Task.CompletedTask;
         }
@@ -1494,10 +1776,4 @@ public sealed class ActivePackageSessionTests
         public void Release() => _release.TrySetResult();
     }
 
-    private interface ITestContribution
-    {
-        string Name { get; }
-    }
-
-    private sealed record TestContribution(string Name) : ITestContribution;
 }

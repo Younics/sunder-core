@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
 
@@ -7,7 +6,6 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed record PreparedPackageSession(
     ActivePackageSession Session,
     PackageSessionSourceSnapshot Sources,
-    IReadOnlyList<PackageUiSnapshotDescriptor> UiSnapshots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     long BaseGeneration,
@@ -20,14 +18,14 @@ internal sealed record PendingPackageSessionPublication(
 internal sealed record PackageSessionPublicationResult(
     RuntimePackageStamp Stamp,
     IReadOnlyList<string> CleanupWarnings,
-    IReadOnlyList<PackageUiSnapshotDescriptor> UiSnapshots,
     bool ReconciliationPending = false);
 
 internal sealed class PackageSessionPublisher(
     RuntimeSessionOwner sessions,
-    RuntimePackageUiService ui,
     ILogger<PackageSessionPublisher> logger,
-    RuntimeLifecyclePolicyOptions? lifecyclePolicy = null)
+    RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
+    RuntimeRpcCatalog? rpcCatalog = null,
+    RuntimeRpcPermissionStore? rpcPermissions = null)
 {
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy = ValidateLifecyclePolicy(
         lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions());
@@ -40,16 +38,9 @@ internal sealed class PackageSessionPublisher(
         long baseGeneration,
         string? stageId = null)
     {
-        var started = Stopwatch.GetTimestamp();
-        var snapshots = ui.CreateSnapshots(session.GetAppPackageSources(), checked(baseGeneration + 1), stageId);
-        logger.LogInformation(
-            "Prepared {SnapshotCount} package UI snapshot(s) in {ElapsedMilliseconds} ms",
-            snapshots.Count,
-            Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return new PreparedPackageSession(
             session,
             sources,
-            snapshots,
             warnings.ToArray(),
             errors.ToArray(),
             baseGeneration,
@@ -88,16 +79,12 @@ internal sealed class PackageSessionPublisher(
         PreparedPackageSession candidate,
         CancellationToken cancellationToken)
     {
-        var started = Stopwatch.GetTimestamp();
         try
         {
             var publication = await sessions.PreparePublicationAsync(
                 candidate.Session,
                 candidate.BaseGeneration,
                 cancellationToken);
-            logger.LogInformation(
-                "Drained the previous package session in {ElapsedMilliseconds} ms",
-                Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             return new PendingPackageSessionPublication(candidate, publication);
         }
         catch
@@ -111,38 +98,36 @@ internal sealed class PackageSessionPublisher(
         PendingPackageSessionPublication pending,
         CancellationToken cancellationToken = default)
     {
-        var started = Stopwatch.GetTimestamp();
         var candidate = pending.Candidate;
-        var snapshots = candidate.UiSnapshots;
         try
         {
+            if (rpcPermissions is not null)
+            {
+                await rpcPermissions.GrantDeclaredInstalledActionsAsync(
+                    RuntimeRpcPermissionSubjects.FromSession(candidate.Session),
+                    cancellationToken);
+            }
             await candidate.Session.StartBackgroundServicesAsync(
                 logger,
                 _lifecyclePolicy.PackageBackgroundServiceStartupTimeout,
                 _lifecyclePolicy.PackageBackgroundServiceCleanupTimeout,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (candidate.StageId is not null)
-            {
-                snapshots = ui.PromoteStage(candidate.StageId, candidate.UiSnapshots);
-            }
             var publication = await sessions.CommitPublicationAsync(
                 pending.Publication,
                 candidate.Sources,
-                snapshots,
                 candidate.Warnings,
                 candidate.Errors);
             await CommitRuntimeGenerationAsync(
                 candidate.Session,
                 publication.Stamp.SessionGeneration,
                 cancellationToken);
+            rpcCatalog?.ActivateSession(candidate.Session, publication.Stamp.SessionGeneration);
+            rpcCatalog?.VerifySessionGeneration(publication.Stamp.SessionGeneration);
             sessions.ActivatePublication(pending.Publication);
             candidate.Session.StartRuntimeGenerationMonitoring(sessions.HandleRuntimeGenerationFault);
-            ui.ScheduleCacheGarbageCollection();
-            logger.LogInformation(
-                "Started background services, committed the package session, and activated Runtime generations in {ElapsedMilliseconds} ms",
-                Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-            return new PackageSessionPublicationResult(publication.Stamp, publication.Warnings, snapshots);
+            candidate.Session.ActivateCommittedRuntimeGeneration();
+            return new PackageSessionPublicationResult(publication.Stamp, publication.Warnings);
         }
         catch (Exception exception)
         {
@@ -170,31 +155,75 @@ internal sealed class PackageSessionPublisher(
                         retirementException,
                         "Failed to remove a package session whose Runtime generation did not activate");
                 }
-                if (candidate.StageId is not null)
+                finally
                 {
-                    ui.DiscardStage(candidate.StageId);
+                    DeactivateRpcCatalog();
                 }
-                ui.DiscardSnapshots(snapshots);
                 logger.LogError(exception, "Package session publication failed before Runtime generation activation completed");
                 throw;
             }
             if (pending.Publication.Committed)
             {
+                AlignRpcCatalogToActiveSession();
                 const string warning = "The package session was applied, but publishing its Runtime snapshot did not complete; reconciliation is pending.";
                 logger.LogError(exception, "Package session publication failed after Runtime generation activation completed");
                 return new PackageSessionPublicationResult(
                     sessions.Stamp,
                     [warning],
-                    snapshots,
                     ReconciliationPending: true);
             }
-            if (candidate.StageId is not null)
-            {
-                ui.DiscardStage(candidate.StageId);
-            }
-            ui.DiscardSnapshots(snapshots);
             await DisposeSessionAsync(candidate.Session);
+            AlignRpcCatalogToActiveSession();
             throw;
+        }
+    }
+
+    private void DeactivateRpcCatalog()
+    {
+        if (rpcCatalog is null)
+        {
+            return;
+        }
+
+        var generation = sessions.Generation;
+        rpcCatalog.DeactivateAll(generation);
+        rpcCatalog.VerifySessionGeneration(generation);
+    }
+
+    private void AlignRpcCatalogToActiveSession()
+    {
+        if (rpcCatalog is null)
+        {
+            return;
+        }
+
+        PackageSessionLease sessionLease;
+        try
+        {
+            sessionLease = sessions.State.AcquireLease();
+        }
+        catch (RuntimeUnavailableException)
+        {
+            return;
+        }
+
+        using (sessionLease)
+        {
+            var generation = sessionLease.Generation;
+            while (true)
+            {
+                if (rpcCatalog.SessionGeneration != generation)
+                {
+                    rpcCatalog.ActivateSession(sessionLease.Session, generation);
+                }
+                var currentGeneration = sessions.Generation;
+                if (currentGeneration == generation)
+                {
+                    rpcCatalog.VerifySessionGeneration(generation);
+                    return;
+                }
+                generation = currentGeneration;
+            }
         }
     }
 
@@ -250,14 +279,7 @@ internal sealed class PackageSessionPublisher(
 
     public async Task DiscardAsync(PreparedPackageSession candidate)
     {
-        if (candidate.StageId is not null)
-        {
-            ui.DiscardStage(candidate.StageId);
-        }
-        else
-        {
-            ui.DiscardSnapshots(candidate.UiSnapshots);
-        }
+        if (candidate.StageId is not null) sessions.RemoveStage(candidate.StageId);
         await DisposeSessionAsync(candidate.Session);
     }
 

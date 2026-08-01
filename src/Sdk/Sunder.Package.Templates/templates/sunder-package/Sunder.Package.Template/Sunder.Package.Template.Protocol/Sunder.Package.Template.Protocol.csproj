@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>Sunder.Package.Template.Protocol</AssemblyName>
+    <Description>Package-local RPC descriptors and generated bindings for SUNDER_PACKAGE_NAME_XML.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" PrivateAssets="all" />
+    <EmbeddedResource Include="Contracts\sample.rpc.json"
+                      LogicalName="Sunder.Package.Template.Protocol.Contracts.sample.rpc.json" />
+  </ItemGroup>
+
+</Project>

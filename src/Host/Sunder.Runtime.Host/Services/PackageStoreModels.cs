@@ -49,6 +49,7 @@ internal sealed class PackageStoreSimulatedCrashException(PackageStoreFaultPoint
 internal sealed record PackageStorePreparedStage(
     string StageId,
     IReadOnlyList<InstalledPackageRecord> ProspectivePackages,
+    IReadOnlyDictionary<string, string> PreparationSourcePaths,
     PackageOperationResult Result,
     long BaseCatalogGeneration);
 

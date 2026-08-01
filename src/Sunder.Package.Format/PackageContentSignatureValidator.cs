@@ -10,14 +10,13 @@ internal static class PackageContentSignatureValidator
 
     public static async Task ValidateAsync(
         SunderPackageContentIndexEntry entry,
-        string stagingPath,
-        ArchiveRelativePath path,
+        string? filePath,
         string normalizedPath,
         ICollection<string> errors,
+        bool validateHash,
         CancellationToken cancellationToken)
     {
-        var filePath = SunderArchive.ResolveFile(stagingPath, path);
-        if (!File.Exists(filePath))
+        if (filePath is null)
         {
             errors.Add($"Package content index references missing file '{normalizedPath}'.");
             return;
@@ -27,6 +26,10 @@ internal static class PackageContentSignatureValidator
         if (info.Length != entry.Size)
         {
             errors.Add($"Package file '{normalizedPath}' size mismatch.");
+        }
+        if (!validateHash)
+        {
+            return;
         }
         await using var stream = File.OpenRead(filePath);
         var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();

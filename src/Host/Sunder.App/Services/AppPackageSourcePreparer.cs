@@ -61,15 +61,14 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
                     CancellationToken = cancellationToken,
                 }).ConfigureAwait(false);
             File.Delete(archivePath);
-            var manifestPath = Path.Combine(shadowFolder, "sunder-package.json");
-            var manifest = File.Exists(manifestPath) ? AppPackageManifest.Load(manifestPath) : null;
-            if (string.IsNullOrWhiteSpace(manifest?.Id))
+            var manifest = AppPackageManifestReader.Read(shadowFolder);
+            if (string.IsNullOrWhiteSpace(manifest.Id))
             {
                 return null;
             }
 
             prepared = true;
-            return new AppPreparedPackageSource(manifest.Id, shadowFolder);
+            return new AppPreparedPackageSource(manifest.Id, shadowFolder, manifest);
         }
         finally
         {

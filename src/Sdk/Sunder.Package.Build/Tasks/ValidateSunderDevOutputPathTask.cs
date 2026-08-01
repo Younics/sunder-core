@@ -19,6 +19,9 @@ public sealed class ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.
     [Output]
     public string NormalizedDevOutputPath { get; private set; } = string.Empty;
 
+    [Output]
+    public string OwnershipMarkerPath { get; private set; } = string.Empty;
+
     public override bool Execute()
     {
         try
@@ -50,7 +53,7 @@ public sealed class ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.
                     return false;
                 }
 
-                var markerPath = Path.Combine(output, MarkerFileName);
+                var markerPath = GetOwnershipMarkerPath(output);
                 if (!File.Exists(markerPath)
                     || (File.GetAttributes(markerPath) & FileAttributes.ReparsePoint) != 0)
                 {
@@ -63,6 +66,7 @@ public sealed class ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.
             NormalizedDevOutputPath = Path.EndsInDirectorySeparator(output)
                 ? output
                 : output + Path.DirectorySeparatorChar;
+            OwnershipMarkerPath = GetOwnershipMarkerPath(output);
             return true;
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException)
@@ -74,6 +78,9 @@ public sealed class ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.
 
     private static string Normalize(string path)
         => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    public static string GetOwnershipMarkerPath(string devOutputPath)
+        => Path.TrimEndingDirectorySeparator(Path.GetFullPath(devOutputPath)) + MarkerFileName;
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(left, right, PathComparison);

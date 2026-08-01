@@ -7,18 +7,37 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed partial class PackageSessionLoadService
 {
-    private readonly PackageSessionPreparer _preparer = new();
+    private readonly PackageSessionPreparer _preparer;
     private readonly RuntimePackageActivator _activator;
     private readonly ILogger _logger;
 
-    public PackageSessionLoadService(ILogger logger, RuntimePackagePaths? paths = null)
+    public PackageSessionLoadService(
+        ILogger logger,
+        RuntimePackagePaths? paths = null,
+        string? runtimeIdentifier = null,
+        RuntimeRpcBroker? rpcBroker = null,
+        RuntimeProcessPolicyOptions? processPolicy = null,
+        CancellationToken hostStopping = default,
+        RuntimeContentTransferStore? contentTransfers = null,
+        PackageSessionState? sessions = null,
+        RuntimeTransportPolicyOptions? transportPolicy = null)
     {
         _logger = logger;
-        _activator = new RuntimePackageActivator(logger, paths ?? new RuntimePackagePaths());
+        _preparer = new PackageSessionPreparer(runtimeIdentifier);
+        _activator = new RuntimePackageActivator(
+            logger,
+            paths ?? new RuntimePackagePaths(),
+            rpcBroker,
+            processPolicy,
+            hostStopping,
+            contentTransfers,
+            sessions,
+            transportPolicy);
     }
 
     public async Task<PackageSessionLoadResult> LoadInstalledAsync(
         IReadOnlyList<InstalledPackageRecord> packages,
+        IReadOnlyDictionary<string, string>? preparationSourcePaths = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -27,7 +46,6 @@ internal sealed partial class PackageSessionLoadService
         RuntimePackageSessionDirectories.ScheduleStaleSessionCleanup();
         var sessionFolder = RuntimePackageSessionDirectories.CreateInstalledSessionFolder();
         Directory.CreateDirectory(sessionFolder);
-        var fileMaterializer = new PackageSessionFileMaterializer();
         var preparedCandidates = new List<PreparedRuntimePackage>();
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase);
         var enabledPackages = packages.Where(static package => package.IsEnabled).ToArray();
@@ -36,7 +54,30 @@ internal sealed partial class PackageSessionLoadService
         {
             ThrowIfCancellationRequested(cancellationToken, sessionFolder);
             var package = packages[index];
-            var activation = PackageSessionPreparer.ToActivationState(package);
+            var physicalSourceRoot = preparationSourcePaths?.GetValueOrDefault(package.PackageId)
+                ?? package.InstallPath;
+            var errorCount = errors.Count;
+            var activation = await _preparer.ReadInstalledActivationStateAsync(
+                package,
+                physicalSourceRoot,
+                errors,
+                cancellationToken);
+            if (activation is null)
+            {
+                sessionPackages[package.PackageId] = BuildSessionDescriptor(
+                    new RuntimePackageActivationState(
+                        package.PackageId,
+                        package.Name,
+                        package.Version,
+                        PackageHostRoles.None,
+                        package.Icon),
+                    isEnabled: false,
+                    readiness: PackageReadinessState.Failed,
+                    failureOrigin: PackageFailureOrigin.RuntimeActivation,
+                    lastError: errors.Skip(errorCount).LastOrDefault() ?? "Installed package failed strict validation.",
+                    failureCount: 1);
+                continue;
+            }
             if (!package.IsEnabled)
             {
                 sessionPackages[package.PackageId] = BuildSessionDescriptor(
@@ -46,8 +87,14 @@ internal sealed partial class PackageSessionLoadService
                 continue;
             }
 
-            var errorCount = errors.Count;
-            var preparedPackage = _preparer.PrepareInstalledPackage(index, package, sessionFolder, fileMaterializer, errors);
+            errorCount = errors.Count;
+            var preparedPackage = await _preparer.PrepareInstalledPackageAsync(
+                index,
+                package,
+                physicalSourceRoot,
+                sessionFolder,
+                errors,
+                cancellationToken);
             if (preparedPackage is not null)
             {
                 preparedCandidates.Add(preparedPackage);
@@ -66,7 +113,7 @@ internal sealed partial class PackageSessionLoadService
         if (enabledPackages.Length == 0 && sessionPackages.Count == 0)
         {
             TryDeleteDirectory(sessionFolder);
-            return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings, errors);
+            return new PackageSessionLoadResult(ActivePackageSession.CreateEmpty(), warnings, errors);
         }
 
         ThrowIfCancellationRequested(cancellationToken, sessionFolder);
@@ -85,7 +132,7 @@ internal sealed partial class PackageSessionLoadService
         if (preparedCandidates.Count == 0 && initialSessionPackages.Count == 0)
         {
             TryDeleteDirectory(sessionFolder);
-            return new PackageSessionLoadResult(ActivePackageSession.Empty, warnings.ToArray(), errors.ToArray());
+            return new PackageSessionLoadResult(ActivePackageSession.CreateEmpty(), warnings.ToArray(), errors.ToArray());
         }
 
         ThrowIfCancellationRequested(cancellationToken, sessionFolder);
@@ -106,7 +153,6 @@ internal sealed partial class PackageSessionLoadService
         var readySources = new List<RuntimePackageSource>(orderedPackages.Count);
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(initialSessionPackages, StringComparer.OrdinalIgnoreCase);
         var readyPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var extensionCatalog = new RuntimePackageExtensionCatalog();
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -131,7 +177,7 @@ internal sealed partial class PackageSessionLoadService
 
                 var activationStarted = Stopwatch.GetTimestamp();
                 var activation = await _activator.ActivateAsync(
-                    preparedPackage, sharedAssemblyRegistry, extensionCatalog, warnings, errors, cancellationToken);
+                    preparedPackage, sharedAssemblyRegistry, warnings, errors, cancellationToken);
                 _logger.LogInformation(
                     "Activated Runtime package {PackageId} in {ElapsedMilliseconds} ms",
                     preparedPackage.PackageId,
@@ -153,7 +199,6 @@ internal sealed partial class PackageSessionLoadService
                 sessionFolder,
                 loadedPackages,
                 sessionPackages,
-                extensionCatalog,
                 sharedAssemblyRegistry,
                 false,
                 readySources);
@@ -166,7 +211,6 @@ internal sealed partial class PackageSessionLoadService
             sessionFolder,
             loadedPackages,
             sessionPackages,
-            extensionCatalog,
             sharedAssemblyRegistry,
             false,
             readySources);

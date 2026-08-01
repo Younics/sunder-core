@@ -27,18 +27,6 @@ public sealed class PackagingPrimitiveTests
         => Assert.False(PackageVersionRange.TryParse(new string('1', PackageVersionRange.MaximumLength + 1), out _));
 
     [Fact]
-    public void ExtensionContribution_RequiresCanonicalOwner()
-    {
-        Assert.Throws<ArgumentException>(() => new PackageExtensionContribution<object>(string.Empty, new object()));
-        Assert.Throws<ArgumentException>(() => new PackageExtensionContribution<object>("Package.Owner", new object()));
-
-        var contribution = new PackageExtensionContribution<string>("package.owner", "value");
-
-        Assert.Equal("package.owner", contribution.PackageId);
-        Assert.Equal("value", contribution.Contribution);
-    }
-
-    [Fact]
     public void PackagingPrimitives_AreOwnedOnlyBySdk()
     {
         var formatAssembly = typeof(SunderPackageArchiveInspector).Assembly;

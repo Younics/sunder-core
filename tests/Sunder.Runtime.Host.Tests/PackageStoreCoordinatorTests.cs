@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -671,20 +672,21 @@ public sealed class PackageStoreCoordinatorTests
     {
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "lib"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "assets"));
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "lib"));
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "assets"));
         var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
         {
+            ArchiveFormatVersion = 1,
             ManifestVersion = 1,
             Id = packageId,
             Name = packageId,
             Version = version,
-            EntryAssembly = packageId + ".dll",
-            HostRoles = [SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole],
-            SdkApiVersion = 1,
-            SdkPackageVersion = "1.1.0",
-            RequiredSdkCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
+            Targets =
+            [
+                CreateTarget(SunderPackageFormat.AppHostRole, SunderPackageFormat.AvaloniaTargetKind, packageId),
+                CreateTarget(SunderPackageFormat.RuntimeHostRole, SunderPackageFormat.DotnetTargetKind, packageId),
+            ],
             DependsOn = (dependencies ?? []).Select(dependency => new SunderPackageDependencyManifest
             {
                 PackageId = dependency.PackageId,
@@ -693,8 +695,8 @@ public sealed class PackageStoreCoordinatorTests
         }));
         File.Copy(
             typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
-            Path.Combine(sourceRoot, "payload", "lib", packageId + ".dll"));
-        File.WriteAllText(Path.Combine(sourceRoot, "payload", "assets", "test-content.txt"), payloadContent);
+            Path.Combine(sourceRoot, "payload", "shared", "lib", packageId + ".dll"));
+        File.WriteAllText(Path.Combine(sourceRoot, "payload", "shared", "assets", "test-content.txt"), payloadContent);
         var entries = Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories)
             .Select(path => CreateIndexEntry(sourceRoot, path))
             .ToArray();
@@ -713,6 +715,7 @@ public sealed class PackageStoreCoordinatorTests
         File.ReadAllText(Path.Combine(
             paths.GetInstalledPackagePath(packageId, version),
             "payload",
+            "shared",
             "assets",
             "test-content.txt"));
 
@@ -723,9 +726,20 @@ public sealed class PackageStoreCoordinatorTests
         return new SunderPackageContentIndexEntry(
             relativePath,
             Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
-            new FileInfo(path).Length,
-            SunderPackageFormat.GetContentRole(relativePath) ?? "file");
+            new FileInfo(path).Length);
     }
+
+    private static SunderPackageTargetManifest CreateTarget(string role, string kind, string packageId)
+        => new()
+        {
+            Role = role,
+            Rid = RuntimeInformation.RuntimeIdentifier,
+            Kind = kind,
+            EntryPoint = $"lib/{packageId}.dll",
+            TargetFramework = "net10.0",
+            SdkVersion = "1.1.0",
+            RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
+        };
 
     private static string CreateTempDirectory()
     {

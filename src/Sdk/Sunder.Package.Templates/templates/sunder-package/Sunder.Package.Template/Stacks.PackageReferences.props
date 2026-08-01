@@ -1,5 +1,0 @@
-<Project>
-  <ItemGroup>
-    <PackageReference Include="Sunder.Sdk.Stacks" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
-  </ItemGroup>
-</Project>

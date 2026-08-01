@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
@@ -36,7 +37,7 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 packagePath,
                 stagingPath,
                 cancellationToken);
-            if (validation.Errors.Count > 0 || validation.Manifest is null)
+            if (!validation.Success || validation.Manifest is null || validation.ContentIndex is null)
             {
                 TryDeleteDirectory(stagingPath);
                 return new PackageArchiveMutationPreparationResult(
@@ -51,28 +52,18 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
             }
 
             var manifest = validation.Manifest;
-            var compatibilityErrors = SunderSdkCompatibilityProfile.Validate(manifest);
-            if (compatibilityErrors.Count > 0)
-            {
-                TryDeleteDirectory(stagingPath);
-                return new PackageArchiveMutationPreparationResult(
-                    null,
-                    new PackageOperationResult(
-                        false,
-                        "Package SDK compatibility validation failed.",
-                        RuntimeSessionApplied: false,
-                        RequiresAppRestart: false,
-                        validation.Warnings,
-                        compatibilityErrors));
-            }
-
             var installedPath = Path.GetFullPath(paths.GetInstalledPackagePath(manifest.Id!, manifest.Version!));
+            var installedRecord = CreateInstalledPackageRecord(
+                manifest,
+                validation.ContentIndex,
+                stagingPath,
+                installedPath,
+                isEnabled);
             return new PackageArchiveMutationPreparationResult(
                 new PreparedPackageArchiveMutation(
                     stagingPath,
                     installedPath,
-                    CreateInstalledPackageRecord(manifest, stagingPath, isEnabled),
-                    CreateInstalledPackageRecord(manifest, installedPath, isEnabled)),
+                    installedRecord),
                 null);
         }
         catch (OperationCanceledException)
@@ -89,6 +80,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
 
     private static InstalledPackageRecord CreateInstalledPackageRecord(
         SunderPackageManifest manifest,
+        SunderPackageContentIndex contentIndex,
+        string sourcePath,
         string installedPath,
         bool isEnabled)
         => new(
@@ -96,14 +89,31 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
             manifest.Name!,
             manifest.Summary,
             manifest.Version!,
-            manifest.EntryAssembly!,
             manifest.Icon,
+            installedPath,
+            Path.Combine(installedPath, SunderPackageFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar)),
+            ComputeContentIdentity(sourcePath),
+            contentIndex.Files!
+                .Select(entry => new InstalledPackageContentRecord(entry!.Path!, entry.Sha256!, entry.Size))
+                .OrderBy(static entry => entry.Path, StringComparer.Ordinal)
+                .ToArray(),
             (manifest.DependsOn ?? [])
                 .Select(dependency => new InstalledPackageDependencyRecord(dependency.PackageId!, dependency.VersionRange!))
                 .ToArray(),
-            installedPath,
             isEnabled,
             DateTimeOffset.UtcNow);
+
+    private static string ComputeContentIdentity(string sourcePath)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var relativePath in new[] { SunderPackageFormat.ManifestPath, SunderPackageFormat.ContentIndexPath })
+        {
+            var path = Path.Combine(sourcePath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            using var stream = File.OpenRead(path);
+            hash.AppendData(SHA256.HashData(stream));
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
 
     private static PackageArchiveMutationPreparationResult PreparationFailure(string message)
         => new(null, PackageOperationResults.Failure(message));

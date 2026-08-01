@@ -7,7 +7,4 @@ namespace Sunder.Sdk.Abstractions;
 [SunderSdkCapability(SunderSdkCapabilities.ContributionsV1)]
 public interface ISunderAppContributionRegistry
 {
-    /// <summary>Registers a contribution owned by the currently activating package for a typed extension point.</summary>
-    [SunderSdkCapability(SunderSdkCapabilities.ExtensionsV1)]
-    void RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution);
 }

@@ -27,7 +27,21 @@ internal static class PackageSessionEndpoints
 
         group.MapGet(
             "ui-snapshots",
-            (RuntimePackageUiService packageUi) => Results.Ok(packageUi.GetActiveSnapshots()));
+            (string appRid, RuntimePackageUiService packageUi) => Results.Ok(packageUi.GetActiveSnapshots(appRid)));
+
+        group.MapGet(
+            "session/stage/{stageId}/ui-snapshots",
+            (string stageId, string appRid, RuntimePackageUiService packageUi) =>
+            {
+                try
+                {
+                    return Results.Ok(packageUi.GetStageSnapshots(stageId, appRid));
+                }
+                catch (KeyNotFoundException exception)
+                {
+                    throw new RuntimeNotFoundException(exception.Message);
+                }
+            });
 
         group.MapGet("ui-snapshots/{snapshotId}", (
             string snapshotId,

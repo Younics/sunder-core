@@ -1,0 +1,31 @@
+{
+  "name": "SUNDER_NPM_PACKAGE_NAME",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && node --test test/*.test.cjs",
+    "sunder:dev": "sunder-package dev --watch",
+    "sunder:dev:once": "sunder-package dev",
+    "build": "sunder-package build",
+    "smoke": "sunder-package smoke",
+    "package": "sunder-package package"
+  },
+  "dependencies": {
+    "@sunder/sdk": "^1.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@sunder/package-tool": "^1.1.0",
+    "@types/node": "24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "6.0.3",
+    "vite": "^8.0.10"
+  }
+}

@@ -1360,7 +1360,7 @@ public sealed class MainWindowViewModelShellViewTests
         );
         Assert.True(harness.ViewModel.IsViewInHotbar("agent.chat"));
 
-        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []));
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []), []);
 
         Assert.Empty(GetPackageMenuGroups(harness.ViewModel));
         Assert.Empty(harness.ViewModel.ListHotbarViews());
@@ -1390,7 +1390,7 @@ public sealed class MainWindowViewModelShellViewTests
         );
         var hostedView = hostedBoundary.HostedView;
 
-        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []));
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([], []), []);
         await packageViewHostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(
@@ -1443,6 +1443,7 @@ public sealed class MainWindowViewModelShellViewTests
 
         var apply = harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
             CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+            [replacementSource],
             ["agent"]
         );
         try
@@ -1526,6 +1527,7 @@ public sealed class MainWindowViewModelShellViewTests
             var expectedInvocations = runtimeHandler.OperationRequestCount + 1;
             await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([activePackage], [source], generation),
+                [source],
                 retryPackageIds).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(expectedInvocations, runtimeHandler.OperationRequestCount);
             Assert.True(harness.ViewModel.HasMiddleSelection);
@@ -1557,7 +1559,8 @@ public sealed class MainWindowViewModelShellViewTests
 
         var requestsBeforeRemove = runtimeHandler.OperationRequestCount;
         await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
-            CreateRuntimeSnapshot([], [], generation: 4)).WaitAsync(TimeSpan.FromSeconds(5));
+            CreateRuntimeSnapshot([], [], generation: 4),
+            []).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(requestsBeforeRemove, runtimeHandler.OperationRequestCount);
         Assert.False(harness.ViewModel.HasMiddleSelection);
 
@@ -1577,6 +1580,7 @@ public sealed class MainWindowViewModelShellViewTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([updatedPackage], [rejectedSource], generation: 6),
+                [rejectedSource],
                 ["agent"]));
         var rejectedView = Assert.Single(
             harness.StagingSurface.StagedViews.Skip(stagedBeforeRejection));
@@ -1645,6 +1649,7 @@ public sealed class MainWindowViewModelShellViewTests
         await harness
             .ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+                [replacementSource],
                 ["agent"]
             )
             .WaitAsync(TimeSpan.FromSeconds(5));
@@ -1732,6 +1737,7 @@ public sealed class MainWindowViewModelShellViewTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+                [replacementSource],
                 ["agent"]
             )
         );
@@ -1799,6 +1805,7 @@ public sealed class MainWindowViewModelShellViewTests
 
         var apply = harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
             CreateRuntimeSnapshot([package], [replacementSource], generation: 2),
+            [replacementSource],
             ["agent"],
             cancellation.Token
         );
@@ -1839,6 +1846,7 @@ public sealed class MainWindowViewModelShellViewTests
 
         await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
             harness.RuntimeSnapshot!,
+            harness.PackageSources!,
             ["agent"]
         );
 
@@ -2032,6 +2040,7 @@ public sealed class MainWindowViewModelShellViewTests
             runtimeApiClientFactory.PackageSources = [];
             await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([], [], index * 2 + 2),
+                [],
                 ["agent"]
             );
 
@@ -2039,6 +2048,7 @@ public sealed class MainWindowViewModelShellViewTests
             runtimeApiClientFactory.PackageSources = [packageSource];
             await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([CreateActiveAgentPackage()], [packageSource], index * 2 + 3),
+                [packageSource],
                 ["agent"]
             );
         }
@@ -2467,13 +2477,17 @@ public sealed class MainWindowViewModelShellViewTests
     {
         var rootPath = CreateTempDirectory();
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
+        var packageSources = new[]
+        {
+            RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder),
+        };
         var runtimeSnapshot = CreateRuntimeSnapshot(
             [CreateActiveAgentPackage()],
-            [RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, packageSourceFolder)]
+            packageSources
         );
         var runtimeApiClientFactory = new StaticRuntimeApiClientFactory(
             runtimeSnapshot.ActivePackages,
-            runtimeSnapshot.PackageUiSnapshots
+            packageSources
         );
         var packageViewHostService = CreatePackageViewHostService();
         return CreateHarness(
@@ -2481,7 +2495,8 @@ public sealed class MainWindowViewModelShellViewTests
             runtimeApiClientFactory,
             packageViewHostService,
             packageViewHostService,
-            runtimeSnapshot: runtimeSnapshot
+            runtimeSnapshot: runtimeSnapshot,
+            runtimePackageSources: packageSources
         );
     }
 
@@ -2494,7 +2509,8 @@ public sealed class MainWindowViewModelShellViewTests
         RuntimePackageSnapshot? runtimeSnapshot = null,
         bool deferInitialHostedViews = false,
         IUiDispatcher? uiDispatcher = null,
-        string? initialRightTopViewId = null
+        string? initialRightTopViewId = null,
+        IReadOnlyList<PackageUiSnapshotDescriptor>? runtimePackageSources = null
     )
     {
         var state = new ShellState
@@ -2584,7 +2600,8 @@ public sealed class MainWindowViewModelShellViewTests
             statePath,
             stagingSurface,
             disposablePackageViewHostService,
-            runtimeSnapshot
+            runtimeSnapshot,
+            runtimePackageSources
         );
     }
 
@@ -2600,7 +2617,6 @@ public sealed class MainWindowViewModelShellViewTests
             RuntimeBootstrapState.Ready,
             activePackages,
             [],
-            packageSources,
             [],
             []
         );
@@ -2745,15 +2761,10 @@ public sealed class MainWindowViewModelShellViewTests
 
         var assemblyPath = typeof(ShellLifecycleTestPackageModule).Assembly.Location;
         var entryAssemblyFileName = Path.GetFileName(assemblyPath);
-        File.WriteAllText(
-            Path.Combine(packageSourceFolder, "sunder-package.json"),
-            $$"""
-            {
-              "id": "{{packageId}}",
-              "entryAssembly": "{{entryAssemblyFileName}}"
-            }
-            """
-        );
+        RuntimeContractTestData.WriteAppProjectionManifest(
+            packageSourceFolder,
+            packageId,
+            $"lib/{entryAssemblyFileName}");
         File.WriteAllBytes(Path.Combine(packageSourceFolder, "icon.png"), [1, 2, 3]);
 
         foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
@@ -2817,12 +2828,15 @@ public sealed class MainWindowViewModelShellViewTests
         string statePath,
         TestPackageViewStagingSurface stagingSurface,
         PackageViewHostService? packageViewHostService = null,
-        RuntimePackageSnapshot? runtimeSnapshot = null
+        RuntimePackageSnapshot? runtimeSnapshot = null,
+        IReadOnlyList<PackageUiSnapshotDescriptor>? packageSources = null
     ) : IDisposable
     {
         public MainWindowViewModel ViewModel { get; } = viewModel;
 
         public RuntimePackageSnapshot? RuntimeSnapshot { get; } = runtimeSnapshot;
+
+        public IReadOnlyList<PackageUiSnapshotDescriptor>? PackageSources { get; } = packageSources;
 
         public string StatePath { get; } = statePath;
 
@@ -2951,11 +2965,22 @@ public sealed class MainWindowViewModelShellViewTests
             CancellationToken cancellationToken = default
         ) => Task.FromResult<IReadOnlyList<SessionPackageDescriptor>>([]);
 
+        public Task<RuntimePackageSnapshot> GetRuntimePackageSnapshotAsync(
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(CreateRuntimeSnapshot(activePackages, packageSources));
+
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
+            string appRid,
             CancellationToken cancellationToken = default
         ) =>
             getActivePackageSourcesAsync?.Invoke(cancellationToken)
             ?? Task.FromResult(packageSources);
+
+        public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(
+            string stageId,
+            string appRid,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult(packageSources);
 
         public Task DownloadPackageUiSnapshotAsync(
             PackageUiSnapshotDescriptor snapshot,
@@ -3373,10 +3398,26 @@ public sealed class MainWindowViewModelShellViewTests
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":3,\"minimumSupportedRevision\":3,\"maximumSupportedRevision\":3,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"package-runtime-operations.v1\",\"package-runtime-stream-envelopes.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
+                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":5,\"minimumSupportedRevision\":5,\"maximumSupportedRevision\":5,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v1\",\"package-runtime-operations.v1\",\"package-runtime-stream-envelopes.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
                         System.Text.Encoding.UTF8,
                         "application/json"),
                 });
+            }
+
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/open")
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "{\"sessionId\":\"test-app-session\"}",
+                        System.Text.Encoding.UTF8,
+                        "application/json"),
+                });
+            }
+
+            if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/close")
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
             }
 
             Assert.EndsWith(

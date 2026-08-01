@@ -39,10 +39,11 @@ public sealed class ShellStartupResult : IAsyncDisposable
 
     internal Task StartRuntimeSubscriptionAsync(
         RuntimePackageSnapshot initialSnapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
         CancellationToken cancellationToken
     ) =>
         GetSession()
-            .StartRuntimeSubscriptionAsync(initialSnapshot, cancellationToken);
+            .StartRuntimeSubscriptionAsync(initialSnapshot, initialPackageSources, cancellationToken);
 
     internal ShellSession TransferOwnership(ServiceProvider serviceProvider)
     {
@@ -285,7 +286,10 @@ public sealed class ShellStartupCoordinator
                         .GetSystemStatusAsync(cancellationToken)
                         .ConfigureAwait(false);
                     activePackages = runtimePackageSnapshot.ActivePackages;
-                    packageSources = runtimePackageSnapshot.PackageUiSnapshots;
+                    packageSources = await runtimeApiClient
+                        .GetActivePackageUiSnapshotsAsync(AppPackageTargetEnvironment.CurrentRid, cancellationToken)
+                        .ConfigureAwait(false);
+                    ValidatePackageSourceGeneration(runtimePackageSnapshot, packageSources);
                     warnings.AddRange(runtimePackageSnapshot.Warnings);
                     errors.AddRange(runtimePackageSnapshot.Errors);
                     LogStartupPhase("runtime package snapshot", phaseStopwatch);
@@ -433,6 +437,7 @@ public sealed class ShellStartupCoordinator
                 await result
                     .StartRuntimeSubscriptionAsync(
                         runtimePackageSnapshot,
+                        packageSources,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -484,6 +489,17 @@ public sealed class ShellStartupCoordinator
     }
 
     internal static bool ShouldCheckPackageUpdates(bool openCoreShell) => !openCoreShell;
+
+    internal static void ValidatePackageSourceGeneration(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources)
+    {
+        if (packageSources.Any(source => source.SessionGeneration != snapshot.SessionGeneration))
+        {
+            throw new InvalidDataException(
+                $"App package snapshots do not belong to Runtime generation {snapshot.SessionGeneration}.");
+        }
+    }
 
     internal static async Task<RuntimePackageSnapshot> WaitForReadyRuntimeSnapshotAsync(
         IRuntimeSnapshotClient runtimeApiClient,

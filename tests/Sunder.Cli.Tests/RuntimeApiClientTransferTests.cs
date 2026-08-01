@@ -28,7 +28,7 @@ public sealed class RuntimeApiClientTransferTests
                 "/api/v1/packages/installed" => Json(Array.Empty<InstalledPackageDescriptor>()),
                 "/api/v1/uploads/packages" => Json(new ContentUploadDescriptor("upload-1", "hash", body.Length, "demo.sunderpkg", "application/vnd.sunder.package")),
                 "/api/v1/packages/store/stage" => Json(new PackageStoreStageResult(
-                    "stage-1", new PackageOperationResult(true, "staged", false, false, [], []), [], [])),
+                    "stage-1", new PackageOperationResult(true, "staged", false, false, [], []), [])),
                 "/api/v1/packages/store/stage/stage-1/commit" => Json(new PackageOperationResult(true, "installed", true, false, [], [])),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
@@ -64,7 +64,7 @@ public sealed class RuntimeApiClientTransferTests
                 "/api/v1/packages/installed" => Json(Array.Empty<InstalledPackageDescriptor>()),
                 "/api/v1/uploads/packages" => Json(new ContentUploadDescriptor("upload-1", "hash", 7, "demo.sunderpkg", "application/vnd.sunder.package")),
                 "/api/v1/packages/store/stage" => Json(new PackageStoreStageResult(
-                    "stage-1", new PackageOperationResult(true, "staged", false, false, [], []), [], [])),
+                    "stage-1", new PackageOperationResult(true, "staged", false, false, [], []), [])),
                 "/api/v1/packages/store/stage/stage-1/commit" => throw new HttpRequestException("response lost after commit"),
                 "/api/v1/packages/stages/stage-1" => Json(new RuntimePackageStageStatus(
                     "stage-1",

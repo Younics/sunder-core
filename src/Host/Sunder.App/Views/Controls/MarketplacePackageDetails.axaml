@@ -71,6 +71,44 @@
       </StackPanel>
     </Border>
 
+    <Border Classes="card-surface">
+      <Expander IsExpanded="False">
+        <Expander.Header>
+          <StackPanel Spacing="2">
+            <TextBlock Classes="section-title" Text="RPC Access" />
+            <TextBlock Classes="caption" Text="{Binding Marketplace.RpcAccessSummary}" />
+          </StackPanel>
+        </Expander.Header>
+        <StackPanel Margin="0,12,0,0" Spacing="10">
+          <TextBlock Classes="muted"
+                     IsVisible="{Binding Marketplace.HasRpcAccessError}"
+                     Text="{Binding Marketplace.RpcAccessError}"
+                     TextWrapping="Wrap" />
+          <TextBlock Classes="muted"
+                     IsVisible="{Binding Marketplace.HasNoRpcContractUses}"
+                     Text="This version does not declare access to another package's RPC contract."
+                     TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding Marketplace.RpcContractUses}"
+                        IsVisible="{Binding Marketplace.HasRpcContractUses}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:PackageRpcAccessItemViewModel">
+                <Border Classes="settings-note-card" Margin="0,0,0,8">
+                  <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding ContractId}" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding VersionRange}" />
+                      <TextBlock Grid.Column="2" Classes="caption" Text="{Binding RequirementText}" />
+                    </Grid>
+                    <TextBlock Classes="muted" Text="{Binding ActionsText}" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Expander>
+    </Border>
+
     <controls:MarketplaceProfileCard Description="Project links and package metadata."
                                       Links="{Binding Marketplace.ProfileLinks}"
                                       Metadata="{Binding Marketplace.ProfileMetadata}"

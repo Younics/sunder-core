@@ -15,7 +15,7 @@ Runtime contains file-store paths beneath their package root and rejects symboli
 
 Avalonia view/settings contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`.
 
-Use this package for explicit Runtime/App lifecycle roles, background services, typed extension points, and package-scoped storage, settings, secrets, and logging. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
+Use this package for explicit Runtime/App lifecycle roles, background services, schema-first RPC, and package-scoped storage, settings, secrets, and logging. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
@@ -52,7 +52,7 @@ dotnet new sunder-package --name MyPackage --packageId my.company.package --pack
 
 ## Package Shape
 
-A Sunder package is a .NET assembly that declares package metadata and may expose one `ISunderRuntimePackageModule`, one `ISunderAppPackageModule`, or a single class implementing both roles.
+A Sunder package is one universal archive with shared content and exact App/Runtime RID targets. A managed target declares package metadata and exposes at most one module for its role. A shared-only package may contain descriptor bundles without executable targets.
 
 Typical package projects:
 
@@ -132,11 +132,10 @@ Runtime and App roles have separate module instances, service providers, and exp
 
 ## Contributions
 
-`ISunderRuntimeContributionRegistry` supports background services, Runtime extensions, and host-stamped `PackageSettingsSchema` registration. Base `ISunderAppContributionRegistry` supports App extensions; `Sunder.Sdk.Avalonia` adds:
+`ISunderRuntimeContributionRegistry` supports background services, package-scoped Runtime operations and streams, schema-first RPC providers, and host-stamped `PackageSettingsSchema` registration. `Sunder.Sdk.Avalonia` adds these App registrations to `ISunderAppContributionRegistry`:
 
 - `RegisterPackageView<TView>(PackageViewRegistration registration)`
 - `RegisterSettingsView<TView>()`
-- `RegisterExtension<TContract>(PackageExtensionPoint<TContract> extensionPoint, TContract contribution)`
 
 Package views are Avalonia controls registered by code and constructed from the package App service provider, so their constructors may request registered dependencies. View ids must be globally unique and stable; conventionally prefix them with your package id.
 
@@ -263,11 +262,19 @@ var response = await runtimeClient.InvokeAsync(
 
 Runtime availability, transport, timeout, and Runtime-reported operation failures throw `PackageRuntimeInvocationException`. Its bounded `Code`, optional `StatusCode` and `CorrelationId`, and `IsTransient` classification are the complete package-visible failure contract. Host exceptions are logged internally and are never attached to the package-visible exception. Caller-requested cancellation remains `OperationCanceledException`.
 
-Host-level App extension orchestrators should invoke contributions through `IPackageExtensionInvocationCatalog` leases. Handle expected operation failures, cancellation, and owner retirement locally. A host may caller-bind `TryReportInvariantViolation` for a trusted orchestrator; ordinary package scopes receive default-deny behavior. For an unexpected contributor invariant failure, the trusted orchestrator releases the lease and reports the original opaque reference. The App accepts only that exact current owner activation and generation before applying its normal package-disable policy.
-
 Requests may run concurrently and are cancelled when the caller disconnects, Runtime shuts down, or the package session generation begins retirement. A retiring generation stops admitting new leases and reload waits only for a bounded drain deadline. Handlers must promptly observe cancellation; a handler that ignores it causes reload to fail while the old generation remains loaded and undisposed. Keep operations coarse-grained, use paging for large collections, do not send local filesystem paths, and do not model the channel as remote SQL or a generic repository. Hosts enforce bounded request and response payloads.
 
 For ordered updates, define `PackageRuntimeStream<TRequest, TEvent>`, implement `IPackageRuntimeStreamHandler<TRequest, TEvent>`, register it with `RegisterRuntimeStream`, and consume it with `IPackageRuntimeClient.SubscribeAsync`. Each subscription is independent, retains its Runtime package activation until the stream completes, and must observe cancellation. The wire stream uses bounded newline-terminated `event`, `completed`, and `error` JSON envelopes. EOF without a terminal envelope and a trailing partial record are transport failures; reconnect and replay semantics remain package-defined.
+
+## Schema-first RPC V1
+
+Use `Sunder.Sdk.Rpc` for cross-package Runtime calls. A package bundles every contract descriptor it provides or imports under `payload/shared`, declares the descriptor identity and canonical SHA-256 in `contractBundles`, declares maximum requested `discover`, `invoke`, and `subscribe` actions in `usesContracts`, and declares each provider in `provides`. Runtime provider modules register only the manifest-declared provider id with `RegisterRpcProvider`. Consumers receive a caller-scoped `ISunderRpcClient`; endpoint references identify one exact activation and never retarget a replacement.
+
+Descriptors are strict UTF-8 JSON with `descriptorVersion: 1`, strict SemVer contract versions, services, methods, and local `#/$defs/...` schema references. The supported Draft 2020-12 profile is deliberately closed: bounded strings, arrays, and maps; closed case-sensitive records; bounded numbers; boolean and null; enum and const; local references; and unambiguous object `oneOf` unions with one required string-const discriminator. Remote references, recursive references, unknown keywords, open records, unbounded values, duplicate or case-colliding names, and excessive descriptor depth/count/size are rejected during package validation.
+
+Descriptor hashes use deterministic JCS-compatible canonical JSON. Descriptor numeric tokens, including schema bounds and counts, must be canonical integers in the IEEE-754 safe range `-9007199254740991` through `9007199254740991`; exponent, fractional, leading-zero, and negative-zero descriptor forms are rejected. A runtime instance covered by a schema of type `number` may still contain a fractional JSON number within those integer-authored bounds.
+
+Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. Use `SunderRpcException` for bounded domain failures, `SunderRpcContentReference` for host-mediated large content, and the typed client extensions or `SunderRpcCSharpGenerator` for generated bindings.
 
 ## Settings Navigation
 
@@ -304,19 +311,11 @@ queue.Enqueue(new BackgroundProcessRequest(
 
 `BackgroundProcessIndicator.Hidden` keeps the process out of all footer indicators. `Main`, `Packages`, and `Settings` show it in exactly one host indicator surface. `GroupKey` is for concurrency and package-side listing; it is not used for UI placement.
 
-## Extension Catalog
+## Package-Local Protocol
 
-Packages can query installed/active contributions through `IPackageExtensionCatalog`:
+Sunder does not share package-authored CLR assemblies or expose package objects across activation boundaries. Define cross-package Runtime behavior with a schema-first RPC descriptor, bundle it in each package manifest, and use generated or hand-written package-local adapters over `ISunderRpcClient`.
 
-```csharp
-var providers = extensionCatalog.GetExtensions(MyExtensionPoints.Providers);
-```
-
-Use `GetExtensionContributions` whenever package ownership affects exported dependencies, settings navigation, attribution, or lifecycle decisions. Every contribution has a canonical non-empty owner id; catalogs cannot fall back to ownerless entries.
-
-When a package needs to update open UI or cached capability lists as other packages activate/deactivate, inject `IPackageExtensionCatalog` and cast to `IPackageExtensionCatalogMonitor`. `Changed` provides a revision, active-lifecycle reason, and extension-point additions/removals including package id and contribution type. Subscriber exceptions are isolated by the Host so later subscribers still receive the revision.
-
-Use the change details to refresh only affected state, for example execution-target UI when `sunder.package.agent:execution-targets` changes.
+Discovery and watch results carry Host-stamped owner and activation identities. Endpoint references bind to one exact activation, so callers must rediscover after provider replacement. Keep CLR interfaces and implementations package-local; adapters such as `Sunder.Sdk.Stacks` translate those local calls to the public RPC ABI.
 
 ## Callback Sessions
 
@@ -354,13 +353,13 @@ Example Avalonia usage:
 </Border>
 ```
 
-## Runtime Dependencies And Contracts
+## Runtime Dependencies And Protocol Packages
 
-Runtime package dependencies and NuGet contracts dependencies are separate concepts.
+Runtime package dependencies and NuGet protocol dependencies are separate concepts.
 
 Use `[assembly: SunderPackageDependency(...)]` when your installed package requires another installed Sunder package at runtime.
 
-Use a normal NuGet package reference when you need compile-time contracts from another package, such as a `*.Contracts` package that declares extension points or contribution interfaces.
+Keep descriptors, DTOs, generated bindings, and adapters in a non-packable package-local Protocol project by default. A coordinated package family may distribute a helper NuGet package, but it remains a build-time convenience and does not create shared Runtime type identity. Every Sunder package still bundles the language-neutral descriptor it uses, and cross-package calls travel through `ISunderRpcClient`.
 
 ## Build And Publish
 

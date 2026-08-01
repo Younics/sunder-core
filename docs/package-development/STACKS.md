@@ -28,27 +28,25 @@ Or reference `Sunder.Sdk.Stacks` with the same bounded minor range as `Sunder.Sd
 | `IPackageStackImporter` | Produce a side-effect-free preview, then apply selected actions. |
 | `IPackageStackImportAppliedHandler` | Refresh derived state after committed imports for one contributor id. |
 
-Register each role independently from the Runtime module:
+Register one manifest-declared RPC provider from the Runtime module. The SDK adapter keeps the convenient interfaces package-local:
 
 ```csharp
 var contributor = services.GetRequiredService<MyStackContributor>();
-registry.RegisterExtension(SunderStackExtensionPoints.StackExporters, contributor);
-registry.RegisterExtension(SunderStackExtensionPoints.StackImporters, contributor);
-registry.RegisterExtension(SunderStackExtensionPoints.StackImportAppliedHandlers, contributor);
+registry.RegisterStackContributor("my.company.package.stack", contributor, services);
 ```
 
-A single class may implement multiple contracts, but each extension point is independently discoverable. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
+A single class may implement multiple local contracts. The adapter publishes capability metadata over `sunder.stack.contributor` v1.0.0, and Runtime discovers only exact descriptor-compatible RPC endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
 
 The generated template's [compiled Stack stub](../../src/Sdk/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/StackSupport.cs) is exercised by template tests and CI.
 
 ## Export Lifecycle
 
-1. Runtime obtains active exporter contributions with their canonical owner package ids.
+1. Runtime discovers active Stack RPC endpoints and obtains Host-stamped package identities and contributor metadata.
 2. `ListExportItemsAsync` returns an immutable discovery snapshot without mutating package state.
 3. App shows items/details, honoring `DefaultSelected` while allowing the user to change selections, editable values, and sensitivity.
 4. Runtime calls `ExportAsync` with selected item/detail ids.
-5. The contributor returns versioned JSON fragments, fresh-stream payload handles, package requirements, and warnings.
-6. Runtime validates and builds the archive, then validates the exact produced archive before exposing it.
+5. The package-local adapter converts fresh-stream payload handles into bounded, audience- and generation-fenced content references.
+6. Runtime consumes those references, validates and builds the archive, then validates the exact produced archive before exposing it.
 
 Item ids must be nonblank and case-insensitively unique within one contributor. Detail ids enable independent selection; details without ids are informational. Use `StackExportSelectionExtensions` to apply default selection/value/sensitivity behavior consistently.
 
@@ -74,11 +72,11 @@ A compatible installed version satisfies the requirement without resolving the d
 2. The user selects fragments; Runtime groups them by owner package and contributor.
 3. `PreviewImportAsync` receives immutable fragments, input values, id remaps, and read-only payload handles. Preview **must be side-effect free**.
 4. The importer returns selectable actions, still-required inputs, conflicts, and warnings.
-5. Runtime creates an expiring, single-use plan bound to the archive hash, Runtime generation, contributor instances, selected fragments, values/remaps, schema versions, available actions, and conflicts.
-6. Import consumes that plan and calls each unchanged contributor with only selected local action ids.
-7. Runtime aggregates contributor outcomes and calls matching post-import handlers when items committed.
+5. Runtime creates an expiring, single-use plan bound to the archive hash, Runtime generation, exact provider endpoints, selected fragments, values/remaps, schema versions, available actions, and conflicts.
+6. Import consumes that plan, verifies each exact endpoint is still active, and calls it with fresh fenced content references and only selected local action ids.
+7. Runtime aggregates contributor outcomes and invokes `import-applied` on the same endpoint when items committed.
 
-Plans expire after 15 minutes and are consumed even when apply fails. They become stale if the Runtime generation, archive, contributor instance, or selected fragment set changes. Apply may choose any subset of the plan's known actions; unknown action ids are rejected. Preview actions and required-input ids must be nonblank and case-insensitively unique within that contributor.
+Plans expire after 15 minutes and are consumed even when apply fails. They become stale if the Runtime generation, archive, exact provider activation, or selected fragment set changes. Apply may choose any subset of the plan's known actions; unknown action ids are rejected. Preview actions and required-input ids must be nonblank and case-insensitively unique within that contributor.
 
 Runtime scopes action ids, required-input ids, and remap keys by owner package and contributor before exposing them to App. Importers receive their original local ids. Identical local ids from different contributors remain distinct; package code must not parse or persist host-scoped ids.
 
@@ -100,6 +98,6 @@ Post-import handlers run after that contributor reports committed items. Their f
 
 ## Lifecycle And Safety
 
-Exporter, importer, and post-import calls hold a Runtime generation lease and may run concurrently. Observe cancellation before additional mutations and close all streams. Keep preview deterministic for the same immutable input; never reserve ids, write files, create records, or consume one-time credentials during preview.
+Exporter, importer, and post-import calls hold Runtime session, caller, and provider activation leases and may run concurrently. Content references are additionally fenced by owner, audience, generation, expiry, hash, and use count. Observe cancellation before additional mutations and close all streams. Keep preview deterministic for the same immutable input; never reserve ids, write files, create records, or consume one-time credentials during preview.
 
 Do not export `IPackageSecrets`, access tokens, private keys, cookies, or environment secrets. Required inputs are the replacement mechanism. Runtime's Stack secret scan is defense in depth, not proof that an archive is safe. Review [Package Trust And Security](SECURITY.md) before handling third-party Stacks.

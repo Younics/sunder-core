@@ -59,7 +59,7 @@ dotnet new sunder-package `
   --output .\MyPackage
 ```
 
-The generated project contains C# package metadata, a package module, starter state code, and optional App/Stack/contracts files. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates that file from compiled metadata.
+The generated aggregate contains package metadata, Runtime code, an always-present non-packable `*.Protocol` project, and optional App/Stack code. The protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical manifest from compiled metadata and MSBuild items.
 
 ### Template Options
 
@@ -70,14 +70,10 @@ The generated project contains C# package metadata, a package module, starter st
 | `--withAvalonia` | Adds `Sunder.Sdk.Avalonia`, Avalonia, and a default App view. |
 | `--noDefaultView` | Keeps Avalonia support but omits the starter shell view. |
 | `--withStacks` | Adds `Sunder.Sdk.Stacks` and a compiled exporter/importer stub. |
-| `--withContracts` | Adds a sibling packable `*.Contracts` project. |
 | `--createInPlace` | Writes directly to `--output` rather than a child directory. |
 | `--withHostDependency` | Adds an installed-package dependency. |
-| `--hostPackageId <id>` | Host package required by either host-dependency option. |
+| `--hostPackageId <id>` | Package id required by `--withHostDependency`. |
 | `--hostPackageVersionRange <range>` | Runtime dependency range; default `>=1.1.0 <1.2.0`. |
-| `--withHostContracts` | Adds host dependency metadata, a host contracts NuGet reference, and an extension stub. |
-| `--hostContractsPackageId <id>` | Required contracts NuGet package id. |
-| `--hostContractsVersionRange <range>` | Contracts range; defaults to the generated SDK minor range. |
 
 ## Build
 

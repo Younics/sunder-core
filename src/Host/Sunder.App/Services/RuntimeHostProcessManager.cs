@@ -28,8 +28,10 @@ public sealed class RuntimeHostProcessManager : IDisposable
     private readonly Func<Uri, CancellationToken, Task<bool>> _tryEnsureSupervisedRuntimeStartedAsync;
     private readonly Func<bool> _isHostInstanceLockAvailable;
     private readonly UserHostPayloadStore? _userHostPayloadStore;
+    private readonly bool _restartManagedHostOnFirstStart;
     private readonly SemaphoreSlim _startupSemaphore = new(1, 1);
     private readonly RuntimeHealthProbe? _healthProbe;
+    private bool _managedHostRestartCompleted;
 
     public RuntimeHostProcessManager(AppStartupOptions startupOptions)
         : this(startupOptions, null, null, null, null, null, null, null, null)
@@ -68,7 +70,8 @@ public sealed class RuntimeHostProcessManager : IDisposable
         Func<Uri, CancellationToken, Task<HostHandshakeResponse?>>? tryGetHostHandshakeAsync = null,
         UserHostPayloadStore? userHostPayloadStore = null,
         Func<Uri, CancellationToken, Task<bool>>? tryEnsureSupervisedRuntimeStartedAsync = null,
-        Func<bool>? isHostInstanceLockAvailable = null)
+        Func<bool>? isHostInstanceLockAvailable = null,
+        bool? restartManagedHostOnFirstStart = null)
     {
         _startupOptions = startupOptions;
         _runtimeConnectionState = runtimeConnectionState ?? new RuntimeConnectionState(startupOptions.RuntimeUrl);
@@ -127,6 +130,14 @@ public sealed class RuntimeHostProcessManager : IDisposable
             ? userHostPayloadStore ?? new UserHostPayloadStore()
             : userHostPayloadStore;
 #endif
+        _restartManagedHostOnFirstStart = restartManagedHostOnFirstStart
+            ?? ShouldRestartManagedHostForDefaultDevelopmentLaunch(
+                resolveRuntimeHostPath,
+                tryGetRuntimeHandshakeAsync,
+                isRuntimeHealthyAsync,
+                shutdownRuntimeAsync,
+                startProcess,
+                userHostPayloadStore);
         _isHostInstanceLockAvailable = isHostInstanceLockAvailable
             ?? (connectionInfoPath is null
                 ? HostConnectionInfoStore.IsLifecycleLockAvailable
@@ -177,12 +188,35 @@ public sealed class RuntimeHostProcessManager : IDisposable
 
     private async Task EnsureStartedCoreAsync(Uri runtimeUrl, CancellationToken cancellationToken)
     {
+        var developmentRestartPending = _restartManagedHostOnFirstStart
+                                        && !_managedHostRestartCompleted
+                                        && runtimeUrl.IsLoopback;
         using var payload = runtimeUrl.IsLoopback ? _userHostPayloadStore?.Prepare() : null;
         var runtimeHostPath = payload?.ExecutablePath ?? _resolveRuntimeHostPath();
         RefreshPublishedConnection(runtimeUrl);
-        var hostHandshake = payload is null
+        var hostHandshake = payload is null && !developmentRestartPending
             ? null
             : await _tryGetHostHandshakeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
+        var developmentHostStopped = false;
+        if (developmentRestartPending
+            && hostHandshake is not null
+            && string.Equals(hostHandshake.ProtocolIdentity, HostProtocol.Identity, StringComparison.Ordinal))
+        {
+            if (runtimeHostPath is null || !File.Exists(runtimeHostPath))
+            {
+                throw new InvalidOperationException(
+                    "Unable to locate the development Sunder Host before replacing the running instance.");
+            }
+            AppSessionLog.WriteInfo("Restarting the managed Sunder Host for this development App session.");
+            await _shutdownRuntimeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
+            if (!await WaitForStoppedRuntimeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    "The previous development Sunder Host did not stop in time for replacement.");
+            }
+            developmentHostStopped = true;
+            hostHandshake = null;
+        }
         var replacingPayload = payload is not null
                                && (payload.ReplacesCurrent
                                    || (hostHandshake is null
@@ -250,6 +284,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
                 {
                     _userHostPayloadStore!.Commit(payload);
                 }
+                CompleteDevelopmentRestart(developmentRestartPending);
                 return;
             }
 
@@ -267,13 +302,14 @@ public sealed class RuntimeHostProcessManager : IDisposable
                     {
                         await GetCompatibleHostHandshakeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
                     }
+                    CompleteDevelopmentRestart(developmentRestartPending);
                     return;
                 }
                 throw new InvalidOperationException(
                     $"The Sunder Host at '{runtimeUrl}' did not make its Runtime worker ready within {_startupTimeout.TotalSeconds:0} seconds.");
             }
 
-            var replaceExistingRuntime = payload is not null;
+            var replaceExistingRuntime = payload is not null || developmentHostStopped;
             if (ShouldReplaceRunningRuntime(runningHandshake))
             {
                 replaceExistingRuntime = true;
@@ -340,6 +376,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
                 _connectionInfoPath,
                 managedSupervisor: launchingSupervisor), replaceExistingRuntime, cancellationToken).ConfigureAwait(false);
             payloadLaunchAccepted = payload is not null;
+            CompleteDevelopmentRestart(developmentRestartPending);
             AppSessionLog.WriteInfo(
                 $"Runtime launcher accepted '{runtimeUrl}' in {launchStopwatch.ElapsedMilliseconds} ms.");
 
@@ -366,6 +403,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
             {
                 await GetCompatibleHostHandshakeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
             }
+            CompleteDevelopmentRestart(developmentRestartPending);
         }
         catch
         {
@@ -668,6 +706,34 @@ public sealed class RuntimeHostProcessManager : IDisposable
         => handshake is not null
            && string.Equals(handshake.ProtocolIdentity, RuntimeProtocol.Identity, StringComparison.Ordinal)
            && !RuntimeProtocolCompatibility.IsCompatible(handshake);
+
+    private void CompleteDevelopmentRestart(bool wasPending)
+    {
+        if (wasPending)
+        {
+            _managedHostRestartCompleted = true;
+        }
+    }
+
+    private static bool ShouldRestartManagedHostForDefaultDevelopmentLaunch(
+        Func<string?>? resolveRuntimeHostPath,
+        Func<Uri, CancellationToken, Task<RuntimeHandshakeResponse?>>? tryGetRuntimeHandshakeAsync,
+        Func<Uri, CancellationToken, Task<bool>>? isRuntimeHealthyAsync,
+        Func<Uri, CancellationToken, Task>? shutdownRuntimeAsync,
+        Action<ProcessStartInfo>? startProcess,
+        UserHostPayloadStore? userHostPayloadStore)
+    {
+#if DEBUG
+        return resolveRuntimeHostPath is null
+               && tryGetRuntimeHandshakeAsync is null
+               && isRuntimeHealthyAsync is null
+               && shutdownRuntimeAsync is null
+               && startProcess is null
+               && userHostPayloadStore is null;
+#else
+        return false;
+#endif
+    }
 
     private void RefreshPublishedConnection(Uri runtimeUrl)
     {

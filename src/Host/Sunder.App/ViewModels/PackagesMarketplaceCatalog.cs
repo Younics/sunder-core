@@ -52,6 +52,24 @@ internal sealed class PackagesMarketplaceCatalog(
             return PackagesMarketplaceDetailsResult.Succeeded(package, versions);
         }
     }
+
+    public async Task<RegistryPackageVersionDetails?> LoadVersionDetailsAsync(
+        string packageId,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        if (!registryClientProvider.TryCreate(out var registryClient, out _))
+        {
+            return null;
+        }
+
+        using (registryClient)
+        {
+            return await registryClient
+                .GetVersionAsync(packageId, version, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
 }
 
 internal sealed record PackagesMarketplaceSearchResult(

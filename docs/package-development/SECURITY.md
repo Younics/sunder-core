@@ -12,6 +12,8 @@ Collectible `AssemblyLoadContext`, separate DI providers, role boundaries, const
 
 Only install packages whose code and distribution source you trust. A Registry ownership record controls publication; it does not make the contained code safe.
 
+Installation and update are also the consent boundary for schema-first cross-package RPC. Sunder displays each version's declared contract actions in package details, then grants all declared actions to that exact installed version and manifest. Development packages receive the same effective access only for their active development session. Packages cannot invoke undeclared actions.
+
 ## Package Integrity Versus Authenticity
 
 The V1 package validator checks the generated manifest, exact content index, SHA-256 hashes and sizes, canonical roots/paths, ZIP entry safety and expansion limits, entry assembly/host-role shape, SDK compatibility, dependencies, and icon content. Runtime stages and validates before committing install/update state.
@@ -25,8 +27,8 @@ The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative so
 - Keep Sunder SDK/build references in the coordinated `[1.1.0,1.2.0)` range.
 - Bound other NuGet dependencies intentionally and commit `packages.lock.json` for reproducible CI restore.
 - Review transitive and native assets included under package `lib`/`runtimes`.
-- Put shared public APIs in a minimal `*.Contracts` package; never expose implementation or host types.
-- Declare Sunder runtime dependencies separately from NuGet contracts dependencies.
+- Put language-neutral RPC descriptors and optional typed helpers in a minimal protocol package; never expose implementation or Host types.
+- Declare Sunder runtime dependencies separately from NuGet protocol-helper dependencies.
 - Validate the exact Release artifact that will be uploaded.
 - Never overwrite a published version; publish a new SemVer and deprecate/yank a bad immutable version.
 - Treat development-package folders as trusted local code. `--watch` rebuilds can replace active code without a new install prompt.

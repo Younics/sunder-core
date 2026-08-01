@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Sunder.Package.Hosting;
 
 namespace Sunder.App.Services;
 
@@ -11,5 +10,5 @@ internal sealed class AppPackageActivationState
 
     public AppPackageLoadContext? LoadContext { get; set; }
 
-    public PackageExtensionOwnerActivation? ExtensionOwner { get; set; }
+    public IAsyncDisposable? TargetLifetime { get; set; }
 }

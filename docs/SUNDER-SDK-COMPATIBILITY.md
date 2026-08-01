@@ -4,39 +4,36 @@ This document defines the Sunder V1 compatibility contract for independently ins
 
 ## Compatibility Boundary
 
-The compatibility boundary is the generated package manifest, public `Sunder.Sdk*` contract assemblies, and Host support for those contracts. The Runtime Host must validate SDK compatibility before loading a package assembly because packages use Host-bundled SDK contract assemblies.
+The compatibility boundary is each exact target's generated manifest metadata, the public `Sunder.Sdk*` assemblies, and Host support for those contracts. The Host validates target compatibility before loading an assembly or starting a process.
 
 The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, an overlapping supported revision range, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
 
-The unreleased 1.1 App and Runtime use clean-break protocol revision `3`. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent. There is no revision-2 or global-watch compatibility path.
+The V1 App and Runtime use protocol revision `3`. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent.
 
-## Version Fields
+## Target Compatibility Fields
 
-- `manifestVersion`: package manifest/archive schema version. This is not the SDK API version.
-- `sdkApiVersion`: broad SDK activation generation. Current value is `1`.
-- `sdkPackageVersion`: required strict SemVer 2.0 `Sunder.Sdk` package/build version used by `Sunder.Package.Build`.
-- `requiredSdkCapabilities`: granular Host-required SDK features inferred from SDK contract usage.
+- `archiveFormatVersion` and `manifestVersion`: package archive and manifest schema versions.
+- `sdkVersion`: optional strict SemVer identifying the SDK used to build one SDK-backed target.
+- `requiredHostCapabilities`: granular Host requirements for one exact target, inferred from authored SDK usage or declared by non-.NET tooling.
 
-V1 is a clean format boundary: build tooling emits `sdkApiVersion` exactly `1`, `sdkPackageVersion` must be valid SemVer 2.0, and `requiredSdkCapabilities` must contain distinct V1-form ids. The shipped 1.1 baseline additionally requires `sdkPackageVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing or mixed 1.0/1.1 compatibility metadata is rejected before assembly load.
+V1 targets contain distinct V1-form capability ids. SDK-backed targets built on the coordinated 1.1 line require `sdkVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing, malformed, or unsupported target metadata is rejected before target code runs.
 
 Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`, and generated runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
 
 ## Compatibility Rules
 
-- The immutable 1.1 API snapshots are the compatibility baseline. Future 1.1 patches may extend but must not break them.
-- Current `Sunder.Sdk.*` contracts are SDK API `1`.
+- The current public API snapshots are the unreleased V1 source baseline.
+- Compatible 1.1 patches may extend public SDK contracts but must not break the snapshots.
 - An old Host must reject unsupported package SDK requirements before assembly load.
-- Runtime/Registry projection records are structurally ratcheted and their current JSON plus representative N-1 JSON remain test gates. Additive optional fields are permitted; silent projection drift is not.
+- Runtime and Registry projection records are structurally ratcheted. Silent projection drift is not permitted.
 
-## Shared Contract Assemblies
+## Host-Owned Type Identity
 
-Host-owned SDK/framework boundary assemblies are authoritative. Package-shared assemblies are eligible for session-wide sharing only when their simple name ends in `.Contracts`; their dependency closure may then be loaded into the same collectible shared context. App and Runtime use the same host-neutral identity policy:
+Host-owned SDK/framework boundary assemblies are authoritative. App and Runtime substitute only assemblies on explicit Host allowlists; package-authored assembly names never grant shared identity. Cross-package behavior uses schema-first RPC rather than shared CLR types. For an allowlisted Host assembly:
 
 - simple name, culture, and public-key token must match exactly;
 - substitution is allowed only within the requested assembly major version;
-- the loaded version must be greater than or equal to the requested version;
-- two files claiming the same unsigned assembly identity must be byte-identical definitions;
-- different public keys/cultures with the same simple name, cross-major substitution, and post-load identity changes are rejected.
+- the Host-provided version must be greater than or equal to the requested version.
 
 The Avalonia resource-assembly registry is separate from contract assembly resolution and does not alter these rules.
 
@@ -56,9 +53,6 @@ Current SDK capabilities are:
 | `background-services.v1` | package background services |
 | `runtime-generations.v1` | post-publication Runtime generation participants |
 | `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
-| `extensions.v1` | extension points, contribution registration, extension catalog queries |
-| `extensions.changes.v1` | extension catalog change monitoring |
-| `extensions.invocations.v1` | owner-activation-scoped extension references, invocation leases, and exact-owner App fault reporting |
 | `settings.schema.v1` | host-rendered package settings schema contracts |
 | `settings.v1` | validated writable package settings, stored independently from opaque state |
 | `storage.v1` | package storage/file/key-value abstractions |
@@ -71,13 +65,14 @@ Current SDK capabilities are:
 | `view-navigation-preparation.v1` | hidden package-view preparation and post-presentation acknowledgement |
 | `runtime-operations.v1` | package-scoped typed App-to-Runtime operations and streams |
 | `runtime-invocation-errors.v1` | sanitized package-visible Runtime invocation failure metadata |
+| `rpc.v1` | schema-first cross-package RPC descriptors, discovery, invocation, subscription, and provider registration |
 | `stacks.v1` | `Sunder.Sdk.Stacks` Stack import/export data contracts |
-| `stacks.contributions.v1` | `Sunder.Sdk.Stacks` Stack contributor extension contracts |
+| `stacks.rpc.v1` | `Sunder.Sdk.Stacks` package-local provider/client adapters over the Stack RPC descriptor |
 | `callbacks.v1` | generic callback sessions |
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |
 
-`Sunder.Package.Build` infers required capabilities from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the entry assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
+`Sunder.Package.Build` infers target requirements from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the target assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
 
 Manual MSBuild capability entries are required for unusual dynamic/reflection scenarios. Declare every capability that dynamically reached code can use and add the exact `SunderSdkDynamicAccess` call-site acknowledgment printed by the build. A capability declaration does not acknowledge unrelated unresolved sites:
 
@@ -98,16 +93,14 @@ Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one
 
 `auth.v1` is only for auth-specific Host/App integration, including status and disconnect behavior. It always implies `callbacks.v1`; non-auth callback packages require only `callbacks.v1`.
 
-## Extension Catalog Changes
+## Schema-First RPC
 
-Use `IPackageExtensionCatalogMonitor` for structured extension catalog changes. It exposes `Changed` with `PackageExtensionCatalogChangedEventArgs` including revision, active-lifecycle reason, and per-extension-point additions/removals. The Host isolates subscriber exceptions so one package cannot interrupt another package's activation or prevent later subscribers from receiving the revision.
+Cross-package Runtime contracts are strict, versioned JSON descriptors bundled in package content and identified by canonical SHA-256. Manifests declare imported contracts, requested actions, and provided endpoints. Installing or updating consents to every declared action for that exact package version and manifest; undeclared actions remain default-deny. Runtime validates descriptor compatibility and payload schemas before dispatch.
 
-`IPackageExtensionCatalog.GetExtensionContributions` is mandatory. Hosts and test catalogs must supply the canonical non-empty id of the package that registered each contribution. The extension-point definition or contracts assembly does not own contributions from other packages; explicit ownership prevents Stack and other dependency-producing consumers from silently omitting package requirements.
+Discovery and watch results contain Host-stamped package, provider, contract, and activation identities. An endpoint reference remains bound to that exact activation and never retargets a replacement provider.
 
-## Extension Invocation Leases
+## RPC Invocation Leases
 
-Use `IPackageExtensionInvocationCatalog.GetExtensionReferences` when contribution code or metadata must survive an asynchronous call, callback, event subscription, or queued delivery. A reference is bound to one exact owner activation. `TryAcquire` and owner retirement are linearized: once retirement starts, that reference can never acquire again, including after a package with the same id registers a replacement contribution.
+Invocations and subscriptions acquire provider-activation leases. Once retirement starts, the endpoint admits no new work, active calls receive retirement cancellation, and a same-id replacement cannot satisfy an old reference.
 
-Only an acquired `IPackageExtensionLease<TContract>` exposes `PackageId`, `Contribution`, and `RetirementToken`. Keep the contribution inside the lease scope, link long-running work to the retirement token, and dispose the lease promptly and idempotently. The Host removes the owner from discovery and raises `Changed` without waiting for leases, then drains only that owner's leases before disposing its service provider or unloading its ALC. A lease that exceeds the bounded cleanup deadline quarantines those owner resources; the Host never forces disposal while the lease remains active.
-
-`TryReportInvariantViolation` is default-deny and does not grant ordinary packages package-lifetime control. A Host may enable it only on a caller-bound catalog for a trusted extension orchestrator. Accepted reports remain tied to the opaque reference's exact owner epoch through queued lifecycle handling, so neither a same-id replacement nor a later App generation can be disabled by a stale report.
+The Host removes a retiring endpoint from discovery before waiting for its leases. A call that exceeds the bounded cleanup deadline keeps the provider and load context quarantined; the Host does not dispose provider-owned resources while leased work remains active.

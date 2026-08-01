@@ -2,16 +2,16 @@
 
 > **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
 
-A Sunder package is one installed and versioned unit, but it may contain two independently activated roles. App and Runtime run in separate processes and never share package object instances.
+A Sunder package is one installed and versioned universal unit containing shared content and zero or more exact App/Runtime RID targets. App and Runtime run in separate processes and never share package object instances.
 
-## The Two Roles
+## Target Roles
 
 | Role | Module | Owns |
 | --- | --- | --- |
-| Runtime | `ISunderRuntimePackageModule` | Headless services, background services, settings schemas, callbacks/auth, typed operations/streams, and Runtime extension contributions. |
-| App | `ISunderAppPackageModule` | Avalonia views/settings views, shell integration, notifications, App background processes, and App extension contributions. |
+| Runtime | `ISunderRuntimePackageModule` | Headless services, background services, settings schemas, callbacks/auth, typed operations/streams, and RPC providers. |
+| App | `ISunderAppPackageModule` | Avalonia views/settings views, shell integration, notifications, and App background processes. |
 
-An entry assembly may contain one Runtime module, one App module, one class implementing both interfaces, or no module for a contract-only package. Build tooling infers exact `hostRoles` from compiled metadata. Each declared role permits at most one top-level public, non-abstract, non-generic implementation with a public parameterless constructor.
+Each managed target entry assembly contains at most one top-level public, non-abstract, non-generic module for its role, with a public parameterless constructor. Build tooling infers exact targets from compiled module metadata and emits one target per selected RID. A shared-only package contains RPC descriptor bundles and no executable target.
 
 When one class implements both interfaces, each host still creates a different module instance, service provider, load context, and lifecycle. Never use instance or static state to communicate between roles.
 
@@ -47,36 +47,40 @@ An App-only package can use its App role-local workspace and App logging, but Ru
 
 All `IPackageContext` capabilities are scoped to one activation and must not escape it. Capability implementations are thread-safe unless their member documentation states otherwise. `RoleLocalWorkspace` is host-owned; package code must not dispose it.
 
-## Typical Project
+## Typical Aggregate Project
 
 ```text
 MyPackage/
   MyPackage.csproj
   PackageMetadata.cs
-  PackageModule.cs
-  Runtime/
-  App/
   Assets/
+  MyPackage.Protocol/
+    Contracts/
+    Generated/
+  MyPackage.Runtime/
+    PackageModule.cs
+  MyPackage.App/
+    PackageModule.cs
 ```
 
-Keep shared request/response records and extension contracts host-neutral. Keep Avalonia types out of code loaded exclusively by Runtime. A single project is supported, but folders or companion authored projects help prevent accidental cross-role coupling.
+The generated `*.Protocol` project is non-packable and package-local. It contains bundled descriptors plus generated DTO, client, and provider adapters; Runtime and App consume it through private project references. Keep Avalonia types out of Runtime-only code. The aggregate project combines validated leaves into one universal package.
 
 The compiled [quickstart package](../samples/Sunder.Package.Quickstart/) demonstrates one assembly with separate Runtime and App registrations.
 
-## Package Dependencies Versus Contracts
+## Package Dependencies Versus Protocol Helpers
 
 These solve different problems:
 
 - `[assembly: SunderPackageDependency(...)]` says another Sunder package must be installed and ready at Runtime. Runtime validates versions and activates dependencies before dependents.
-- A NuGet `PackageReference` to `*.Contracts` supplies compile-time types such as extension points and interfaces.
+- Package-local protocol source supplies DTOs, generated bindings, and adapters used by this package's targets. A coordinated package family may also distribute a helper NuGet package, but that is a build-time convenience only.
 
-Typed extension contracts should live in a separately versioned `*.Contracts` NuGet package. The implementation package depends on those contracts, and extension packages normally need both the contracts NuGet reference and a Sunder runtime dependency on the host package.
+Cross-package Runtime behavior is defined by a language-neutral RPC descriptor bundled into every package that provides or consumes it. CLR types are never shared between package load contexts. A consumer that requires a specific provider package also declares a Sunder runtime dependency on that provider.
 
-Session-wide contract sharing is limited to assemblies whose simple names end in `.Contracts`. Matching includes name, culture, and public-key token; substitution remains within a major assembly version and never substitutes an older assembly. Unsigned assemblies claiming the same identity must be byte-identical.
+Only assemblies on an explicit Host allowlist use Host-provided type identity. Package-authored assemblies always remain activation-local.
 
-## Role Pruning
+## Target Selection
 
-Runtime keeps App-only and contract-only packages in dependency readiness and snapshot planning, but does not create a Runtime module, provider, or collectible package load context for them. App activates only App modules and materializes the contract dependencies required by the App dependency closure. A Runtime-only package has no App module or view.
+Runtime keeps packages without a Runtime target in dependency readiness and snapshot planning but creates no Runtime module, provider, process, or collectible load context for them. App activates only the selected exact App target. Shared-only packages have no executable activation.
 
 ## Boundaries To Keep
 
@@ -87,4 +91,4 @@ Runtime keeps App-only and contract-only packages in dependency readiness and sn
 - Do not maintain `sunder-package.json` in source.
 - Do not treat collectible load contexts as a security sandbox. See [Package Trust And Security](SECURITY.md).
 
-The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for identity, metadata, host-role, generated-output, and archive rules.
+The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for identity, exact targets, layered payloads, projections, RPC metadata, generated output, and archive rules.

@@ -17,14 +17,28 @@ internal sealed class PackagesOperationCommandCoordinator(
 
     public async Task<bool> InstallFromDiskAsync()
     {
-        var packagePath = await packageArchivePicker.PickPackagePathAsync();
-        if (string.IsNullOrWhiteSpace(packagePath))
+        var selection = await packageArchivePicker.PickPackageAsync();
+        if (selection is null)
         {
             return false;
         }
 
-        operationExecutor.EnqueueLocalInstall(packagePath);
-        MarkQueued($"Queued install for {Path.GetFileName(packagePath)}.");
+        try
+        {
+            operationExecutor.EnqueueLocalInstall(
+                selection.PackagePath,
+                selection.Sha256,
+                selection.DeleteAfterUse);
+        }
+        catch
+        {
+            if (selection.DeleteAfterUse)
+            {
+                PackageArchivePicker.DeleteReviewSnapshot(selection.PackagePath);
+            }
+            throw;
+        }
+        MarkQueued($"Queued install for {Path.GetFileName(selection.PackagePath)}.");
         return true;
     }
 

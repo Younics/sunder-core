@@ -31,6 +31,15 @@
           "Avalonia": "12.0.0"
         }
       },
+      "Avalonia.Controls.WebView": {
+        "type": "Direct",
+        "requested": "[12.0.1, )",
+        "resolved": "12.0.1",
+        "contentHash": "GrCIpIIBL7ueFDsNu3lyYc1mgO3QGGl1c1MCK8YAgjaNZwF9PV5PF2UB3lm1uuqj/MWOKNhemLwcSDLyYv0JjQ==",
+        "dependencies": {
+          "Avalonia": "12.0.0"
+        }
+      },
       "Avalonia.Desktop": {
         "type": "Direct",
         "requested": "[12.0.3, )",
@@ -352,7 +361,6 @@
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.0.3, )",
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.8, )",
           "Sunder.Sdk": "[1.1.0, )"
         }
       },

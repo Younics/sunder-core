@@ -4,7 +4,6 @@ public sealed record PackageLifecycleOperationResult(
     bool Success,
     string? Message,
     IReadOnlyList<ActivePackageDescriptor> ActivePackages,
-    IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds)
@@ -12,9 +11,6 @@ public sealed record PackageLifecycleOperationResult(
     public IReadOnlyList<ActivePackageDescriptor> ActivePackages { get; }
         = RuntimeContractCollections.Freeze(ActivePackages.Select(
             package => package with { Views = RuntimeContractCollections.Freeze(package.Views) }));
-
-    public IReadOnlyList<PackageUiSnapshotDescriptor> PackageUiSnapshots { get; }
-        = RuntimeContractCollections.Freeze(PackageUiSnapshots);
 
     public IReadOnlyList<string> Warnings { get; } = RuntimeContractCollections.Freeze(Warnings);
 
@@ -28,9 +24,8 @@ public sealed record PackageLifecycleOperationResult(
     public static PackageLifecycleOperationResult Failed(
         string message,
         IReadOnlyList<ActivePackageDescriptor>? activePackages = null,
-        IReadOnlyList<PackageUiSnapshotDescriptor>? packageUiSnapshots = null,
         IReadOnlyList<string>? warnings = null,
         IReadOnlyList<string>? errors = null,
         IReadOnlyList<string>? impactedPackageIds = null)
-        => new(false, message, activePackages ?? [], packageUiSnapshots ?? [], warnings ?? [], errors ?? [message], impactedPackageIds ?? []);
+        => new(false, message, activePackages ?? [], warnings ?? [], errors ?? [message], impactedPackageIds ?? []);
 }

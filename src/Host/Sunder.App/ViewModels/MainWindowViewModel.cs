@@ -419,6 +419,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     internal async Task ApplyPackageLifecycleSnapshotAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? retryDisabledPackageIds = null,
         CancellationToken cancellationToken = default,
         Action? detachAuxiliaryPackageViews = null
@@ -438,6 +439,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             await _packageLifecycleRefreshCoordinator.ApplyPackageLifecycleChangesAsync(
                 snapshot,
+                packageSources,
                 retryDisabledPackageIds,
                 lifetimeCancellation.Token,
                 detachAuxiliaryPackageViews

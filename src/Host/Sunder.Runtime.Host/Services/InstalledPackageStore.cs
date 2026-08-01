@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
@@ -11,7 +12,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        PropertyNameCaseInsensitive = true,
+        PropertyNameCaseInsensitive = false,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         WriteIndented = true,
     };
 
@@ -39,6 +41,10 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' has an unsupported schema version.");
         }
 
+        if (state.Packages is null)
+        {
+            throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is missing packages.");
+        }
         ValidateCatalog(state.Packages);
         return state.Packages.ToArray();
     }
@@ -85,6 +91,52 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                     $"Installed package '{package.PackageId}' path '{package.InstallPath}' is outside its current versioned package root.");
             }
 
+            var expectedManifestPath = Path.GetFullPath(Path.Combine(
+                package.InstallPath,
+                SunderPackageFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar)));
+            if (!PathsEqual(expectedManifestPath, package.ManifestPath))
+            {
+                throw new InvalidDataException(
+                    $"Installed package '{package.PackageId}' manifest path '{package.ManifestPath}' is not canonical.");
+            }
+            if (!IsCanonicalHash(package.ContentIdentity))
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid content identity.");
+            }
+            if (package.ContentInventory is null
+                || package.ContentInventory.Count == 0
+                || package.ContentInventory.Count > SunderPackageFormat.MaxContentIndexEntries)
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid content inventory.");
+            }
+            var inventoryPaths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var content in package.ContentInventory)
+            {
+                if (content is null
+                    || !ArchiveRelativePath.TryParse(
+                        content.Path,
+                        SunderPackageFormat.MaxArchivePathLength,
+                        SunderPackageFormat.MaxArchivePathDepth,
+                        out var contentPath,
+                        out _)
+                    || !SunderPackageFormat.IsAllowedArchivePath(contentPath.ToString())
+                    || SunderPackageFormat.IsContentIndexPath(contentPath.ToString())
+                    || !inventoryPaths.Add(contentPath.ToString())
+                    || !IsCanonicalHash(content.Sha256)
+                    || content.Size < 0)
+                {
+                    throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid content inventory entry.");
+                }
+            }
+            if (!inventoryPaths.Contains(SunderPackageFormat.ManifestPath))
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' content inventory is missing its manifest.");
+            }
+
+            if (package.DependsOn is null)
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' is missing dependencies.");
+            }
             foreach (var dependency in package.DependsOn)
             {
                 if (!PackageId.TryParse(dependency.PackageId, out _)
@@ -99,8 +151,33 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 
     public InstalledPackageDescriptor ToDescriptor(InstalledPackageRecord package)
     {
-        var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(package.ManifestPath), JsonOptions)
-            ?? throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid manifest.");
+        var validation = SunderPackageArchiveInspector.ValidateExtractedPackageAsync(package.InstallPath)
+            .GetAwaiter()
+            .GetResult();
+        if (!validation.Success || validation.Manifest is null)
+        {
+            throw new InvalidDataException(
+                $"Installed package '{package.PackageId}' is invalid: {string.Join(" | ", validation.Errors)}");
+        }
+        var manifest = validation.Manifest;
+        if (!string.Equals(manifest.Id, package.PackageId, StringComparison.Ordinal)
+            || !string.Equals(manifest.Version, package.Version, StringComparison.Ordinal)
+            || !string.Equals(manifest.Name, package.Name, StringComparison.Ordinal)
+            || !string.Equals(manifest.Summary, package.Summary, StringComparison.Ordinal)
+            || !string.Equals(manifest.Icon, package.Icon, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Installed package '{package.PackageId}' catalog identity does not match its strict manifest.");
+        }
+        if (validation.ContentIndex is null
+            || !PackageSessionPreparer.InventoryMatches(validation.ContentIndex, package.ContentInventory)
+            || !string.Equals(
+                PackageSessionPreparer.ComputeContentIdentity(package.InstallPath),
+                package.ContentIdentity,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Installed package '{package.PackageId}' content identity or inventory does not match its strict package content.");
+        }
         var icon = string.IsNullOrWhiteSpace(package.Icon)
             ? null
             : new PackageIconDescriptor(null, package.Icon);
@@ -111,13 +188,21 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             package.PackageId,
             package.Name,
             package.Version,
-            PackageSessionPreparer.ToHostRoles(manifest.HostRoles ?? []),
+            PackageTargetSelection.GetHostRoles(manifest),
             package.Summary,
             icon,
             package.IsEnabled,
             dependencies,
             package.InstalledAtUtc,
-            package.IsEnabled ? null : "Disabled");
+            package.IsEnabled ? null : "Disabled",
+            (manifest.UsesContracts ?? [])
+                .Where(static use => use is not null)
+                .Select(static use => new PackageRpcContractUseDescriptor(
+                    use!.ContractId!,
+                    use.VersionRange!,
+                    use.Required!.Value,
+                    (use.Actions ?? []).Where(static action => action is not null).Select(static action => action!).ToArray()))
+                .ToArray());
     }
 
     public async Task<string?> TryResolvePackageAssetPathAsync(
@@ -135,4 +220,14 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             ? null
             : PackageAssetPathResolver.TryResolveInstalledAssetPath(package.InstallPath, assetPath);
     }
+
+    private static bool IsCanonicalHash(string? value)
+        => value is { Length: 64 }
+           && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }

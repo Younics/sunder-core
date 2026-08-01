@@ -15,9 +15,11 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     public static TheoryData<Type, Type> ProjectionPairs => new()
     {
         { typeof(RegistryPackageChangeRequest), typeof(RuntimeRegistryPackageChangeRequest) },
+        { typeof(RegistryPackageTargetRequest), typeof(RuntimeRegistryPackageTargetRequest) },
         { typeof(RegistryPackageDependency), typeof(RuntimeRegistryPackageDependency) },
-        { typeof(RegistryPackageArtifact), typeof(RuntimeRegistryPackageArtifact) },
-        { typeof(RegistryPackageCompatibility), typeof(RuntimeRegistryPackageCompatibility) },
+        { typeof(RegistryPackageProjectionArtifact), typeof(RuntimeRegistryPackageProjectionArtifact) },
+        { typeof(RegistryPackageTarget), typeof(RuntimeRegistryPackageTarget) },
+        { typeof(RegistryPackageWebView), typeof(RuntimeRegistryPackageWebView) },
         { typeof(RegistryPackageInstallPlanItem), typeof(RuntimeRegistryPackageInstallPlanItem) },
         { typeof(RegistryPackageInstallPlanConflict), typeof(RuntimeRegistryPackageInstallPlanConflict) },
         { typeof(RegistryResolveInstallPlanResponse), typeof(RuntimeRegistryResolveInstallPlanResponse) },
@@ -38,7 +40,13 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     [Fact]
     public void RuntimeProjection_PreservesCurrentRegistryJsonShape()
     {
-        var request = new RuntimeRegistryPackageChangeRequest("test.package", null, "preview", ">=1.1.0 <1.2.0", false);
+        var request = new RuntimeRegistryPackageChangeRequest(
+            "test.package",
+            null,
+            [new RuntimeRegistryPackageTargetRequest("runtime", "win-x64")],
+            "preview",
+            ">=1.1.0 <1.2.0",
+            false);
         var registryRequest = Assert.Single(RuntimeRegistryContractMapper.ToRegistry([request]));
         Assert.True(JsonNode.DeepEquals(JsonSerializer.SerializeToNode(request, JsonOptions), JsonSerializer.SerializeToNode(registryRequest, JsonOptions)));
 
@@ -51,8 +59,31 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                 true,
                 null,
                 [new RegistryPackageDependency("test.base", ">=1.1.0 <1.2.0")],
-                new RegistryPackageArtifact(new string('a', 64), 42, "/download"),
-                new RegistryPackageCompatibility(1, "1.1.0", ["core.v1"], "net10.0", 1, 1))],
+                [new RegistryPackageTarget(
+                    "app",
+                    "win-x64",
+                    "web",
+                    "web/index.html",
+                    null,
+                    "1.1.0",
+                    ["core.v1"],
+                    [new RegistryPackageWebView(
+                        "test.package.workspace",
+                        "Workspace",
+                        "/workspace",
+                        "assets/workspace.png",
+                        "rightTop",
+                        true)])],
+                [new RegistryPackageProjectionArtifact(
+                    "shared",
+                    null,
+                    new string('a', 64),
+                    42,
+                    "/download",
+                    new string('b', 64),
+                    new string('c', 64),
+                    new string('d', 64),
+                    1)])],
             ["warning"],
             ["error"],
             [new RegistryPackageInstallPlanConflict(
@@ -61,25 +92,14 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                 ">=1.1.0 <1.2.0",
                 "test.root",
                 RegistryV1ErrorCodes.PackageRequirementUnsatisfied,
-                "Version conflict.")]);
+                "Version conflict.")],
+            ["https://artifacts.example"]);
 
         var runtimeResponse = RuntimeRegistryContractMapper.ToRuntime(registryResponse);
 
         Assert.True(JsonNode.DeepEquals(
             JsonSerializer.SerializeToNode(registryResponse, JsonOptions),
             JsonSerializer.SerializeToNode(runtimeResponse, JsonOptions)));
-    }
-
-    [Fact]
-    public void RuntimeRegistryProjection_DeserializesNMinusOneJsonWithCurrentDefaults()
-    {
-        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "RuntimeRegistryProjection.n-1.json");
-        var payload = JsonSerializer.Deserialize<RuntimeProjectionPayload>(File.ReadAllText(fixturePath), JsonOptions);
-
-        Assert.NotNull(payload);
-        Assert.Null(payload.Request.VersionRange);
-        Assert.True(payload.Request.Required);
-        Assert.Equal("registry.v1.resource.conflict", Assert.Single(payload.Response.Conflicts).ErrorCode);
     }
 
     private static string NormalizeShape(Type type)
@@ -95,8 +115,4 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                 .Replace("Registry", string.Empty, StringComparison.Ordinal)
             : type.FullName ?? type.Name;
     }
-
-    private sealed record RuntimeProjectionPayload(
-        RuntimeRegistryPackageChangeRequest Request,
-        RuntimeRegistryResolveInstallPlanResponse Response);
 }

@@ -36,7 +36,7 @@ Package and Registry secrets use Runtime-V1-specific DPAPI entropy and macOS Key
 
 The V1 boundary does not assume a shared filesystem. Runtime package UI is exposed as bounded, generation-scoped snapshot descriptors and authenticated ZIP streams. Runtime aliases share persistent deterministic archive objects keyed by a source fingerprint and format revision. The App verifies each immutable SHA-256 revision, atomically fills a validated content-addressed cache, and copies it into a generation-owned tree; cache files are never loaded directly. Old generation directories are deleted only after views, services, assembly probes, and load contexts detach. Package and Stack mutations upload bytes to Runtime-owned temporary storage and use opaque handles. Runtime install, dev, staging, workspace, and transfer paths are never returned in API JSON.
 
-Host-role pruning keeps dependency readiness and order while avoiding unnecessary activation. Runtime does not create providers, modules, or collectible package load contexts for App-only and contract-only packages. App activates only App-role modules, while materializing contract dependencies in the App dependency closure. Runtime-only packages produce App snapshots only when that closure requires their content.
+Exact-target selection keeps dependency readiness and order while avoiding unnecessary activation. Runtime creates no providers, modules, processes, or collectible load contexts for packages without a Runtime target. App activates only the matching App target while materializing shared dependency content in its closure. Runtime-only and shared-only packages produce App snapshots only when that closure requires their content.
 
 ## Startup Arguments
 

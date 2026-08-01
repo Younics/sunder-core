@@ -111,7 +111,6 @@ public sealed class PackageAuthSessionCoordinatorTests
             owner.Sources.Snapshot(),
             [],
             [],
-            [],
             expectedGeneration: 0);
         var initialGeneration = owner.Generation;
         var firstLease = owner.State.AcquireLease();
@@ -167,7 +166,6 @@ public sealed class PackageAuthSessionCoordinatorTests
             owner.Sources.Snapshot(),
             [],
             [],
-            [],
             expectedGeneration: 0);
         var staleLease = owner.State.AcquireLease();
         Func<bool>? applyStaleReport = null;
@@ -197,7 +195,6 @@ public sealed class PackageAuthSessionCoordinatorTests
             await owner.PublishAsync(
                 CreateSession(replacementPackage),
                 owner.Sources.Snapshot(),
-                [],
                 [],
                 [],
                 expectedGeneration: 1);

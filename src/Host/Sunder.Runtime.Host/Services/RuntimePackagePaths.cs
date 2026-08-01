@@ -23,6 +23,7 @@ internal sealed class RuntimePackagePaths
         RegistryCredentialRootPath = Path.Combine(RootPath, RuntimeV1StateDescriptor.RegistryCredentialsDirectory);
         RegistryCredentialFilePath = Path.Combine(RegistryCredentialRootPath, RuntimeV1StateDescriptor.RegistryCredentialFile);
         StateFilePath = Path.Combine(CatalogRootPath, "installed-packages.json");
+        RpcPermissionFilePath = Path.Combine(CatalogRootPath, "rpc-permissions.json");
         SchemaFilePath = Path.Combine(RootPath, RuntimeLocalState.SchemaFileName);
         LeaseFilePath = Path.Combine(RootPath, RuntimeLocalState.LeaseFileName);
         ConnectionInfoFilePath = Path.Combine(RootPath, "connection.json");
@@ -51,6 +52,8 @@ internal sealed class RuntimePackagePaths
     public string RegistryCredentialFilePath { get; }
 
     public string StateFilePath { get; }
+
+    public string RpcPermissionFilePath { get; }
 
     public string SchemaFilePath { get; }
 

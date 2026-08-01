@@ -1,0 +1,8 @@
+<Project>
+  <ItemGroup Condition="'$(SunderPackageProject)' == 'true'">
+    <SunderContractBundle Include="$(MSBuildThisFileDirectory)..\contracts\sunder.stack.contributor.rpc.json"
+                          ContractId="sunder.stack.contributor"
+                          Version="1.0.0"
+                          DescriptorPath="contracts/sunder.stack.contributor.rpc.json" />
+  </ItemGroup>
+</Project>

@@ -43,7 +43,7 @@ internal sealed class PackageUiSnapshotStore : IDisposable
     }
 
     public IReadOnlyList<PackageUiSnapshotDescriptor> CreateSnapshots(
-        IReadOnlyList<RuntimePackageSource> sources,
+        IReadOnlyList<RuntimePackageTargetSource> sources,
         long generation,
         string? stageId = null)
     {
@@ -161,9 +161,10 @@ internal sealed class PackageUiSnapshotStore : IDisposable
 
     public void Dispose() => _aliases.Clear();
 
-    private PackageUiSnapshotDescriptor CreateSnapshot(RuntimePackageSource source, long generation, string? stageId)
+    private PackageUiSnapshotDescriptor CreateSnapshot(RuntimePackageTargetSource targetSource, long generation, string? stageId)
     {
-        var snapshotObject = _objects.GetOrCreate(source);
+        var source = targetSource.Source;
+        var snapshotObject = _objects.GetOrCreate(targetSource);
         var snapshotId = Guid.NewGuid().ToString("N");
         _aliases[snapshotId] = new SnapshotAlias(
             snapshotObject.Path,
@@ -174,7 +175,14 @@ internal sealed class PackageUiSnapshotStore : IDisposable
         var uri = stageId is null
             ? $"packages/ui-snapshots/{snapshotId}"
             : $"packages/session/stage/{stageId}/ui-snapshots/{snapshotId}";
-        return new PackageUiSnapshotDescriptor(source.PackageId, source.Kind, generation, snapshotObject.ContentHash, snapshotId, uri);
+        return new PackageUiSnapshotDescriptor(
+            source.PackageId,
+            source.Kind,
+            generation,
+            PackageTargetSelection.ToDescriptor(targetSource.Target),
+            snapshotObject.ContentHash,
+            snapshotId,
+            uri);
     }
 
     private void Remove(string id) => _aliases.TryRemove(id, out _);

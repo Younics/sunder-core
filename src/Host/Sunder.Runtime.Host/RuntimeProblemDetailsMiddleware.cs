@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
+using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host;
 
@@ -28,8 +29,9 @@ internal sealed class RuntimeProblemDetailsMiddleware(
                 await RuntimeProblemDetailsWriter.WriteAsync(context, new RuntimeCancellationException(), correlationId);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            LogRpcFailureIfPresent(context, exception, correlationId);
             if (!context.Response.HasStarted)
             {
                 await RuntimeProblemDetailsWriter.WriteAsync(context, new RuntimeCancellationException(), correlationId);
@@ -54,18 +56,74 @@ internal sealed class RuntimeProblemDetailsMiddleware(
         }
         catch (Exception exception)
         {
-            logger.LogError(
-                exception,
-                "Unhandled Runtime API failure. CorrelationId: {CorrelationId}; Method: {Method}; Route: {Route}",
-                correlationId,
-                context.Request.Method,
-                context.Request.Path.Value);
+            LogUnhandledFailure(context, exception, correlationId);
             if (!context.Response.HasStarted)
             {
                 await RuntimeProblemDetailsWriter.WriteInternalAsync(context, correlationId);
             }
         }
     }
+
+    private void LogUnhandledFailure(HttpContext context, Exception exception, string correlationId)
+    {
+        var rpcException = FindRpcException(exception);
+        if (rpcException is not null)
+        {
+            logger.LogError(
+                "Unhandled Runtime API RPC failure. CorrelationId: {CorrelationId}; Method: {Method}; Route: {Route}; RpcKind: {RpcKind}; RpcCode: {RpcCode}",
+                correlationId,
+                context.Request.Method,
+                context.Request.Path.Value,
+                rpcException.Error.Kind,
+                Bound(rpcException.Error.Code, 256));
+            return;
+        }
+
+        logger.LogError(
+            exception,
+            "Unhandled Runtime API failure. CorrelationId: {CorrelationId}; Method: {Method}; Route: {Route}",
+            correlationId,
+            context.Request.Method,
+            context.Request.Path.Value);
+    }
+
+    private void LogRpcFailureIfPresent(HttpContext context, Exception exception, string correlationId)
+    {
+        if (FindRpcException(exception) is not null)
+        {
+            LogUnhandledFailure(context, exception, correlationId);
+        }
+    }
+
+    private static SunderRpcException? FindRpcException(Exception exception)
+    {
+        var pending = new Stack<Exception>();
+        pending.Push(exception);
+        while (pending.TryPop(out var current))
+        {
+            if (current is SunderRpcException rpcException)
+            {
+                return rpcException;
+            }
+            if (current is AggregateException aggregate)
+            {
+                for (var index = aggregate.InnerExceptions.Count - 1; index >= 0; index--)
+                {
+                    pending.Push(aggregate.InnerExceptions[index]);
+                }
+            }
+            else if (current.InnerException is not null)
+            {
+                pending.Push(current.InnerException);
+            }
+        }
+        return null;
+    }
+
+    private static string Bound(string? value, int maximumLength)
+        => string.IsNullOrWhiteSpace(value)
+            ? "rpc.unknown"
+            : value[..Math.Min(value.Length, maximumLength)];
 
     private static string ResolveCorrelationId(HttpContext context)
     {

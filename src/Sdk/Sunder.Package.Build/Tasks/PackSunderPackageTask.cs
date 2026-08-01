@@ -28,10 +28,11 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            var manifestPath = Path.Combine(DevPackagePath, "sunder-package.json");
+            var manifestPath = ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath).ToPlatformPath(DevPackagePath);
             if (!File.Exists(manifestPath))
             {
-                Log.LogError($"Sunder dev package folder '{DevPackagePath}' does not contain sunder-package.json.");
+                Log.LogError(
+                    $"Sunder dev package folder '{DevPackagePath}' does not contain {SunderPackageFormat.ManifestPath}.");
                 return false;
             }
 
@@ -41,15 +42,17 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            var stagingPath = Path.Combine(Path.GetTempPath(), "Sunder.Package.Build", "pack", Guid.NewGuid().ToString("N"));
-            var archiveValidationPath = stagingPath + "-archive-validation";
+            var archiveValidationPath = Path.Combine(
+                Path.GetTempPath(),
+                "Sunder.Package.Build",
+                "pack-validation",
+                Guid.NewGuid().ToString("N"));
             try
             {
-                PackageContentLayoutBuilder.Build(DevPackagePath, stagingPath, manifestPath);
-                PackageContentIndexer.Write(stagingPath);
+                PackageContentIndexer.Write(DevPackagePath);
 
                 var stagingValidation = SunderPackageArchiveInspector
-                    .ValidateExtractedPackageAsync(stagingPath)
+                    .ValidateExtractedPackageAsync(DevPackagePath)
                     .GetAwaiter()
                     .GetResult();
                 if (!LogValidation(stagingValidation, logWarnings: false))
@@ -63,7 +66,7 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                     Directory.CreateDirectory(packageOutputDirectory);
                 }
 
-                DeterministicPackageArchiveWriter.Write(stagingPath, PackageOutputPath);
+                DeterministicPackageArchiveWriter.Write(DevPackagePath, PackageOutputPath);
                 try
                 {
                     var archiveValidation = SunderPackageArchiveInspector
@@ -87,7 +90,6 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
             finally
             {
                 TryDeleteDirectory(archiveValidationPath);
-                TryDeleteDirectory(stagingPath);
             }
         }
         catch (Exception ex)

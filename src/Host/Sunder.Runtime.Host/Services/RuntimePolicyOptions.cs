@@ -7,6 +7,8 @@ internal sealed record RuntimeTransportPolicyOptions
     public long MaxRegistryErrorBytes { get; init; } = 64 * 1024;
     public TimeSpan ContentTransferLifetime { get; init; } = TimeSpan.FromMinutes(30);
     public TimeSpan ContentTransferSweepInterval { get; init; } = TimeSpan.FromMinutes(1);
+    public long MaxRpcContentBytes { get; init; } = 64L * 1024 * 1024;
+    public int MaxRpcContentUses { get; init; } = 32;
 }
 
 internal sealed record RuntimeAuthPolicyOptions
@@ -49,6 +51,36 @@ internal sealed record RuntimePackageOperationPolicyOptions
     public int MaxStreamRecordBytes { get; init; } = 1024 * 1024 + 16 * 1024;
     public int MaxStreamErrorMessageCharacters { get; init; } = 4096;
     public TimeSpan SessionDrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
+}
+
+internal sealed record RuntimeRpcPolicyOptions
+{
+    public int MaxPayloadBytes { get; init; } = 1024 * 1024;
+    public int MaxPayloadDepth { get; init; } = 64;
+    public int MaxConcurrentCallsPerCaller { get; init; } = 32;
+    public int MaxConcurrentCallsPerCallee { get; init; } = 64;
+    public int MaxNestedCallDepth { get; init; } = 8;
+    public int MaxStreamEvents { get; init; } = 100_000;
+    public int MaxStreamEventsPerSecond { get; init; } = 1000;
+    public int MaxAppCallerSessions { get; init; } = 128;
+    public TimeSpan DefaultDeadline { get; init; } = TimeSpan.FromMinutes(10);
+}
+
+internal sealed record RuntimeProcessPolicyOptions
+{
+    public int MaxFrameBytes { get; init; } = 1024 * 1024;
+    public int MaxHeaderBytes { get; init; } = 8 * 1024;
+    public int MaxMessageDepth { get; init; } = 64;
+    public int MaxOutstandingHostCalls { get; init; } = 64;
+    public int MaxOutstandingWorkerCalls { get; init; } = 32;
+    public int MaxWriteQueueMessages { get; init; } = 128;
+    public int MaxRememberedMessageIds { get; init; } = 2048;
+    public int MaxStderrBytes { get; init; } = 256 * 1024;
+    public int MaxStderrLineCharacters { get; init; } = 4096;
+    public TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan ActivationTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan CancellationDrainTimeout { get; init; } = TimeSpan.FromSeconds(5);
 }
 
 internal sealed record RuntimeLifecyclePolicyOptions
