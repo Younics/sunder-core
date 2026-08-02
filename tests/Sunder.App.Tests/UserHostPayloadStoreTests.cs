@@ -123,6 +123,35 @@ public sealed class UserHostPayloadStoreTests
     }
 
     [Fact]
+    public void Prepare_WhenSameVersionContentChanges_StagesNewDeploymentIdentity()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var source = CreatePayloadSource(root, "source", "one");
+            var payloadRoot = Path.Combine(root, "payloads");
+            var firstStore = new UserHostPayloadStore(source, payloadRoot, "1.0.0");
+            var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
+            var firstPath = first.DirectoryPath;
+            firstStore.Commit(first);
+            File.WriteAllText(Path.Combine(source, "RuntimeHost", "worker.dat"), "nested-two");
+            var secondStore = new UserHostPayloadStore(source, payloadRoot, "1.0.0");
+
+            using var second = secondStore.Prepare();
+
+            Assert.NotEqual(firstIdentity, second.DeploymentIdentity);
+            Assert.NotEqual(firstPath, second.DirectoryPath);
+            Assert.Equal(firstPath, second.Previous?.DirectoryPath);
+            Assert.True(second.ReplacesCurrent);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Matches_RejectsSameVersionHostWithoutRequiredLifecycleProtocol()
     {
         var root = CreateRoot();
@@ -141,9 +170,75 @@ public sealed class UserHostPayloadStoreTests
                 Guid.NewGuid(),
                 Guid.NewGuid(),
                 [HostProtocolFeatures.RuntimeGatewayV1],
-                new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "1.0.0"));
+                new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "1.0.0"))
+            {
+                DeploymentIdentity = payload.DeploymentIdentity,
+            };
 
             Assert.False(store.Matches(payload, handshake));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Matches_UsesDeploymentIdentityInsteadOfProductVersion()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var store = new UserHostPayloadStore(
+                CreatePayloadSource(root, "source", "one"),
+                Path.Combine(root, "payloads"),
+                "1.0.0");
+            using var payload = store.Prepare();
+            var handshake = new HostHandshakeResponse(
+                HostProtocol.Identity,
+                HostProtocol.CurrentRevision,
+                HostProtocol.MinimumSupportedRevision,
+                HostProtocol.MaximumSupportedRevision,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                [
+                    HostProtocolFeatures.RuntimeGatewayV1,
+                    HostProtocolFeatures.RuntimeLifecycleV1,
+                    HostProtocolFeatures.DurableOperationsV1,
+                ],
+                new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "different", "different"))
+            {
+                DeploymentIdentity = payload.DeploymentIdentity,
+            };
+
+            Assert.True(store.Matches(payload, handshake));
+            Assert.False(store.Matches(payload, handshake with
+            {
+                DeploymentIdentity = HostDeploymentIdentity.FromSha256(new string('a', 64)),
+            }));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Commit_WhenStagedBytesChange_RejectsDeployment()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var store = new UserHostPayloadStore(
+                CreatePayloadSource(root, "source", "one"),
+                Path.Combine(root, "payloads"),
+                "1.0.0");
+            var payload = store.Prepare();
+            File.WriteAllText(payload.ExecutablePath, "changed-after-prepare");
+
+            Assert.Throws<InvalidDataException>(() => store.Commit(payload));
+
+            store.Abandon(payload);
         }
         finally
         {

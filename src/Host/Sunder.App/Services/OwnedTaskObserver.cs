@@ -46,13 +46,16 @@ public sealed class OwnedTaskObserver : IDisposable
     }
 
     public void Run(Func<CancellationToken, Task> operation, string operationName)
+        => _ = RunTracked(operation, operationName);
+
+    internal Task RunTracked(Func<CancellationToken, Task> operation, string operationName)
     {
         Task observedTask;
         lock (_syncRoot)
         {
             if (_stopped)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             observedTask = ObserveOperationAsync(operation, operationName, _lifetimeToken);
@@ -60,6 +63,7 @@ public sealed class OwnedTaskObserver : IDisposable
         }
 
         TrackCompletion(observedTask);
+        return observedTask;
     }
 
     private void TrackCompletion(Task observedTask)

@@ -5,6 +5,11 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
+internal sealed class StalePackageUiSnapshotException(
+    string packageId,
+    Exception innerException)
+    : Exception($"Runtime package UI snapshot for '{packageId}' became stale.", innerException);
+
 internal sealed class AppPackageGenerationBuilder(
     object eventSender,
     AppPackageSnapshotCache snapshotCache,
@@ -94,6 +99,12 @@ internal sealed class AppPackageGenerationBuilder(
                     catch (OperationCanceledException)
                     {
                         throw;
+                    }
+                    catch (RuntimeClientException exception) when (
+                        !hasCommittedGeneration
+                        && exception.ErrorCode is "runtime.v1.not-found" or "runtime.v1.stale-generation")
+                    {
+                        throw new StalePackageUiSnapshotException(source.PackageId, exception);
                     }
                     catch (Exception exception)
                     {

@@ -54,6 +54,48 @@ public sealed class DevPackageOwnerSessionTests
     }
 
     [Fact]
+    public async Task Release_AfterUncertainAcquireFailure_UsesPendingMutationIdentity()
+    {
+        var runtimeId = Guid.NewGuid();
+        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
+        var connection = new RuntimeConnectionState(runtimeUrl);
+        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
+        var client = new OwnerClient(runtimeId) { FailFirstMutation = true };
+        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => session.AcquireAsync([Path.Combine(".", "dev-a")], watch: false));
+        await session.ReleaseAsync();
+
+        var release = Assert.Single(client.Releases);
+        Assert.Equal(runtimeId, release.RuntimeInstanceId);
+        Assert.Equal(session.OwnerToken, release.OwnerToken);
+    }
+
+    [Fact]
+    public async Task Release_WhenCleanupResponseFails_RetainsPendingIdentityForRetry()
+    {
+        var runtimeId = Guid.NewGuid();
+        var runtimeUrl = new Uri("http://127.0.0.1:5275/");
+        var connection = new RuntimeConnectionState(runtimeUrl);
+        connection.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "runtime-bearer-token"));
+        var client = new OwnerClient(runtimeId)
+        {
+            FailFirstMutation = true,
+            FailFirstRelease = true,
+        };
+        await using var session = new DevPackageOwnerSession(new OwnerClientFactory(client), connection);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => session.AcquireAsync([Path.Combine(".", "dev-a")], watch: false));
+        await Assert.ThrowsAsync<HttpRequestException>(() => session.ReleaseAsync());
+        await session.ReleaseAsync();
+
+        Assert.Equal(2, client.Releases.Count);
+        Assert.All(client.Releases, release => Assert.Equal(runtimeId, release.RuntimeInstanceId));
+    }
+
+    [Fact]
     public async Task Heartbeat_ReacquiresDesiredSetAfterRuntimeWorkerReplacement()
     {
         var firstRuntimeId = Guid.NewGuid();
@@ -90,8 +132,10 @@ public sealed class DevPackageOwnerSessionTests
         public List<DevPackageOwnerMutationRequest> Mutations { get; } = [];
         public DevPackageOwnerMutationRequest? Mutation => Mutations.LastOrDefault();
         public string? OwnerId { get; private set; }
-        public DevPackageOwnerReleaseRequest? Release { get; private set; }
+        public List<DevPackageOwnerReleaseRequest> Releases { get; } = [];
+        public DevPackageOwnerReleaseRequest? Release => Releases.LastOrDefault();
         public bool FailFirstMutation { get; init; }
+        public bool FailFirstRelease { get; init; }
         public TimeSpan LeaseLifetime { get; init; } = TimeSpan.FromMinutes(1);
         public TaskCompletionSource SecondMutation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -154,7 +198,11 @@ public sealed class DevPackageOwnerSessionTests
             DevPackageOwnerReleaseRequest request,
             CancellationToken cancellationToken = default)
         {
-            Release = request;
+            Releases.Add(request);
+            if (FailFirstRelease && Releases.Count == 1)
+            {
+                throw new HttpRequestException("release response lost");
+            }
             return Task.CompletedTask;
         }
 

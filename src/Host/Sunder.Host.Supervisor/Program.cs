@@ -9,6 +9,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 
 var options = HostStartupOptions.Parse(args);
+HostDeploymentIdentityVerifier.Validate(AppContext.BaseDirectory, options.DeploymentIdentity);
 var builder = WebApplication.CreateBuilder(args);
 if (builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any())
 {
@@ -100,7 +101,10 @@ app.MapGet("/api/host/handshake", () => Results.Ok(new HostHandshakeResponse(
     hostId,
     supervisorInstanceId,
     hostFeatures,
-    CreateProductDiagnostics())));
+    CreateProductDiagnostics())
+{
+    DeploymentIdentity = options.DeploymentIdentity,
+}));
 app.MapGet("/api/host/v1/status", (RuntimeWorkerCoordinator worker) => Results.Ok(worker.GetStatus()));
 app.MapGet("/api/host/v1/operations/{operationId}", (
     string operationId,

@@ -4,7 +4,8 @@ internal sealed record HostStartupOptions(
     string? RuntimeHostPath,
     TimeSpan WorkerStartupTimeout,
     string? HostStateRoot,
-    string? RuntimeStateRoot)
+    string? RuntimeStateRoot,
+    string? DeploymentIdentity)
 {
     internal const string RuntimeHostPathEnvironmentVariable = "SUNDER_HOST_RUNTIME_PATH";
     internal const string HostStateRootEnvironmentVariable = "SUNDER_HOST_STATE_ROOT";
@@ -19,6 +20,7 @@ internal sealed record HostStartupOptions(
         string? configuredRuntimePath = getEnvironmentVariable(RuntimeHostPathEnvironmentVariable);
         string? hostStateRoot = getEnvironmentVariable(HostStateRootEnvironmentVariable);
         string? runtimeStateRoot = getEnvironmentVariable(RuntimeStateRootEnvironmentVariable);
+        string? deploymentIdentity = null;
         var startupTimeout = TimeSpan.FromSeconds(30);
         for (var index = 0; index < args.Count; index++)
         {
@@ -37,6 +39,12 @@ internal sealed record HostStartupOptions(
             if (TryReadValue(args, ref index, "--runtime-state-root", out value))
             {
                 runtimeStateRoot = value;
+                continue;
+            }
+
+            if (TryReadValue(args, ref index, "--deployment-identity", out value))
+            {
+                deploymentIdentity = value;
                 continue;
             }
 
@@ -59,13 +67,21 @@ internal sealed record HostStartupOptions(
 
         hostStateRoot = NormalizeOptionalPath(hostStateRoot);
         runtimeStateRoot = NormalizeOptionalPath(runtimeStateRoot);
+        if (deploymentIdentity is not null
+            && !Sunder.Host.Contracts.HostDeploymentIdentity.IsValid(deploymentIdentity))
+        {
+            throw new ArgumentException(
+                "--deployment-identity requires a canonical Sunder Host SHA-256 deployment identity.",
+                nameof(args));
+        }
 
         var runtimeHostPath = ResolveRuntimeHostPath(configuredRuntimePath, baseDirectory);
         return new HostStartupOptions(
             runtimeHostPath,
             startupTimeout,
             hostStateRoot,
-            runtimeStateRoot);
+            runtimeStateRoot,
+            deploymentIdentity);
     }
 
     internal static string? ResolveRuntimeHostPath(string? configuredPath, string? baseDirectory = null)

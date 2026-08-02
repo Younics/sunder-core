@@ -17,7 +17,9 @@ internal sealed partial class PackageSessionLifecycleService
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
+        var previousSources = _sessions.Sources.Snapshot();
         var sources = _sessions.Sources.Snapshot();
+        var packageStateBefore = _sessions.GetSnapshot();
         var activeBefore = sources.ActiveDevOverlays;
         var replacements = await CreateAppOwnerOverlaysAsync(ownerId, folders, operationToken);
         foreach (var replacement in replacements)
@@ -41,14 +43,77 @@ internal sealed partial class PackageSessionLifecycleService
             return ToOwnerPackages(replacements);
         }
 
-        var result = await LoadLifecycleCoreAsync([], operationToken, sources);
+        PackageLifecycleOperationResult result;
+        var publicationWasCommitted = false;
+        try
+        {
+            result = await LoadLifecycleCoreAsync(
+                [],
+                operationToken,
+                sources,
+                publicationCommitted: committed => publicationWasCommitted = committed);
+        }
+        catch (OperationCanceledException exception)
+        {
+            if (publicationWasCommitted
+                && !await TryRestorePreviousPackageSessionAsync(
+                    previousSources,
+                    packageStateBefore).ConfigureAwait(false))
+            {
+                throw new RuntimeUnavailableException(
+                    "The App dev package owner request was cancelled after publication and the previous package session could not be restored.",
+                    exception);
+            }
+            throw;
+        }
         if (!result.Success)
         {
+            if (publicationWasCommitted)
+            {
+                if (!await TryRestorePreviousPackageSessionAsync(
+                        previousSources,
+                        packageStateBefore).ConfigureAwait(false))
+                {
+                    throw new RuntimeUnavailableException(
+                        "The Runtime rejected the App dev package owner set but could not restore the previous package session.");
+                }
+            }
             throw new RuntimePackageValidationException(
                 result.Errors.FirstOrDefault() ?? result.Message ?? "The Runtime rejected the App dev package owner set.");
         }
 
         return ToOwnerPackages(replacements);
+    }
+
+    private async Task<bool> TryRestorePreviousPackageSessionAsync(
+        PackageSessionSourceSnapshot previousSources,
+        RuntimePackageSnapshot packageStateBefore)
+    {
+        var restorationBudget = _lifecyclePolicy.PackageBackgroundServiceStartupTimeout
+                                + _lifecyclePolicy.PackageRuntimeGenerationActivationTimeout
+                                * _lifecyclePolicy.PackageRuntimeGenerationActivationAttempts
+                                + _lifecyclePolicy.PackageBackgroundServiceCleanupTimeout;
+        using var restorationDeadline = new CancellationTokenSource(restorationBudget);
+        try
+        {
+            var restoration = await LoadLifecycleCoreAsync(
+                [],
+                restorationDeadline.Token,
+                previousSources,
+                allowPackageErrors: true);
+            return restoration.Success
+                   && DevOverlaySetsEqual(
+                       previousSources.DevOverlays,
+                       _sessions.Sources.Snapshot().DevOverlays)
+                   && PackageStateSetsEqual(packageStateBefore, _sessions.GetSnapshot());
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(
+                exception,
+                "Failed to restore the previous package session after rejecting an App dev package owner request");
+            return false;
+        }
     }
 
     public async Task ReleaseAppDevPackageOwnerAsync(
@@ -57,7 +122,9 @@ internal sealed partial class PackageSessionLifecycleService
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
+        var previousSources = _sessions.Sources.Snapshot();
         var sources = _sessions.Sources.Snapshot();
+        var packageStateBefore = _sessions.GetSnapshot();
         var activeBefore = sources.ActiveDevOverlays;
         if (!sources.RemoveDevOverlaysForAppOwner(ownerId))
         {
@@ -70,13 +137,40 @@ internal sealed partial class PackageSessionLifecycleService
             return;
         }
 
-        var result = await LoadLifecycleCoreAsync(
-            [],
-            operationToken,
-            sources,
-            allowPackageErrors: true);
+        PackageLifecycleOperationResult result;
+        var publicationWasCommitted = false;
+        try
+        {
+            result = await LoadLifecycleCoreAsync(
+                [],
+                operationToken,
+                sources,
+                allowPackageErrors: true,
+                publicationCommitted: committed => publicationWasCommitted = committed);
+        }
+        catch (OperationCanceledException exception)
+        {
+            if (publicationWasCommitted
+                && !await TryRestorePreviousPackageSessionAsync(
+                    previousSources,
+                    packageStateBefore).ConfigureAwait(false))
+            {
+                throw new RuntimeUnavailableException(
+                    "The App dev package owner release was cancelled after publication and the previous package session could not be restored.",
+                    exception);
+            }
+            throw;
+        }
         if (!result.Success)
         {
+            if (publicationWasCommitted
+                && !await TryRestorePreviousPackageSessionAsync(
+                    previousSources,
+                    packageStateBefore).ConfigureAwait(false))
+            {
+                throw new RuntimeUnavailableException(
+                    "The Runtime could not release the App dev package owner or restore the previous package session.");
+            }
             throw new RuntimePackageValidationException(
                 result.Errors.FirstOrDefault() ?? result.Message ?? "The Runtime could not release the App dev package owner set.");
         }
@@ -155,4 +249,63 @@ internal sealed partial class PackageSessionLifecycleService
             rightById.TryGetValue(overlay.PackageId, out var candidate)
             && PathsEqual(overlay.Folder, candidate.Folder));
     }
+
+    private static bool DevOverlaySetsEqual(
+        IReadOnlyList<PackageSessionDevOverlay> left,
+        IReadOnlyList<PackageSessionDevOverlay> right)
+        => left.Count == right.Count
+           && left.All(overlay => right.Any(candidate =>
+               string.Equals(candidate.PackageId, overlay.PackageId, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(candidate.OwnerKey, overlay.OwnerKey, StringComparison.Ordinal)
+               && candidate.Watch == overlay.Watch
+               && PathsEqual(candidate.Folder, overlay.Folder)));
+
+    private static bool PackageStateSetsEqual(
+        RuntimePackageSnapshot expected,
+        RuntimePackageSnapshot actual)
+        => expected.ActivePackages
+               .Select(static package => ToComparableState(package, failureOrigin: null))
+               .OrderBy(static package => package.PackageId, StringComparer.OrdinalIgnoreCase)
+               .SequenceEqual(actual.ActivePackages
+                   .Select(static package => ToComparableState(package, failureOrigin: null))
+                   .OrderBy(static package => package.PackageId, StringComparer.OrdinalIgnoreCase))
+           && expected.SessionPackages
+               .Select(static package => ToComparableState(package, package.FailureOrigin))
+               .OrderBy(static package => package.PackageId, StringComparer.OrdinalIgnoreCase)
+               .SequenceEqual(actual.SessionPackages
+                   .Select(static package => ToComparableState(package, package.FailureOrigin))
+                   .OrderBy(static package => package.PackageId, StringComparer.OrdinalIgnoreCase));
+
+    private static ComparablePackageState ToComparableState(
+        ActivePackageDescriptor package,
+        PackageFailureOrigin? failureOrigin)
+        => new(
+            package.PackageId.ToUpperInvariant(),
+            package.Version,
+            package.HostRoles,
+            package.IsEnabled,
+            package.Readiness,
+            failureOrigin,
+            string.Join('\n', package.Views.Select(static view => view.ViewId)));
+
+    private static ComparablePackageState ToComparableState(
+        SessionPackageDescriptor package,
+        PackageFailureOrigin? failureOrigin)
+        => new(
+            package.PackageId.ToUpperInvariant(),
+            package.Version,
+            package.HostRoles,
+            package.IsEnabled,
+            package.Readiness,
+            failureOrigin,
+            string.Join('\n', package.Views.Select(static view => view.ViewId)));
+
+    private sealed record ComparablePackageState(
+        string PackageId,
+        string Version,
+        PackageHostRoles HostRoles,
+        bool IsEnabled,
+        PackageReadinessState Readiness,
+        PackageFailureOrigin? FailureOrigin,
+        string ViewIds);
 }

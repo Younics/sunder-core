@@ -17,6 +17,39 @@ public static class HostProtocolFeatures
     public const string DurableOperationsV1 = "durable-operations.v1";
 }
 
+public static class HostDeploymentIdentity
+{
+    public const string Sha256Prefix = "host-payload-v1:sha256:";
+
+    public static string FromSha256(string sha256)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
+        if (sha256.Length != 64 || sha256.Any(static character => !Uri.IsHexDigit(character)))
+        {
+            throw new ArgumentException("Host deployment SHA-256 must contain exactly 64 hexadecimal characters.", nameof(sha256));
+        }
+        return Sha256Prefix + sha256.ToLowerInvariant();
+    }
+
+    public static bool IsValid(string? value)
+    {
+        if (value is null
+            || value.Length != Sha256Prefix.Length + 64
+            || !value.StartsWith(Sha256Prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        foreach (var character in value.AsSpan(Sha256Prefix.Length))
+        {
+            if (character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 public sealed record HostProductVersionDiagnostics(
     string ProductName,
     string ProductVersion,
@@ -39,6 +72,8 @@ public sealed record HostHandshakeResponse(
         get => _supportedFeatures;
         init => _supportedFeatures = Freeze(value);
     }
+
+    public string? DeploymentIdentity { get; init; }
 
     private static IReadOnlyList<T> Freeze<T>(IEnumerable<T> values)
         => new ReadOnlyCollection<T>(values.ToArray());

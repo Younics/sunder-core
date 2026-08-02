@@ -23,12 +23,15 @@ public sealed class HostSupervisorProcessIntegrationTests
         var externalConnectionPath = Path.Combine(root, "connection", "host.json");
         var workerConnectionPath = Path.Combine(hostStateRoot, "connection", "runtime-worker.json");
         var externalToken = $"integration-external-{Guid.NewGuid():N}";
+        var deploymentIdentity = HostDeploymentIdentityVerifier.Compute(
+            Path.GetDirectoryName(typeof(HostStartupOptions).Assembly.Location)!);
         using var process = StartSupervisor(
             typeof(RuntimeHostStartupOptions).Assembly.Location,
             hostStateRoot,
             runtimeStateRoot,
             externalConnectionPath,
-            externalToken);
+            externalToken,
+            deploymentIdentity);
         var standardOutput = process.StandardOutput.ReadToEndAsync();
         var standardError = process.StandardError.ReadToEndAsync();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
@@ -61,6 +64,11 @@ public sealed class HostSupervisorProcessIntegrationTests
                 timeout.Token);
             Assert.NotNull(hostHandshake);
             Assert.Equal(HostProtocol.Identity, hostHandshake.ProtocolIdentity);
+            Assert.Equal(deploymentIdentity, hostHandshake.DeploymentIdentity);
+            var repeatedHandshake = await authenticated.GetFromJsonAsync<HostHandshakeResponse>(
+                "api/host/handshake",
+                timeout.Token);
+            Assert.Equal(deploymentIdentity, repeatedHandshake?.DeploymentIdentity);
 
             var ready = await WaitForHostStateAsync(
                 authenticated,
@@ -177,7 +185,8 @@ public sealed class HostSupervisorProcessIntegrationTests
         string hostStateRoot,
         string runtimeStateRoot,
         string externalConnectionPath,
-        string externalToken)
+        string externalToken,
+        string deploymentIdentity)
     {
         var supervisorAssembly = typeof(HostStartupOptions).Assembly.Location;
         var startInfo = new ProcessStartInfo(ResolveDotnetHost())
@@ -199,6 +208,8 @@ public sealed class HostSupervisorProcessIntegrationTests
         startInfo.ArgumentList.Add(runtimeStateRoot);
         startInfo.ArgumentList.Add("--worker-startup-timeout-seconds");
         startInfo.ArgumentList.Add("30");
+        startInfo.ArgumentList.Add("--deployment-identity");
+        startInfo.ArgumentList.Add(deploymentIdentity);
 
         foreach (var key in startInfo.Environment.Keys
                      .Where(static key => key.StartsWith("SUNDER_", StringComparison.OrdinalIgnoreCase))

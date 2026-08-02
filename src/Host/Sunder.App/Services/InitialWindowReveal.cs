@@ -19,12 +19,14 @@ internal sealed class InitialWindowReveal(IInitialWindowRevealPlatform? platform
     public void Reveal(
         Window mainWindow,
         Window loadingWindow,
+        Action commitStartup,
         Action setDesktopMainWindow,
         Action releaseRuntimePresentation
     ) =>
         Reveal(
             new AvaloniaInitialRevealWindow(mainWindow),
             new AvaloniaInitialRevealWindow(loadingWindow),
+            commitStartup,
             setDesktopMainWindow,
             releaseRuntimePresentation
         );
@@ -44,12 +46,15 @@ internal sealed class InitialWindowReveal(IInitialWindowRevealPlatform? platform
     internal void Reveal(
         IInitialRevealWindow mainWindow,
         IInitialRevealWindow loadingWindow,
+        Action commitStartup,
         Action setDesktopMainWindow,
         Action releaseRuntimePresentation
     )
     {
+        ArgumentNullException.ThrowIfNull(commitStartup);
         ArgumentNullException.ThrowIfNull(setDesktopMainWindow);
         ArgumentNullException.ThrowIfNull(releaseRuntimePresentation);
+        commitStartup();
         if (_nativeConcealed && !_platform.TryReveal(mainWindow))
         {
             throw new InvalidOperationException("The native main window could not be revealed.");

@@ -60,6 +60,215 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureStartedAsync_ObservesLaunchReceiptAndLogsServiceIdentity()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://127.0.0.1:54321/");
+        var serviceName = $"test-service-{Guid.NewGuid():N}";
+        var receipt = new HostServiceLaunchReceipt("test-backend", serviceName, 42001);
+        var runtimeReady = false;
+        var hostServiceManager = new TestHostServiceManager(
+            receipt,
+            (_, _) =>
+            {
+                runtimeReady = true;
+                return Task.FromResult(new HostServiceObservation(HostServiceState.Starting, 42001));
+            });
+
+        try
+        {
+            using var manager = CreateObservedLaunchManager(
+                runtimeHostPath,
+                Path.Combine(rootPath, "connection.json"),
+                hostServiceManager,
+                (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeReady ? CreateHandshake() : null));
+
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(1, hostServiceManager.LaunchCount);
+            Assert.Same(receipt, hostServiceManager.ObservedReceipt);
+            Assert.Equal(runtimeHostPath, hostServiceManager.StartInfo?.FileName);
+            Assert.Contains(
+                AppSessionLog.Snapshot(),
+                entry => entry.Message.Contains("backend=test-backend", StringComparison.Ordinal)
+                         && entry.Message.Contains($"service={serviceName}", StringComparison.Ordinal)
+                         && entry.Message.Contains("pid=42001", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenObservedProcessExits_FailsImmediatelyWithSafeTypedError()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var receipt = new HostServiceLaunchReceipt("direct", "sunder-host", 42002);
+        var delayCount = 0;
+        var hostServiceManager = new TestHostServiceManager(
+            receipt,
+            (_, _) => Task.FromResult(new HostServiceObservation(
+                HostServiceState.Failed,
+                processId: 42002,
+                exitCode: 17,
+                result: "process-exit",
+                safeDetail: "password=do-not-expose",
+                diagnosticPaths: [Path.Combine(rootPath, "host.log")])));
+
+        try
+        {
+            using var manager = CreateObservedLaunchManager(
+                runtimeHostPath,
+                Path.Combine(rootPath, "connection.json"),
+                hostServiceManager,
+                static (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(null),
+                delayAsync: (_, _) =>
+                {
+                    delayCount++;
+                    return Task.CompletedTask;
+                });
+
+            var exception = await Assert.ThrowsAsync<HostServiceStartupException>(
+                () => manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.Equal(HostServiceStartupFailure.TerminalState, exception.Failure);
+            Assert.Same(receipt, exception.Receipt);
+            Assert.Equal(HostServiceState.Failed, exception.Observation?.State);
+            Assert.Equal(17, exception.Observation?.ExitCode);
+            Assert.Contains("Exit code: 17", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("password=[redacted]", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("do-not-expose", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, delayCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenServiceObservationThrows_ReturnsSafeTypedError()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var receipt = new HostServiceLaunchReceipt("test-backend", "sunder-host", 42003);
+        var delayCount = 0;
+        var hostServiceManager = new TestHostServiceManager(
+            receipt,
+            static (_, _) => throw new InvalidOperationException("access_token=do-not-expose"));
+
+        try
+        {
+            using var manager = CreateObservedLaunchManager(
+                runtimeHostPath,
+                Path.Combine(rootPath, "connection.json"),
+                hostServiceManager,
+                static (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(null),
+                delayAsync: (_, _) =>
+                {
+                    delayCount++;
+                    return Task.CompletedTask;
+                });
+
+            var exception = await Assert.ThrowsAsync<HostServiceStartupException>(
+                () => manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.Equal(HostServiceStartupFailure.ObservationError, exception.Failure);
+            Assert.Null(exception.Observation);
+            Assert.Contains("access_token=[redacted]", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("do-not-expose", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, delayCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenServiceObservationIsUnknown_WaitsUntilTimeout()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var receipt = new HostServiceLaunchReceipt("legacy-test", "sunder-host");
+        var hostServiceManager = new TestHostServiceManager(
+            receipt,
+            static (_, _) => Task.FromResult(HostServiceObservation.Unknown()));
+        var timeProvider = new ManualTimeProvider();
+        var delayCount = 0;
+
+        try
+        {
+            using var manager = CreateObservedLaunchManager(
+                runtimeHostPath,
+                Path.Combine(rootPath, "connection.json"),
+                hostServiceManager,
+                static (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(null),
+                delayAsync: (delay, _) =>
+                {
+                    delayCount++;
+                    timeProvider.Advance(delay);
+                    return Task.CompletedTask;
+                },
+                timeProvider,
+                TimeSpan.FromMilliseconds(800));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.IsNotType<HostServiceStartupException>(exception);
+            Assert.Contains("within 1 seconds", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, hostServiceManager.LaunchCount);
+            Assert.Equal(3, hostServiceManager.ObserveCount);
+            Assert.Equal(2, delayCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenObservedServiceRunsAndConnectionAppears_Succeeds()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var receipt = new HostServiceLaunchReceipt("test-backend", "sunder-host", 42004);
+        var runtimeReady = false;
+        var hostServiceManager = new TestHostServiceManager(
+            receipt,
+            static (_, _) => Task.FromResult(new HostServiceObservation(
+                HostServiceState.Running,
+                processId: 42004)));
+        var delayCount = 0;
+
+        try
+        {
+            using var manager = CreateObservedLaunchManager(
+                runtimeHostPath,
+                Path.Combine(rootPath, "connection.json"),
+                hostServiceManager,
+                (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeReady ? CreateHandshake() : null),
+                delayAsync: (_, _) =>
+                {
+                    delayCount++;
+                    runtimeReady = true;
+                    return Task.CompletedTask;
+                });
+
+            await manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/"));
+
+            Assert.Equal(1, hostServiceManager.LaunchCount);
+            Assert.Equal(1, hostServiceManager.ObserveCount);
+            Assert.Equal(1, delayCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task EnsureStartedAsync_WhenReplacingRuntime_WaitsForStateLeaseRelease()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
@@ -330,23 +539,80 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public async Task EnsureStartedAsync_WhenDevelopmentManagedHostIsWarm_RestartsItOnlyOnce()
+    public async Task EnsureStartedAsync_WhenManagedHostDeploymentIdentityMatches_ReusesWithoutRestart()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var supervisorPath = Path.Combine(
-                root,
-                OperatingSystem.IsWindows() ? "Sunder.Host.Supervisor.exe" : "Sunder.Host.Supervisor");
-            await File.WriteAllTextAsync(supervisorPath, string.Empty);
+            var store = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v1"),
+                Path.Combine(root, "payloads"),
+                "1.0.0");
+            var installed = store.Prepare();
+            var deploymentIdentity = installed.DeploymentIdentity;
+            store.Commit(installed);
+            var runtimeUrl = new Uri("http://127.0.0.1:54321/");
+            var shutdownCount = 0;
+            var startCount = 0;
+            using var manager = new RuntimeHostProcessManager(
+                new AppStartupOptions(),
+                tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(CreateHandshake()),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(true),
+                shutdownRuntimeAsync: (_, _) =>
+                {
+                    shutdownCount++;
+                    return Task.CompletedTask;
+                },
+                startProcess: _ => startCount++,
+                delayAsync: (_, _) => Task.CompletedTask,
+                connectionInfoPath: Path.Combine(root, "host-connection.json"),
+                isRuntimeLeaseAvailable: () => true,
+                tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
+                    CreateHostHandshake("different-diagnostic-version", deploymentIdentity)),
+                isHostInstanceLockAvailable: () => true,
+                userHostPayloadStore: store);
+
+            await manager.EnsureStartedAsync(runtimeUrl);
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(0, shutdownCount);
+            Assert.Equal(0, startCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenManagedHostDeploymentIdentityDiffers_ReplacesExactlyOnce()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var payloadRoot = Path.Combine(root, "payloads");
+            var oldStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v1"),
+                payloadRoot,
+                "1.0.0");
+            var oldPayload = oldStore.Prepare();
+            var oldIdentity = oldPayload.DeploymentIdentity;
+            oldStore.Commit(oldPayload);
+            var newStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v2"),
+                payloadRoot,
+                "1.0.0");
+            var candidate = newStore.Prepare();
+            var newIdentity = candidate.DeploymentIdentity;
+            candidate.Dispose();
             var runtimeUrl = new Uri("http://127.0.0.1:54321/");
             var runtimeState = 0;
             var shutdownCount = 0;
             var startCount = 0;
             using var manager = new RuntimeHostProcessManager(
                 new AppStartupOptions(),
-                resolveRuntimeHostPath: () => supervisorPath,
                 tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
                     runtimeState is 0 or 2 ? CreateHandshake() : null),
                 isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeState is 0 or 2),
@@ -358,24 +624,88 @@ public sealed class RuntimeHostProcessManagerTests
                 },
                 startProcess: startInfo =>
                 {
-                    Assert.Equal(supervisorPath, startInfo.FileName);
                     startCount++;
+                    Assert.Contains("--deployment-identity", startInfo.ArgumentList);
+                    Assert.Contains(newIdentity, startInfo.ArgumentList);
+                    runtimeState = 2;
+                },
+                delayAsync: (_, _) => Task.CompletedTask,
+                connectionInfoPath: Path.Combine(root, "host-connection.json"),
+                isRuntimeLeaseAvailable: () => true,
+                tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(runtimeState switch
+                {
+                    0 => CreateHostHandshake("1.0.0", oldIdentity),
+                    2 => CreateHostHandshake("1.0.0", newIdentity),
+                    _ => null,
+                }),
+                userHostPayloadStore: newStore,
+                isHostInstanceLockAvailable: () => true);
+
+            await manager.EnsureStartedAsync(runtimeUrl);
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(1, shutdownCount);
+            Assert.Equal(1, startCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenMatchingPayloadPathRequiresRepair_ReplacesBeforeCommit()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v1"),
+                Path.Combine(root, "payloads"),
+                "1.0.0");
+            var installed = store.Prepare();
+            var oldPath = installed.DirectoryPath;
+            var identity = installed.DeploymentIdentity;
+            store.Commit(installed);
+            File.WriteAllText(
+                Path.Combine(oldPath, OperatingSystem.IsWindows()
+                    ? "Sunder.Host.Supervisor.exe"
+                    : "Sunder.Host.Supervisor"),
+                "corrupted-after-launch");
+            var runtimeState = 0;
+            var shutdownCount = 0;
+            var launchCount = 0;
+            using var manager = new RuntimeHostProcessManager(
+                new AppStartupOptions(),
+                tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeState is 0 or 2 ? CreateHandshake() : null),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeState is 0 or 2),
+                shutdownRuntimeAsync: (_, _) =>
+                {
+                    shutdownCount++;
+                    runtimeState = 1;
+                    return Task.CompletedTask;
+                },
+                startProcess: startInfo =>
+                {
+                    launchCount++;
+                    Assert.NotEqual(oldPath, Path.GetDirectoryName(startInfo.FileName));
                     runtimeState = 2;
                 },
                 delayAsync: (_, _) => Task.CompletedTask,
                 connectionInfoPath: Path.Combine(root, "host-connection.json"),
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                    runtimeState is 0 or 2 ? CreateHostHandshake("Development") : null),
-                isHostInstanceLockAvailable: () => true,
-                restartManagedHostOnFirstStart: true);
+                    runtimeState is 0 or 2 ? CreateHostHandshake("1.0.0", identity) : null),
+                userHostPayloadStore: store,
+                isHostInstanceLockAvailable: () => true);
 
-            await manager.EnsureStartedAsync(runtimeUrl);
-            await manager.EnsureStartedAsync(runtimeUrl);
+            await manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/"));
 
             Assert.Equal(1, shutdownCount);
-            Assert.Equal(1, startCount);
-            Assert.Equal(2, runtimeState);
+            Assert.Equal(1, launchCount);
+            Assert.False(Directory.Exists(oldPath));
         }
         finally
         {
@@ -383,101 +713,219 @@ public sealed class RuntimeHostProcessManagerTests
         }
     }
 
-    [Fact]
-    public async Task EnsureStartedAsync_WhenDevelopmentReplacementIsMissing_DoesNotStopManagedHost()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        var shutdownCount = 0;
-        var startCount = 0;
-        using var manager = new RuntimeHostProcessManager(
-            new AppStartupOptions(),
-            resolveRuntimeHostPath: () => null,
-            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(CreateHandshake()),
-            isRuntimeHealthyAsync: (_, _) => Task.FromResult(true),
-            shutdownRuntimeAsync: (_, _) =>
-            {
-                shutdownCount++;
-                return Task.CompletedTask;
-            },
-            startProcess: _ => startCount++,
-            delayAsync: (_, _) => Task.CompletedTask,
-            connectionInfoPath: Path.Combine(root, "host-connection.json"),
-            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                CreateHostHandshake("Development")),
-            restartManagedHostOnFirstStart: true);
-
-        try
-        {
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
-
-            Assert.Contains("before replacing", exception.Message, StringComparison.Ordinal);
-            Assert.Equal(0, shutdownCount);
-            Assert.Equal(0, startCount);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task EnsureStartedAsync_WhenDevelopmentReplacementStartsLate_DoesNotRestartItAgain()
+    [Theory]
+    [InlineData((int)HostServiceState.Failed, true)]
+    [InlineData((int)HostServiceState.Absent, false)]
+    public async Task EnsureStartedAsync_WhenReplacementIsTerminal_RestoresOnlyAfterExactTermination(
+        int observedState,
+        bool expectRestore)
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            var supervisorPath = Path.Combine(
-                root,
-                OperatingSystem.IsWindows() ? "Sunder.Host.Supervisor.exe" : "Sunder.Host.Supervisor");
-            await File.WriteAllTextAsync(supervisorPath, string.Empty);
-            var runtimeUrl = new Uri("http://127.0.0.1:54321/");
-            var hostRunning = true;
-            var runtimeReady = true;
-            var shutdownCount = 0;
-            var startCount = 0;
-            var timeProvider = new ManualTimeProvider();
+            var payloadRoot = Path.Combine(root, "payloads");
+            var firstStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v1"),
+                payloadRoot,
+                "1.0.0");
+            var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
+            firstStore.Commit(first);
+            var secondStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v2"),
+                payloadRoot,
+                "2.0.0");
+            var second = secondStore.Prepare();
+            second.Dispose();
+            var runtimeState = 0;
+            var launchState = 0;
+            var serviceManager = new TestHostServiceManager(
+                 new HostServiceLaunchReceipt("test-backend", "sunder-host", 4400),
+                 (_, _) => Task.FromResult(new HostServiceObservation(
+                     (HostServiceState)observedState,
+                    4400,
+                    19,
+                    "process-exit")),
+                (_, _) => runtimeState = serviceManagerLaunchState());
+            int serviceManagerLaunchState() => ++launchState == 1 ? 2 : 3;
             using var manager = new RuntimeHostProcessManager(
                 new AppStartupOptions(),
-                resolveRuntimeHostPath: () => supervisorPath,
                 tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
-                    runtimeReady ? CreateHandshake() : null),
-                isRuntimeHealthyAsync: (_, _) => Task.FromResult(hostRunning),
+                    runtimeState == 3 ? CreateHandshake() : null),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeState is 0 or 3),
                 shutdownRuntimeAsync: (_, _) =>
                 {
-                    shutdownCount++;
-                    hostRunning = false;
-                    runtimeReady = false;
+                    runtimeState = 1;
                     return Task.CompletedTask;
                 },
-                startProcess: _ =>
-                {
-                    startCount++;
-                    hostRunning = true;
-                },
-                delayAsync: (delay, _) =>
-                {
-                    timeProvider.Advance(delay);
-                    return Task.CompletedTask;
-                },
+                delayAsync: (_, _) => Task.CompletedTask,
                 connectionInfoPath: Path.Combine(root, "host-connection.json"),
-                timeProvider: timeProvider,
-                startupTimeout: TimeSpan.FromMilliseconds(400),
+                isRuntimeLeaseAvailable: () => true,
+                tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(runtimeState switch
+                {
+                    0 or 3 => CreateHostHandshake("1.0.0", firstIdentity),
+                    _ => null,
+                }),
+                userHostPayloadStore: secondStore,
+                isHostInstanceLockAvailable: () => true,
+                hostServiceManager: serviceManager);
+
+            var exception = await Assert.ThrowsAsync<HostServiceStartupException>(() =>
+                manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.Equal(HostServiceStartupFailure.TerminalState, exception.Failure);
+            Assert.Equal(expectRestore ? 2 : 1, serviceManager.LaunchCount);
+            Assert.Equal(
+                expectRestore ? [second.ExecutablePath, first.ExecutablePath] : [second.ExecutablePath],
+                serviceManager.StartInfos.Select(info => info.FileName));
+            Assert.Equal(expectRestore ? 0 : 1, serviceManager.StopCount);
+            Assert.True(Directory.Exists(first.DirectoryPath));
+            Assert.Equal(!expectRestore, Directory.Exists(second.DirectoryPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenLauncherDisplacesServiceBeforeReceipt_RestoresPreviousPayload()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var payloadRoot = Path.Combine(root, "payloads");
+            var firstStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v1"),
+                payloadRoot,
+                "1.0.0");
+            var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
+            firstStore.Commit(first);
+            var secondStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v2"),
+                payloadRoot,
+                "2.0.0");
+            var second = secondStore.Prepare();
+            second.Dispose();
+            var runtimeState = 0;
+            var launchCount = 0;
+            var serviceManager = new TestHostServiceManager(
+                new HostServiceLaunchReceipt("test-backend", "sunder-host", 4500),
+                (_, _) => Task.FromResult(HostServiceObservation.Unknown(4500)),
+                (_, _) =>
+                {
+                    launchCount++;
+                    if (launchCount == 1)
+                    {
+                        runtimeState = 1;
+                        throw new HostServiceReplacementException(
+                            new IOException("replacement launch failed"));
+                    }
+                    runtimeState = 3;
+                });
+            using var manager = new RuntimeHostProcessManager(
+                new AppStartupOptions(),
+                tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeState == 3 ? CreateHandshake() : null),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeState == 3),
+                shutdownRuntimeAsync: (_, _) => Task.CompletedTask,
+                delayAsync: (_, _) => Task.CompletedTask,
+                connectionInfoPath: Path.Combine(root, "host-connection.json"),
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                    hostRunning ? CreateHostHandshake("Development") : null),
-                isHostInstanceLockAvailable: () => !hostRunning,
-                restartManagedHostOnFirstStart: true);
+                    runtimeState == 3
+                        ? CreateHostHandshake("1.0.0", firstIdentity)
+                        : null),
+                userHostPayloadStore: secondStore,
+                isHostInstanceLockAvailable: () => true,
+                hostServiceManager: serviceManager);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureStartedAsync(runtimeUrl));
+            await Assert.ThrowsAsync<HostServiceReplacementException>(() =>
+                manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
 
-            runtimeReady = true;
-            await manager.EnsureStartedAsync(runtimeUrl);
+            Assert.Equal(2, serviceManager.LaunchCount);
+            Assert.Equal(
+                [second.ExecutablePath, first.ExecutablePath],
+                serviceManager.StartInfos.Select(info => info.FileName));
+            Assert.True(Directory.Exists(first.DirectoryPath));
+            Assert.Contains(
+                "1.0.0",
+                File.ReadAllText(Path.Combine(payloadRoot, "current.json")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
-            Assert.Equal(1, shutdownCount);
-            Assert.Equal(1, startCount);
+    [Fact]
+    public async Task EnsureStartedAsync_WhenReplacementReportsWrongIdentity_StopsExactReceiptAndRestoresPreviousPayload()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var payloadRoot = Path.Combine(root, "payloads");
+            var firstStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v1"),
+                payloadRoot,
+                "1.0.0");
+            var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
+            firstStore.Commit(first);
+            var secondStore = new UserHostPayloadStore(
+                CreateSupervisorPayload(root, "source-v2"),
+                payloadRoot,
+                "2.0.0");
+            var second = secondStore.Prepare();
+            var secondIdentity = second.DeploymentIdentity;
+            second.Dispose();
+            var runtimeState = 0;
+            var launchState = 0;
+            var serviceManager = new TestHostServiceManager(
+                new HostServiceLaunchReceipt("test-backend", "sunder-host", 4401, "candidate-generation"),
+                (_, _) => Task.FromResult(new HostServiceObservation(HostServiceState.Running, 4401)),
+                (_, _) => runtimeState = ++launchState == 1 ? 2 : 3,
+                (_, _) =>
+                {
+                    runtimeState = 1;
+                    return Task.FromResult(true);
+                });
+            using var manager = new RuntimeHostProcessManager(
+                new AppStartupOptions(),
+                tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                    runtimeState is 2 or 3 ? CreateHandshake() : null),
+                isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeState is 0 or 2 or 3),
+                shutdownRuntimeAsync: (_, _) =>
+                {
+                    runtimeState = 1;
+                    return Task.CompletedTask;
+                },
+                delayAsync: (_, _) => Task.CompletedTask,
+                connectionInfoPath: Path.Combine(root, "host-connection.json"),
+                isRuntimeLeaseAvailable: () => true,
+                tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(runtimeState switch
+                {
+                    0 or 2 or 3 => CreateHostHandshake("1.0.0", firstIdentity),
+                    _ => null,
+                }),
+                userHostPayloadStore: secondStore,
+                isHostInstanceLockAvailable: () => true,
+                hostServiceManager: serviceManager);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.Contains(secondIdentity, exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, serviceManager.StopCount);
+            Assert.Equal(2, serviceManager.LaunchCount);
+            Assert.Equal([second.ExecutablePath, first.ExecutablePath], serviceManager.StartInfos.Select(info => info.FileName));
+            Assert.True(Directory.Exists(first.DirectoryPath));
+            Assert.False(Directory.Exists(second.DirectoryPath));
         }
         finally
         {
@@ -504,8 +952,7 @@ public sealed class RuntimeHostProcessManagerTests
             startProcess: _ => startCount++,
             delayAsync: (_, _) => Task.CompletedTask,
             connectionInfoPath: Path.Combine(rootPath, "connection-v1.json"),
-            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(null),
-            restartManagedHostOnFirstStart: true);
+            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(null));
 
         try
         {
@@ -683,11 +1130,15 @@ public sealed class RuntimeHostProcessManagerTests
                 payloadRoot,
                 "1.0.0");
             var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
             firstStore.Commit(first);
             var secondStore = new UserHostPayloadStore(
                 CreateSupervisorPayload(root, "source-v2"),
                 payloadRoot,
                 "2.0.0");
+            var second = secondStore.Prepare();
+            var secondIdentity = second.DeploymentIdentity;
+            second.Dispose();
             var publishedUrl = new Uri("http://127.0.0.1:5275/");
             var requestedUrl = new Uri("http://127.0.0.1:5276/");
             var connectionInfoPath = Path.Combine(root, "connection-v1.json");
@@ -727,7 +1178,7 @@ public sealed class RuntimeHostProcessManagerTests
                 connectionInfoPath: connectionInfoPath,
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (url, _) => Task.FromResult<HostHandshakeResponse?>(
-                    url == runningUrl ? CreateHostHandshake("1.0.0") : null),
+                    url == runningUrl ? CreateHostHandshake("1.0.0", firstIdentity) : null),
                 userHostPayloadStore: secondStore,
                 isHostInstanceLockAvailable: () => true);
 
@@ -801,6 +1252,57 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureStartedAsync_WhenHostPublishesBeforeWorkerReady_PreservesAndReusesIt()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var runtimeUrl = new Uri("http://127.0.0.1:54321/");
+        var connectionInfoPath = Path.Combine(rootPath, "connection-v1.json");
+        var connection = new RuntimeConnectionInfo(runtimeUrl, "late-host-token");
+        var hostAvailable = false;
+        var runtimeReady = false;
+        var ensureCount = 0;
+        var startCount = 0;
+        using var manager = new RuntimeHostProcessManager(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
+                runtimeReady ? CreateHandshake() : null),
+            isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            shutdownRuntimeAsync: (_, _) => Task.CompletedTask,
+            startProcess: _ => startCount++,
+            delayAsync: (_, _) => Task.CompletedTask,
+            connectionInfoPath: connectionInfoPath,
+            isRuntimeLeaseAvailable: () => true,
+            tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
+                hostAvailable ? CreateHostHandshake("1.0.0") : null),
+            tryEnsureSupervisedRuntimeStartedAsync: (_, _) =>
+            {
+                ensureCount++;
+                if (!hostAvailable)
+                {
+                    hostAvailable = true;
+                    RuntimeConnectionInfoStore.Save(connection, connectionInfoPath);
+                    return Task.FromResult(false);
+                }
+                runtimeReady = true;
+                return Task.FromResult(true);
+            });
+
+        try
+        {
+            await manager.EnsureStartedAsync(runtimeUrl);
+
+            Assert.Equal(0, startCount);
+            Assert.Equal(2, ensureCount);
+            Assert.Equal(connection.BearerToken, RuntimeConnectionInfoStore.Load(connectionInfoPath)?.BearerToken);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task EnsureStartedAsync_AfterTimeoutReusesLateRuntimeWithoutSecondLaunch()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
@@ -861,11 +1363,15 @@ public sealed class RuntimeHostProcessManagerTests
                 payloadRoot,
                 "1.0.0");
             var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
             firstStore.Commit(first);
             var secondStore = new UserHostPayloadStore(
                 CreateSupervisorPayload(root, "source-v2"),
                 payloadRoot,
                 "2.0.0");
+            var second = secondStore.Prepare();
+            var secondIdentity = second.DeploymentIdentity;
+            second.Dispose();
             var runtimeUrl = new Uri("http://127.0.0.1:54321/");
             var running = true;
             var replacementStarted = false;
@@ -890,7 +1396,9 @@ public sealed class RuntimeHostProcessManagerTests
                 connectionInfoPath: Path.Combine(root, "connection.json"),
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                    CreateHostHandshake(replacementStarted ? "2.0.0" : "1.0.0")),
+                    replacementStarted
+                        ? CreateHostHandshake("2.0.0", secondIdentity)
+                        : CreateHostHandshake("1.0.0", firstIdentity)),
                 userHostPayloadStore: secondStore);
 
             await manager.EnsureStartedAsync(runtimeUrl);
@@ -918,6 +1426,9 @@ public sealed class RuntimeHostProcessManagerTests
                 CreateSupervisorPayload(root, "source-v1"),
                 payloadRoot,
                 "1.0.0");
+            var candidate = store.Prepare();
+            var candidateIdentity = candidate.DeploymentIdentity;
+            candidate.Dispose();
             var runtimeUrl = new Uri("http://127.0.0.1:54321/");
             var runtimeState = 0;
             var shutdownCount = 0;
@@ -944,7 +1455,7 @@ public sealed class RuntimeHostProcessManagerTests
                 connectionInfoPath: Path.Combine(root, "host-connection.json"),
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                    runtimeState == 2 ? CreateHostHandshake("1.0.0") : null),
+                    runtimeState == 2 ? CreateHostHandshake("1.0.0", candidateIdentity) : null),
                 userHostPayloadStore: store);
 
             await manager.EnsureStartedAsync(runtimeUrl);
@@ -973,12 +1484,14 @@ public sealed class RuntimeHostProcessManagerTests
                 payloadRoot,
                 "1.0.0");
             var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
             firstStore.Commit(first);
             var secondStore = new UserHostPayloadStore(
                 CreateSupervisorPayload(root, "source-v2"),
                 payloadRoot,
                 "2.0.0");
             var second = secondStore.Prepare();
+            var secondIdentity = second.DeploymentIdentity;
             second.Dispose();
             var runtimeUrl = new Uri("http://127.0.0.1:54321/");
             var runtimeState = 0;
@@ -1014,12 +1527,12 @@ public sealed class RuntimeHostProcessManagerTests
                 startupTimeout: TimeSpan.FromMilliseconds(400),
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                    CreateHostHandshake("1.0.0")),
+                    CreateHostHandshake("1.0.0", firstIdentity)),
                 userHostPayloadStore: secondStore);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureStartedAsync(runtimeUrl));
 
-            Assert.Equal(2, shutdownCount);
+            Assert.Equal(1, shutdownCount);
             Assert.Equal(1, launchCount);
             Assert.True(Directory.Exists(first.DirectoryPath));
             Assert.True(Directory.Exists(second.DirectoryPath));
@@ -1046,12 +1559,14 @@ public sealed class RuntimeHostProcessManagerTests
                 payloadRoot,
                 "1.0.0");
             var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
             firstStore.Commit(first);
             var secondStore = new UserHostPayloadStore(
                 CreateSupervisorPayload(root, "source-v2"),
                 payloadRoot,
                 "2.0.0");
             var second = secondStore.Prepare();
+            var secondIdentity = second.DeploymentIdentity;
             second.Dispose();
             var runtimeUrl = new Uri("http://127.0.0.1:54321/");
             var runtimeState = 0;
@@ -1078,9 +1593,9 @@ public sealed class RuntimeHostProcessManagerTests
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(runtimeState switch
                 {
-                    0 => CreateHostHandshake("1.0.0"),
-                    2 => CreateHostHandshake("1.0.0"),
-                    3 => CreateHostHandshake("1.0.0"),
+                    0 => CreateHostHandshake("1.0.0", firstIdentity),
+                    2 => CreateHostHandshake("2.0.0", firstIdentity),
+                    3 => CreateHostHandshake("1.0.0", firstIdentity),
                     _ => null,
                 }),
                 userHostPayloadStore: secondStore,
@@ -1089,11 +1604,11 @@ public sealed class RuntimeHostProcessManagerTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => manager.EnsureStartedAsync(runtimeUrl));
 
-            Assert.Contains("instead of staged payload version '2.0.0'", exception.Message, StringComparison.Ordinal);
-            Assert.Equal(2, shutdownCount);
-            Assert.Equal([second.ExecutablePath, first.ExecutablePath], launchedPaths);
+            Assert.Contains($"instead of staged payload identity '{secondIdentity}'", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, shutdownCount);
+            Assert.Equal([second.ExecutablePath], launchedPaths);
             Assert.True(Directory.Exists(first.DirectoryPath));
-            Assert.False(Directory.Exists(second.DirectoryPath));
+            Assert.True(Directory.Exists(second.DirectoryPath));
             var descriptor = File.ReadAllText(Path.Combine(payloadRoot, "current.json"));
             Assert.Contains("1.0.0", descriptor, StringComparison.Ordinal);
             Assert.DoesNotContain("2.0.0", descriptor, StringComparison.Ordinal);
@@ -1117,6 +1632,7 @@ public sealed class RuntimeHostProcessManagerTests
                 payloadRoot,
                 "1.0.0");
             var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
             firstStore.Commit(first);
             var secondStore = new UserHostPayloadStore(
                 CreateSupervisorPayload(root, "source-v2"),
@@ -1153,7 +1669,7 @@ public sealed class RuntimeHostProcessManagerTests
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(runtimeState switch
                 {
-                    0 or 2 => CreateHostHandshake("1.0.0"),
+                    0 or 2 => CreateHostHandshake("1.0.0", firstIdentity),
                     _ => null,
                 }),
                 userHostPayloadStore: secondStore,
@@ -1187,6 +1703,7 @@ public sealed class RuntimeHostProcessManagerTests
                 payloadRoot,
                 "1.0.0");
             var first = firstStore.Prepare();
+            var firstIdentity = first.DeploymentIdentity;
             firstStore.Commit(first);
             var secondStore = new UserHostPayloadStore(
                 CreateSupervisorPayload(root, "source-v2"),
@@ -1224,7 +1741,7 @@ public sealed class RuntimeHostProcessManagerTests
                 startupTimeout: TimeSpan.FromMilliseconds(400),
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
-                    runtimeState == 0 ? CreateHostHandshake("1.0.0") : null),
+                    runtimeState == 0 ? CreateHostHandshake("1.0.0", firstIdentity) : null),
                 userHostPayloadStore: secondStore);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureStartedAsync(runtimeUrl));
@@ -1306,6 +1823,9 @@ public sealed class RuntimeHostProcessManagerTests
                 CreateSupervisorPayload(root, "source-v1"),
                 payloadRoot,
                 "1.0.0");
+            var candidate = store.Prepare();
+            var candidateIdentity = candidate.DeploymentIdentity;
+            candidate.Dispose();
             var runtimeUrl = new Uri("http://127.0.0.1:54321/");
             var started = false;
             using var manager = new RuntimeHostProcessManager(
@@ -1324,7 +1844,7 @@ public sealed class RuntimeHostProcessManagerTests
                 isRuntimeLeaseAvailable: () => true,
                 tryGetHostHandshakeAsync: (_, _) => Task.FromResult<HostHandshakeResponse?>(
                     started
-                        ? CreateHostHandshake("1.0.0") with
+                        ? CreateHostHandshake("1.0.0", candidateIdentity) with
                         {
                             SupportedFeatures = [HostProtocolFeatures.RuntimeGatewayV1],
                         }
@@ -1423,8 +1943,31 @@ public sealed class RuntimeHostProcessManagerTests
         }
     }
 
-    private static HostHandshakeResponse CreateHostHandshake(string version)
+    private static RuntimeHostProcessManager CreateObservedLaunchManager(
+        string runtimeHostPath,
+        string connectionInfoPath,
+        IHostServiceManager hostServiceManager,
+        Func<Uri, CancellationToken, Task<RuntimeHandshakeResponse?>> tryGetRuntimeHandshakeAsync,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        TimeProvider? timeProvider = null,
+        TimeSpan? startupTimeout = null)
         => new(
+            new AppStartupOptions(),
+            resolveRuntimeHostPath: () => runtimeHostPath,
+            tryGetRuntimeHandshakeAsync: tryGetRuntimeHandshakeAsync,
+            isRuntimeHealthyAsync: static (_, _) => Task.FromResult(false),
+            shutdownRuntimeAsync: static (_, _) => Task.CompletedTask,
+            delayAsync: delayAsync ?? (static (_, _) => Task.CompletedTask),
+            connectionInfoPath: connectionInfoPath,
+            timeProvider: timeProvider,
+            startupTimeout: startupTimeout ?? TimeSpan.FromSeconds(2),
+            isRuntimeLeaseAvailable: static () => true,
+            hostServiceManager: hostServiceManager);
+
+    private static HostHandshakeResponse CreateHostHandshake(
+        string version,
+        string? deploymentIdentity = null)
+        => new HostHandshakeResponse(
             HostProtocol.Identity,
             HostProtocol.CurrentRevision,
             HostProtocol.MinimumSupportedRevision,
@@ -1436,7 +1979,10 @@ public sealed class RuntimeHostProcessManagerTests
                 HostProtocolFeatures.RuntimeLifecycleV1,
                 HostProtocolFeatures.DurableOperationsV1,
             ],
-            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", version, version));
+            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", version, version))
+        {
+            DeploymentIdentity = deploymentIdentity,
+        };
 
     private static string CreateSupervisorPayload(string root, string name)
     {
@@ -1487,6 +2033,57 @@ public sealed class RuntimeHostProcessManagerTests
         {
             _utcNow += duration;
             _timestamp += duration.Ticks;
+        }
+    }
+
+    private sealed class TestHostServiceManager(
+        HostServiceLaunchReceipt receipt,
+        Func<HostServiceLaunchReceipt, CancellationToken, Task<HostServiceObservation>> observeAsync,
+        Action<ProcessStartInfo, bool>? launch = null,
+        Func<HostServiceLaunchReceipt, CancellationToken, Task<bool>>? stopAsync = null)
+        : IHostServiceManager
+    {
+        public int LaunchCount { get; private set; }
+
+        public int ObserveCount { get; private set; }
+
+        public int StopCount { get; private set; }
+
+        public ProcessStartInfo? StartInfo { get; private set; }
+
+        public List<ProcessStartInfo> StartInfos { get; } = [];
+
+        public HostServiceLaunchReceipt? ObservedReceipt { get; private set; }
+
+        public Task<HostServiceLaunchReceipt> ReconcileAndLaunchAsync(
+            ProcessStartInfo startInfo,
+            bool replaceExisting,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LaunchCount++;
+            StartInfo = startInfo;
+            StartInfos.Add(startInfo);
+            launch?.Invoke(startInfo, replaceExisting);
+            return Task.FromResult(receipt);
+        }
+
+        public Task<HostServiceObservation> ObserveAsync(
+            HostServiceLaunchReceipt launchReceipt,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ObserveCount++;
+            ObservedReceipt = launchReceipt;
+            return observeAsync(launchReceipt, cancellationToken);
+        }
+
+        public Task<bool> TryStopAsync(
+            HostServiceLaunchReceipt launchReceipt,
+            CancellationToken cancellationToken)
+        {
+            StopCount++;
+            return stopAsync?.Invoke(launchReceipt, cancellationToken) ?? Task.FromResult(false);
         }
     }
 

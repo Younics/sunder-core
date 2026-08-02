@@ -2,8 +2,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Microsoft.Extensions.DependencyInjection;
+using System.Net;
 using System.Reflection;
 using Sunder.App.Services;
+using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
@@ -40,6 +42,40 @@ public sealed class PackageViewHostServiceTests
             Assert.False(downloadCalled);
             Assert.Equal(0, hostService.LoadedPackageCount);
             Assert.Equal(0, hostService.LoadContextCount);
+        }
+        finally
+        {
+            await hostService.DisposeAsync();
+            TryDeleteDirectoryBestEffort(root);
+        }
+    }
+
+    [Fact]
+    public async Task InitialPackageGeneration_StaleRuntimeSnapshotFailsForStartupRetry()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var package = CreateActivePackage("stale.package");
+        var source = RuntimeContractTestData.Snapshot(
+            package.PackageId,
+            PackageSourceKind.Installed,
+            "stale-content");
+        var hostService = new PackageViewHostService(
+            new AppPackageViewRegistry(),
+            [],
+            [],
+            [],
+            sessionFolder: root,
+            downloadPackageUiSnapshotAsync: (_, _, _) => throw new RuntimeClientException(
+                HttpStatusCode.NotFound,
+                "Runtime resource not found",
+                "Snapshot is stale.",
+                "runtime.v1.not-found"),
+            uiDispatcher: TestUiDispatcher);
+        try
+        {
+            await Assert.ThrowsAsync<StalePackageUiSnapshotException>(
+                () => hostService.ApplyPackageDeltaAsync([package], [source]));
         }
         finally
         {

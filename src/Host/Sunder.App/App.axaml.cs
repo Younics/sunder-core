@@ -8,6 +8,7 @@ using Sunder.App.Composition;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.Sdk.Notifications;
 
 namespace Sunder.App;
 
@@ -21,6 +22,7 @@ public partial class App : Application
     private IClassicDesktopStyleApplicationLifetime? _desktopLifetime;
     private Window? _shutdownWindow;
     private Task? _desktopShutdownTask;
+    private int _requestedExitCode;
     private bool _allowWindowClose;
     private bool _allowDesktopShutdown;
 
@@ -48,6 +50,7 @@ public partial class App : Application
             Program.StartupOptions,
             _packageResourceAssemblyRegistry
         );
+        _serviceProvider.GetRequiredService<IThemeManager>().Initialize();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -67,55 +70,117 @@ public partial class App : Application
             _shutdownWindow = loadingWindow;
             loadingWindow.Closing += OnDesktopMainWindowClosing;
 
-            loadingViewModel.ConfigureFailureActions(
-                () =>
-                    CompleteStartupSafelyAsync(
-                        desktop,
-                        loadingWindow,
-                        loadingViewModel,
-                        cancellationToken: _tasks.Token
-                    ),
-                () =>
-                    CompleteStartupSafelyAsync(
-                        desktop,
-                        loadingWindow,
-                        loadingViewModel,
-                        openCoreShell: true,
-                        cancellationToken: _tasks.Token
-                    ),
-                () => RequestDesktopShutdown(desktop)
-            );
-
             loadingWindow.Opened += (_, _) =>
-                _tasks.Run(
-                    cancellationToken =>
-                        CompleteStartupSafelyAsync(
+            {
+                var shutdownAfterStartup = false;
+                var startupTask = _tasks.RunTracked(
+                    async cancellationToken =>
+                    {
+                        shutdownAfterStartup = await CompleteStartupSafelyAsync(
                             desktop,
                             loadingWindow,
                             loadingViewModel,
-                            cancellationToken: cancellationToken
-                        ),
+                            cancellationToken
+                        );
+                    },
                     "completing startup"
                 );
+                _ = startupTask.ContinueWith(
+                    _ =>
+                    {
+                        if (shutdownAfterStartup)
+                        {
+                            Dispatcher.UIThread.Post(
+                                () => RequestDesktopShutdown(desktop, exitCode: 1)
+                            );
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                );
+            };
             desktop.MainWindow = loadingWindow;
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    private async Task CompleteStartupSafelyAsync(
+    private async Task<bool> CompleteStartupSafelyAsync(
         IClassicDesktopStyleApplicationLifetime desktop,
         LoadingWindow loadingWindow,
         LoadingWindowViewModel loadingViewModel,
-        bool openCoreShell = false,
         CancellationToken cancellationToken = default
     )
     {
         if (!loadingViewModel.TryBeginAttempt())
         {
-            return;
+            return false;
         }
 
+        try
+        {
+            var notificationService = ResolveStartupNotificationService(_serviceProvider);
+            var outcome = await StartupFallbackRunner.RunAsync(
+                async (openCoreShell, attemptCancellationToken) =>
+                {
+                    if (openCoreShell)
+                    {
+                        loadingViewModel.BeginCoreShellFallback();
+                    }
+
+                    await CompleteStartupAttemptAsync(
+                        desktop,
+                        loadingWindow,
+                        loadingViewModel,
+                        openCoreShell,
+                        attemptCancellationToken
+                    );
+                },
+                (failure, notificationCancellationToken) =>
+                    PublishStartupFailureAsync(
+                        notificationService,
+                        failure,
+                        notificationCancellationToken
+                    ),
+                cancellationToken
+            );
+
+            return outcome.CoreShellFailure is not null;
+        }
+        finally
+        {
+            loadingViewModel.CompleteAttempt();
+        }
+    }
+
+    internal static IPackageNotificationService ResolveStartupNotificationService(
+        IServiceProvider? serviceProvider
+    )
+    {
+        try
+        {
+            return serviceProvider?.GetService<IPackageNotificationService>()
+                ?? NullPackageNotificationService.Instance;
+        }
+        catch (Exception exception)
+        {
+            AppSessionLog.WriteError(
+                "Failed to resolve the Sunder SDK notification service.",
+                exception
+            );
+            return NullPackageNotificationService.Instance;
+        }
+    }
+
+    private async Task CompleteStartupAttemptAsync(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        LoadingWindow loadingWindow,
+        LoadingWindowViewModel loadingViewModel,
+        bool openCoreShell,
+        CancellationToken cancellationToken
+    )
+    {
         using var deadline = new StartupAttemptDeadline(cancellationToken);
         try
         {
@@ -124,24 +189,66 @@ public partial class App : Application
                 loadingWindow,
                 loadingViewModel,
                 openCoreShell,
-                deadline.Token
+                deadline
             );
-            loadingViewModel.CompleteAttempt();
         }
-        catch (OperationCanceledException ex) when (deadline.HasExpired)
+        catch (OperationCanceledException exception) when (deadline.HasExpired)
         {
-            var timeoutException = deadline.CreateTimeoutException(ex);
-            AppSessionLog.WriteError("Sunder startup timed out.", timeoutException);
-            loadingViewModel.ShowFailure(timeoutException);
+            var timeoutException = deadline.CreateTimeoutException(exception);
+            AppSessionLog.WriteError(
+                openCoreShell
+                    ? "Sunder Core Shell startup timed out."
+                    : "Sunder startup timed out; opening the Core Shell.",
+                timeoutException
+            );
+            throw timeoutException;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            AppSessionLog.WriteError("Sunder startup failed.", ex);
-            loadingViewModel.ShowFailure(ex);
+            AppSessionLog.WriteError(
+                openCoreShell
+                    ? "Sunder Core Shell startup failed."
+                    : "Sunder startup failed; opening the Core Shell.",
+                exception
+            );
+            throw;
+        }
+    }
+
+    internal static async Task PublishStartupFailureAsync(
+        IPackageNotificationService notificationService,
+        Exception startupFailure,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(notificationService);
+        ArgumentNullException.ThrowIfNull(startupFailure);
+        try
+        {
+            await notificationService.PublishAsync(
+                new PackageNotificationRequest(
+                    "Sunder startup failed",
+                    startupFailure.Message,
+                    PackageNotificationDisplayMode.ToastAndTray,
+                    PackageNotificationSeverity.Error
+                ),
+                cancellationToken
+            );
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            AppSessionLog.WriteError(
+                "Failed to publish the Sunder startup error notification.",
+                exception
+            );
         }
     }
 
@@ -150,9 +257,10 @@ public partial class App : Application
         LoadingWindow loadingWindow,
         LoadingWindowViewModel loadingViewModel,
         bool openCoreShell,
-        CancellationToken cancellationToken
+        StartupAttemptDeadline startupAttempt
     )
     {
+        var cancellationToken = startupAttempt.Token;
         var startupCoordinator = (
             _serviceProvider
             ?? throw new InvalidOperationException("App services are not initialized.")
@@ -163,14 +271,27 @@ public partial class App : Application
             startup = await startupCoordinator.StartAsync(
                 Program.StartupOptions,
                 loadingViewModel,
-                openCoreShell,
-                cancellationToken
+                startupAttempt,
+                openCoreShell
             );
+            startupAttempt.EnterPhase(StartupPhase.InitialViewActivation);
             await startup.PrepareForRevealAsync(loadingWindow, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             _shutdownWindow = startup.MainWindow;
             startup.MainWindow.Closing += OnDesktopMainWindowClosing;
-            await startup.RevealAsync(desktop, loadingWindow, cancellationToken);
+            startupAttempt.EnterPhase(StartupPhase.Reveal);
+            await startup.RevealAsync(
+                desktop,
+                loadingWindow,
+                () =>
+                {
+                    if (!startupAttempt.TryCommit())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        throw new OperationCanceledException(cancellationToken);
+                    }
+                },
+                cancellationToken);
 
             var serviceProvider =
                 Interlocked.Exchange(ref _serviceProvider, null)
@@ -286,8 +407,16 @@ public partial class App : Application
         }
     }
 
-    private void RequestDesktopShutdown(IClassicDesktopStyleApplicationLifetime desktop)
+    private void RequestDesktopShutdown(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        int exitCode = 0
+    )
     {
+        if (exitCode != 0)
+        {
+            Interlocked.Exchange(ref _requestedExitCode, exitCode);
+        }
+
         var shutdownTask = _shutdown.ShutdownAsync(ShutdownCoreAsync);
         if (Interlocked.CompareExchange(ref _desktopShutdownTask, shutdownTask, null) is not null)
         {
@@ -308,7 +437,7 @@ public partial class App : Application
         Task shutdownTask
     )
     {
-        var exitCode = 0;
+        var exitCode = Volatile.Read(ref _requestedExitCode);
         if (shutdownTask.Exception is { } exception)
         {
             exitCode = 1;

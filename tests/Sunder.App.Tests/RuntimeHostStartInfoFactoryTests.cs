@@ -6,6 +6,24 @@ namespace Sunder.App.Tests;
 public sealed class RuntimeHostStartInfoFactoryTests
 {
     [Fact]
+    public void Create_ManagedSupervisorCarriesCanonicalDeploymentIdentity()
+    {
+        var identity = Sunder.Host.Contracts.HostDeploymentIdentity.FromSha256(new string('a', 64));
+
+        var startInfo = RuntimeHostStartInfoFactory.Create(
+            OperatingSystem.IsWindows() ? @"C:\Sunder\Sunder.Host.Supervisor.exe" : "/opt/sunder/Sunder.Host.Supervisor",
+            new Uri("http://127.0.0.1:5275/"),
+            OperatingSystem.IsWindows() ? @"C:\Sunder\host.json" : "/tmp/sunder/host.json",
+            managedSupervisor: true,
+            deploymentIdentity: identity);
+
+        var identityOption = startInfo.ArgumentList.IndexOf("--deployment-identity");
+        Assert.True(identityOption >= 0);
+        Assert.Equal(identity, startInfo.ArgumentList[identityOption + 1]);
+        Assert.False(startInfo.Environment.ContainsKey("SUNDER_HOST_RUNTIME_PATH"));
+    }
+
+    [Fact]
     public void ManagedSupervisorEnvironment_RemovesInheritedSunderSecretsAndRetainsStateOverrides()
     {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)

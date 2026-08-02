@@ -32,12 +32,14 @@ public sealed class InitialWindowRevealTests
         reveal.Reveal(
             mainWindow,
             loadingWindow,
+            () => events.Add("startup-commit"),
             () => events.Add("desktop-main-window"),
             () => events.Add("runtime-presentation-release")
         );
 
         Assert.Equal(
             [
+                "startup-commit",
                 "native-reveal",
                 "desktop-main-window",
                 "main-activate",

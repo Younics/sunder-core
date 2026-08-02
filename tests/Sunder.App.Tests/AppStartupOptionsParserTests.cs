@@ -92,6 +92,31 @@ public sealed class AppStartupOptionsParserTests
     }
 
     [Fact]
+    public void Parse_WhenArgumentDelimiterIsProvided_IgnoresIt()
+    {
+        using var environment = PreserveRuntimeEnvironment();
+
+        var options = AppStartupOptionsParser.Parse(["--"]);
+
+        Assert.Empty(options.ParseErrors);
+    }
+
+    [Theory]
+    [InlineData("--dev")]
+    [InlineData("--dev-packages")]
+    [InlineData("--unknown")]
+    public void Parse_WhenOptionIsUnknown_RecordsError(string option)
+    {
+        using var environment = PreserveRuntimeEnvironment();
+
+        var options = AppStartupOptionsParser.Parse([option]);
+
+        Assert.Contains(
+            options.ParseErrors,
+            error => error.Contains($"Unrecognized startup option '{option}'", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Parse_WhenWatchIsFollowedByPath_RecordsUnrecognizedArgument()
     {
         using var environment = PreserveRuntimeEnvironment();

@@ -6,6 +6,20 @@ namespace Sunder.App.Tests;
 public sealed class OwnedTaskObserverTests
 {
     [Fact]
+    public async Task Run_ReturnsTaskThatCompletesAfterTheOwnedOperation()
+    {
+        using var observer = new OwnedTaskObserver("test");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = observer.RunTracked(_ => release.Task, "waiting");
+
+        Assert.False(operation.IsCompleted);
+        release.SetResult();
+        await operation;
+        Assert.True(operation.IsCompletedSuccessfully);
+    }
+
+    [Fact]
     public async Task StopAsync_CancelsAndDrainsOwnedTasksAndIsIdempotent()
     {
         using var observer = new OwnedTaskObserver("test");

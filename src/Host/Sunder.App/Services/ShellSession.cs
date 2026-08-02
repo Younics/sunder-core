@@ -128,6 +128,7 @@ public sealed class ShellSession : IAsyncDisposable
     internal async Task RevealAsync(
         IClassicDesktopStyleApplicationLifetime desktop,
         LoadingWindow loadingWindow,
+        Action commitStartup,
         CancellationToken cancellationToken
     )
     {
@@ -140,6 +141,7 @@ public sealed class ShellSession : IAsyncDisposable
                     _initialWindowReveal.Reveal(
                         MainWindow,
                         loadingWindow,
+                        commitStartup,
                         () => desktop.MainWindow = MainWindow,
                         ReleaseRuntimePresentation
                     );

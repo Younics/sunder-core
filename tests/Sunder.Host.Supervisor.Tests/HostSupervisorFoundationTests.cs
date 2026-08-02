@@ -18,6 +18,54 @@ public sealed partial class HostSupervisorFoundationTests
             Assert.Equal(TimeSpan.FromSeconds(30), options.WorkerStartupTimeout);
             Assert.Null(options.HostStateRoot);
             Assert.Null(options.RuntimeStateRoot);
+            Assert.Null(options.DeploymentIdentity);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostStartupOptions_ValidatesDeploymentIdentity()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var identity = HostDeploymentIdentity.FromSha256(new string('a', 64));
+
+            var options = HostStartupOptions.Parse(
+                ["--deployment-identity", identity],
+                static _ => null,
+                root);
+
+            Assert.Equal(identity, options.DeploymentIdentity);
+            Assert.Throws<ArgumentException>(() => HostStartupOptions.Parse(
+                ["--deployment-identity", "not-canonical"],
+                static _ => null,
+                root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostDeploymentIdentityVerifier_BindsIdentityToDirectoryContent()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var file = Path.Combine(root, "host.dat");
+            File.WriteAllText(file, "one");
+            var identity = HostDeploymentIdentityVerifier.Compute(root);
+
+            HostDeploymentIdentityVerifier.Validate(root, identity);
+            File.WriteAllText(file, "two");
+
+            Assert.Throws<InvalidDataException>(() =>
+                HostDeploymentIdentityVerifier.Validate(root, identity));
         }
         finally
         {

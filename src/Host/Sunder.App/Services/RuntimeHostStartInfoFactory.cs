@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Sunder.Host.Contracts;
 using Sunder.Runtime.Client;
 
 namespace Sunder.App.Services;
@@ -16,7 +17,8 @@ internal static class RuntimeHostStartInfoFactory
         string runtimeHostPath,
         Uri runtimeUrl,
         string connectionInfoPath,
-        bool managedSupervisor = false)
+        bool managedSupervisor = false,
+        string? deploymentIdentity = null)
     {
         var runtimeUrlText = runtimeUrl.ToString().TrimEnd('/');
         var isDotnetAssembly = string.Equals(Path.GetExtension(runtimeHostPath), ".dll", StringComparison.OrdinalIgnoreCase);
@@ -30,12 +32,28 @@ internal static class RuntimeHostStartInfoFactory
         if (managedSupervisor)
         {
             SanitizeManagedSupervisorEnvironment(startInfo.Environment);
+            if (deploymentIdentity is not null)
+            {
+                startInfo.Environment.Remove("SUNDER_HOST_RUNTIME_PATH");
+            }
         }
         startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = connectionInfoPath;
 
         if (isDotnetAssembly)
         {
             startInfo.ArgumentList.Add(runtimeHostPath);
+        }
+
+        if (managedSupervisor && deploymentIdentity is not null)
+        {
+            if (!HostDeploymentIdentity.IsValid(deploymentIdentity))
+            {
+                throw new ArgumentException(
+                    "The Host deployment identity is not canonical.",
+                    nameof(deploymentIdentity));
+            }
+            startInfo.ArgumentList.Add("--deployment-identity");
+            startInfo.ArgumentList.Add(deploymentIdentity);
         }
 
         startInfo.ArgumentList.Add("--urls");

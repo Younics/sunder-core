@@ -202,6 +202,194 @@ public sealed class DevPackageOwnerLeaseTests
     }
 
     [Fact]
+    public async Task GenerationActivationFailure_RestoresPreviousSessionBeforeRejectingOwner()
+    {
+        var fixture = CreateFixture(new RuntimeLifecyclePolicyOptions
+        {
+            PackageRuntimeGenerationActivationAttempts = 1,
+        });
+        var installed = CreatePackageLayout(
+            fixture.Paths.RootPath,
+            "installed",
+            "installed.package",
+            "1.0.0");
+        var failingDev = CreatePackageLayout(
+            fixture.Paths.RootPath,
+            "dev",
+            "generation.failing.package",
+            "1.0.0").InstallPath;
+        try
+        {
+            await AddInstalledPackageAsync(fixture.Store, installed);
+            Assert.True((await fixture.Host.LoadInstalledPackagesAsync()).Success);
+
+            await Assert.ThrowsAsync<RuntimePackageValidationException>(() =>
+                fixture.Host.ReplaceDevPackageOwnerAsync(
+                    "owner-a",
+                    Mutation(
+                        fixture.Host.RuntimeInstanceId,
+                        "owner-token-restore-restore-restore",
+                        "mutation-1",
+                        1,
+                        failingDev,
+                        watch: false)));
+
+            var active = Assert.Single(fixture.Host.GetActivePackages());
+            Assert.Equal("installed.package", active.PackageId);
+            Assert.False(fixture.Host.ContainsDevPackageOwner("owner-a"));
+        }
+        finally
+        {
+            await fixture.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task CancellationAfterPublication_RestoresPreviousSessionBeforePropagating()
+    {
+        var fixture = CreateFixture(new RuntimeLifecyclePolicyOptions
+        {
+            PackageRuntimeGenerationActivationAttempts = 1,
+        });
+        var installed = CreatePackageLayout(
+            fixture.Paths.RootPath,
+            "installed",
+            "installed.package",
+            "1.0.0");
+        var cancellingDev = CreatePackageLayout(
+            fixture.Paths.RootPath,
+            "dev",
+            "generation.cancelling.package",
+            "1.0.0").InstallPath;
+        var commitStartedPath = Path.Combine(fixture.Paths.RootPath, "generation-commit-started");
+        var previousCommitStartedPath = Environment.GetEnvironmentVariable(
+            CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable);
+        var previousTriggerVersion = Environment.GetEnvironmentVariable(
+            CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable);
+        using var cancellation = new CancellationTokenSource();
+        Environment.SetEnvironmentVariable(
+            CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
+            commitStartedPath);
+        Environment.SetEnvironmentVariable(
+            CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
+            "1.0.0");
+        try
+        {
+            await AddInstalledPackageAsync(fixture.Store, installed);
+            Assert.True((await fixture.Host.LoadInstalledPackagesAsync()).Success);
+
+            var replacement = fixture.Host.ReplaceDevPackageOwnerAsync(
+                "owner-a",
+                Mutation(
+                    fixture.Host.RuntimeInstanceId,
+                    "owner-token-cancel-cancel-cancel",
+                    "mutation-1",
+                    1,
+                    cancellingDev,
+                    watch: false),
+                cancellation.Token);
+            var commitDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
+            while (!File.Exists(commitStartedPath) && DateTimeOffset.UtcNow < commitDeadline)
+            {
+                await Task.Delay(20);
+            }
+            Assert.True(File.Exists(commitStartedPath), "Generation activation did not reach its cancellable commit.");
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => replacement);
+            var active = Assert.Single(fixture.Host.GetActivePackages());
+            Assert.Equal("installed.package", active.PackageId);
+            Assert.False(fixture.Host.ContainsDevPackageOwner("owner-a"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
+                previousCommitStartedPath);
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
+                previousTriggerVersion);
+            await fixture.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task CancellationAfterReleasePublication_RestoresOwnedDevSessionBeforePropagating()
+    {
+        var fixture = CreateFixture(new RuntimeLifecyclePolicyOptions
+        {
+            PackageRuntimeGenerationActivationAttempts = 1,
+        });
+        var installed = CreatePackageLayout(
+            fixture.Paths.RootPath,
+            "installed",
+            "generation.cancelling.package",
+            "1.0.0");
+        var dev = CreatePackageLayout(
+            fixture.Paths.RootPath,
+            "dev",
+            "generation.cancelling.package",
+            "2.0.0").InstallPath;
+        var commitStartedPath = Path.Combine(fixture.Paths.RootPath, "release-generation-commit-started");
+        var previousCommitStartedPath = Environment.GetEnvironmentVariable(
+            CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable);
+        var previousTriggerVersion = Environment.GetEnvironmentVariable(
+            CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable);
+        const string token = "owner-token-release-cancel-release";
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
+                null);
+            await AddInstalledPackageAsync(fixture.Store, installed);
+            Assert.True((await fixture.Host.LoadInstalledPackagesAsync()).Success);
+            await fixture.Host.ReplaceDevPackageOwnerAsync(
+                "owner-a",
+                Mutation(
+                    fixture.Host.RuntimeInstanceId,
+                    token,
+                    "mutation-1",
+                    1,
+                    dev,
+                    watch: false));
+            Assert.Equal("2.0.0", Assert.Single(fixture.Host.GetActivePackages()).Version);
+
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
+                commitStartedPath);
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
+                "1.0.0");
+            var release = fixture.Host.ReleaseDevPackageOwnerAsync(
+                "owner-a",
+                new DevPackageOwnerReleaseRequest(fixture.Host.RuntimeInstanceId, token),
+                cancellation.Token);
+            var commitDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
+            while (!File.Exists(commitStartedPath) && DateTimeOffset.UtcNow < commitDeadline)
+            {
+                await Task.Delay(20);
+            }
+            Assert.True(File.Exists(commitStartedPath), "Owner release did not reach its cancellable commit.");
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => release);
+            Assert.True(fixture.Host.ContainsDevPackageOwner("owner-a"));
+            Assert.Equal("2.0.0", Assert.Single(fixture.Host.GetActivePackages()).Version);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
+                previousCommitStartedPath);
+            Environment.SetEnvironmentVariable(
+                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
+                previousTriggerVersion);
+            await fixture.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task SameFolderCoownership_AggregatesWatchAndReleasesIndependently()
     {
         var fixture = CreateFixture();

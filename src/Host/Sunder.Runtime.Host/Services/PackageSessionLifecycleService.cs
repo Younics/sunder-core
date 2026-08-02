@@ -318,8 +318,10 @@ internal sealed partial class PackageSessionLifecycleService
         IReadOnlyCollection<string> reloadFolders,
         CancellationToken cancellationToken,
         PackageSessionSourceSnapshot? candidateSources = null,
-        bool allowPackageErrors = false)
+        bool allowPackageErrors = false,
+        Action<bool>? publicationCommitted = null)
     {
+        publicationCommitted?.Invoke(false);
         var warnings = new List<string>();
         var errors = new List<string>();
         var baseGeneration = _sessions.Generation;
@@ -344,6 +346,7 @@ internal sealed partial class PackageSessionLifecycleService
         var packageSources = loaded.Session.GetActivePackageSources();
         var impacted = PackageSessionImpactAnalyzer.Compare(currentPackages, currentSources, packages, packageSources, reloadFolders);
         PackageSessionPublicationResult publication;
+        PendingPackageSessionPublication? pendingPublication = null;
         try
         {
             publication = await _publisher.PublishAsync(
@@ -352,15 +355,19 @@ internal sealed partial class PackageSessionLifecycleService
                 warnings,
                 errors,
                 baseGeneration,
-                cancellationToken);
+                cancellationToken,
+                pending => pendingPublication = pending);
+            publicationCommitted?.Invoke(pendingPublication?.Publication.Committed == true);
             warnings.AddRange(publication.CleanupWarnings);
         }
         catch (OperationCanceledException)
         {
+            publicationCommitted?.Invoke(pendingPublication?.Publication.Committed == true);
             throw;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            publicationCommitted?.Invoke(pendingPublication?.Publication.Committed == true);
             _logger.LogError(exception, "Failed to start package background services");
             const string message = "Package lifecycle load failed while starting background services.";
             return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message], impacted);

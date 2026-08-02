@@ -919,6 +919,14 @@ public sealed class PackageSessionOverlayTestPackageModule : PackageSessionOverl
         {
             services.AddSingleton<RuntimeActivationCounterBackgroundService>();
         }
+        if (string.Equals(context.PackageId, "generation.failing.package", StringComparison.Ordinal))
+        {
+            services.AddSingleton<FailingGenerationActivationBackgroundService>();
+        }
+        if (string.Equals(context.PackageId, "generation.cancelling.package", StringComparison.Ordinal))
+        {
+            services.AddSingleton<CancellableGenerationActivationBackgroundService>();
+        }
     }
 
     public override void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
@@ -927,6 +935,14 @@ public sealed class PackageSessionOverlayTestPackageModule : PackageSessionOverl
         if (RuntimeActivationCounter.TryRecord(context, "register"))
         {
             registry.RegisterBackgroundService<RuntimeActivationCounterBackgroundService>();
+        }
+        if (string.Equals(context.PackageId, "generation.failing.package", StringComparison.Ordinal))
+        {
+            registry.RegisterBackgroundService<FailingGenerationActivationBackgroundService>();
+        }
+        if (string.Equals(context.PackageId, "generation.cancelling.package", StringComparison.Ordinal))
+        {
+            registry.RegisterBackgroundService<CancellableGenerationActivationBackgroundService>();
         }
         if (!RegisterStackContributor)
         {
@@ -959,6 +975,47 @@ public sealed class RuntimeActivationCounterBackgroundService(IPackageContext co
     }
 
     public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+}
+
+public sealed class FailingGenerationActivationBackgroundService : IPackageRuntimeGenerationParticipant
+{
+    public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task CommitGenerationAsync(
+        PackageRuntimeGeneration generation,
+        CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException("Injected Runtime generation activation failure.");
+}
+
+public sealed class CancellableGenerationActivationBackgroundService(IPackageContext context)
+    : IPackageRuntimeGenerationParticipant
+{
+    public const string CommitStartedPathEnvironmentVariable =
+        "SUNDER_RUNTIME_TEST_CANCELLING_GENERATION_PATH";
+    public const string TriggerVersionEnvironmentVariable =
+        "SUNDER_RUNTIME_TEST_CANCELLING_GENERATION_VERSION";
+
+    public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public async Task CommitGenerationAsync(
+        PackageRuntimeGeneration generation,
+        CancellationToken cancellationToken = default)
+    {
+        var triggerVersion = Environment.GetEnvironmentVariable(TriggerVersionEnvironmentVariable);
+        if (!string.Equals(context.Version.ToString(), triggerVersion, StringComparison.Ordinal))
+        {
+            return;
+        }
+        var path = Environment.GetEnvironmentVariable(CommitStartedPathEnvironmentVariable)
+            ?? throw new InvalidOperationException("The generation cancellation test marker path is unavailable.");
+        File.WriteAllText(path, generation.SessionGeneration.ToString(
+            System.Globalization.CultureInfo.InvariantCulture));
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+    }
 }
 
 internal static class RuntimeActivationCounter

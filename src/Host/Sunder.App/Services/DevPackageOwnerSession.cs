@@ -130,22 +130,27 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
         try
         {
             DevPackageOwnerLeaseResponse? lease;
+            DevPackageOwnerMutationRequest? pendingMutation;
             CancellationTokenSource? heartbeatCancellation;
             Task heartbeatTask;
             lock (_syncRoot)
             {
                 lease = _lease;
-                _pendingMutation = null;
-                _desiredFolders = null;
+                pendingMutation = _pendingMutation;
                 heartbeatCancellation = _heartbeatCancellation;
                 _heartbeatCancellation = null;
                 heartbeatTask = _heartbeatTask;
                 _heartbeatTask = Task.CompletedTask;
             }
 
-            if (lease is null)
+            var runtimeInstanceId = pendingMutation?.RuntimeInstanceId ?? lease?.RuntimeInstanceId;
+            if (runtimeInstanceId is null)
             {
                 heartbeatCancellation?.Dispose();
+                lock (_syncRoot)
+                {
+                    _desiredFolders = null;
+                }
                 return;
             }
 
@@ -165,14 +170,15 @@ public sealed class DevPackageOwnerSession : IAsyncDisposable
             using var client = _clients.CreateClient<IRuntimeDevPackageOwnerClient>();
             await client.ReleaseDevPackageOwnerAsync(
                 OwnerId,
-                new DevPackageOwnerReleaseRequest(lease.RuntimeInstanceId, OwnerToken),
+                new DevPackageOwnerReleaseRequest(runtimeInstanceId.Value, OwnerToken),
                 cancellationToken).ConfigureAwait(false);
             lock (_syncRoot)
             {
-                if (_lease?.RuntimeInstanceId == lease.RuntimeInstanceId
-                    && _lease.Revision == lease.Revision)
+                if (_lease == lease && _pendingMutation == pendingMutation)
                 {
                     _lease = null;
+                    _pendingMutation = null;
+                    _desiredFolders = null;
                 }
             }
         }

@@ -53,7 +53,8 @@ internal sealed class PackageSessionPublisher(
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
         long expectedGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<PendingPackageSessionPublication>? publicationPrepared = null)
     {
         PreparedPackageSession candidate;
         try
@@ -72,6 +73,7 @@ internal sealed class PackageSessionPublisher(
         }
 
         var publication = await BeginPublishAsync(candidate, cancellationToken);
+        publicationPrepared?.Invoke(publication);
         return await CommitAsync(publication, cancellationToken);
     }
 

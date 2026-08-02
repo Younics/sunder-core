@@ -20,6 +20,11 @@ public static class AppStartupOptionsParser
         {
             var argument = args[index];
 
+            if (string.Equals(argument, "--", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             if (TryReadOptionValue(args, ref index, argument, "--dev-package", out var devPackageFolder))
             {
                 if (string.IsNullOrWhiteSpace(devPackageFolder))
@@ -82,10 +87,9 @@ public static class AppStartupOptionsParser
                 continue;
             }
 
-            if (!argument.StartsWith("--", StringComparison.Ordinal))
-            {
-                parseErrors.Add($"Unrecognized startup argument '{argument}'. Did you mean --dev-package {argument}?");
-            }
+            parseErrors.Add(argument.StartsWith("--", StringComparison.Ordinal)
+                ? $"Unrecognized startup option '{argument}'. Use --dev-package <folder> for development packages."
+                : $"Unrecognized startup argument '{argument}'. Did you mean --dev-package {argument}?");
         }
 
         var normalizedDevPackageFolders = devPackageFolders

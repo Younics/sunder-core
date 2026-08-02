@@ -7,71 +7,34 @@ namespace Sunder.App.Tests;
 public sealed class LoadingWindowViewModelTests
 {
     [Fact]
-    public async Task FailureActions_AreAvailableOnlyAfterStartupFails()
+    public void StartupAttempt_PreventsOverlapAndResetsProgressWhenRestarted()
     {
-        var retries = 0;
-        var coreShellOpens = 0;
-        var quits = 0;
         var viewModel = new LoadingWindowViewModel();
-        viewModel.ConfigureFailureActions(
-            () =>
-            {
-                retries++;
-                return Task.CompletedTask;
-            },
-            () =>
-            {
-                coreShellOpens++;
-                return Task.CompletedTask;
-            },
-            () => quits++);
 
         Assert.True(viewModel.TryBeginAttempt());
-        Assert.False(viewModel.RetryCommand.CanExecute(null));
+        Assert.True(viewModel.IsBusy);
+        Assert.False(viewModel.TryBeginAttempt());
 
-        viewModel.ShowFailure(new InvalidOperationException("Runtime bootstrap failed."));
+        viewModel.StatusMessage = "Starting runtime...";
+        viewModel.ProgressWidth = 248;
+        viewModel.CompleteAttempt();
 
-        Assert.True(viewModel.HasFailed);
-        Assert.Equal("Runtime bootstrap failed.", viewModel.FailureDetails);
-        Assert.True(viewModel.RetryCommand.CanExecute(null));
-        Assert.True(viewModel.OpenCoreShellCommand.CanExecute(null));
-        Assert.True(viewModel.QuitCommand.CanExecute(null));
-
-        await viewModel.RetryCommand.ExecuteAsync(null);
-        await viewModel.OpenCoreShellCommand.ExecuteAsync(null);
-        viewModel.QuitCommand.Execute(null);
-
-        Assert.Equal(1, retries);
-        Assert.Equal(1, coreShellOpens);
-        Assert.Equal(1, quits);
+        Assert.True(viewModel.TryBeginAttempt());
+        Assert.Equal("Loading shell...", viewModel.StatusMessage);
+        Assert.Equal(56, viewModel.ProgressWidth);
     }
 
     [Fact]
-    public void StartupAttempt_ClearsThePreviousFailure()
+    public void CoreShellFallback_UpdatesLoadingStatusWithoutExposingFailureState()
     {
         var viewModel = new LoadingWindowViewModel();
-        viewModel.ShowFailure(new InvalidOperationException("failed"));
-
         Assert.True(viewModel.TryBeginAttempt());
+
+        viewModel.BeginCoreShellFallback();
 
         Assert.True(viewModel.IsBusy);
-        Assert.False(viewModel.HasFailed);
-        Assert.Empty(viewModel.FailureDetails);
-    }
-
-    [Fact]
-    public void TimeoutFailure_UsesClearDeadlineStatusAndKeepsFailureActionsAvailable()
-    {
-        var viewModel = new LoadingWindowViewModel();
-
-        viewModel.ShowFailure(new TimeoutException(
-            "Sunder startup did not complete within 60 seconds. Retry, open the Core Shell, or quit."));
-
-        Assert.Equal("Sunder took too long to start.", viewModel.StatusMessage);
-        Assert.Contains("60 seconds", viewModel.FailureDetails, StringComparison.Ordinal);
-        Assert.True(viewModel.RetryCommand.CanExecute(null));
-        Assert.True(viewModel.OpenCoreShellCommand.CanExecute(null));
-        Assert.True(viewModel.QuitCommand.CanExecute(null));
+        Assert.Equal("Opening Core Shell...", viewModel.StatusMessage);
+        Assert.Equal(56, viewModel.ProgressWidth);
     }
 
     [Fact]
@@ -87,7 +50,68 @@ public sealed class LoadingWindowViewModelTests
 
         Assert.True(deadline.HasExpired);
         Assert.Contains("Sunder startup did not complete within 20 milliseconds", timeout.Message, StringComparison.Ordinal);
-        Assert.Contains("Retry, open the Core Shell, or quit.", timeout.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Retry", timeout.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StartupAttemptDeadline_ReportsTheExpiredPhase()
+    {
+        using var deadline = new StartupAttemptDeadline(
+            CancellationToken.None,
+            TimeSpan.FromSeconds(1));
+        deadline.EnterPhase(StartupPhase.RuntimePackages, TimeSpan.FromMilliseconds(20));
+
+        var cancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Task.Delay(Timeout.InfiniteTimeSpan, deadline.Token));
+        var timeout = deadline.CreateTimeoutException(cancellation);
+
+        Assert.Equal(StartupPhase.RuntimePackages, deadline.CurrentPhase);
+        Assert.Equal(StartupPhase.RuntimePackages, deadline.ExpiredPhase);
+        Assert.Contains("loading Runtime packages", timeout.Message, StringComparison.Ordinal);
+        Assert.Contains("20 milliseconds", timeout.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StartupAttemptDeadline_EnteringNextPhaseReplacesThePreviousPhaseBudget()
+    {
+        using var deadline = new StartupAttemptDeadline(
+            CancellationToken.None,
+            TimeSpan.FromSeconds(2));
+        deadline.EnterPhase(StartupPhase.Theme, TimeSpan.FromMilliseconds(100));
+        deadline.EnterPhase(StartupPhase.RuntimeHost, TimeSpan.FromMilliseconds(500));
+        await Task.Delay(200);
+
+        Assert.False(deadline.Token.IsCancellationRequested);
+        Assert.Equal(StartupPhase.RuntimeHost, deadline.CurrentPhase);
+    }
+
+    [Fact]
+    public async Task StartupAttemptDeadline_CommitAtomicallyDisarmsTheRevealDeadline()
+    {
+        using var deadline = new StartupAttemptDeadline(
+            CancellationToken.None,
+            TimeSpan.FromSeconds(1));
+        deadline.EnterPhase(StartupPhase.Reveal, TimeSpan.FromMilliseconds(20));
+
+        Assert.True(deadline.TryCommit());
+        await Task.Delay(50);
+
+        Assert.False(deadline.Token.IsCancellationRequested);
+        Assert.False(deadline.HasExpired);
+    }
+
+    [Fact]
+    public async Task StartupAttemptDeadline_CommitRejectsAnElapsedDeadline()
+    {
+        using var deadline = new StartupAttemptDeadline(
+            CancellationToken.None,
+            TimeSpan.FromSeconds(1));
+        deadline.EnterPhase(StartupPhase.Reveal, TimeSpan.FromMilliseconds(20));
+        await Task.Delay(50);
+
+        Assert.False(deadline.TryCommit());
+        Assert.True(deadline.HasExpired);
+        Assert.Equal(StartupPhase.Reveal, deadline.ExpiredPhase);
     }
 
     [Fact]

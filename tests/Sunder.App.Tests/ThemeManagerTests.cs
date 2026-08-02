@@ -27,6 +27,49 @@ public sealed class ThemeManagerTests
     }
 
     [Fact]
+    public void Initialize_PublishesResourcesRequiredByLoadingWindow()
+    {
+        var application = new Application();
+        var themeManager = new ThemeManager(application);
+
+        themeManager.Initialize();
+
+        var primaryForeground = Assert.IsType<SolidColorBrush>(
+            application.Resources[SunderThemeKeys.ForegroundPrimaryBrush]);
+        Assert.Equal(Color.Parse("#D8D5CE"), primaryForeground.Color);
+        Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.ForegroundSecondaryBrush]);
+        Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.ForegroundMutedBrush]);
+        Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.SurfaceWorkspaceBrush]);
+        Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.SurfaceRaisedBrush]);
+        Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.AccentBrush]);
+        Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlayStartColor]);
+        Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlayMiddleColor]);
+        Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlaySoftColor]);
+        Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlayEndColor]);
+    }
+
+    [Fact]
+    public void AppStartup_InitializesThemeBeforeConstructingLoadingWindow()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            GetRepositoryRoot(),
+            "src",
+            "Host",
+            "Sunder.App",
+            "App.axaml.cs"));
+
+        var themeInitialization = source.IndexOf(
+            "GetRequiredService<IThemeManager>().Initialize()",
+            StringComparison.Ordinal);
+        var loadingWindowConstruction = source.IndexOf(
+            "new LoadingWindow",
+            StringComparison.Ordinal);
+
+        Assert.True(themeInitialization >= 0);
+        Assert.True(loadingWindowConstruction > themeInitialization);
+    }
+
+    [Fact]
     public void PackageStyles_UseSemanticVisibleFocusAdornerForInteractiveControls()
     {
         var path = Path.Combine(

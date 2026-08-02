@@ -1,14 +1,26 @@
 using System.Diagnostics;
+using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Composition;
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Notifications;
 
 namespace Sunder.App.Services;
+
+internal sealed record RuntimePackageStartupResult(
+    RuntimePackageSnapshot Snapshot,
+    bool DevPackageOwnerAcquired,
+    string? Warning,
+    Exception? DevPackageFailure);
+
+internal sealed record RuntimePackageUiStartupResult(
+    RuntimePackageSnapshot Snapshot,
+    IReadOnlyList<PackageUiSnapshotDescriptor> PackageSources);
 
 public sealed class ShellStartupResult : IAsyncDisposable
 {
@@ -34,8 +46,9 @@ public sealed class ShellStartupResult : IAsyncDisposable
     internal Task RevealAsync(
         Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop,
         LoadingWindow loadingWindow,
+        Action commitStartup,
         CancellationToken cancellationToken
-    ) => GetSession().RevealAsync(desktop, loadingWindow, cancellationToken);
+    ) => GetSession().RevealAsync(desktop, loadingWindow, commitStartup, cancellationToken);
 
     internal Task StartRuntimeSubscriptionAsync(
         RuntimePackageSnapshot initialSnapshot,
@@ -149,20 +162,21 @@ public sealed class ShellStartupCoordinator
         _uiDispatcher = uiDispatcher;
     }
 
-    public async Task<ShellStartupResult> StartAsync(
+    internal async Task<ShellStartupResult> StartAsync(
         AppStartupOptions startupOptions,
         LoadingWindowViewModel loadingViewModel,
-        bool openCoreShell = false,
-        CancellationToken cancellationToken = default
+        StartupAttemptDeadline startupAttempt,
+        bool openCoreShell = false
     )
     {
+        ArgumentNullException.ThrowIfNull(startupAttempt);
         try
         {
             return await StartCoreAsync(
                     startupOptions,
                     loadingViewModel,
                     openCoreShell,
-                    cancellationToken
+                    startupAttempt
                 )
                 .ConfigureAwait(false);
         }
@@ -188,9 +202,10 @@ public sealed class ShellStartupCoordinator
         AppStartupOptions startupOptions,
         LoadingWindowViewModel loadingViewModel,
         bool openCoreShell,
-        CancellationToken cancellationToken
+        StartupAttemptDeadline startupAttempt
     )
     {
+        var cancellationToken = startupAttempt.Token;
         ValidateStartupOptions(startupOptions, openCoreShell);
         cancellationToken.ThrowIfCancellationRequested();
         var shellStateService = _shellStateService;
@@ -198,6 +213,8 @@ public sealed class ShellStartupCoordinator
         IReadOnlyList<ActivePackageDescriptor> activePackages = [];
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources = [];
         RuntimePackageSnapshot? runtimePackageSnapshot = null;
+        var devPackageOwnerAcquired = false;
+        Guid? devPackageOwnerRuntimeInstanceId = null;
         var warnings = new List<string>();
         var errors = startupOptions.ParseErrors.ToList();
         SystemStatusResponse? systemStatus = null;
@@ -213,6 +230,7 @@ public sealed class ShellStartupCoordinator
         var startupStopwatch = Stopwatch.StartNew();
         var phaseStopwatch = Stopwatch.StartNew();
 
+        startupAttempt.EnterPhase(StartupPhase.Theme);
         await SetProgressAsync(loadingViewModel, "Loading theme...", 96, cancellationToken);
 
         var themeManager = await _uiDispatcher.InvokeAsync(
@@ -226,8 +244,9 @@ public sealed class ShellStartupCoordinator
             },
             cancellationToken
         );
-        LogStartupPhase("theme", phaseStopwatch);
+        LogStartupPhase(StartupPhase.Theme, phaseStopwatch);
 
+        startupAttempt.EnterPhase(StartupPhase.Cli);
         await SetProgressAsync(loadingViewModel, "Checking CLI...", 136, cancellationToken);
         await EnsureCliInstalledForStartupAsync(
                 cliInstallationService,
@@ -236,7 +255,7 @@ public sealed class ShellStartupCoordinator
                 cancellationToken
             )
             .ConfigureAwait(false);
-        LogStartupPhase("cli", phaseStopwatch);
+        LogStartupPhase(StartupPhase.Cli, phaseStopwatch);
 
         if (!openCoreShell)
         {
@@ -244,6 +263,7 @@ public sealed class ShellStartupCoordinator
             {
                 try
                 {
+                    startupAttempt.EnterPhase(StartupPhase.RuntimeHost);
                     await SetProgressAsync(
                             loadingViewModel,
                             "Starting runtime...",
@@ -255,9 +275,11 @@ public sealed class ShellStartupCoordinator
                     await runtimeHostProcessManager
                         .EnsureStartedAsync(runtimeConnectionState.RuntimeUrl, cancellationToken)
                         .ConfigureAwait(false);
+                    LogStartupPhase(StartupPhase.RuntimeHost, phaseStopwatch);
 
                     using var runtimeApiClient =
                         runtimeApiClientFactory.CreateClient<IRuntimeStartupClient>();
+                    startupAttempt.EnterPhase(StartupPhase.RuntimePackages);
                     await SetProgressAsync(
                             loadingViewModel,
                             startupOptions.DevPackageFolders.Count > 0
@@ -267,37 +289,54 @@ public sealed class ShellStartupCoordinator
                             cancellationToken
                         )
                         .ConfigureAwait(false);
-                    if (startupOptions.DevPackageFolders.Count > 0)
-                    {
-                        await _devPackageOwnerSession
-                            .AcquireAsync(
+                    var runtimePackageStartup = await LoadRuntimePackagesForStartupAsync(
+                            runtimeApiClient,
+                            startupOptions.DevPackageFolders.Count > 0,
+                            token => _devPackageOwnerSession.AcquireAsync(
                                 startupOptions.DevPackageFolders,
                                 startupOptions.WatchDevPackages,
-                                cancellationToken
-                            )
+                                token),
+                            token => _devPackageOwnerSession.ReleaseAsync(token),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    runtimePackageSnapshot = runtimePackageStartup.Snapshot;
+                    devPackageOwnerAcquired = runtimePackageStartup.DevPackageOwnerAcquired;
+                    devPackageOwnerRuntimeInstanceId = devPackageOwnerAcquired
+                        ? runtimePackageSnapshot.RuntimeInstanceId
+                        : null;
+                    if (runtimePackageStartup.Warning is { } devPackageWarning)
+                    {
+                        warnings.Add(devPackageWarning);
+                        AppSessionLog.WriteError(
+                            "Dev package startup failed; Sunder restored the active Runtime package set.",
+                            runtimePackageStartup.DevPackageFailure!);
+                        await PublishDevPackageWarningAsync(
+                                notificationCenter,
+                                devPackageWarning,
+                                cancellationToken)
                             .ConfigureAwait(false);
                     }
-                    runtimePackageSnapshot = await WaitForReadyRuntimeSnapshotAsync(
+                    var runtimePackageUi = await LoadConsistentPackageUiStateAsync(
                             runtimeApiClient,
-                            cancellationToken: cancellationToken
-                        )
+                            runtimePackageSnapshot,
+                            token => runtimeApiClient.GetActivePackageUiSnapshotsAsync(
+                                AppPackageTargetEnvironment.CurrentRid,
+                                token),
+                            requiredRuntimeInstanceId: devPackageOwnerRuntimeInstanceId,
+                            cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
+                    runtimePackageSnapshot = runtimePackageUi.Snapshot;
+                    packageSources = runtimePackageUi.PackageSources;
+                    activePackages = runtimePackageSnapshot.ActivePackages;
                     systemStatus = await runtimeApiClient
                         .GetSystemStatusAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    activePackages = runtimePackageSnapshot.ActivePackages;
-                    packageSources = await runtimeApiClient
-                        .GetActivePackageUiSnapshotsAsync(AppPackageTargetEnvironment.CurrentRid, cancellationToken)
-                        .ConfigureAwait(false);
-                    ValidatePackageSourceGeneration(runtimePackageSnapshot, packageSources);
-                    warnings.AddRange(runtimePackageSnapshot.Warnings);
-                    errors.AddRange(runtimePackageSnapshot.Errors);
-                    LogStartupPhase("runtime package snapshot", phaseStopwatch);
+                    LogStartupPhase(StartupPhase.RuntimePackages, phaseStopwatch);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
                     throw new InvalidOperationException(
-                        "Sunder Runtime failed to initialize.",
+                        $"Sunder Runtime failed to initialize: {exception.Message}",
                         exception
                     );
                 }
@@ -308,6 +347,7 @@ public sealed class ShellStartupCoordinator
             warnings.Add("Sunder opened the Core Shell without Runtime packages.");
         }
 
+        startupAttempt.EnterPhase(StartupPhase.AppPackageActivation);
         await SetProgressAsync(loadingViewModel, "Composing shell...", 318, cancellationToken)
             .ConfigureAwait(false);
 
@@ -315,11 +355,105 @@ public sealed class ShellStartupCoordinator
         var settingsNavigationService = _settingsNavigationService;
         try
         {
-            packageViewHostService = await _packageViewHostServiceFactory
-                .CreateForPackagesAsync(activePackages, packageSources, cancellationToken)
-                .ConfigureAwait(false);
+            for (var attempt = 0; ; attempt++)
+            {
+                PackageViewHostService? candidatePackageViewHostService = null;
+                try
+                {
+                    candidatePackageViewHostService = await _packageViewHostServiceFactory
+                        .CreateForPackagesAsync(activePackages, packageSources, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (runtimePackageSnapshot is not null)
+                    {
+                        using var confirmationClient =
+                            runtimeApiClientFactory.CreateClient<IRuntimeStartupClient>();
+                        var confirmation = await WaitForReadyRuntimeSnapshotAsync(
+                                confirmationClient,
+                                cancellationToken: cancellationToken)
+                            .ConfigureAwait(false);
+                        ValidateRequiredRuntimeInstance(
+                            confirmation,
+                            devPackageOwnerRuntimeInstanceId);
+                        if (confirmation.RuntimeInstanceId != runtimePackageSnapshot.RuntimeInstanceId
+                            || confirmation.SessionGeneration != runtimePackageSnapshot.SessionGeneration)
+                        {
+                            if (attempt >= 2)
+                            {
+                                throw new InvalidDataException(
+                                    "The Runtime package generation kept changing while initial App package UI was being activated.");
+                            }
+                            var refreshedState = await LoadConsistentPackageUiStateAsync(
+                                    confirmationClient,
+                                    confirmation,
+                                    token => confirmationClient.GetActivePackageUiSnapshotsAsync(
+                                        AppPackageTargetEnvironment.CurrentRid,
+                                        token),
+                                    requiredRuntimeInstanceId: devPackageOwnerRuntimeInstanceId,
+                                    cancellationToken: cancellationToken)
+                                .ConfigureAwait(false);
+                            runtimePackageSnapshot = refreshedState.Snapshot;
+                            packageSources = refreshedState.PackageSources;
+                            activePackages = runtimePackageSnapshot.ActivePackages;
+                            systemStatus = await confirmationClient
+                                .GetSystemStatusAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                            continue;
+                        }
+                    }
+                    packageViewHostService = candidatePackageViewHostService;
+                    candidatePackageViewHostService = null;
+                    break;
+                }
+                catch (StalePackageUiSnapshotException exception) when (
+                    runtimePackageSnapshot is not null && attempt < 2)
+                {
+                    AppSessionLog.WriteInfo(
+                        $"Retrying initial App package activation after stale Runtime snapshots: {exception.Message}");
+                    using var runtimeApiClient =
+                        runtimeApiClientFactory.CreateClient<IRuntimeStartupClient>();
+                    var refreshedSnapshot = await WaitForReadyRuntimeSnapshotAsync(
+                            runtimeApiClient,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    if (devPackageOwnerAcquired
+                        && refreshedSnapshot.RuntimeInstanceId
+                        != devPackageOwnerRuntimeInstanceId)
+                    {
+                        throw new InvalidOperationException(
+                            "The Runtime worker changed while dev package UI was being activated; retry startup so the App can reacquire its dev package owner lease.",
+                            exception);
+                    }
+                    var refreshedState = await LoadConsistentPackageUiStateAsync(
+                            runtimeApiClient,
+                            refreshedSnapshot,
+                            token => runtimeApiClient.GetActivePackageUiSnapshotsAsync(
+                                AppPackageTargetEnvironment.CurrentRid,
+                                token),
+                            requiredRuntimeInstanceId: devPackageOwnerRuntimeInstanceId,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    runtimePackageSnapshot = refreshedState.Snapshot;
+                    packageSources = refreshedState.PackageSources;
+                    activePackages = runtimePackageSnapshot.ActivePackages;
+                    systemStatus = await runtimeApiClient
+                        .GetSystemStatusAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (candidatePackageViewHostService is not null)
+                    {
+                        await candidatePackageViewHostService.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+            }
             activePackages = packageViewHostService.FilterEnabledPackages(activePackages);
-            LogStartupPhase("app package activation", phaseStopwatch);
+            if (runtimePackageSnapshot is not null)
+            {
+                warnings.AddRange(runtimePackageSnapshot.Warnings);
+                errors.AddRange(runtimePackageSnapshot.Errors);
+            }
+            LogStartupPhase(StartupPhase.AppPackageActivation, phaseStopwatch);
         }
         catch (OperationCanceledException)
         {
@@ -338,6 +472,7 @@ public sealed class ShellStartupCoordinator
         RuntimeEventSubscriptionService? runtimeEventSubscription = null;
         try
         {
+            startupAttempt.EnterPhase(StartupPhase.ShellComposition);
             cancellationToken.ThrowIfCancellationRequested();
             var shellSnapshot = _shellCompositionService.Compose(
                 activePackages,
@@ -360,7 +495,7 @@ public sealed class ShellStartupCoordinator
                     )
                     .ConfigureAwait(false);
             }
-            LogStartupPhase("shell composition", phaseStopwatch);
+            LogStartupPhase(StartupPhase.ShellComposition, phaseStopwatch);
             if (startupOptions.DevPackageFolders.Count > 0)
             {
                 developerLog.Enable(startPackageLogStreaming: false);
@@ -369,6 +504,7 @@ public sealed class ShellStartupCoordinator
             runtimeEventSubscription = runtimePackageSnapshot is null
                 ? null
                 : _runtimeEventSubscriptionServiceFactory.Create();
+            startupAttempt.EnterPhase(StartupPhase.MainWindowCreation);
             result = await _uiDispatcher
                 .InvokeAsync(
                     () =>
@@ -406,7 +542,7 @@ public sealed class ShellStartupCoordinator
                                     _uiDispatcher,
                                     developerLog: developerLog
                                 ),
-                                startupOptions.DevPackageFolders.Count > 0
+                                devPackageOwnerAcquired
                                     ? _devPackageOwnerSession
                                     : null
                             );
@@ -423,17 +559,25 @@ public sealed class ShellStartupCoordinator
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            LogStartupPhase("main window creation", phaseStopwatch);
-            if (startupOptions.DevPackageFolders.Count > 0)
+            LogStartupPhase(StartupPhase.MainWindowCreation, phaseStopwatch);
+            if (devPackageOwnerAcquired)
             {
                 developerLog.Info(
                     "dev",
                     $"Developer mode enabled for {startupOptions.DevPackageFolders.Count} dev package folder(s)."
                 );
             }
+            else if (startupOptions.DevPackageFolders.Count > 0)
+            {
+                developerLog.Warning(
+                    "dev",
+                    "Developer packages were not loaded; Sunder continued with the active Runtime package set."
+                );
+            }
 
             if (runtimePackageSnapshot is not null)
             {
+                startupAttempt.EnterPhase(StartupPhase.RuntimeSubscription);
                 await result
                     .StartRuntimeSubscriptionAsync(
                         runtimePackageSnapshot,
@@ -441,6 +585,7 @@ public sealed class ShellStartupCoordinator
                         cancellationToken
                     )
                     .ConfigureAwait(false);
+                LogStartupPhase(StartupPhase.RuntimeSubscription, phaseStopwatch);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -551,6 +696,138 @@ public sealed class ShellStartupCoordinator
         throw new TimeoutException("Runtime package bootstrap did not become ready in time.");
     }
 
+    internal static async Task<RuntimePackageStartupResult> LoadRuntimePackagesForStartupAsync(
+        IRuntimeSnapshotClient runtimeApiClient,
+        bool loadDevPackages,
+        Func<CancellationToken, Task<DevPackageOwnerLeaseResponse>> acquireDevPackagesAsync,
+        Func<CancellationToken, Task> releaseDevPackagesAsync,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(runtimeApiClient);
+        ArgumentNullException.ThrowIfNull(acquireDevPackagesAsync);
+        ArgumentNullException.ThrowIfNull(releaseDevPackagesAsync);
+
+        var baseline = await WaitForReadyRuntimeSnapshotAsync(
+                runtimeApiClient,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (!loadDevPackages)
+        {
+            return new RuntimePackageStartupResult(baseline, false, null, null);
+        }
+
+        DevPackageOwnerLeaseResponse lease;
+        try
+        {
+            lease = await acquireDevPackagesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception acquisitionException) when (acquisitionException is not OperationCanceledException)
+        {
+            if (!CanSafelyFallbackFromDevPackageFailure(acquisitionException))
+            {
+                throw new InvalidOperationException(
+                    "Sunder could not confirm whether the Runtime applied the dev package request. Startup stopped without activating package UI; wait for the dev owner lease to expire, then retry.",
+                    acquisitionException);
+            }
+            try
+            {
+                await releaseDevPackagesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception releaseException) when (releaseException is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    $"Dev packages could not be loaded ({acquisitionException.Message}), and Sunder could not restore the active Runtime package set ({releaseException.Message}).",
+                    new AggregateException(acquisitionException, releaseException));
+            }
+
+            var restoredSnapshot = await WaitForReadyRuntimeSnapshotAsync(
+                    runtimeApiClient,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new RuntimePackageStartupResult(
+                restoredSnapshot,
+                false,
+                $"Dev packages were not loaded: {acquisitionException.Message} Sunder continued with the active Runtime package set; fix the package and relaunch to retry.",
+                acquisitionException);
+        }
+
+        var devSnapshot = await WaitForReadyRuntimeSnapshotAsync(
+                runtimeApiClient,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (devSnapshot.RuntimeInstanceId != lease.RuntimeInstanceId
+            || devSnapshot.SessionGeneration < lease.SessionGeneration)
+        {
+            throw new InvalidDataException(
+                "Runtime returned a package snapshot older than the acquired dev package owner lease.");
+        }
+        return new RuntimePackageStartupResult(devSnapshot, true, null, null);
+    }
+
+    private static bool CanSafelyFallbackFromDevPackageFailure(Exception exception)
+        => exception is RuntimeClientException
+        {
+            StatusCode: HttpStatusCode.BadRequest
+                or HttpStatusCode.Unauthorized
+                or HttpStatusCode.Conflict
+                or HttpStatusCode.UnprocessableEntity,
+            ErrorCode: "runtime.v1.validation"
+                or "runtime.v1.authentication"
+                or "runtime.v1.conflict"
+                or "runtime.v1.stale-generation"
+                or "runtime.v1.package-validation",
+        };
+
+    internal static async Task<RuntimePackageUiStartupResult> LoadConsistentPackageUiStateAsync(
+        IRuntimeSnapshotClient runtimeApiClient,
+        RuntimePackageSnapshot initialSnapshot,
+        Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>> loadPackageSourcesAsync,
+        Guid? requiredRuntimeInstanceId = null,
+        int maxAttempts = 3,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeApiClient);
+        ArgumentNullException.ThrowIfNull(initialSnapshot);
+        ArgumentNullException.ThrowIfNull(loadPackageSourcesAsync);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        ValidateRequiredRuntimeInstance(initialSnapshot, requiredRuntimeInstanceId);
+
+        var snapshot = initialSnapshot;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var packageSources = await loadPackageSourcesAsync(cancellationToken).ConfigureAwait(false);
+            var confirmation = await WaitForReadyRuntimeSnapshotAsync(
+                    runtimeApiClient,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            ValidateRequiredRuntimeInstance(confirmation, requiredRuntimeInstanceId);
+            if (confirmation.RuntimeInstanceId == snapshot.RuntimeInstanceId
+                && confirmation.SessionGeneration == snapshot.SessionGeneration
+                && packageSources.All(source => source.SessionGeneration == snapshot.SessionGeneration))
+            {
+                return new RuntimePackageUiStartupResult(snapshot, packageSources);
+            }
+            snapshot = confirmation;
+        }
+
+        throw new InvalidDataException(
+            "The Runtime worker or package generation changed while App package snapshots were being loaded.");
+    }
+
+    private static void ValidateRequiredRuntimeInstance(
+        RuntimePackageSnapshot snapshot,
+        Guid? requiredRuntimeInstanceId)
+    {
+        if (requiredRuntimeInstanceId is { } required
+            && snapshot.RuntimeInstanceId != required)
+        {
+            throw new InvalidOperationException(
+                "The Runtime worker changed while dev package UI was being loaded; retry startup so the App can reacquire its dev package owner lease.");
+        }
+    }
+
     private async Task SetProgressAsync(
         LoadingWindowViewModel loadingViewModel,
         string statusMessage,
@@ -583,12 +860,39 @@ public sealed class ShellStartupCoordinator
         loadingViewModel.ProgressWidth = progressWidth;
     }
 
-    private void LogStartupPhase(string phaseName, Stopwatch phaseStopwatch)
+    private void LogStartupPhase(StartupPhase phase, Stopwatch phaseStopwatch)
     {
         AppSessionLog.WriteInfo(
-            $"Sunder startup phase '{phaseName}' completed in {phaseStopwatch.ElapsedMilliseconds} ms. UI thread: {_uiDispatcher.CheckAccess()}."
+            $"Sunder startup phase '{StartupAttemptDeadline.DescribePhase(phase)}' completed in {phaseStopwatch.ElapsedMilliseconds} ms. UI thread: {_uiDispatcher.CheckAccess()}."
         );
         phaseStopwatch.Restart();
+    }
+
+    private static async Task PublishDevPackageWarningAsync(
+        NotificationCenterService notificationCenter,
+        string warning,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await notificationCenter
+                .PublishAsync(
+                    "sunder.app",
+                    "Sunder",
+                    new PackageNotificationRequest(
+                        "Dev packages were not loaded",
+                        warning,
+                        PackageNotificationDisplayMode.TrayOnly,
+                        PackageNotificationSeverity.Warning
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            AppSessionLog.WriteError("Failed to publish the dev package startup warning.", exception);
+        }
     }
 
     private static async Task EnsureCliInstalledForStartupAsync(

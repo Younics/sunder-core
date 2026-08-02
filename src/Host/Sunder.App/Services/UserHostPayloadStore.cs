@@ -53,26 +53,28 @@ internal sealed class UserHostPayloadStore
             SetPrivateDirectoryMode(_payloadRoot);
             EnsurePayloadRootMarker();
 
-            var directoryName = CreatePayloadDirectoryName(_payloadVersion);
+            EnsureSafePayloadDirectory(_sourceDirectory);
+            var contentSha256 = ComputePayloadContentSha256(_sourceDirectory);
+            var directoryName = CreatePayloadDirectoryName(_payloadVersion, contentSha256);
             var destination = Path.Combine(_payloadRoot, directoryName);
             var currentDescriptor = LoadCurrentPayloadDescriptor();
             var currentPath = currentDescriptor?.PayloadPath;
             var stagedRepair = false;
-            if (!IsCompletePayload(destination, _payloadVersion))
+            if (!IsCompletePayload(destination, _payloadVersion, contentSha256))
             {
                 if (Directory.Exists(destination))
                 {
                     stagedRepair = true;
                     var repairDestination = Path.Combine(_payloadRoot, $"{directoryName}-repair");
-                    destination = IsCompletePayload(repairDestination, _payloadVersion)
+                    destination = IsCompletePayload(repairDestination, _payloadVersion, contentSha256)
                         ? repairDestination
                         : Directory.Exists(repairDestination)
                             ? Path.Combine(_payloadRoot, $"{directoryName}-repair-{Guid.NewGuid():N}")
                             : repairDestination;
                 }
-                if (!IsCompletePayload(destination, _payloadVersion))
+                if (!IsCompletePayload(destination, _payloadVersion, contentSha256))
                 {
-                    StagePayload(destination);
+                    StagePayload(destination, contentSha256);
                 }
             }
 
@@ -87,6 +89,7 @@ internal sealed class UserHostPayloadStore
                                   || (currentPath is not null && !PathEquals(currentPath, destination));
             return new UserHostPayload(
                 _payloadVersion,
+                contentSha256,
                 destination,
                 executablePath,
                 previous,
@@ -106,7 +109,7 @@ internal sealed class UserHostPayloadStore
         EnsurePathIsDirectChild(payload.DirectoryPath);
         payload.ActivationLease.EnsureActiveFor(_installationLockPath);
         if (!Directory.Exists(_payloadRoot)
-            || !IsCompletePayload(payload.DirectoryPath, payload.Version))
+            || !IsCompletePayload(payload.DirectoryPath, payload.Version, payload.ContentSha256))
         {
             throw new InvalidDataException("The Sunder Host payload cannot be activated because it is incomplete.");
         }
@@ -156,8 +159,8 @@ internal sealed class UserHostPayloadStore
 
     public bool Matches(UserHostPayload payload, HostHandshakeResponse handshake)
         => string.Equals(
-               handshake.Product.InformationalVersion,
-               payload.Version,
+               handshake.DeploymentIdentity,
+               payload.DeploymentIdentity,
                StringComparison.Ordinal)
             && HostProtocolCompatibility.GetManagedSupervisorIncompatibility(handshake) is null;
 
@@ -396,10 +399,15 @@ internal sealed class UserHostPayloadStore
             return null;
         }
         var executablePath = ResolveSupervisorExecutable(descriptor.PayloadPath);
+        var marker = executablePath is null
+            ? null
+            : LoadPayloadMarker(descriptor.PayloadPath);
         return executablePath is null
+               || marker is null
             ? null
             : new UserHostPayload(
                 descriptor.PayloadVersion,
+                marker.ContentSha256,
                 descriptor.PayloadPath,
                 executablePath,
                 Previous: null,
@@ -407,7 +415,7 @@ internal sealed class UserHostPayloadStore
                 activationLease);
     }
 
-    private void StagePayload(string destination)
+    private void StagePayload(string destination, string expectedContentSha256)
     {
         var staging = Path.Combine(_payloadRoot, $".stage-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
@@ -421,6 +429,11 @@ internal sealed class UserHostPayloadStore
             }
 
             var contentSha256 = ComputePayloadContentSha256(staging);
+            if (!string.Equals(contentSha256, expectedContentSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "The bundled Sunder Host payload changed while it was being staged.");
+            }
             WriteJsonAtomically(
                 Path.Combine(staging, MarkerFileName),
                 new UserHostPayloadMarker(DescriptorVersion, _payloadVersion, contentSha256));
@@ -459,7 +472,10 @@ internal sealed class UserHostPayloadStore
         }
     }
 
-    private bool IsCompletePayload(string directory, string expectedVersion)
+    private bool IsCompletePayload(
+        string directory,
+        string expectedVersion,
+        string? expectedContentSha256 = null)
     {
         try
         {
@@ -473,8 +489,12 @@ internal sealed class UserHostPayloadStore
                    && string.Equals(marker.PayloadVersion, expectedVersion, StringComparison.Ordinal)
                    && !string.IsNullOrWhiteSpace(marker.ContentSha256)
                    && string.Equals(
-                       marker.ContentSha256,
-                       ComputePayloadContentSha256(directory),
+                        marker.ContentSha256,
+                        expectedContentSha256 ?? marker.ContentSha256,
+                        StringComparison.OrdinalIgnoreCase)
+                   && string.Equals(
+                        marker.ContentSha256,
+                        ComputePayloadContentSha256(directory),
                        StringComparison.OrdinalIgnoreCase)
                    && ResolveSupervisorExecutable(directory) is not null;
         }
@@ -484,6 +504,21 @@ internal sealed class UserHostPayloadStore
                                           or InvalidDataException)
         {
             return false;
+        }
+    }
+
+    private static UserHostPayloadMarker? LoadPayloadMarker(string directory)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<UserHostPayloadMarker>(
+                File.ReadAllText(Path.Combine(directory, MarkerFileName)),
+                JsonOptions);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
         }
     }
 
@@ -666,10 +701,10 @@ internal sealed class UserHostPayloadStore
 
     private string GetDescriptorPath() => Path.Combine(_payloadRoot, "current.json");
 
-    private static string CreatePayloadDirectoryName(string version)
+    private static string CreatePayloadDirectoryName(string version, string contentSha256)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(version));
-        return $"host-{Convert.ToHexString(hash)[..16].ToLowerInvariant()}";
+        return $"host-{Convert.ToHexString(hash)[..16].ToLowerInvariant()}-{contentSha256[..16].ToLowerInvariant()}";
     }
 
     private static void WriteJsonAtomically<T>(string path, T value)
@@ -733,12 +768,15 @@ internal sealed class UserHostPayloadStore
 
 internal sealed record UserHostPayload(
     string Version,
+    string ContentSha256,
     string DirectoryPath,
     string ExecutablePath,
     UserHostPayload? Previous,
     bool ReplacesCurrent,
     UserHostPayloadActivationLease ActivationLease) : IDisposable
 {
+    public string DeploymentIdentity => HostDeploymentIdentity.FromSha256(ContentSha256);
+
     public void Dispose() => ActivationLease.Dispose();
 }
 

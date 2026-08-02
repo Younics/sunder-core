@@ -56,6 +56,33 @@ public sealed class HostContractTests
     }
 
     [Fact]
+    public void Handshake_DeploymentIdentityIsAdditiveAndUsesStableJsonName()
+    {
+        var identity = HostDeploymentIdentity.FromSha256(new string('a', 64));
+        var handshake = new HostHandshakeResponse(
+            HostProtocol.Identity,
+            HostProtocol.CurrentRevision,
+            HostProtocol.MinimumSupportedRevision,
+            HostProtocol.MaximumSupportedRevision,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            [HostProtocolFeatures.RuntimeGatewayV1],
+            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "1.0.0"))
+        {
+            DeploymentIdentity = identity,
+        };
+
+        var json = JsonSerializer.Serialize(handshake, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var legacy = JsonSerializer.Deserialize<HostHandshakeResponse>(
+            json.Replace($",\"deploymentIdentity\":\"{identity}\"", string.Empty, StringComparison.Ordinal),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.Contains($"\"deploymentIdentity\":\"{identity}\"", json, StringComparison.Ordinal);
+        Assert.Null(legacy?.DeploymentIdentity);
+        Assert.True(HostDeploymentIdentity.IsValid(identity));
+    }
+
+    [Fact]
     public void LifecycleContracts_UseStableWebJsonNames()
     {
         var status = new HostRuntimeStatus(
