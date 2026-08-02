@@ -110,12 +110,20 @@ public sealed record RuntimeStackImportActionDescriptor(
     bool DefaultSelected,
     string? Description = null);
 
+[JsonConverter(typeof(JsonStringEnumConverter<RuntimeStackInputSensitivity>))]
+public enum RuntimeStackInputSensitivity
+{
+    Public,
+    Secret,
+}
+
 public sealed record RuntimeStackRequiredInputDescriptor(
     string InputId,
     string OwnerPackageId,
     string ContributorId,
     string LocalInputId,
     string Label,
+    RuntimeStackInputSensitivity Sensitivity,
     bool Required,
     string? Description = null,
     string? DefaultValue = null);

@@ -1,6 +1,6 @@
 # Getting Started
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 3. Use the matching `sdk/v*` tag for released template behavior.
 
 This guide creates a package, runs it as a development package, and produces a validated distributable artifact. The repository also contains a [compiled quickstart package](../samples/Sunder.Package.Quickstart/) used by the Sunder Core build.
 
@@ -48,18 +48,7 @@ dotnet new sunder-package `
   --withAvalonia
 ```
 
-To put project files directly in a chosen directory:
-
-```powershell
-dotnet new sunder-package `
-  --name MyPackage `
-  --packageId my.company.package `
-  --packageName "My Package" `
-  --createInPlace `
-  --output .\MyPackage
-```
-
-The generated aggregate contains package metadata, Runtime code, an always-present non-packable `*.Protocol` project, and optional App/Stack code. The protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical manifest from compiled metadata and MSBuild items.
+Use `--output .\MyPackage` when you need an explicit destination. The generated aggregate contains `Sunder.Package.props` as its single package-version source, package metadata, Runtime code, an always-present non-packable `*.Protocol` project, and optional App/Stack code. The protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical manifest from compiled metadata and MSBuild items.
 
 ### Template Options
 
@@ -70,7 +59,6 @@ The generated aggregate contains package metadata, Runtime code, an always-prese
 | `--withAvalonia` | Adds `Sunder.Sdk.Avalonia`, Avalonia, and a default App view. |
 | `--noDefaultView` | Keeps Avalonia support but omits the starter shell view. |
 | `--withStacks` | Adds `Sunder.Sdk.Stacks` and a compiled exporter/importer stub. |
-| `--createInPlace` | Writes directly to `--output` rather than a child directory. |
 | `--withHostDependency` | Adds an installed-package dependency. |
 | `--hostPackageId <id>` | Package id required by `--withHostDependency`. |
 | `--hostPackageVersionRange <range>` | Runtime dependency range; default `>=1.1.0 <1.2.0`. |
@@ -107,27 +95,29 @@ Sunder.App.exe `
   --watch
 ```
 
-## Publish And Validate
+## Pack And Validate
 
-Set a strict SemVer package version in the project:
+Set the strict SemVer package version once in the generated `Sunder.Package.props`. The aggregate, Runtime, App, and Protocol projects all import this file:
 
 ```xml
-<PropertyGroup>
-  <Version>1.0.0</Version>
-</PropertyGroup>
+<Project>
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>
 ```
 
 Create and validate the artifact:
 
 ```powershell
-dotnet publish .\MyPackage\MyPackage.csproj -c Release
-sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
 Install the exact validated file locally:
 
 ```powershell
-sunder install --file .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
+sunder package install --file .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
 See [Build, Validate, Publish, And Version](BUILD-PUBLISH-VERSIONING.md) before publishing to a Registry. The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for generated manifest and archive rules.

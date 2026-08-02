@@ -68,6 +68,7 @@ public interface IRuntimeContentTransferClient : IRuntimeClient
 public interface IRuntimePackageStoreClient : IRuntimeClient
 {
     Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default);
+    Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(string packageId, CancellationToken cancellationToken = default);
     Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default);
     Task<PackageOperationResult> CommitPackageStoreStageAsync(string stageId, CancellationToken cancellationToken = default);
     Task<RuntimePackageStageStatus> GetPackageStoreStageStatusAsync(string stageId, CancellationToken cancellationToken = default);

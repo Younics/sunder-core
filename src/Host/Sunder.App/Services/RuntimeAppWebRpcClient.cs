@@ -43,13 +43,30 @@ internal sealed class RuntimeAppWebRpcClient(
 {
     private int _disposed;
 
-    public async ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
-        SunderRpcEndpointReference endpoint,
+    public async ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
+        SunderRpcCallOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        var descriptor = await management.OpenAppRpcCallScopeAsync(
+            new RuntimeRpcAppCallScopeOpenRequest(sessionId, options?.DeadlineUtc),
+            cancellationToken).ConfigureAwait(false);
+        return new RuntimeAppWebRpcCallScope(this, descriptor);
+    }
+
+    public async ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
+        SunderRpcEndpointReference endpoint,
+        CancellationToken cancellationToken = default)
+        => await GetProviderAsync(endpoint, callScopeId: null, cancellationToken).ConfigureAwait(false);
+
+    internal async ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
+        SunderRpcEndpointReference endpoint,
+        string? callScopeId,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
         var response = await management.GetAppRpcProviderAsync(
-            new RuntimeRpcAppProviderRequest(sessionId, endpoint.Value),
+            new RuntimeRpcAppProviderRequest(sessionId, endpoint.Value, callScopeId),
             cancellationToken).ConfigureAwait(false);
         ThrowIfError(response.Error);
         return response.Provider is null ? null : ToSdk(response.Provider);
@@ -58,10 +75,16 @@ internal sealed class RuntimeAppWebRpcClient(
     public async ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
         string contractId,
         CancellationToken cancellationToken)
+        => await DiscoverAsync(contractId, callScopeId: null, cancellationToken).ConfigureAwait(false);
+
+    internal async ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+        string contractId,
+        string? callScopeId,
+        CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         var response = await management.DiscoverAppRpcAsync(
-            new RuntimeRpcAppDiscoverRequest(sessionId, contractId),
+            new RuntimeRpcAppDiscoverRequest(sessionId, contractId, callScopeId),
             cancellationToken).ConfigureAwait(false);
         ThrowIfError(response.Error);
         var snapshot = response.Snapshot
@@ -79,9 +102,25 @@ internal sealed class RuntimeAppWebRpcClient(
         long afterSequence,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await foreach (var item in WatchAsync(
+                           afterRevision,
+                           afterSequence,
+                           callScopeId: null,
+                           cancellationToken).ConfigureAwait(false))
+        {
+            yield return item;
+        }
+    }
+
+    internal async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+        long afterRevision,
+        long afterSequence,
+        string? callScopeId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         ThrowIfDisposed();
         await foreach (var frame in management.WatchAppRpcAsync(
-                           new RuntimeRpcAppWatchRequest(sessionId, afterRevision, afterSequence),
+            new RuntimeRpcAppWatchRequest(sessionId, afterRevision, afterSequence, callScopeId),
                            cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             switch (frame.Type)
@@ -113,6 +152,23 @@ internal sealed class RuntimeAppWebRpcClient(
         JsonElement request,
         DateTimeOffset? deadlineUtc,
         CancellationToken cancellationToken)
+        => await InvokeAsync(
+            endpointReference,
+            serviceId,
+            methodId,
+            request,
+            deadlineUtc,
+            callScopeId: null,
+            cancellationToken).ConfigureAwait(false);
+
+    internal async ValueTask<JsonElement> InvokeAsync(
+        string endpointReference,
+        string serviceId,
+        string methodId,
+        JsonElement request,
+        DateTimeOffset? deadlineUtc,
+        string? callScopeId,
+        CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         var response = await management.InvokeAppRpcAsync(
@@ -122,7 +178,8 @@ internal sealed class RuntimeAppWebRpcClient(
                 serviceId,
                 methodId,
                 request,
-                deadlineUtc),
+                deadlineUtc,
+                callScopeId),
             cancellationToken).ConfigureAwait(false);
         ThrowIfError(response.Error);
         return response.Value
@@ -146,15 +203,38 @@ internal sealed class RuntimeAppWebRpcClient(
         DateTimeOffset? deadlineUtc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await foreach (var item in SubscribeAsync(
+                           endpointReference,
+                           serviceId,
+                           methodId,
+                           request,
+                           deadlineUtc,
+                           callScopeId: null,
+                           cancellationToken).ConfigureAwait(false))
+        {
+            yield return item;
+        }
+    }
+
+    internal async IAsyncEnumerable<JsonElement> SubscribeAsync(
+        string endpointReference,
+        string serviceId,
+        string methodId,
+        JsonElement request,
+        DateTimeOffset? deadlineUtc,
+        string? callScopeId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         ThrowIfDisposed();
         await foreach (var frame in management.SubscribeAppRpcAsync(
                            new RuntimeRpcAppInvokeRequest(
                                sessionId,
                                endpointReference,
                                serviceId,
-                               methodId,
-                               request,
-                               deadlineUtc),
+                                methodId,
+                                request,
+                                deadlineUtc,
+                                callScopeId),
                            cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             switch (frame.Type)
@@ -181,6 +261,64 @@ internal sealed class RuntimeAppWebRpcClient(
         SunderRpcCallOptions? options,
         CancellationToken cancellationToken)
         => SubscribeAsync(endpoint.Value, serviceId, methodId, request, options?.DeadlineUtc, cancellationToken);
+
+    internal async ValueTask<SunderRpcContentReference> RegisterContentAsync(
+        string callScopeId,
+        SunderRpcEndpointReference endpoint,
+        Stream source,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var response = await management.RegisterAppRpcContentAsync(
+            new RuntimeRpcAppContentRegisterMetadata(
+                sessionId,
+                callScopeId,
+                endpoint.Value,
+                options.MediaType,
+                options.FileName,
+                options.Length,
+                options.ExpiresAtUtc,
+                options.Repeatability == SunderRpcContentRepeatability.SingleUse
+                    ? RuntimeRpcContentRepeatability.SingleUse
+                    : RuntimeRpcContentRepeatability.Repeatable,
+                options.MaximumUses),
+            source,
+            cancellationToken).ConfigureAwait(false);
+        ThrowIfError(response.Error);
+        return response.Content is null
+            ? throw Protocol(
+                "rpc.transport.empty-content-reference",
+                "The Runtime returned an empty RPC content registration response.")
+            : ToSdk(response.Content);
+    }
+
+    internal async ValueTask<Stream> OpenContentAsync(
+        string callScopeId,
+        SunderRpcContentReference reference,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var result = await management.OpenAppRpcContentAsync(
+            new RuntimeRpcAppContentOpenRequest(
+                sessionId,
+                callScopeId,
+                ToProtocol(reference)),
+            cancellationToken).ConfigureAwait(false);
+        ThrowIfError(result.Error);
+        return result.Content
+               ?? throw Protocol(
+                   "rpc.transport.empty-content",
+                   "The Runtime returned an empty RPC content stream.");
+    }
+
+    internal async ValueTask CloseCallScopeAsync(string callScopeId)
+    {
+        ThrowIfDisposed();
+        await management.CloseAppRpcCallScopeAsync(
+            new RuntimeRpcAppCallScopeCloseRequest(sessionId, callScopeId),
+            CancellationToken.None).ConfigureAwait(false);
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -231,6 +369,30 @@ internal sealed class RuntimeAppWebRpcClient(
             },
             provider.FaultCode);
 
+    private static SunderRpcContentReference ToSdk(RuntimeRpcContentReferenceDescriptor reference)
+        => new(
+            reference.Id,
+            reference.Length,
+            reference.Sha256,
+            reference.MediaType,
+            reference.FileName,
+            reference.ExpiresAtUtc,
+            reference.Repeatability == RuntimeRpcContentRepeatability.SingleUse
+                ? SunderRpcContentRepeatability.SingleUse
+                : SunderRpcContentRepeatability.Repeatable);
+
+    private static RuntimeRpcContentReferenceDescriptor ToProtocol(SunderRpcContentReference reference)
+        => new(
+            reference.Id,
+            reference.Length,
+            reference.Sha256,
+            reference.MediaType,
+            reference.FileName,
+            reference.ExpiresAtUtc,
+            reference.Repeatability == SunderRpcContentRepeatability.SingleUse
+                ? RuntimeRpcContentRepeatability.SingleUse
+                : RuntimeRpcContentRepeatability.Repeatable);
+
     private static SunderRpcCatalogEvent ToSdk(RuntimeRpcCatalogEventDescriptor value)
         => new(
             value.Revision,
@@ -279,4 +441,137 @@ internal sealed class RuntimeAppWebRpcClient(
         => new(new SunderRpcError(SunderRpcErrorKind.Protocol, code, message));
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+}
+
+internal sealed class RuntimeAppWebRpcCallScope(
+    RuntimeAppWebRpcClient client,
+    RuntimeRpcAppCallScopeDescriptor descriptor) : ISunderRpcCallScope
+{
+    private int _disposed;
+
+    public DateTimeOffset DeadlineUtc => descriptor.DeadlineUtc;
+
+    public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
+        SunderRpcEndpointReference endpoint,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.GetProviderAsync(endpoint, descriptor.CallScopeId, cancellationToken);
+    }
+
+    public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+        string contractId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.DiscoverAsync(contractId, descriptor.CallScopeId, cancellationToken);
+    }
+
+    public IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+        long afterRevision,
+        long afterSequence,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.WatchAsync(
+            afterRevision,
+            afterSequence,
+            descriptor.CallScopeId,
+            cancellationToken);
+    }
+
+    public ValueTask<JsonElement> InvokeAsync(
+        SunderRpcEndpointReference endpoint,
+        string serviceId,
+        string methodId,
+        JsonElement request,
+        SunderRpcCallOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.InvokeAsync(
+            endpoint.Value,
+            serviceId,
+            methodId,
+            request,
+            options?.DeadlineUtc,
+            descriptor.CallScopeId,
+            cancellationToken);
+    }
+
+    public IAsyncEnumerable<JsonElement> SubscribeAsync(
+        SunderRpcEndpointReference endpoint,
+        string serviceId,
+        string methodId,
+        JsonElement request,
+        SunderRpcCallOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.SubscribeAsync(
+            endpoint.Value,
+            serviceId,
+            methodId,
+            request,
+            options?.DeadlineUtc,
+            descriptor.CallScopeId,
+            cancellationToken);
+    }
+
+    public ValueTask<SunderRpcContentReference> RegisterContentAsync(
+        SunderRpcEndpointReference endpoint,
+        Stream source,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.RegisterContentAsync(
+            descriptor.CallScopeId,
+            endpoint,
+            source,
+            options,
+            cancellationToken);
+    }
+
+    public async ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+        SunderRpcEndpointReference endpoint,
+        string filePath,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        await using var source = new FileStream(
+            Path.GetFullPath(filePath),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            128 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await RegisterContentAsync(endpoint, source, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask<Stream> OpenContentAsync(
+        SunderRpcContentReference reference,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return client.OpenContentAsync(descriptor.CallScopeId, reference, cancellationToken);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try
+        {
+            await client.CloseCallScopeAsync(descriptor.CallScopeId).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            AppSessionLog.WriteError("Failed to close a package App RPC call scope.", exception);
+        }
+    }
+
+    private void ThrowIfDisposed()
+        => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 }

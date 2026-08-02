@@ -886,6 +886,7 @@ public sealed class RuntimeRpcBrokerTests
             var contentPath = Path.Combine(root, "content.bin");
             Directory.CreateDirectory(root);
             await File.WriteAllBytesAsync(contentPath, [1, 2, 3]);
+            var providerEndpoint = new RuntimeRpcContentEndpoint("rpc1_test", Guid.NewGuid());
             var reference = await store.RegisterRpcContentAsync(
                 contentPath,
                 "application/octet-stream",
@@ -893,16 +894,44 @@ public sealed class RuntimeRpcBrokerTests
                 "provider.package",
                 "caller.package",
                 generation: 7,
+                providerEndpoint,
                 DateTimeOffset.UtcNow.AddMinutes(1),
                 SunderRpcContentRepeatability.SingleUse,
                 maximumUses: 1);
 
-            Assert.Null(store.AcquireRpcContent(reference, "provider.package", "other.package", 7));
-            Assert.Null(store.AcquireRpcContent(reference, "provider.package", "caller.package", 8));
-            var lease = store.AcquireRpcContent(reference, "provider.package", "caller.package", 7);
+            Assert.Null(store.AcquireRpcContent(
+                reference,
+                "provider.package",
+                "other.package",
+                7,
+                providerEndpoint));
+            Assert.Null(store.AcquireRpcContent(
+                reference,
+                "provider.package",
+                "caller.package",
+                8,
+                providerEndpoint));
+            Assert.Null(store.AcquireRpcContent(
+                reference,
+                "provider.package",
+                "caller.package",
+                7,
+                providerEndpoint with { EndpointReference = "rpc1_sibling" }));
+            var lease = store.AcquireRpcContent(
+                reference,
+                "provider.package",
+                "caller.package",
+                7,
+                providerEndpoint);
             Assert.NotNull(lease);
             Assert.Equal(1, lease.UseNumber);
-            Assert.Null(store.AcquireRpcContent(reference, "provider.package", "caller.package", 7));
+            Assert.Null(store.AcquireRpcContent(
+                reference,
+                "provider.package",
+                "caller.package",
+                7,
+                providerEndpoint));
+            store.ReleaseRpcContent(lease);
 
             var tamperReference = await store.RegisterRpcContentAsync(
                 contentPath,
@@ -911,17 +940,376 @@ public sealed class RuntimeRpcBrokerTests
                 "provider.package",
                 "caller.package",
                 generation: 7,
+                providerEndpoint,
                 DateTimeOffset.UtcNow.AddMinutes(1),
                 SunderRpcContentRepeatability.Repeatable,
                 maximumUses: 2);
             await File.WriteAllBytesAsync(contentPath, [9, 9, 9]);
-            Assert.Null(store.AcquireRpcContent(tamperReference, "provider.package", "caller.package", 7));
+            Assert.Null(store.AcquireRpcContent(
+                tamperReference,
+                "provider.package",
+                "caller.package",
+                7,
+                providerEndpoint));
         }
         finally
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task ContentAuthority_RevocationWinsLateRegistrationRaceWithoutFileLeak()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var paths = new RuntimePackagePaths(root);
+            using var store = new RuntimeContentTransferStore(paths);
+            var authority = new RuntimeRpcContentAuthority("race-authority");
+            await using var source = new ReleaseBlockingReadStream();
+            var registration = store.RegisterRpcContentAsync(
+                source,
+                expectedLength: 1,
+                "application/octet-stream",
+                "content.bin",
+                "caller.package",
+                "provider.package",
+                generation: 7,
+                new RuntimeRpcContentEndpoint("rpc1_target", Guid.NewGuid()),
+                DateTimeOffset.UtcNow.AddMinutes(1),
+                SunderRpcContentRepeatability.SingleUse,
+                maximumUses: 1,
+                CancellationToken.None,
+                authority);
+            await source.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            store.DiscardRpcContentAuthority(authority);
+            source.Release.TrySetResult();
+
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await registration);
+            Assert.Empty(Directory.Exists(paths.TransferRootPath)
+                ? Directory.GetFiles(paths.TransferRootPath)
+                : []);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CallScope_ContentAuthorityEndsWithInvocationAndScopeDisposal()
+    {
+        await using var fixture = new RpcFixture();
+        SunderRpcInvocationContext? retainedContext = null;
+        SunderRpcContentReference? requestContent = null;
+        SunderRpcContentReference? responseContent = null;
+        var activation = await fixture.PublishAsync(new TestHandler
+        {
+            UnaryWithContext = async (context, _, cancellationToken) =>
+            {
+                retainedContext = context;
+                await using (var input = await context.OpenContentAsync(
+                                 requestContent!,
+                                 cancellationToken))
+                using (var reader = new StreamReader(input, Encoding.UTF8, leaveOpen: false))
+                {
+                    Assert.Equal("request-content", await reader.ReadToEndAsync(cancellationToken));
+                }
+                await using var output = new MemoryStream(Encoding.UTF8.GetBytes("response-content"));
+                responseContent = await context.RegisterContentAsync(
+                    output,
+                    new SunderRpcContentRegistrationOptions(
+                        "text/plain",
+                        "response.txt",
+                        output.Length,
+                        Repeatability: SunderRpcContentRepeatability.Repeatable,
+                        MaximumUses: 2),
+                    cancellationToken);
+                return JsonSerializer.SerializeToElement(new { accepted = true });
+            },
+        });
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        var scope = await client.CreateCallScopeAsync();
+        await using var request = new MemoryStream(Encoding.UTF8.GetBytes("request-content"));
+        requestContent = await scope.RegisterContentAsync(
+            endpoint,
+            request,
+            new SunderRpcContentRegistrationOptions("text/plain", "request.txt", request.Length));
+
+        var result = await scope.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "content" }));
+
+        Assert.True(result.GetProperty("accepted").GetBoolean());
+        var retainedFailure = await Assert.ThrowsAsync<SunderRpcException>(() => retainedContext!
+            .RegisterContentAsync(
+                new MemoryStream([1]),
+                new SunderRpcContentRegistrationOptions("application/octet-stream", "late.bin", 1))
+            .AsTask());
+        Assert.Equal(SunderRpcErrorKind.Unavailable, retainedFailure.Error.Kind);
+
+        await using var response = await scope.OpenContentAsync(responseContent!);
+        await scope.DisposeAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            _ = await response.ReadAsync(new byte[1]));
+        Assert.Throws<ObjectDisposedException>(() => scope.OpenContentAsync(responseContent!));
+    }
+
+    [Fact]
+    public async Task CallScope_RequestContentIsBoundToExactSiblingEndpoint()
+    {
+        await using var fixture = new RpcFixture();
+        SunderRpcContentReference? requestContent = null;
+        var targetHandler = new TestHandler
+        {
+            UnaryWithContext = async (context, _, cancellationToken) =>
+            {
+                await using var input = await context.OpenContentAsync(requestContent!, cancellationToken);
+                using var reader = new StreamReader(input, Encoding.UTF8, leaveOpen: false);
+                Assert.Equal("endpoint-bound", await reader.ReadToEndAsync(cancellationToken));
+                return JsonSerializer.SerializeToElement(new { accepted = true });
+            },
+        };
+        var siblingDenied = false;
+        var siblingHandler = new TestHandler
+        {
+            UnaryWithContext = async (context, _, cancellationToken) =>
+            {
+                var failure = await Assert.ThrowsAsync<SunderRpcException>(() => context
+                    .OpenContentAsync(requestContent!, cancellationToken)
+                    .AsTask());
+                siblingDenied = failure.Error.Kind == SunderRpcErrorKind.NotFound;
+                return JsonSerializer.SerializeToElement(new { accepted = true });
+            },
+        };
+        var activation = await fixture.PublishAsync(targetHandler, siblingHandler: siblingHandler);
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var providers = (await client.DiscoverAsync("example.rpc")).Providers;
+        var targetEndpoint = providers.Single(provider => provider.ProviderId == "example.provider").Endpoint;
+        var siblingEndpoint = providers.Single(provider => provider.ProviderId == "example.sibling").Endpoint;
+        await using var scope = await client.CreateCallScopeAsync();
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes("endpoint-bound"));
+        requestContent = await scope.RegisterContentAsync(
+            targetEndpoint,
+            source,
+            new SunderRpcContentRegistrationOptions("text/plain", "request.txt", source.Length));
+
+        await scope.InvokeAsync(
+            siblingEndpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "sibling" }));
+        Assert.True(siblingDenied);
+
+        var response = await scope.InvokeAsync(
+            targetEndpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "target" }));
+        Assert.True(response.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CallScope_ProviderRetirementCancelsOpenContentAndRejectsReopen()
+    {
+        await using var fixture = new RpcFixture();
+        SunderRpcContentReference? responseContent = null;
+        var activation = await fixture.PublishAsync(new TestHandler
+        {
+            UnaryWithContext = async (context, _, cancellationToken) =>
+            {
+                await using var output = new MemoryStream(Encoding.UTF8.GetBytes("response-content"));
+                responseContent = await context.RegisterContentAsync(
+                    output,
+                    new SunderRpcContentRegistrationOptions(
+                        "text/plain",
+                        "response.txt",
+                        output.Length,
+                        Repeatability: SunderRpcContentRepeatability.Repeatable,
+                        MaximumUses: 2),
+                    cancellationToken);
+                return JsonSerializer.SerializeToElement(new { accepted = true });
+            },
+        });
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        await using var scope = await client.CreateCallScopeAsync();
+        await scope.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "content" }));
+        await using var open = await scope.OpenContentAsync(responseContent!);
+
+        Assert.True(fixture.Catalog.DeactivatePackage(
+            activation.Provider.PackageId,
+            activation.Provider.ActivationId,
+            faulted: false));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            _ = await open.ReadAsync(new byte[1]));
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => scope
+            .OpenContentAsync(responseContent!)
+            .AsTask());
+        Assert.Equal(SunderRpcErrorKind.NotFound, failure.Error.Kind);
+    }
+
+    [Fact]
+    public async Task CallScope_DeadlineRevokesWatchContentAndReleasesCapacity()
+    {
+        var clock = new ManualTimeProvider();
+        await using var fixture = new RpcFixture(
+            new RuntimeRpcPolicyOptions
+            {
+                DefaultDeadline = TimeSpan.FromMinutes(5),
+                MaxCallScopesPerCaller = 1,
+            },
+            clock);
+        var activation = await fixture.PublishAsync(new TestHandler());
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var snapshot = await client.DiscoverAsync("example.rpc");
+        var endpoint = Assert.Single(snapshot.Providers).Endpoint;
+        var scope = await client.CreateCallScopeAsync(
+            new SunderRpcCallOptions(clock.GetUtcNow().AddMinutes(1)));
+        await using var source = new MemoryStream([1, 2, 3]);
+        await scope.RegisterContentAsync(
+            endpoint,
+            source,
+            new SunderRpcContentRegistrationOptions("application/octet-stream", "request.bin", source.Length));
+        await using var watch = scope.WatchAsync(
+            snapshot.Revision + 1,
+            snapshot.Sequence).GetAsyncEnumerator();
+        Assert.True(await watch.MoveNextAsync());
+        var waiting = watch.MoveNextAsync().AsTask();
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var expired = await Assert.ThrowsAsync<SunderRpcException>(async () => await waiting);
+        Assert.Equal(SunderRpcErrorKind.DeadlineExceeded, expired.Error.Kind);
+        Assert.Empty(fixture.GetTransferFiles());
+        Assert.Equal(0, clock.ActiveTimerCount);
+        await using var replacement = await client.CreateCallScopeAsync();
+        var stale = await Assert.ThrowsAsync<SunderRpcException>(() => scope
+            .DiscoverAsync("example.rpc")
+            .AsTask());
+        Assert.Equal(SunderRpcErrorKind.DeadlineExceeded, stale.Error.Kind);
+        await scope.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CallScope_ExpiryDuringRegistrationCleansPartialContentAndScope()
+    {
+        var clock = new ManualTimeProvider();
+        await using var fixture = new RpcFixture(
+            new RuntimeRpcPolicyOptions
+            {
+                DefaultDeadline = TimeSpan.FromMinutes(5),
+                MaxCallScopesPerCaller = 1,
+            },
+            clock);
+        var activation = await fixture.PublishAsync(new TestHandler());
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        var scope = await client.CreateCallScopeAsync(
+            new SunderRpcCallOptions(clock.GetUtcNow().AddMinutes(1)));
+        await using var source = new CancellationBlockingReadStream();
+        var registration = scope.RegisterContentAsync(
+            endpoint,
+            source,
+            new SunderRpcContentRegistrationOptions("application/octet-stream", "request.bin"))
+            .AsTask();
+        await source.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var expired = await Assert.ThrowsAsync<SunderRpcException>(async () => await registration);
+        Assert.Equal(SunderRpcErrorKind.DeadlineExceeded, expired.Error.Kind);
+        Assert.Empty(fixture.GetTransferFiles());
+        await using var replacement = await client.CreateCallScopeAsync();
+        await scope.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CallScope_DeadlineAndDisposeRaceLeavesNoTimersOrScopeSlots()
+    {
+        var clock = new ManualTimeProvider();
+        await using var fixture = new RpcFixture(
+            new RuntimeRpcPolicyOptions
+            {
+                DefaultDeadline = TimeSpan.FromMinutes(5),
+                MaxCallScopesPerCaller = 1,
+            },
+            clock);
+        var activation = await fixture.PublishAsync(new TestHandler());
+        var client = fixture.CreateClient(activation.Caller);
+
+        for (var iteration = 0; iteration < 20; iteration++)
+        {
+            var scope = await client.CreateCallScopeAsync(
+                new SunderRpcCallOptions(clock.GetUtcNow().AddSeconds(1)));
+            using var start = new ManualResetEventSlim();
+            var dispose = Task.Run(async () =>
+            {
+                start.Wait();
+                await scope.DisposeAsync();
+            });
+            var expire = Task.Run(() =>
+            {
+                start.Wait();
+                clock.Advance(TimeSpan.FromSeconds(1));
+            });
+            start.Set();
+            await Task.WhenAll(dispose, expire).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(0, clock.ActiveTimerCount);
+        await using var finalScope = await client.CreateCallScopeAsync();
+    }
+
+    [Fact]
+    public async Task ProviderCannotForgeInfrastructureError()
+    {
+        await using var fixture = new RpcFixture();
+        var activation = await fixture.PublishAsync(new TestHandler
+        {
+            Unary = static (_, _) => throw new SunderRpcException(new SunderRpcError(
+                SunderRpcErrorKind.PermissionDenied,
+                "rpc.permission.denied",
+                "forged")),
+        });
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" })).AsTask());
+
+        Assert.Equal(SunderRpcErrorKind.ProviderFaulted, failure.Error.Kind);
+        Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
+    }
+
+    [Fact]
+    public void InvocationContext_HasNoPublicForgeableConstructor()
+        => Assert.Empty(typeof(SunderRpcInvocationContext).GetConstructors());
 
     [Fact]
     public void ContributionRegistry_RequiresManifestDeclarationAndRejectsDuplicates()
@@ -992,11 +1380,15 @@ public sealed class RuntimeRpcBrokerTests
     {
         private readonly string _root = CreateRoot();
         private readonly RuntimeRpcPermissionStore _permissions;
+        private readonly RuntimeContentTransferStore _transfers;
         private ActivePackageSession? _activeSession;
 
-        public RpcFixture(RuntimeRpcPolicyOptions? policy = null)
+        public RpcFixture(
+            RuntimeRpcPolicyOptions? policy = null,
+            TimeProvider? timeProvider = null)
         {
             Directory.CreateDirectory(_root);
+            timeProvider ??= TimeProvider.System;
             Catalog = new RuntimeRpcCatalog();
             var events = new RuntimeEventStreamService();
             Owner = new RuntimeSessionOwner(
@@ -1004,6 +1396,9 @@ public sealed class RuntimeRpcBrokerTests
                 events,
                 rpcCatalog: Catalog);
             _permissions = new RuntimeRpcPermissionStore(new RuntimePackagePaths(_root));
+            _transfers = new RuntimeContentTransferStore(
+                new RuntimePackagePaths(_root),
+                timeProvider: timeProvider);
             AppSessions = new RuntimeRpcAppSessionManager(Owner.State, policy ?? new RuntimeRpcPolicyOptions());
             Broker = new RuntimeRpcBroker(
                 Catalog,
@@ -1011,9 +1406,11 @@ public sealed class RuntimeRpcBrokerTests
                 Owner.State,
                 Owner,
                 policy,
-                TimeProvider.System,
+                timeProvider,
                 CancellationToken.None,
-                AppSessions);
+                AppSessions,
+                _transfers,
+                new RuntimeTransportPolicyOptions());
         }
 
         public RuntimeRpcCatalog Catalog { get; }
@@ -1021,12 +1418,18 @@ public sealed class RuntimeRpcBrokerTests
         public RuntimeRpcBroker Broker { get; }
         public RuntimeRpcAppSessionManager AppSessions { get; }
         public string PermissionFilePath => new RuntimePackagePaths(_root).RpcPermissionFilePath;
+        public string[] GetTransferFiles()
+        {
+            var path = new RuntimePackagePaths(_root).TransferRootPath;
+            return Directory.Exists(path) ? Directory.GetFiles(path) : [];
+        }
 
         public async Task<RpcActivation> PublishAsync(
             TestHandler handler,
             bool providerUsesContract = false,
             bool webCaller = false,
-            PackageSourceKind callerSourceKind = PackageSourceKind.Installed)
+            PackageSourceKind callerSourceKind = PackageSourceKind.Installed,
+            TestHandler? siblingHandler = null)
         {
             var descriptor = Contract();
             var caller = CreatePackage(
@@ -1039,7 +1442,12 @@ public sealed class RuntimeRpcBrokerTests
             {
                 caller = AddWebTarget(caller, descriptor);
             }
-            var provider = CreatePackage("provider.package", descriptor, handler, providerUsesContract);
+            var provider = CreatePackage(
+                "provider.package",
+                descriptor,
+                handler,
+                providerUsesContract,
+                siblingHandler: siblingHandler);
             var session = CreateSession(caller, provider);
             await Owner.PublishAsync(
                 session,
@@ -1128,6 +1536,7 @@ public sealed class RuntimeRpcBrokerTests
             Catalog.Dispose();
             AppSessions.Dispose();
             _permissions.Dispose();
+            _transfers.Dispose();
             try
             {
                 if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
@@ -1213,7 +1622,8 @@ public sealed class RuntimeRpcBrokerTests
         SunderRpcContractDescriptor descriptor,
         TestHandler? handler,
         bool usesContract,
-        PackageSourceKind sourceKind = PackageSourceKind.Installed)
+        PackageSourceKind sourceKind = PackageSourceKind.Installed,
+        TestHandler? siblingHandler = null)
     {
         var root = CreateRoot();
         Directory.CreateDirectory(root);
@@ -1244,7 +1654,11 @@ public sealed class RuntimeRpcBrokerTests
                     },
                 ]
                 : [],
-            Provides = handler is null ? [] : [ProviderManifest(descriptor)],
+            Provides = handler is null
+                ? []
+                : siblingHandler is null
+                    ? [ProviderManifest(descriptor)]
+                    : [ProviderManifest(descriptor), ProviderManifest(descriptor, "example.sibling")],
         };
         var source = new RuntimePackageSource(
             packageId,
@@ -1288,20 +1702,25 @@ public sealed class RuntimeRpcBrokerTests
         };
         if (handler is not null)
         {
-            var declaration = Assert.Single(manifest.Provides)!;
+            var handlers = new Dictionary<string, TestHandler>(StringComparer.Ordinal)
+            {
+                ["example.provider"] = handler,
+            };
+            if (siblingHandler is not null) handlers.Add("example.sibling", siblingHandler);
             package = package with
             {
-                RpcProviders = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal)
-                {
-                    [declaration.ProviderId!] = new RuntimeRpcProviderRegistration(
-                        declaration.ProviderId!,
-                        descriptor.ContractId,
-                        descriptor.Version,
-                        descriptor.Sha256,
-                        descriptor,
-                        handler,
-                        declaration),
-                },
+                RpcProviders = manifest.Provides!.Select(static declaration => declaration!)
+                    .ToDictionary(
+                        static declaration => declaration.ProviderId!,
+                        declaration => new RuntimeRpcProviderRegistration(
+                            declaration.ProviderId!,
+                            descriptor.ContractId,
+                            descriptor.Version,
+                            descriptor.Sha256,
+                            descriptor,
+                            handlers[declaration.ProviderId!],
+                            declaration),
+                        StringComparer.Ordinal),
             };
         }
         return package;
@@ -1328,10 +1747,12 @@ public sealed class RuntimeRpcBrokerTests
                     0),
                 StringComparer.OrdinalIgnoreCase));
 
-    private static SunderPackageProviderManifest ProviderManifest(SunderRpcContractDescriptor descriptor)
+    private static SunderPackageProviderManifest ProviderManifest(
+        SunderRpcContractDescriptor descriptor,
+        string providerId = "example.provider")
         => new()
         {
-            ProviderId = "example.provider",
+            ProviderId = providerId,
             ContractId = descriptor.ContractId,
             ContractVersion = descriptor.Version,
             ContractSha256 = descriptor.Sha256,
@@ -1361,6 +1782,212 @@ public sealed class RuntimeRpcBrokerTests
         TestHandler Handler,
         ActivePackageSession Session);
 
+    private sealed class CancellationBlockingReadStream : Stream
+    {
+        private int _reads;
+
+        public TaskCompletionSource Blocked { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                buffer.Span[0] = 1;
+                return 1;
+            }
+            Blocked.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class ReleaseBlockingReadStream : Stream
+    {
+        private int _reads;
+
+        public TaskCompletionSource Blocked { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                buffer.Span[0] = 1;
+                return 1;
+            }
+            Blocked.TrySetResult();
+            await Release.Task.ConfigureAwait(false);
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly List<ManualTimer> _timers = [];
+        private DateTimeOffset _utcNow = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        public int ActiveTimerCount
+        {
+            get
+            {
+                lock (_gate) return _timers.Count(timer => !timer.IsDisposed);
+            }
+        }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate) return _utcNow;
+        }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = new ManualTimer(this, callback, state);
+            lock (_gate)
+            {
+                _timers.Add(timer);
+                ChangeLocked(timer, dueTime, period);
+            }
+            return timer;
+        }
+
+        public void Advance(TimeSpan duration)
+        {
+            if (duration < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(duration));
+            lock (_gate) _utcNow += duration;
+            while (true)
+            {
+                ManualTimer[] due;
+                lock (_gate)
+                {
+                    due = _timers
+                        .Where(timer => !timer.IsDisposed && timer.DueAtUtc is { } at && at <= _utcNow)
+                        .ToArray();
+                    foreach (var timer in due)
+                    {
+                        if (timer.Period == Timeout.InfiniteTimeSpan)
+                        {
+                            timer.DueAtUtc = null;
+                        }
+                        else
+                        {
+                            do
+                            {
+                                timer.DueAtUtc += timer.Period;
+                            } while (timer.DueAtUtc <= _utcNow);
+                        }
+                    }
+                }
+                if (due.Length == 0) return;
+                foreach (var timer in due) timer.Invoke();
+            }
+        }
+
+        private bool Change(ManualTimer timer, TimeSpan dueTime, TimeSpan period)
+        {
+            lock (_gate)
+            {
+                if (timer.IsDisposed) return false;
+                ChangeLocked(timer, dueTime, period);
+                return true;
+            }
+        }
+
+        private void ChangeLocked(ManualTimer timer, TimeSpan dueTime, TimeSpan period)
+        {
+            timer.DueAtUtc = dueTime == Timeout.InfiniteTimeSpan ? null : _utcNow + dueTime;
+            timer.Period = period;
+        }
+
+        private void Dispose(ManualTimer timer)
+        {
+            lock (_gate)
+            {
+                if (timer.IsDisposed) return;
+                timer.IsDisposed = true;
+                timer.DueAtUtc = null;
+                _timers.Remove(timer);
+            }
+        }
+
+        private sealed class ManualTimer(
+            ManualTimeProvider owner,
+            TimerCallback callback,
+            object? state) : ITimer
+        {
+            public bool IsDisposed { get; set; }
+            public DateTimeOffset? DueAtUtc { get; set; }
+            public TimeSpan Period { get; set; }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+                => owner.Change(this, dueTime, period);
+
+            public void Dispose() => owner.Dispose(this);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Invoke()
+            {
+                if (!IsDisposed) callback(state);
+            }
+        }
+    }
+
     private sealed class TestHandler : ISunderRpcServiceHandler
     {
         public Func<JsonElement, CancellationToken, ValueTask<JsonElement>> Unary { get; set; } =
@@ -1369,6 +1996,8 @@ public sealed class RuntimeRpcBrokerTests
                 cancellationToken.ThrowIfCancellationRequested();
                 return ValueTask.FromResult(JsonSerializer.SerializeToElement(new { accepted = true }));
             };
+
+        public Func<SunderRpcInvocationContext, JsonElement, CancellationToken, ValueTask<JsonElement>>? UnaryWithContext { get; set; }
 
         public Func<JsonElement, CancellationToken, IAsyncEnumerable<JsonElement>> Stream { get; set; } =
             static (_, cancellationToken) => Single(cancellationToken);
@@ -1379,7 +2008,9 @@ public sealed class RuntimeRpcBrokerTests
             string methodId,
             JsonElement request,
             CancellationToken cancellationToken = default)
-            => Unary(request, cancellationToken);
+            => UnaryWithContext is null
+                ? Unary(request, cancellationToken)
+                : UnaryWithContext(context, request, cancellationToken);
 
         public IAsyncEnumerable<JsonElement> InvokeServerStreamAsync(
             SunderRpcInvocationContext context,

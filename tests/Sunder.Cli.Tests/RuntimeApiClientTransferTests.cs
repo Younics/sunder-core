@@ -176,6 +176,92 @@ public sealed class RuntimeApiClientTransferTests
     }
 
     [Fact]
+    public async Task Registry_problem_details_preserve_code_and_correlation_id()
+    {
+        var handler = new DelegateHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "title":"Registry unavailable",
+                  "detail":"Try again later.",
+                  "code":"registry.v1.unavailable",
+                  "correlationId":"registry-correlation-42"
+                }
+                """,
+                Encoding.UTF8,
+                "application/problem+json"),
+        }));
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        var exception = await Assert.ThrowsAsync<CliHttpException>(() => client.SearchAsync(null, 0, 20, default));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
+        Assert.Equal("registry.v1.unavailable", exception.Code);
+        Assert.Equal("registry-correlation-42", exception.CorrelationId);
+    }
+
+    [Fact]
+    public async Task Registry_problem_details_discard_unsafe_correlation_id()
+    {
+        var handler = new DelegateHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "title":"Authentication required",
+                  "detail":"Use a valid credential.",
+                  "code":"registry.v1.auth.unauthorized",
+                  "correlationId":"unsafe correlation value"
+                }
+                """,
+                Encoding.UTF8,
+                "application/problem+json"),
+        }));
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        var exception = await Assert.ThrowsAsync<CliHttpException>(() => client.SearchAsync(null, 0, 20, default));
+
+        Assert.Null(exception.CorrelationId);
+        Assert.Null(CliErrorMapper.Describe(exception).CorrelationId);
+        Assert.DoesNotContain("unsafe correlation", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Registry_search_rejects_null_items_in_nominal_success_collection()
+    {
+        var handler = new DelegateHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[null]", Encoding.UTF8, "application/json"),
+        }));
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.SearchAsync(null, 0, 20, default));
+    }
+
+    [Fact]
+    public async Task Registry_details_reject_missing_required_nominal_success_collection()
+    {
+        var handler = new DelegateHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "packageId":"demo.package",
+                  "name":"Demo",
+                  "createdAtUtc":"2026-01-01T00:00:00Z",
+                  "updatedAtUtc":"2026-01-01T00:00:00Z"
+                }
+                """,
+                Encoding.UTF8,
+                "application/json"),
+        }));
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetPackageAsync("demo.package", default));
+    }
+
+    [Fact]
     public async Task Runtime_client_rejects_oversized_json_response()
     {
         var handler = new DelegateHandler(request => Task.FromResult(

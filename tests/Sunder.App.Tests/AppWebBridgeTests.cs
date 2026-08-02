@@ -74,7 +74,57 @@ public sealed class AppWebBridgeTests
         }
     }
 
-    private static string Request(string nonce, string origin, string requestId, string method, object payload)
+    [Fact]
+    public async Task BrowserDeadline_IsCarriedForEveryCallAndCompletesAsAuthenticatedDeadlineExceeded()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            var rpc = new DeadlineRpcClient();
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                rpc,
+                AppWebRpcContractCatalog.Load(root, new SunderPackageManifest { ContractBundles = [] }),
+                new ExternalBrowserService(),
+                _ => { });
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            var bootstrap = Assert.Single(webView.Scripts);
+            Assert.Contains("deadlineUtc: options?.deadline?.toISOString?.() ?? null", bootstrap, StringComparison.Ordinal);
+            webView.ClearScripts();
+
+            var request = bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_deadline",
+                "rpc.discover",
+                new { contractId = "example.rpc" },
+                DateTimeOffset.UtcNow.AddMilliseconds(300)));
+            await rpc.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await request.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var response = Assert.Single(webView.Scripts);
+            Assert.Contains("deadline-exceeded", response, StringComparison.Ordinal);
+            Assert.Contains("rpc.call.deadline-exceeded", response, StringComparison.Ordinal);
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string Request(
+        string nonce,
+        string origin,
+        string requestId,
+        string method,
+        object payload,
+        DateTimeOffset? deadlineUtc = null)
         => JsonSerializer.Serialize(new
         {
             protocol = AppWebBridge.Protocol,
@@ -83,6 +133,7 @@ public sealed class AppWebBridgeTests
             origin,
             requestId,
             method,
+            deadlineUtc = deadlineUtc?.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             payload,
         });
 
@@ -252,6 +303,52 @@ public sealed class AppWebBridgeTests
             DateTimeOffset? deadlineUtc,
             CancellationToken cancellationToken)
             => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { accepted = true }));
+
+        public async IAsyncEnumerable<JsonElement> SubscribeAsync(
+            string endpointReference,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            DateTimeOffset? deadlineUtc,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DeadlineRpcClient : IAppWebRpcClient
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+            string contractId,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The deadline test should be cancelled.");
+        }
+
+        public async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+            long afterRevision,
+            long afterSequence,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            yield break;
+        }
+
+        public ValueTask<JsonElement> InvokeAsync(
+            string endpointReference,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            DateTimeOffset? deadlineUtc,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<JsonElement>(new NotSupportedException());
 
         public async IAsyncEnumerable<JsonElement> SubscribeAsync(
             string endpointReference,

@@ -57,6 +57,17 @@ public sealed class RuntimePackageCallbackClient : IDisposable
         return await _responses.ReadRequiredJsonAsync<PackageCallbackSessionResponse>(response, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<bool> CancelAsync(
+        string packageId,
+        string callbackSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreateUri(packageId, $"callbacks/sessions/{Uri.EscapeDataString(callbackSessionId)}"),
+            cancellationToken).ConfigureAwait(false);
+        return await _responses.ReadRequiredJsonAsync<bool>(response, cancellationToken).ConfigureAwait(false);
+    }
+
     private Uri CreateUri(string packageId, string route)
     {
         var connection = _getConnectionInfo()

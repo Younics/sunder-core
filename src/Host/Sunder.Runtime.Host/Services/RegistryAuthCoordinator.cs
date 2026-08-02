@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Hosting;
@@ -12,6 +13,7 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
 {
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, AuthSession> _sessions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _activeLogouts = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly RegistryAuthApiClient _apiClient;
     private readonly RegistryCredentialStore _credentialStore;
@@ -91,12 +93,17 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
     public RuntimeRegistryAuthStartResponse Start(RuntimeRegistryAuthStartRequest request)
     {
         var registryOrigin = RegistryOrigin.Normalize(request.RegistryOrigin);
+        var registryOriginKey = RegistryOrigin.Key(registryOrigin);
         var authorizationOrigin = RegistryOrigin.NormalizeAuthorizationOrigin(request.AuthorizationOrigin, registryOrigin);
         lock (_syncRoot)
         {
             if (_stopping)
             {
                 throw new InvalidOperationException("Registry authorization coordinator is stopping.");
+            }
+            if (_activeLogouts.ContainsKey(registryOriginKey))
+            {
+                throw new InvalidOperationException("Registry authorization cannot start while logout is in progress for this Registry.");
             }
 
             SweepExpiredLocked(_timeProvider.GetUtcNow());
@@ -115,7 +122,7 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
             var callback = new Uri($"http://127.0.0.1:{port}/callback");
             var expiresAtUtc = _timeProvider.GetUtcNow() + _policy.SessionLifetime;
             var launchUrl = RegistryAuthCallbackProtocol.BuildAuthorizeUri(authorizationOrigin, callback, state, challenge, request.DisplayName);
-            var session = new AuthSession(sessionId, registryOrigin, state, verifier, listener, expiresAtUtc);
+            var session = new AuthSession(sessionId, registryOrigin, registryOriginKey, state, verifier, listener, expiresAtUtc);
             _sessions.Add(sessionId, session);
             session.CompletionTask = CompleteAsync(session);
             return new RuntimeRegistryAuthStartResponse(sessionId, registryOrigin.AbsoluteUri, launchUrl.AbsoluteUri, expiresAtUtc);
@@ -153,41 +160,131 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
     public async Task<RuntimeRegistryAuthStatus> GetStatusAsync(string registryOriginValue, CancellationToken cancellationToken)
     {
         var registryOrigin = RegistryOrigin.Normalize(registryOriginValue);
-        var credential = await _credentialStore.GetAsync(registryOrigin, cancellationToken);
-        if (credential is null)
+        var snapshot = await _credentialStore.GetSnapshotAsync(registryOrigin, cancellationToken);
+        if (snapshot is null)
         {
             return SignedOut(registryOrigin);
         }
 
+        var credential = snapshot.Credential;
         if (credential.ExpiresAtUtc <= _timeProvider.GetUtcNow())
         {
-            await _credentialStore.DeleteAsync(registryOrigin, cancellationToken);
-            return SignedOut(registryOrigin, "Registry credential expired.");
+            return await _credentialStore.TryDeleteAsync(registryOrigin, snapshot, cancellationToken)
+                ? SignedOut(registryOrigin, "Registry credential expired.")
+                : await ReadCurrentStatusAsync(registryOrigin, cancellationToken);
         }
 
         using var response = await _apiClient.SendProfileRequestAsync(registryOrigin, credential.AccessToken, cancellationToken);
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            await _credentialStore.DeleteAsync(registryOrigin, cancellationToken);
-            return SignedOut(registryOrigin, "Registry credential is no longer valid.");
+            return await _credentialStore.TryDeleteAsync(registryOrigin, snapshot, cancellationToken)
+                ? SignedOut(registryOrigin, "Registry credential is no longer valid.")
+                : await ReadCurrentStatusAsync(registryOrigin, cancellationToken);
+        }
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            return new RuntimeRegistryAuthStatus(
+                registryOrigin.AbsoluteUri,
+                true,
+                ToUser(credential),
+                credential.ExpiresAtUtc,
+                RuntimeRegistryErrorCode.Forbidden,
+                "Registry credential is valid but cannot access the current-user endpoint.");
         }
 
         var updated = await _apiClient.ReadProfileAsync(credential, response, cancellationToken);
-        await _credentialStore.SetAsync(registryOrigin, updated, cancellationToken);
-        return SignedIn(registryOrigin, updated);
+        return await _credentialStore.TryUpdateAsync(registryOrigin, snapshot, updated, cancellationToken)
+            ? SignedIn(registryOrigin, updated)
+            : await ReadCurrentStatusAsync(registryOrigin, cancellationToken);
     }
 
     public async Task<RuntimeRegistryAuthStatus> LogoutAsync(string registryOriginValue, CancellationToken cancellationToken)
     {
         var registryOrigin = RegistryOrigin.Normalize(registryOriginValue);
-        await _credentialStore.DeleteAsync(registryOrigin, cancellationToken);
+        var registryOriginKey = RegistryOrigin.Key(registryOrigin);
+        AuthSession[] invalidatedSessions;
+        lock (_syncRoot)
+        {
+            _activeLogouts[registryOriginKey] = _activeLogouts.GetValueOrDefault(registryOriginKey) + 1;
+            var now = _timeProvider.GetUtcNow();
+            invalidatedSessions = _sessions.Values
+                .Where(session => session.RegistryOriginKey == registryOriginKey
+                                  && session.Status.State == RuntimeRegistryAuthSessionState.Pending)
+                .ToArray();
+            foreach (var session in invalidatedSessions)
+            {
+                InvalidateForLogoutLocked(session, now);
+            }
+        }
+
+        ExceptionDispatchInfo? failure = null;
+        try
+        {
+            try
+            {
+                var snapshot = await _credentialStore.GetSnapshotAsync(registryOrigin, cancellationToken);
+                if (snapshot is not null)
+                {
+                    using var response = await _apiClient.RevokeCurrentTokenAsync(
+                        registryOrigin,
+                        snapshot.Credential.AccessToken,
+                        cancellationToken);
+                    if (response.StatusCode != HttpStatusCode.Unauthorized)
+                    {
+                        await _apiClient.EnsureSuccessAsync(response, cancellationToken);
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = ExceptionDispatchInfo.Capture(exception);
+            }
+
+            try
+            {
+                await Task.WhenAll(invalidatedSessions.Select(session => session.CompletionTask));
+            }
+            catch (Exception exception)
+            {
+                failure ??= ExceptionDispatchInfo.Capture(exception);
+            }
+
+            try
+            {
+                await _credentialStore.DeleteAsync(registryOrigin, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                failure ??= ExceptionDispatchInfo.Capture(exception);
+            }
+        }
+        finally
+        {
+            lock (_syncRoot)
+            {
+                if (_activeLogouts[registryOriginKey] == 1)
+                {
+                    _activeLogouts.Remove(registryOriginKey);
+                }
+                else
+                {
+                    _activeLogouts[registryOriginKey]--;
+                }
+            }
+        }
+
+        failure?.Throw();
         return SignedOut(registryOrigin);
     }
 
     private async Task CompleteAsync(AuthSession session)
     {
         using var sessionTimeout = new CancellationTokenSource(_policy.SessionLifetime, _timeProvider);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, sessionTimeout.Token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            _shutdown.Token,
+            sessionTimeout.Token,
+            session.Cancellation.Token);
+        RegistryCredential? uncommittedCredential = null;
         try
         {
             using var client = await session.Listener.AcceptTcpClientAsync(timeout.Token);
@@ -200,16 +297,31 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
                 throw new InvalidOperationException("Registry authorization state did not match.");
             }
 
-            var credential = await _apiClient.ExchangeAsync(session.RegistryOrigin, callback.Code, session.CodeVerifier, timeout.Token);
-            await _credentialStore.SetAsync(session.RegistryOrigin, credential, timeout.Token);
-            TrySetTerminalStatus(session, new RuntimeRegistryAuthSessionStatus(
+            timeout.Token.ThrowIfCancellationRequested();
+            if (!IsPending(session)) return;
+
+            // Once the Registry starts exchanging a code, let the bounded HTTP operation finish so
+            // an invalidated session can revoke any token the Registry issued.
+            var credential = await _apiClient.ExchangeAsync(
+                session.RegistryOrigin,
+                callback.Code,
+                session.CodeVerifier,
+                CancellationToken.None);
+            uncommittedCredential = credential;
+            timeout.Token.ThrowIfCancellationRequested();
+            if (!IsPending(session)) return;
+
+            await _credentialStore.SetAsync(session.RegistryOrigin, credential, CancellationToken.None);
+            timeout.Token.ThrowIfCancellationRequested();
+            if (!TrySetTerminalStatus(session, new RuntimeRegistryAuthSessionStatus(
                 session.SessionId,
                 session.RegistryOrigin.AbsoluteUri,
                 RuntimeRegistryAuthSessionState.Succeeded,
                 ToUser(credential),
                 credential.ExpiresAtUtc,
                 RuntimeRegistryErrorCode.None,
-                "Signed in."));
+                "Signed in."))) return;
+            uncommittedCredential = null;
             await RegistryAuthCallbackProtocol.WriteResponseAsync(stream, true, timeout.Token);
         }
         catch (OperationCanceledException)
@@ -235,6 +347,10 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
         }
         finally
         {
+            if (uncommittedCredential is not null)
+            {
+                await RevokeUncommittedCredentialAsync(session, uncommittedCredential);
+            }
             session.Listener.Stop();
         }
     }
@@ -262,6 +378,10 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
         await Task.WhenAll(sessions.Select(session => session.CompletionTask)).WaitAsync(cancellationToken);
         lock (_syncRoot)
         {
+            foreach (var session in sessions)
+            {
+                session.Dispose();
+            }
             _sessions.Clear();
         }
     }
@@ -301,6 +421,49 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
         }
     }
 
+    private bool IsPending(AuthSession session)
+    {
+        lock (_syncRoot)
+        {
+            return session.Status.State == RuntimeRegistryAuthSessionState.Pending;
+        }
+    }
+
+    private static void InvalidateForLogoutLocked(AuthSession session, DateTimeOffset now)
+    {
+        session.Status = session.Status with
+        {
+            State = RuntimeRegistryAuthSessionState.Failed,
+            ErrorCode = RuntimeRegistryErrorCode.Cancelled,
+            Message = "Registry authorization was cancelled by logout.",
+        };
+        session.CompletedAtUtc = now;
+        session.Cancellation.Cancel();
+        session.Listener.Stop();
+    }
+
+    private async Task RevokeUncommittedCredentialAsync(AuthSession session, RegistryCredential credential)
+    {
+        try
+        {
+            using var response = await _apiClient.RevokeCurrentTokenAsync(
+                session.RegistryOrigin,
+                credential.AccessToken,
+                CancellationToken.None);
+            if (response.StatusCode != HttpStatusCode.Unauthorized)
+            {
+                await _apiClient.EnsureSuccessAsync(response, CancellationToken.None);
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                "Revoking the credential from invalidated Registry authorization session {SessionId} failed: {ErrorType}",
+                session.SessionId,
+                exception.GetType().Name);
+        }
+    }
+
     private void SweepExpiredLocked(DateTimeOffset now)
     {
         foreach (var session in _sessions.Values)
@@ -325,7 +488,10 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
                      .Select(pair => pair.Key)
                      .ToArray())
         {
-            _sessions.Remove(sessionId);
+            if (_sessions.Remove(sessionId, out var session))
+            {
+                session.Dispose();
+            }
         }
     }
 
@@ -335,15 +501,33 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
     private static RuntimeRegistryAuthStatus SignedIn(Uri origin, RegistryCredential credential)
         => new(origin.AbsoluteUri, true, ToUser(credential), credential.ExpiresAtUtc);
 
+    private async Task<RuntimeRegistryAuthStatus> ReadCurrentStatusAsync(
+        Uri origin,
+        CancellationToken cancellationToken)
+    {
+        var current = await _credentialStore.GetAsync(origin, cancellationToken);
+        return current is null || current.ExpiresAtUtc <= _timeProvider.GetUtcNow()
+            ? SignedOut(origin)
+            : SignedIn(origin, current);
+    }
+
     private static RuntimeRegistryUser ToUser(RegistryCredential credential)
         => new(credential.UserId ?? string.Empty, credential.DisplayName, credential.Email, credential.Username, credential.AvatarUrl, credential.RequiresUsername);
 
-    private sealed class AuthSession
+    private sealed class AuthSession : IDisposable
     {
-        public AuthSession(string sessionId, Uri registryOrigin, string state, string codeVerifier, TcpListener listener, DateTimeOffset expiresAtUtc)
+        public AuthSession(
+            string sessionId,
+            Uri registryOrigin,
+            string registryOriginKey,
+            string state,
+            string codeVerifier,
+            TcpListener listener,
+            DateTimeOffset expiresAtUtc)
         {
             SessionId = sessionId;
             RegistryOrigin = registryOrigin;
+            RegistryOriginKey = registryOriginKey;
             State = state;
             CodeVerifier = codeVerifier;
             Listener = listener;
@@ -353,6 +537,7 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
 
         public string SessionId { get; }
         public Uri RegistryOrigin { get; }
+        public string RegistryOriginKey { get; }
         public string State { get; }
         public string CodeVerifier { get; }
         public TcpListener Listener { get; }
@@ -360,5 +545,8 @@ internal sealed class RegistryAuthCoordinator : IHostedService, IAsyncDisposable
         public RuntimeRegistryAuthSessionStatus Status { get; set; }
         public DateTimeOffset? CompletedAtUtc { get; set; }
         public Task CompletionTask { get; set; } = Task.CompletedTask;
+        public CancellationTokenSource Cancellation { get; } = new();
+
+        public void Dispose() => Cancellation.Dispose();
     }
 }

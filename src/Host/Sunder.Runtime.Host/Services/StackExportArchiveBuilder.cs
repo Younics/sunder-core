@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
@@ -18,6 +19,7 @@ internal sealed class StackExportArchiveBuilder(
         IReadOnlyList<StackPackageRequirement> packageRequirements,
         IReadOnlyList<StackOwnedFragment> fragments,
         IReadOnlyDictionary<string, SunderStackFragmentPreview> previews,
+        ISunderRpcCallScope callScope,
         long generation,
         IReadOnlyList<string> contributionWarnings,
         CancellationToken cancellationToken)
@@ -52,25 +54,10 @@ internal sealed class StackExportArchiveBuilder(
                         owned.Fragment.FragmentId,
                         Guid.NewGuid().ToString("N"));
                     Directory.CreateDirectory(Path.GetDirectoryName(materializedPath)!);
-                    var contentLease = transfers.AcquireRpcContent(
-                        file.Content,
-                        owned.Provider.PackageId,
-                        RuntimeRpcHostCallerActivation.StackPrincipalId,
-                        generation);
-                    if (contentLease is null)
+                    await using (var source = await callScope.OpenContentAsync(
+                                     file.Content,
+                                     cancellationToken).ConfigureAwait(false))
                     {
-                        throw new InvalidDataException(
-                            $"Stack payload '{file.RelativePath}' content is stale, exhausted, or unavailable to the Host.");
-                    }
-                    try
-                    {
-                        await using var source = new FileStream(
-                            contentLease.FilePath,
-                            FileMode.Open,
-                            FileAccess.Read,
-                            FileShare.Read | FileShare.Delete,
-                            64 * 1024,
-                            FileOptions.Asynchronous | FileOptions.SequentialScan);
                         await using var destination = new FileStream(
                             materializedPath,
                             FileMode.CreateNew,
@@ -85,10 +72,6 @@ internal sealed class StackExportArchiveBuilder(
                             copiedPayloadBytes,
                             cancellationToken);
                         await destination.FlushAsync(cancellationToken);
-                    }
-                    finally
-                    {
-                        transfers.ReleaseRpcContent(contentLease);
                     }
                     if (new FileInfo(materializedPath).Length != file.Content.Length)
                     {
@@ -367,6 +350,7 @@ internal sealed class StackExportArchiveBuilder(
                 InputId = input.InputId,
                 Label = input.Label,
                 Description = input.Description,
+                Sensitivity = input.Sensitivity.ToString(),
                 DefaultValue = input.DefaultValue,
                 Required = input.Required,
             }).ToArray(),

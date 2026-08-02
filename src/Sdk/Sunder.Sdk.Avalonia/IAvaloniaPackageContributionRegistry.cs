@@ -5,7 +5,7 @@ using Sunder.Sdk.Compatibility;
 namespace Sunder.Sdk.Avalonia;
 
 /// <summary>Registers Avalonia App contributions during package activation.</summary>
-/// <remarks>Registration occurs on the UI thread. The App creates controls from the package App service provider and owns them for the activation lifecycle.</remarks>
+/// <remarks>Registration has no UI-thread guarantee and must not create or access controls. The App creates controls from the package App service provider on the UI thread and owns them for the activation lifecycle.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.ContributionsV1)]
 public interface IAvaloniaPackageContributionRegistry : ISunderAppContributionRegistry
 {

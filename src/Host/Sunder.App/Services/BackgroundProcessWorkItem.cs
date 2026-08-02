@@ -106,7 +106,7 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
             State,
             StatusText,
             ProgressPercent,
-            Request.CanCancel,
+            Request.CanCancel && State is BackgroundProcessState.Queued or BackgroundProcessState.Running,
             Request.Metadata!,
             ErrorMessage,
             QueuedAtUtc,

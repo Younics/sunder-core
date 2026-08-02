@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { FrameDecoder, encodeFrame } from "../src/framing";
+import { formatUtcTimestamp } from "../src/timestamp";
 import type { JsonValue } from "../src/types";
 
 const packageIdentity = {
@@ -99,6 +100,80 @@ test("RpcClient mock Host round trip and unsolicited or post-terminal responses 
   }
 });
 
+test("worker emits seven-digit outbound deadlines and awaits shutdown lifecycle", async () => {
+  const deadline = startWorker("outbound-deadline");
+  try {
+    await handshake(deadline);
+    const request = await deadline.messages.next();
+    assert.equal(request.type, "worker.invoke");
+    assert.equal(request.deadlineUtc, "2030-01-02T03:04:05.6780000Z");
+    send(deadline, { type: "host.result", id: request.id!, value: null });
+    await waitForStderr(deadline, "OUTBOUND_DEADLINE_OK");
+    send(deadline, { type: "host.shutdown", shutdownId: "deadline-stop", reason: "test" });
+    assert.equal((await deadline.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    deadline.child.kill("SIGKILL");
+  }
+
+  const lifecycle = startWorker("shutdown-lifecycle");
+  try {
+    await handshake(lifecycle);
+    send(lifecycle, { type: "host.shutdown", shutdownId: "lifecycle-stop", reason: "release" });
+    assert.equal((await lifecycle.messages.next()).type, "worker.shutdown-ack");
+    assert.match(lifecycle.stderr(), /SHUTDOWN_DONE:release/u);
+    assert.equal(await exitCode(lifecycle.child), 0);
+  } finally {
+    lifecycle.child.kill("SIGKILL");
+  }
+});
+
+test("Host is sole deadline authority for inbound and invocation client calls", async () => {
+  const inbound = startWorker();
+  try {
+    await handshake(inbound);
+    const expired = object(invocation("expired-inbound", "unary", "wait"));
+    const context = object(expired.context);
+    send(inbound, {
+      ...expired,
+      context: { ...context, deadlineUtc: "2020-01-02T03:04:05.6780000Z" },
+    });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    assert.equal(inbound.messages.count, 0, "worker must wait for authenticated Host cancellation");
+    send(inbound, { type: "host.cancel", id: "expired-inbound" });
+    const cancelled = await inbound.messages.next();
+    assert.equal(cancelled.type, "worker.error");
+    assert.equal(object(cancelled.error).kind, "cancelled");
+    send(inbound, { type: "host.shutdown", shutdownId: "deadline-inbound-stop", reason: "test" });
+    assert.equal((await inbound.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    inbound.child.kill("SIGKILL");
+  }
+
+  const outbound = startWorker("outbound-expired-deadline");
+  try {
+    await handshake(outbound);
+    const request = await outbound.messages.next();
+    assert.equal(request.type, "worker.invoke");
+    assert.equal(request.deadlineUtc, "2020-01-02T03:04:05.6780000Z");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    assert.equal(outbound.messages.count, 0, "worker must not race the Host with worker.cancel");
+    send(outbound, {
+      type: "host.error",
+      id: request.id!,
+      error: {
+        kind: "deadline-exceeded",
+        code: "rpc.call.deadline-exceeded",
+        message: "The RPC call deadline elapsed.",
+      },
+    });
+    await waitForStderr(outbound, "OUTBOUND_HOST_DEADLINE_OK");
+    send(outbound, { type: "host.shutdown", shutdownId: "deadline-outbound-stop", reason: "test" });
+    assert.equal((await outbound.messages.next()).type, "worker.shutdown-ack");
+  } finally {
+    outbound.child.kill("SIGKILL");
+  }
+});
+
 test("worker rejects missing required values and bounded stream queue overflow", async () => {
   const missing = startWorker();
   try {
@@ -126,6 +201,27 @@ test("worker rejects missing required values and bounded stream queue overflow",
   }
 });
 
+test("worker applies separate Host-matched inbound and outbound concurrency limits", async () => {
+  const inbound = startWorker("inbound-limit");
+  try {
+    await handshake(inbound);
+    send(inbound, invocation("inbound1", "unary", "wait"));
+    send(inbound, invocation("inbound2", "unary", "wait"));
+    assert.equal(await exitCode(inbound.child), 70);
+  } finally {
+    inbound.child.kill("SIGKILL");
+  }
+
+  const outbound = startWorker("outbound-limit");
+  try {
+    await handshake(outbound);
+    assert.equal((await outbound.messages.next()).type, "worker.watch");
+    assert.equal(await exitCode(outbound.child), 70);
+  } finally {
+    outbound.child.kill("SIGKILL");
+  }
+});
+
 test("provider content client binds register, open, and discard to its Host invocation", async () => {
   const root = await mkdtemp(join(tmpdir(), "sunder-worker-content-"));
   const providerPath = join(root, "provider.txt");
@@ -147,6 +243,7 @@ test("provider content client binds register, open, and discard to its Host invo
     assert.equal(register.type, "worker.content-register");
     assert.equal(register.invocationId, "content1");
     assert.equal(register.filePath, providerPath);
+    assert.equal(object(register.options).expiresAtUtc, "2030-01-02T03:04:05.6780000Z");
     send(worker, { type: "host.result", id: register.id!, value: providerReference });
 
     const open = await worker.messages.next();
@@ -229,7 +326,7 @@ function invocation(id: string, kind: "unary" | "server-stream", methodId: strin
     context: {
       callerPackageId: "caller.package",
       callerPackageVersion: "1.0.0",
-      deadlineUtc: new Date(Date.now() + 30_000).toISOString(),
+      deadlineUtc: formatUtcTimestamp(new Date(Date.now() + 30_000)),
       callDepth: 1,
       provider: {
         packageId: packageIdentity.packageId,
@@ -254,7 +351,7 @@ function contentReference(id: string, length: number): JsonValue {
     sha256: "a".repeat(64),
     mediaType: "text/plain",
     fileName: `${id}.txt`,
-    expiresAtUtc: new Date(Date.now() + 30_000).toISOString(),
+    expiresAtUtc: formatUtcTimestamp(new Date(Date.now() + 30_000)),
     repeatability: "single-use",
   };
 }
@@ -292,6 +389,10 @@ class MessageQueue {
   readonly #decoder = new FrameDecoder();
   readonly #values: Array<Readonly<Record<string, JsonValue>>> = [];
   readonly #waiters: Array<(value: Readonly<Record<string, JsonValue>>) => void> = [];
+
+  public get count(): number {
+    return this.#values.length;
+  }
 
   public pushChunk(chunk: Buffer): void {
     for (const value of this.#decoder.push(chunk)) {

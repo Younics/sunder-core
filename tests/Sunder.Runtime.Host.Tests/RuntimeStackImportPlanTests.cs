@@ -261,6 +261,7 @@ public sealed class RuntimeStackImportPlanTests
         Assert.True(preview.Success, string.Join(Environment.NewLine, preview.Errors));
         Assert.Equal(2, preview.Actions.Select(action => action.ActionId).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(2, preview.RequiredInputs.Select(input => input.InputId).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(preview.RequiredInputs, input => Assert.Equal(RuntimeStackInputSensitivity.Secret, input.Sensitivity));
         var result = await fixture.Service.ImportAsync(new RuntimeStackImportRequest(
             preview.PlanId!,
             ["one-fragment", "two-fragment"],
@@ -545,9 +546,7 @@ public sealed class RuntimeStackImportPlanTests
                         descriptor.Version,
                         descriptor.Sha256,
                         descriptor,
-                        SunderStackContributorRpc.CreateHandler(
-                            contributor,
-                            UnavailableRuntimeRpcContentClient.Instance),
+                        SunderStackContributorRpc.CreateHandler(contributor),
                         declaration),
                 },
                 RpcContracts = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal)
@@ -593,10 +592,10 @@ public sealed class RuntimeStackImportPlanTests
                     : [new StackImportAction(ActionId, "Import " + ContributorId, StackImportActionKind.Create)],
                 duplicateInput
                     ? [
-                        new StackRequiredInputDescriptor(InputId, "Input"),
-                        new StackRequiredInputDescriptor(InputId, "Duplicate input"),
+                        new StackRequiredInputDescriptor(InputId, "Input", StackValueSensitivity.Secret),
+                        new StackRequiredInputDescriptor(InputId, "Duplicate input", StackValueSensitivity.Secret),
                     ]
-                    : [new StackRequiredInputDescriptor(InputId, "Input")],
+                    : [new StackRequiredInputDescriptor(InputId, "Input", StackValueSensitivity.Secret)],
                 [],
                 []));
 

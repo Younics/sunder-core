@@ -54,6 +54,7 @@ internal static class SunderStackManifestProjection
             InputId = source.InputId,
             Label = source.Label,
             Description = source.Description,
+            Sensitivity = source.Sensitivity,
             DefaultValue = source.DefaultValue,
             Required = source.Required,
         };

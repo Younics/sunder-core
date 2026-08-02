@@ -1,328 +1,480 @@
-using Sunder.Sdk.Packaging;
+using System.CommandLine;
+using System.CommandLine.Help;
+using System.CommandLine.Parsing;
+using System.Globalization;
 
 namespace Sunder.Cli;
 
-internal static class CliCommandParser
+internal sealed partial class CliCommandParser
 {
     private const int MaximumPageSize = 100;
-    public static CliInvocation Parse(IReadOnlyList<string> arguments)
+    private readonly Dictionary<Command, Func<ParseResult, CliCommand>> _bindings = [];
+    private readonly Dictionary<Command, string> _paths = [];
+    private readonly Dictionary<Command, string> _helpPaths = [];
+    private readonly HelpOption _helpOption = new("--help", ["-h"])
     {
-        var args = arguments.ToList();
-        var help = TakeFlag(args, "--help") | TakeFlag(args, "-h");
-        if (help || args.Count == 0 || args.All(arg => string.Equals(arg, "--json", StringComparison.OrdinalIgnoreCase)))
-        {
-            return new(new HelpCommand(), TakeFlag(args, "--json"), null);
-        }
-
-        var options = CliOptions.Parse(args);
-        if (args.Count == 0)
-        {
-            return new(new HelpCommand(), options.Json, null);
-        }
-        var family = TakeFirst(args).ToLowerInvariant();
-        var command = family switch
-        {
-            "system" => ParseSystem(args),
-            "runtime" => ParseRuntime(args),
-            "auth" => ParseAuth(args),
-            "search" => ParseSearchPackages(args),
-            "info" => ParsePackageInfo(args),
-            "list" => NoArgs(args, new ListInstalledCommand(), "sunder list"),
-            "install" => ParseInstall(args),
-            "update" => ParseUpdate(args),
-            "publish" => ParsePublishPackage(args),
-            "yank" => ParseYank(args, true),
-            "unyank" => ParseYank(args, false),
-            "deprecate" => ParseDeprecation(args, false),
-            "undeprecate" => ParseDeprecation(args, true),
-            "dist-tag" => ParseDistTag(args),
-            "validate" => new ValidatePackageCommand(One(args, "sunder validate <package.sunderpkg>")),
-            "package" => ParsePackage(args),
-            "stack" or "stacks" => ParseStack(args),
-            _ => throw Usage($"Unknown command '{family}'.")
-        };
-        EnsureDevelopmentRegistry(command, options.RegistryApiUrl);
-        return new(command, options.Json, options);
-    }
-
-    private static CliCommand ParseSystem(List<string> args)
+        Description = "Show help and usage information.",
+        Recursive = true,
+    };
+    private readonly Option<bool> _jsonOption = Flag("--json", "Emit one versioned JSON result.", recursive: true);
+    private readonly Option<string?> _registryApiUrlOption = ValueOption("--registry-api-url", "Registry API base URL.", "url", recursive: true);
+    private readonly Option<string?> _registryWebUrlOption = ValueOption("--registry-web-url", "Registry web URL used for browser sign-in.", "url", recursive: true);
+    private readonly Option<string?> _runtimeUrlOption = ValueOption("--runtime-url", "Authenticated local Runtime base URL.", "url", recursive: true);
+    private readonly Option<TimeSpan?> _timeoutOption;
+    private readonly ParserConfiguration _parserConfiguration = new()
     {
-        if (args.Count == 1 && string.Equals(args[0], "status", StringComparison.OrdinalIgnoreCase))
-        {
-            return new SystemStatusCommand();
-        }
-        throw Usage("Usage: sunder system status");
-    }
+        EnablePosixBundling = false,
+        ResponseFileTokenReplacer = null,
+    };
 
-    private static CliCommand ParseRuntime(List<string> args)
+    public CliCommandParser()
     {
-        if (args.Count > 0 && string.Equals(args[0], "reset", StringComparison.OrdinalIgnoreCase))
+        _timeoutOption = new Option<TimeSpan?>("--timeout")
         {
-            args.RemoveAt(0);
-            var yes = TakeFlag(args, "--yes");
-            EnsureEmpty(args, "sunder runtime reset --yes");
-            if (!yes)
+            Description = "Request timeout, such as 15m, 900s, 900, or 00:15:00.",
+            HelpName = "duration",
+            Recursive = true,
+            Arity = ArgumentArity.ExactlyOne,
+            CustomParser = result =>
             {
-                throw Usage("Runtime reset is destructive. Re-run as 'sunder runtime reset --yes'.");
-            }
+                if (result.Tokens.Count != 1)
+                {
+                    result.AddError("Option '--timeout' requires one value.");
+                    return null;
+                }
 
-            return new RuntimeResetCommand(yes);
-        }
-        throw Usage("Usage: sunder runtime reset --yes");
-    }
+                if (CliOptions.TryParseTimeout(result.Tokens[0].Value, out var timeout, out var error))
+                {
+                    return timeout;
+                }
 
-    private static CliCommand ParseAuth(List<string> args)
-        => args.Count == 1 ? args[0].ToLowerInvariant() switch
-        {
-            "login" => new AuthLoginCommand(),
-            "status" => new AuthStatusCommand(),
-            "logout" => new AuthLogoutCommand(),
-            _ => throw Usage("Usage: sunder auth <login|status|logout>")
-        } : throw Usage("Usage: sunder auth <login|status|logout>");
-
-    private static CliCommand ParseSearchPackages(List<string> args)
-    {
-        var skip = TakeInt(args, "--skip", 0);
-        var take = Math.Clamp(TakeInt(args, "--take", 20), 1, MaximumPageSize);
-        return new SearchPackagesCommand(ZeroOrOne(args, "sunder search [query] [--skip <count>] [--take <count>]"), skip, take);
-    }
-
-    private static CliCommand ParsePackageInfo(List<string> args)
-    {
-        var version = TakeOption(args, "--version");
-        return new PackageInfoCommand(
-            PackageIdArgument(One(args, "sunder info <package-id> [--version <version>]")),
-            version is null ? null : SemanticVersionArgument(version));
-    }
-
-    private static CliCommand ParseInstall(List<string> args)
-    {
-        var file = TakeOption(args, "--file");
-        var version = TakeOption(args, "--version");
-        var explicitTag = TakeOption(args, "--tag");
-        var allowDowngrade = TakeFlag(args, "--allow-downgrade");
-        var reinstall = TakeFlag(args, "--reinstall");
-        if (version is not null && explicitTag is not null)
-        {
-            throw Usage("Use either '--version' or '--tag', not both.");
-        }
-        if (file is not null)
-        {
-            if (version is not null || explicitTag is not null || args.Count != 0)
-            {
-                throw Usage("Usage: sunder install --file <package.sunderpkg> [--allow-downgrade] [--reinstall]");
-            }
-            return new InstallLocalPackageCommand(file, allowDowngrade, reinstall);
-        }
-        return new InstallRegistryPackageCommand(
-            PackageIdArgument(One(args, "sunder install <package-id> [--version <version>|--tag <tag>] [--allow-downgrade] [--reinstall]")),
-            version is null ? null : SemanticVersionArgument(version),
-            version is null ? explicitTag ?? "latest" : null,
-            allowDowngrade,
-            reinstall);
-    }
-
-    private static CliCommand ParseUpdate(List<string> args)
-    {
-        var all = TakeFlag(args, "--all");
-        var prerelease = TakeFlag(args, "--include-prerelease");
-        var packageId = ZeroOrOne(args, "sunder update <package-id|--all> [--include-prerelease]");
-        if (all == (packageId is not null))
-        {
-            throw Usage("Usage: sunder update <package-id|--all> [--include-prerelease]");
-        }
-        return new UpdatePackagesCommand(packageId is null ? null : PackageIdArgument(packageId), prerelease);
-    }
-
-    private static CliCommand ParsePublishPackage(List<string> args)
-    {
-        var file = RequiredOption(args, "--file", "sunder publish --file <package.sunderpkg> [--no-latest] [--dev-local]");
-        var command = new PublishPackageCommand(file, !TakeFlag(args, "--no-latest"), TakeFlag(args, "--dev-local"));
-        EnsureEmpty(args, "sunder publish --file <package.sunderpkg> [--no-latest] [--dev-local]");
-        return command;
-    }
-
-    private static CliCommand ParseYank(List<string> args, bool value)
-    {
-        EnsureCount(args, 2, $"sunder {(value ? "yank" : "unyank")} <package-id> <version>");
-        return new SetYankCommand(PackageIdArgument(args[0]), SemanticVersionArgument(args[1]), value);
-    }
-
-    private static CliCommand ParseDeprecation(List<string> args, bool clear)
-    {
-        var message = clear ? null : TakeOption(args, "--message");
-        EnsureCount(args, 2, clear
-            ? "sunder undeprecate <package-id> <version>"
-            : "sunder deprecate <package-id> <version> --message <message>");
-        if (!clear && string.IsNullOrWhiteSpace(message))
-        {
-            throw Usage("Usage: sunder deprecate <package-id> <version> --message <message>");
-        }
-        return new SetDeprecationCommand(PackageIdArgument(args[0]), SemanticVersionArgument(args[1]), message);
-    }
-
-    private static CliCommand ParseDistTag(List<string> args)
-    {
-        if (args.Count == 0) throw Usage("Usage: sunder dist-tag <list|set|delete> ...");
-        var action = TakeFirst(args).ToLowerInvariant();
-        return action switch
-        {
-            "list" => new ListDistTagsCommand(PackageIdArgument(One(args, "sunder dist-tag list <package-id>"))),
-            "set" => ParseSetTag(args),
-            "delete" or "rm" => ParseDeleteTag(args),
-            _ => throw Usage("Usage: sunder dist-tag <list|set|delete> ...")
+                result.AddError(error!);
+                return null;
+            },
         };
+        RejectRepeated(_timeoutOption);
+
+        Root = CreateCommand("sunder", "Manage the Sunder Runtime, packages, Stacks, Registry, and development artifacts.");
+        _helpPaths.Add(Root, string.Empty);
+        Root.Options.Add(_helpOption);
+        Root.Options.Add(_jsonOption);
+        Root.Options.Add(_registryApiUrlOption);
+        Root.Options.Add(_registryWebUrlOption);
+        Root.Options.Add(_runtimeUrlOption);
+        Root.Options.Add(_timeoutOption);
+
+        BuildRuntimeCommands();
+        BuildPackageCommands();
+        BuildStackCommands();
+        BuildRegistryCommands();
+        BuildDeveloperCommands();
+        BuildConfigCommands();
+        Bind(Leaf(Root, "version", "Show the Sunder CLI version."), "version", _ => new VersionCommand());
     }
 
-    private static CliCommand ParseSetTag(List<string> args)
-    {
-        EnsureCount(args, 3, "sunder dist-tag set <package-id> <tag> <version>");
-        return new SetDistTagCommand(PackageIdArgument(args[0]), args[1], SemanticVersionArgument(args[2]));
-    }
+    public Command Root { get; }
 
-    private static CliCommand ParseDeleteTag(List<string> args)
+    public CliCommandParseResult Parse(IReadOnlyList<string> arguments)
     {
-        EnsureCount(args, 2, "sunder dist-tag delete <package-id> <tag>");
-        return new SetDistTagCommand(PackageIdArgument(args[0]), args[1], null);
-    }
-
-    private static CliCommand ParsePackage(List<string> args)
-    {
-        if (args.Count > 0 && string.Equals(TakeFirst(args), "validate", StringComparison.OrdinalIgnoreCase))
+        var parseResult = Root.Parse(arguments, _parserConfiguration);
+        var selected = parseResult.CommandResult.Command;
+        var json = parseResult.GetResult(_jsonOption) is OptionResult { Implicit: false };
+        var helpRequested = parseResult.GetResult(_helpOption) is OptionResult { Implicit: false };
+        if (helpRequested || arguments.Count == 0)
         {
-            return new ValidatePackageCommand(One(args, "sunder package validate <package.sunderpkg>"));
+            return new CliCommandParseResult(null, [], selected, ShowHelp: true, json);
         }
-        throw Usage("Usage: sunder package validate <package.sunderpkg>");
-    }
 
-    private static CliCommand ParseStack(List<string> args)
-    {
-        if (args.Count == 0) throw Usage("Usage: sunder stack <search|info|download|publish|update|delete|use|inspect|validate> ...");
-        return TakeFirst(args).ToLowerInvariant() switch
+        var unknownOptions = FindUnknownOptions(arguments, selected);
+        if (unknownOptions.Count > 0)
         {
-            "search" => ParseStackSearch(args),
-            "info" => new StackInfoCommand(One(args, "sunder stack info <stack-id>")),
-            "download" => ParseStackDownload(args),
-            "publish" => ParseStackPublish(args),
-            "update" => ParseStackUpdate(args),
-            "delete" or "rm" => new DeleteStackCommand(One(args, "sunder stack delete <stack-id>")),
-            "use" => new UseStackCommand(One(args, "sunder stack use <stack-id>")),
-            "inspect" or "validate" => new ValidateStackCommand(One(args, "sunder stack inspect <stack.sunderstack>")),
-            _ => throw Usage("Usage: sunder stack <search|info|download|publish|update|delete|use|inspect|validate> ...")
-        };
-    }
-
-    private static CliCommand ParseStackSearch(List<string> args)
-    {
-        var skip = TakeInt(args, "--skip", 0);
-        var take = Math.Clamp(TakeInt(args, "--take", 20), 1, MaximumPageSize);
-        return new SearchStacksCommand(ZeroOrOne(args, "sunder stack search [query] [--skip <count>] [--take <count>]"), skip, take);
-    }
-
-    private static CliCommand ParseStackDownload(List<string> args)
-    {
-        var output = TakeOption(args, "--output") ?? TakeOption(args, "-o");
-        var force = TakeFlag(args, "--force");
-        return new DownloadStackCommand(One(args, "sunder stack download <stack-id> [--output <file>] [--force]"), output, force);
-    }
-
-    private static CliCommand ParseStackPublish(List<string> args)
-    {
-        var file = RequiredOption(args, "--file", "sunder stack publish --file <stack.sunderstack> [--dev-local]");
-        var result = new PublishStackCommand(file, TakeFlag(args, "--dev-local"));
-        EnsureEmpty(args, "sunder stack publish --file <stack.sunderstack> [--dev-local]");
-        return result;
-    }
-
-    private static CliCommand ParseStackUpdate(List<string> args)
-    {
-        var file = RequiredOption(args, "--file", "sunder stack update <stack-id> --file <stack.sunderstack>");
-        return new UpdateStackCommand(One(args, "sunder stack update <stack-id> --file <stack.sunderstack>"), file);
-    }
-
-    private static T NoArgs<T>(List<string> args, T command, string usage) where T : CliCommand
-    {
-        EnsureEmpty(args, usage);
-        return command;
-    }
-
-    private static string TakeFirst(List<string> args)
-    {
-        var value = args[0];
-        args.RemoveAt(0);
-        return value;
-    }
-
-    private static bool TakeFlag(List<string> args, string name)
-    {
-        var matches = args.Select((value, index) => (value, index)).Where(item => string.Equals(item.value, name, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (matches.Length > 1) throw Usage($"Option '{name}' may only be specified once.");
-        if (matches.Length == 0) return false;
-        args.RemoveAt(matches[0].index);
-        return true;
-    }
-
-    private static string? TakeOption(List<string> args, string name)
-    {
-        var indexes = args.Select((value, index) => (value, index)).Where(item => string.Equals(item.value, name, StringComparison.OrdinalIgnoreCase)).Select(item => item.index).ToArray();
-        if (indexes.Length > 1) throw Usage($"Option '{name}' may only be specified once.");
-        if (indexes.Length == 0) return null;
-        var index = indexes[0];
-        if (index + 1 >= args.Count || args[index + 1].StartsWith("-", StringComparison.Ordinal)) throw Usage($"Option '{name}' requires a value.");
-        var value = args[index + 1];
-        args.RemoveRange(index, 2);
-        return value;
-    }
-
-    private static string RequiredOption(List<string> args, string name, string usage)
-        => TakeOption(args, name) ?? throw Usage($"Usage: {usage}");
-
-    private static int TakeInt(List<string> args, string name, int fallback)
-    {
-        var value = TakeOption(args, name);
-        if (value is null) return fallback;
-        if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var result) || result < 0)
-            throw Usage($"Option '{name}' must be a non-negative integer.");
-        return result;
-    }
-
-    private static string One(List<string> args, string usage)
-    {
-        EnsureCount(args, 1, usage);
-        return args[0];
-    }
-
-    private static string? ZeroOrOne(List<string> args, string usage)
-    {
-        if (args.Count > 1) throw Usage($"Usage: {usage}");
-        return args.Count == 0 ? null : args[0];
-    }
-
-    private static void EnsureEmpty(List<string> args, string usage) => EnsureCount(args, 0, usage);
-
-    private static void EnsureCount(List<string> args, int count, string usage)
-    {
-        if (args.Count != count || args.Any(string.IsNullOrWhiteSpace)) throw Usage($"Usage: {usage}");
-    }
-
-    private static string PackageIdArgument(string value)
-        => PackageId.TryParse(value, out _)
-            ? value
-            : throw Usage($"Package id '{value}' must be a lowercase dot-separated ASCII id of at most {PackageId.MaximumLength} characters.");
-
-    private static string SemanticVersionArgument(string value)
-        => SemanticVersion.TryParse(value, out _)
-            ? value
-            : throw Usage($"Version '{value}' must be strict SemVer 2.0 and at most {SemanticVersion.MaximumLength} characters.");
-
-    private static void EnsureDevelopmentRegistry(CliCommand command, Uri registryApiUrl)
-    {
-        if (command is PublishPackageCommand { DevLocal: true } or PublishStackCommand { DevLocal: true }
-            && !registryApiUrl.IsLoopback)
-        {
-            throw Usage("Option '--dev-local' requires a loopback Registry API URL.");
+            return new CliCommandParseResult(null, unknownOptions, selected, ShowHelp: false, json);
         }
+
+        var errors = parseResult.Errors
+            .Select(error => error.Message)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (errors.Length > 0)
+        {
+            return new CliCommandParseResult(null, errors, selected, ShowHelp: false, json);
+        }
+        if (!_bindings.ContainsKey(selected))
+        {
+            return new CliCommandParseResult(null, [], selected, ShowHelp: true, json);
+        }
+
+        var command = _bindings[selected](parseResult);
+        var invocation = new CliInvocation(
+            command,
+            _paths[selected],
+            json,
+            new CliOptionOverrides(
+                parseResult.GetValue(_registryApiUrlOption),
+                parseResult.GetValue(_registryWebUrlOption),
+                parseResult.GetValue(_runtimeUrlOption),
+                parseResult.GetValue(_timeoutOption)));
+        return new CliCommandParseResult(invocation, [], selected, ShowHelp: false, json);
     }
 
-    private static CliUsageException Usage(string message) => new(message);
+    public string FormatHelp(Command command)
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        var path = GetPath(command);
+        var arguments = string.IsNullOrEmpty(path)
+            ? new[] { "--help" }
+            : [.. path.Split(' ', StringSplitOptions.RemoveEmptyEntries), "--help"];
+        var result = Root.Parse(arguments, _parserConfiguration);
+        result.Invoke(new InvocationConfiguration
+        {
+            EnableDefaultExceptionHandler = false,
+            Output = writer,
+            Error = writer,
+        });
+        return writer.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd();
+    }
+
+    public string GetPath(Command command) => _helpPaths[command];
+
+    private void BuildRuntimeCommands()
+    {
+        var runtime = Group(Root, "runtime", "Inspect and manage the local Sunder Runtime.");
+        Bind(Leaf(runtime, "status", "Show authenticated Runtime status."), "runtime status", _ => new RuntimeStatusCommand());
+        AddRuntimeLifecycleCommand(runtime, "start", RuntimeLifecycleAction.Start);
+        AddRuntimeLifecycleCommand(runtime, "stop", RuntimeLifecycleAction.Stop);
+        AddRuntimeLifecycleCommand(runtime, "restart", RuntimeLifecycleAction.Restart);
+
+        var reset = Leaf(runtime, "reset", "Drain the Runtime and delete validated local Runtime V1 state.");
+        var yes = Flag("--yes", "Confirm the destructive reset.");
+        reset.Options.Add(yes);
+        reset.Validators.Add(result =>
+        {
+            if (!result.GetValue(yes)) result.AddError("Runtime reset is destructive. Specify '--yes' to continue.");
+        });
+        Bind(reset, "runtime reset", result => new RuntimeResetCommand(result.GetValue(yes)));
+    }
+
+    private void BuildPackageCommands()
+    {
+        var package = Group(Root, "package", "Browse, install, list, and update packages.");
+        AddPagedSearch(package, "search", "Search Registry packages.", "package search", (query, skip, take) => new SearchPackagesCommand(query, skip, take));
+
+        var info = Leaf(package, "info", "Show Registry package details.");
+        var infoId = PackageIdArgument();
+        var infoVersion = SemanticVersionOption("--version", "Show one exact package version.");
+        info.Arguments.Add(infoId);
+        info.Options.Add(infoVersion);
+        Bind(info, "package info", result => new PackageInfoCommand(result.GetRequiredValue(infoId), result.GetValue(infoVersion)));
+
+        Bind(Leaf(package, "list", "List packages installed in the local Runtime."), "package list", _ => new ListInstalledCommand());
+        AddPackageStatusCommand(package);
+        BuildPackageInstall(package);
+        BuildPackageUpdate(package);
+        BuildPackageSourceCommands(package);
+        AddPackageEnabledCommand(package, "enable", enabled: true);
+        AddPackageEnabledCommand(package, "disable", enabled: false);
+        BuildPackageUninstall(package);
+        BuildPackageConfigCommands(package);
+        BuildPackageSecretCommands(package);
+        BuildPackageAuthCommands(package);
+    }
+
+    private void BuildPackageInstall(Command package)
+    {
+        var install = Leaf(package, "install", "Install a Registry package or a local package archive.");
+        var packageId = PackageIdArgument(required: false);
+        var file = ValueOption("--file", "Install a local .sunderpkg archive.", "path");
+        var version = SemanticVersionOption("--version", "Install one exact Registry version.");
+        var tag = ValueOption("--tag", "Install a Registry dist tag. Defaults to latest.", "tag");
+        var allowDowngrade = Flag("--allow-downgrade", "Allow replacing a newer installed version.");
+        var reinstall = Flag("--reinstall", "Allow reinstalling the same version.");
+        install.Arguments.Add(packageId);
+        install.Options.Add(file);
+        install.Options.Add(version);
+        install.Options.Add(tag);
+        install.Options.Add(allowDowngrade);
+        install.Options.Add(reinstall);
+        install.Validators.Add(result =>
+        {
+            var id = result.GetResult(packageId)?.Tokens.FirstOrDefault()?.Value;
+            var path = result.GetResult(file)?.Tokens.FirstOrDefault()?.Value;
+            var exactVersion = result.GetResult(version)?.Tokens.FirstOrDefault()?.Value;
+            var explicitTag = result.GetResult(tag)?.Tokens.FirstOrDefault()?.Value;
+            if ((id is null) == (path is null))
+                result.AddError("Specify exactly one package id or '--file <path>'.");
+            if (exactVersion is not null && explicitTag is not null)
+                result.AddError("Options '--version' and '--tag' cannot be used together.");
+            if (path is not null && (exactVersion is not null || explicitTag is not null))
+                result.AddError("Options '--version' and '--tag' are only valid for Registry installs.");
+        });
+        Bind(install, "package install", result =>
+        {
+            var path = result.GetValue(file);
+            if (path is not null)
+                return new InstallLocalPackageCommand(path, result.GetValue(allowDowngrade), result.GetValue(reinstall));
+            var exactVersion = result.GetValue(version);
+            return new InstallRegistryPackageCommand(
+                result.GetRequiredValue(packageId),
+                exactVersion,
+                exactVersion is null ? result.GetValue(tag) ?? "latest" : null,
+                result.GetValue(allowDowngrade),
+                result.GetValue(reinstall));
+        });
+    }
+
+    private void AddPackageEnabledCommand(Command package, string name, bool enabled)
+    {
+        var command = Leaf(package, name, enabled
+            ? "Enable an installed package."
+            : "Disable an installed package.");
+        var packageId = PackageIdArgument();
+        command.Arguments.Add(packageId);
+        Bind(command, $"package {name}", result => new SetPackageEnabledCommand(
+            result.GetRequiredValue(packageId),
+            enabled));
+    }
+
+    private void BuildPackageUninstall(Command package)
+    {
+        var uninstall = Leaf(package, "uninstall", "Plan or uninstall an installed package.");
+        var packageId = PackageIdArgument();
+        var cascade = Flag("--cascade", "Allow removal of installed packages that depend on this package.");
+        var yes = Flag("--yes", "Apply the exact Runtime-generated uninstall plan.");
+        var dryRun = Flag("--dry-run", "Show the uninstall plan without changing installed state.");
+        uninstall.Arguments.Add(packageId);
+        uninstall.Options.Add(cascade);
+        uninstall.Options.Add(yes);
+        uninstall.Options.Add(dryRun);
+        uninstall.Validators.Add(result =>
+        {
+            if (result.GetValue(yes) == result.GetValue(dryRun))
+                result.AddError("Specify exactly one of '--yes' or '--dry-run'.");
+            if (result.GetValue(dryRun) && result.GetValue(cascade))
+                result.AddError("Option '--cascade' is only valid when applying an uninstall with '--yes'.");
+        });
+        Bind(uninstall, "package uninstall", result => new UninstallPackageCommand(
+            result.GetRequiredValue(packageId),
+            result.GetValue(cascade),
+            result.GetValue(dryRun)));
+    }
+
+    private void BuildStackCommands()
+    {
+        var stack = Group(Root, "stack", "Browse, download, and open Sunder Stacks.");
+        AddPagedSearch(stack, "search", "Search Registry Stacks.", "stack search", (query, skip, take) => new SearchStacksCommand(query, skip, take));
+        AddStackImportCommand(stack);
+        AddStackExportCommand(stack);
+
+        var info = Leaf(stack, "info", "Show Registry Stack details.");
+        var infoId = RequiredTextArgument("stack-id", "Registry Stack id.");
+        info.Arguments.Add(infoId);
+        Bind(info, "stack info", result => new StackInfoCommand(result.GetRequiredValue(infoId)));
+
+        var download = Leaf(stack, "download", "Download and verify a Registry Stack archive.");
+        var downloadId = RequiredTextArgument("stack-id", "Registry Stack id.");
+        var output = ValueOption("--output", "Exact destination file.", "path", aliases: ["-o"]);
+        var force = Flag("--force", "Replace an existing destination file.");
+        download.Arguments.Add(downloadId);
+        download.Options.Add(output);
+        download.Options.Add(force);
+        Bind(download, "stack download", result => new DownloadStackCommand(
+            result.GetRequiredValue(downloadId), result.GetValue(output), result.GetValue(force)));
+
+        var open = Leaf(stack, "open", "Open a Registry Stack in Sunder App.");
+        var openId = RequiredTextArgument("stack-id", "Registry Stack id.");
+        open.Arguments.Add(openId);
+        Bind(open, "stack open", result => new OpenStackCommand(result.GetRequiredValue(openId)));
+    }
+
+    private void BuildRegistryCommands()
+    {
+        var registry = Group(Root, "registry", "Sign in and perform remote Registry management operations.");
+        var auth = Group(registry, "auth", "Manage the Runtime-owned human Registry credential.");
+        Bind(Leaf(auth, "login", "Sign in to the configured Registry in a browser."), "registry auth login", _ => new AuthLoginCommand());
+        Bind(Leaf(auth, "status", "Show Registry sign-in status."), "registry auth status", _ => new AuthStatusCommand());
+        Bind(Leaf(auth, "logout", "Revoke and remove the configured Registry credential."), "registry auth logout", _ => new AuthLogoutCommand());
+
+        BuildRegistryPackageCommands(registry);
+        BuildRegistryStackCommands(registry);
+    }
+
+    private void BuildRegistryPackageCommands(Command registry)
+    {
+        var package = Group(registry, "package", "Publish and manage remote Registry packages.");
+        AddPackagePublish(package, "registry package publish", devLocal: false);
+
+        AddYankCommand(package, "yank", isYanked: true);
+        AddYankCommand(package, "unyank", isYanked: false);
+        AddDeprecationCommand(package, "deprecate", clear: false);
+        AddDeprecationCommand(package, "undeprecate", clear: true);
+
+        var tag = Group(package, "tag", "List and manage package dist tags.");
+        var list = Leaf(tag, "list", "List package dist tags.");
+        var listId = PackageIdArgument();
+        list.Arguments.Add(listId);
+        Bind(list, "registry package tag list", result => new ListDistTagsCommand(result.GetRequiredValue(listId)));
+
+        var set = Leaf(tag, "set", "Set a package dist tag to an exact version.");
+        var setId = PackageIdArgument();
+        var setTag = RequiredTextArgument("tag", "Dist tag.");
+        var setVersion = SemanticVersionArgument();
+        set.Arguments.Add(setId);
+        set.Arguments.Add(setTag);
+        set.Arguments.Add(setVersion);
+        Bind(set, "registry package tag set", result => new SetDistTagCommand(
+            result.GetRequiredValue(setId), result.GetRequiredValue(setTag), result.GetRequiredValue(setVersion)));
+
+        var delete = Leaf(tag, "delete", "Delete a package dist tag.");
+        var deleteId = PackageIdArgument();
+        var deleteTag = RequiredTextArgument("tag", "Dist tag.");
+        delete.Arguments.Add(deleteId);
+        delete.Arguments.Add(deleteTag);
+        Bind(delete, "registry package tag delete", result => new SetDistTagCommand(
+            result.GetRequiredValue(deleteId), result.GetRequiredValue(deleteTag), null));
+    }
+
+    private void BuildRegistryStackCommands(Command registry)
+    {
+        var stack = Group(registry, "stack", "Publish and delete remote Registry Stacks.");
+        AddStackPublish(stack, "registry stack publish", devLocal: false);
+
+        var delete = Leaf(stack, "delete", "Delete a remote Registry Stack.");
+        var deleteId = RequiredTextArgument("stack-id", "Registry Stack id.");
+        delete.Arguments.Add(deleteId);
+        Bind(delete, "registry stack delete", result => new DeleteStackCommand(result.GetRequiredValue(deleteId)));
+    }
+
+    private void BuildDeveloperCommands()
+    {
+        var dev = Group(Root, "dev", "Validate local artifacts and use development-only services.");
+        var package = Group(dev, "package", "Work with local package artifacts.");
+        var validate = Leaf(package, "validate", "Validate and inspect a local .sunderpkg archive.");
+        var packageFile = RequiredTextArgument("file", "Local .sunderpkg archive.");
+        validate.Arguments.Add(packageFile);
+        Bind(validate, "dev package validate", result => new ValidatePackageCommand(result.GetRequiredValue(packageFile)));
+
+        var stack = Group(dev, "stack", "Work with local Stack artifacts.");
+        var inspect = Leaf(stack, "inspect", "Validate and inspect a local .sunderstack archive.");
+        var stackFile = RequiredTextArgument("file", "Local .sunderstack archive.");
+        inspect.Arguments.Add(stackFile);
+        Bind(inspect, "dev stack inspect", result => new ValidateStackCommand(result.GetRequiredValue(stackFile)));
+
+        var registry = Group(dev, "registry", "Use loopback-only development Registry operations.");
+        var registryPackage = Group(registry, "package", "Publish local packages to a development Registry.");
+        AddPackagePublish(registryPackage, "dev registry package publish-local", devLocal: true, commandName: "publish-local");
+        var registryStack = Group(registry, "stack", "Publish local Stacks to a development Registry.");
+        AddStackPublish(registryStack, "dev registry stack publish-local", devLocal: true, commandName: "publish-local");
+    }
+
+    private void BuildConfigCommands()
+    {
+        var config = Group(Root, "config", "Inspect effective Sunder CLI endpoint configuration.");
+        Bind(Leaf(config, "show", "Show effective Registry, Runtime, and timeout settings."), "config show", _ => new ShowConfigCommand());
+    }
+
+    private void AddPackagePublish(Command parent, string path, bool devLocal, string commandName = "publish")
+    {
+        var publish = Leaf(parent, commandName, devLocal
+            ? "Publish a package to a loopback development Registry."
+            : "Publish a package with Runtime-managed human auth or a scoped automation credential.");
+        var file = RequiredValueOption("--file", "Local .sunderpkg archive.", "path");
+        var noLatest = Flag("--no-latest", "Do not set or promote the latest dist tag.");
+        var setLatest = Flag("--set-latest", "Set or promote the latest dist tag, including for a prerelease.");
+        publish.Options.Add(file);
+        publish.Options.Add(noLatest);
+        publish.Options.Add(setLatest);
+        Option<string?>? credentialSource = null;
+        if (!devLocal)
+        {
+            credentialSource = ValueOption(
+                "--credential-source",
+                "Credential source: runtime, environment, or stdin. Defaults to runtime.",
+                "source");
+            credentialSource.Validators.Add(result => ValidateCredentialSource(result.Tokens, result.AddError));
+            publish.Options.Add(credentialSource);
+        }
+        publish.Validators.Add(result =>
+        {
+            if (result.GetValue(noLatest) && result.GetValue(setLatest))
+                result.AddError("Options '--set-latest' and '--no-latest' cannot be used together.");
+        });
+        Bind(publish, path, result => new PublishPackageCommand(
+            result.GetRequiredValue(file)!,
+            result.GetValue(setLatest) ? true : result.GetValue(noLatest) ? false : null,
+            devLocal,
+            devLocal ? RegistryCredentialSource.Runtime : ParseCredentialSource(result.GetValue(credentialSource!))));
+    }
+
+    private void AddStackPublish(Command parent, string path, bool devLocal, string commandName = "publish")
+    {
+        var publish = Leaf(parent, commandName, devLocal
+            ? "Publish a Stack to a loopback development Registry."
+            : "Publish a Stack with Runtime-managed human auth or a scoped automation credential.");
+        var file = RequiredValueOption("--file", "Local .sunderstack archive.", "path");
+        publish.Options.Add(file);
+        Option<string?>? credentialSource = null;
+        if (!devLocal)
+        {
+            credentialSource = ValueOption(
+                "--credential-source",
+                "Credential source: runtime, environment, or stdin. Defaults to runtime.",
+                "source");
+            credentialSource.Validators.Add(result => ValidateCredentialSource(result.Tokens, result.AddError));
+            publish.Options.Add(credentialSource);
+        }
+        Bind(publish, path, result => new PublishStackCommand(
+            result.GetRequiredValue(file)!,
+            devLocal,
+            devLocal ? RegistryCredentialSource.Runtime : ParseCredentialSource(result.GetValue(credentialSource!))));
+    }
+
+    private static void ValidateCredentialSource(IReadOnlyList<Token> tokens, Action<string> addError)
+    {
+        if (tokens.Count == 0) return;
+        if (!RegistryCredentialSourceParser.TryParse(tokens[0].Value, out _))
+            addError("Option '--credential-source' must be one of: runtime, environment, stdin.");
+    }
+
+    private static RegistryCredentialSource ParseCredentialSource(string? value)
+        => value is null
+            ? RegistryCredentialSource.Runtime
+            : RegistryCredentialSourceParser.TryParse(value, out var source)
+                ? source
+                : throw new CliUsageException("Invalid Registry credential source.");
+
+    private void AddYankCommand(Command package, string name, bool isYanked)
+    {
+        var command = Leaf(package, name, isYanked ? "Yank an exact package version." : "Restore a yanked package version.");
+        var packageId = PackageIdArgument();
+        var version = SemanticVersionArgument();
+        command.Arguments.Add(packageId);
+        command.Arguments.Add(version);
+        Bind(command, $"registry package {name}", result => new SetYankCommand(
+            result.GetRequiredValue(packageId), result.GetRequiredValue(version), isYanked));
+    }
+
+    private void AddDeprecationCommand(Command package, string name, bool clear)
+    {
+        var command = Leaf(package, name, clear ? "Clear a package version deprecation." : "Deprecate an exact package version.");
+        var packageId = PackageIdArgument();
+        var version = SemanticVersionArgument();
+        command.Arguments.Add(packageId);
+        command.Arguments.Add(version);
+        Option<string?>? message = null;
+        if (!clear)
+        {
+            message = RequiredValueOption("--message", "Deprecation message.", "text");
+            command.Options.Add(message);
+        }
+        Bind(command, $"registry package {name}", result => new SetDeprecationCommand(
+            result.GetRequiredValue(packageId), result.GetRequiredValue(version), message is null ? null : result.GetRequiredValue(message)));
+    }
+
 }
+
+internal sealed record CliCommandParseResult(
+    CliInvocation? Invocation,
+    IReadOnlyList<string> Errors,
+    Command HelpScope,
+    bool ShowHelp,
+    bool Json);

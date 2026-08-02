@@ -86,6 +86,37 @@ internal sealed class PackageCallbackSessionStore
         }
     }
 
+    public PackageCallbackCancellationWork? TryCancel(
+        string packageId,
+        string sessionId,
+        long generation,
+        DateTimeOffset removeAtUtc)
+    {
+        lock (_syncRoot)
+        {
+            if (!_sessions.TryGetValue(sessionId, out var session)
+                || session.Generation != generation
+                || !string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
+                || session.State != PackageCallbackLifecycleState.Pending)
+            {
+                return null;
+            }
+
+            session.CallbackServer.UnregisterHandler(sessionId);
+            session.State = PackageCallbackLifecycleState.Cancelled;
+            session.ExpiresAtUtc = removeAtUtc;
+            session.Status = session.Status! with
+            {
+                State = PackageCallbackSessionState.Cancelled,
+                Message = "The callback session was cancelled.",
+            };
+            RemoveStartLocked(session);
+            return new PackageCallbackCancellationWork(
+                session,
+                PackageCallbackCancellationReason.CallerRequested);
+        }
+    }
+
     public ActivePackageCallbackSession? TryClaimCompletion(string sessionId, long generation)
     {
         lock (_syncRoot)

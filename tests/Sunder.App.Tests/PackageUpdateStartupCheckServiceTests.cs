@@ -98,6 +98,40 @@ public sealed class PackageUpdateStartupCheckServiceTests
     }
 
     [Fact]
+    public async Task EnqueueStartupCheck_GroupsRecordedOriginsTagsAndPrereleasePolicies()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage("agent", "1.0.0", "https://alpha.example/", "beta", includePrerelease: true),
+            CreateInstalledPackage("tools", "1.0.0", "https://bravo.example/", "stable"),
+            CreateInstalledPackage("dependency", "1.0.0", "https://alpha.example/", tag: null, isTransitive: true),
+        ]);
+        var service = CreateService(
+            queue,
+            runtimeClient,
+            new FakeRegistryApiClient(),
+            CreateNotificationCenter());
+
+        var snapshot = service.EnqueueStartupCheck();
+        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+
+        Assert.Collection(
+            runtimeClient.PlanRequests,
+            request =>
+            {
+                Assert.Equal("https://alpha.example/", request.RegistryOrigin);
+                Assert.True(request.IncludePrerelease);
+                Assert.Equal("beta", Assert.Single(request.Packages).Tag);
+            },
+            request =>
+            {
+                Assert.Equal("https://bravo.example/", request.RegistryOrigin);
+                Assert.False(request.IncludePrerelease);
+                Assert.Equal("stable", Assert.Single(request.Packages).Tag);
+            });
+    }
+
+    [Fact]
     public async Task EnqueueStartupCheck_WhenUpdateCheckFails_CompletesWithoutNotification()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -150,15 +184,19 @@ public sealed class PackageUpdateStartupCheckServiceTests
         return new(
             queue,
             new FakeRuntimeApiClientFactory(runtimeApiClient),
-            new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder"),
-            () => new Uri("https://registry.example/"),
-            _ => registryApiClient);
+            new AppPackageNotificationService(notificationCenter, "sunder.app", "Sunder"));
     }
 
     private static NotificationCenterService CreateNotificationCenter()
         => new(Path.Combine(CreateTempDirectory(), "notifications.json"));
 
-    private static InstalledPackageDescriptor CreateInstalledPackage(string packageId, string version)
+    private static InstalledPackageDescriptor CreateInstalledPackage(
+        string packageId,
+        string version,
+        string registryOrigin = "https://registry.example/",
+        string? tag = "latest",
+        bool includePrerelease = false,
+        bool isTransitive = false)
         => new(
             packageId,
             packageId,
@@ -169,7 +207,17 @@ public sealed class PackageUpdateStartupCheckServiceTests
             IsEnabled: true,
             DependsOn: [],
             DateTimeOffset.UtcNow,
-            StatusMessage: null);
+            StatusMessage: null,
+            Provenance: new InstalledPackageProvenance(
+                InstalledPackageSourceKind.Registry,
+                isTransitive
+                    ? InstalledPackageVersionPolicy.TransitiveDependency
+                    : InstalledPackageVersionPolicy.FollowTag,
+                registryOrigin,
+                packageId,
+                RequestedTag: isTransitive ? null : tag,
+                SourceIdentity: new string('a', 64),
+                IncludePrerelease: isTransitive ? false : includePrerelease));
 
     private static RegistryPackageUpdate CreateUpdate(string packageId, string currentVersion, string availableVersion)
         => new(
@@ -224,9 +272,12 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         public bool ThrowOnResolveUpdates { get; set; }
 
+        public List<RuntimeRegistryPackageBatchRequest> PlanRequests { get; } = [];
+
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
         {
             if (ThrowOnResolveUpdates) throw new InvalidOperationException("registry unavailable");
+            PlanRequests.Add(request);
             return Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
                 PlanSuccess,
                 Updates.Select(update => new RuntimeRegistryPackageInstallPlanItem(

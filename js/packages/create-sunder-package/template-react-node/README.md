@@ -8,4 +8,4 @@ Combined React App and TypeScript process Runtime package `SUNDER_PACKAGE_ID`.
 - `npm run smoke` performs a native `sunder.worker.v1` handshake against the SEA.
 - `npm run package` aggregates available exact-RID leaves into a deterministic `.sunderpkg`.
 
-The browser imports only `@sunder/sdk/browser`. It receives opaque provider handles through the injected bridge and never receives Runtime credentials, filesystem paths, or endpoint references. RPC uses remain default-denied until granted in Sunder Settings.
+The browser imports only `@sunder/sdk/browser`. It receives opaque provider handles through the injected bridge and never receives Runtime credentials, filesystem paths, or Runtime endpoint references. Installing or updating the package consents to the RPC actions declared by that exact manifest; undeclared actions remain default-deny.

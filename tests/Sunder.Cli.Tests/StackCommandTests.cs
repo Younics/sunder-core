@@ -62,6 +62,22 @@ public sealed class StackCommandTests
         Assert.Contains("exact destination file", result.Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Stack_open_launches_the_sunder_app_link()
+    {
+        var registry = new FakeRegistryClient
+        {
+            GetStack = (_, _) => Task.FromResult<RegistryStackDetails?>(Details("demo")),
+        };
+        var browser = new FakeBrowserLauncher();
+
+        var result = await CliTestHost.RunAsync(["stack", "open", "demo"], registry: registry, browser: browser);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.Equal("sunder://stacks/demo", browser.Opened?.AbsoluteUri);
+        Assert.Contains("Opened Stack 'demo'", result.Output, StringComparison.Ordinal);
+    }
+
     private static RegistryStackSummary Summary(string id, string summary)
         => new(id, id, summary, 0, 0, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
 

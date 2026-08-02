@@ -259,8 +259,7 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
     public BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
         string packageId,
         string displayName,
-        string version,
-        Uri registryUrl)
+        string version)
     {
         return EnqueuePackageStoreOperation(
             packageId,
@@ -271,15 +270,9 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             async context =>
             {
                 context.ReportProgress(0, $"Updating {displayName}...");
-                using var registryClient = _createRegistryClient(registryUrl);
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var result = await _registryInstallService.InstallPackageAsync(
+                var result = await _registryInstallService.UpdatePackageAsync(
                     packageId,
-                    version,
-                    tag: null,
-                    allowDowngrade: false,
-                    reinstall: false,
-                    registryClient,
                     runtimeApiClient,
                     progress => ReportRegistryProgress(context, progress),
                     context.CancellationToken).ConfigureAwait(false);
@@ -328,7 +321,10 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             });
     }
 
-    public BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName)
+    public BackgroundProcessSnapshot EnqueueUninstall(
+        string packageId,
+        string displayName,
+        bool allowCascade = false)
     {
         return EnqueuePackageStoreOperation(
             packageId,
@@ -340,15 +336,22 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             {
                 context.ReportIndeterminate($"Uninstalling {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
+                var plan = await runtimeApiClient.GetPackageUninstallPlanAsync(
+                    packageId,
+                    context.CancellationToken).ConfigureAwait(false);
                 var result = await StageCommitPackageStoreAsync(
                     runtimeApiClient,
-                    new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Uninstall, packageId)]),
+                    new PackageStoreStageRequest([new PackageStoreMutationRequest(
+                        PackageStoreMutationKind.Uninstall,
+                        packageId,
+                        AllowCascade: allowCascade,
+                        ConfirmationToken: plan.ConfirmationToken)]),
                     context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package uninstalled", $"{packageId} was uninstalled.").ConfigureAwait(false);
             });
     }
 
-    public BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl)
+    public BackgroundProcessSnapshot EnqueueUpdateAll()
     {
         return EnqueuePackageStoreOperation(
             packageId: null,
@@ -359,10 +362,8 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
             async context =>
             {
                 context.ReportProgress(0, "Updating installed packages...");
-                using var registryClient = _createRegistryClient(registryUrl);
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
                 var result = await _registryInstallService.UpdateAllAsync(
-                    registryClient,
                     runtimeApiClient,
                     progress => ReportRegistryProgress(context, progress),
                     context.CancellationToken).ConfigureAwait(false);

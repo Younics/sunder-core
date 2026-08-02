@@ -189,6 +189,10 @@ public sealed partial class UseStackRequiredInputValueViewModel(RuntimeStackRequ
 
     public string ContributorId { get; } = input.ContributorId;
 
+    public bool IsSecret { get; } = input.Sensitivity == RuntimeStackInputSensitivity.Secret;
+
+    public char PasswordCharacter => IsSecret ? '*' : '\0';
+
     public bool IsHostScoped => !string.IsNullOrWhiteSpace(InputId);
 
     public bool Matches(RuntimeStackRequiredInputDescriptor input)
@@ -204,7 +208,9 @@ public sealed partial class UseStackRequiredInputValueViewModel(RuntimeStackRequ
 
     public bool IsMissingRequiredValue => Required && string.IsNullOrWhiteSpace(Value);
 
-    public string ReviewValue => string.IsNullOrWhiteSpace(Value) ? "Not provided" : "Provided locally";
+    public string ReviewValue => string.IsNullOrWhiteSpace(Value)
+        ? "Not provided"
+        : IsSecret ? "Provided locally" : Value;
 
     [ObservableProperty]
     private string _value = currentValue ?? input.DefaultValue ?? string.Empty;

@@ -14,9 +14,11 @@ Only install packages whose code and distribution source you trust. A Registry o
 
 Installation and update are also the consent boundary for schema-first cross-package RPC. Sunder displays each version's declared contract actions in package details, then grants all declared actions to that exact installed version and manifest. Development packages receive the same effective access only for their active development session. Packages cannot invoke undeclared actions.
 
+RPC content references are not ambient bearer capabilities. Caller-owned call scopes bind request content to one exact target and response content to the originating caller; scope disposal cancels active work and revokes remaining references. Providers receive Host-created invocation contexts whose content authority ends with the handler or stream. Package code may report contract-level domain errors, but it cannot authenticate infrastructure errors.
+
 ## Package Integrity Versus Authenticity
 
-The V1 package validator checks the generated manifest, exact content index, SHA-256 hashes and sizes, canonical roots/paths, ZIP entry safety and expansion limits, entry assembly/host-role shape, SDK compatibility, dependencies, and icon content. Runtime stages and validates before committing install/update state.
+The V1 package validator checks the generated manifest, exact content index, SHA-256 hashes and sizes, canonical roots/paths, ZIP entry safety and expansion limits, target kind/role/entry-point shape, declared compatibility, dependencies, RPC descriptors, web view declarations, and icon content. Runtime stages and validates before committing install/update state. Validation does not execute target code or prove that an entry point behaves safely.
 
 Current `.sunderpkg` archives contain no signature file. Content hashes detect corruption or modification relative to the archive's own index, but they do not prove who created the archive. Do not describe V1 package validation as code signing or publisher attestation.
 
@@ -42,7 +44,7 @@ Never place secrets in:
 - package state/files/settings defaults;
 - Runtime operation DTOs unless the specific flow absolutely requires it;
 - logs, structured attributes, exception messages, or notification text;
-- command-line arguments, environment variables, or callback launch URLs;
+- command-line arguments, package-process environment variables, or callback launch URLs (the CLI's documented one-shot CI publication variable is a separate automation boundary);
 - package assets, manifests, generated output, tests, or source control; or
 - Stack fragments and payload files.
 
@@ -57,6 +59,8 @@ Do not expose host paths through Runtime operation DTOs, Stack records, errors, 
 ## Network And Callbacks
 
 App/CLI-to-Host and Host-to-Runtime traffic is authenticated. Connection credentials are current-user private state and must never appear in package configuration, logs, process arguments, or package APIs.
+
+Human Registry credentials are Runtime-owned and never returned to CLI commands. Protected publication automation may use the CLI's bounded environment/stdin credential sources, but must use a scoped Registry publish token and keep it out of arguments and logs.
 
 Use `IPackageCallbackHandler`/`IPackageAuthHandler` for browser callbacks. Runtime owns the bounded loopback listener, session routing, expiry, and duplicate rejection. Packages must not start their own listener. The package must still validate provider state, nonce, PKCE, origin, account identity, and callback values.
 
@@ -76,7 +80,7 @@ An App package runs in the shell process. A UI exception is contained as a clien
 
 ## Stacks
 
-Treat imported Stack archives as untrusted data even after format validation. Preview must be side-effect free, show accurate actions/conflicts, and require explicit input for omitted secrets. Validate contributor-owned fragment schemas and values before mutation. Contributor-local atomicity means another contributor's committed changes cannot be rolled back by the host.
+Treat imported Stack archives as untrusted data even after format validation. Preview must be side-effect free, show accurate actions/conflicts, and require explicit input for omitted secrets. Classify every required input explicitly as public or secret; secret inputs must not declare portable defaults or appear in logs, diagnostics, telemetry, notifications, or display text. Validate contributor-owned fragment schemas and values before mutation. Contributor-local atomicity means another contributor's committed changes cannot be rolled back by the host.
 
 ## Reporting Vulnerabilities
 

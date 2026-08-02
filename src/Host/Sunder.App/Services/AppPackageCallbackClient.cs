@@ -11,6 +11,8 @@ internal sealed class AppPackageCallbackClient(
     ExternalBrowserService browser,
     AppPackageGenerationPublication? publication = null) : IPackageCallbackClient
 {
+    private static readonly TimeSpan CompletionPollInterval = TimeSpan.FromMilliseconds(250);
+
     public bool IsAvailable => publication?.IsPublished ?? true;
 
     public async ValueTask<PackageCallbackSessionStatus> StartAsync(
@@ -19,6 +21,7 @@ internal sealed class AppPackageCallbackClient(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackHandlerId);
+        cancellationToken.ThrowIfCancellationRequested();
         publication?.RequirePublished("callback sessions");
         var snapshot = PackageCallbackParameters.CopyAndValidate(parameters);
         return Map(await client.StartAsync(
@@ -33,8 +36,57 @@ internal sealed class AppPackageCallbackClient(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackSessionId);
+        cancellationToken.ThrowIfCancellationRequested();
         publication?.RequirePublished("callback sessions");
         return Map(await client.GetStatusAsync(packageId, callbackSessionId, cancellationToken).ConfigureAwait(false));
+    }
+
+    public async ValueTask<bool> CancelAsync(
+        string callbackSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackSessionId);
+        cancellationToken.ThrowIfCancellationRequested();
+        publication?.RequirePublished("callback sessions");
+        return await client.CancelAsync(packageId, callbackSessionId, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<PackageCallbackSessionStatus> WaitForCompletionAsync(
+        string callbackSessionId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackSessionId);
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "The callback wait timeout must be positive.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        publication?.RequirePublished("callback sessions");
+        using var timeoutCancellation = new CancellationTokenSource(timeout);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutCancellation.Token);
+        try
+        {
+            while (true)
+            {
+                var status = await GetStatusAsync(callbackSessionId, linkedCancellation.Token).ConfigureAwait(false);
+                if (status.IsTerminal)
+                {
+                    return status;
+                }
+
+                await Task.Delay(CompletionPollInterval, linkedCancellation.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (
+            timeoutCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Callback session '{callbackSessionId}' did not complete within {timeout}.");
+        }
     }
 
     public ValueTask OpenLaunchUriAsync(Uri launchUri, CancellationToken cancellationToken = default)

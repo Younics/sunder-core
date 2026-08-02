@@ -11,6 +11,7 @@ public enum PackageAuthSessionState
     Connected = 1,
     Failed = 2,
     Cancelled = 3,
+    Expired = 4,
 }
 
 public sealed record PackageAuthSessionStartResponse(
@@ -18,11 +19,13 @@ public sealed record PackageAuthSessionStartResponse(
     string AuthSessionId,
     PackageAuthFlowKind Flow,
     string LaunchUrl,
-    string Message);
+    string Message,
+    DateTimeOffset ExpiresAtUtc);
 
 public sealed record PackageAuthSessionStatusResponse(
     string PackageId,
     string AuthSessionId,
     PackageAuthSessionState State,
     string Message,
-    string? LaunchUrl);
+    string? LaunchUrl,
+    DateTimeOffset ExpiresAtUtc);

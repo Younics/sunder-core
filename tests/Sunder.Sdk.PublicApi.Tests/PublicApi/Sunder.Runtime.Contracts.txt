@@ -112,7 +112,7 @@ type sealed class Sunder.Runtime.Contracts.DevPackageOwnerReleaseRequest : Syste
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.InstalledPackageDescriptor : System.IEquatable<Sunder.Runtime.Contracts.InstalledPackageDescriptor>
-  method .ctor(System.String PackageId, System.String Name, System.String Version, Sunder.Runtime.Contracts.PackageHostRoles HostRoles, System.String? Summary, Sunder.Runtime.Contracts.PackageIconDescriptor? Icon, System.Boolean IsEnabled, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageDependencyDescriptor> DependsOn, System.DateTimeOffset InstalledAtUtc, System.String? StatusMessage, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor>? RpcContractUses = null)
+  method .ctor(System.String PackageId, System.String Name, System.String Version, Sunder.Runtime.Contracts.PackageHostRoles HostRoles, System.String? Summary, Sunder.Runtime.Contracts.PackageIconDescriptor? Icon, System.Boolean IsEnabled, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageDependencyDescriptor> DependsOn, System.DateTimeOffset InstalledAtUtc, System.String? StatusMessage, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor>? RpcContractUses = null, Sunder.Runtime.Contracts.InstalledPackageProvenance? Provenance = null)
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageDependencyDescriptor> DependsOn { get; init; }
   property Sunder.Runtime.Contracts.PackageHostRoles HostRoles { get; init; }
   property Sunder.Runtime.Contracts.PackageIconDescriptor? Icon { get; init; }
@@ -120,28 +120,60 @@ type sealed class Sunder.Runtime.Contracts.InstalledPackageDescriptor : System.I
   property System.Boolean IsEnabled { get; init; }
   property System.String Name { get; init; }
   property System.String PackageId { get; init; }
+  property Sunder.Runtime.Contracts.InstalledPackageProvenance Provenance { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor> RpcContractUses { get; init; }
   property System.String? StatusMessage { get; init; }
   property System.String? Summary { get; init; }
   property System.String Version { get; init; }
   method Sunder.Runtime.Contracts.InstalledPackageDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String Version, out Sunder.Runtime.Contracts.PackageHostRoles HostRoles, out System.String? Summary, out Sunder.Runtime.Contracts.PackageIconDescriptor? Icon, out System.Boolean IsEnabled, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageDependencyDescriptor> DependsOn, out System.DateTimeOffset InstalledAtUtc, out System.String? StatusMessage, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor>? RpcContractUses)
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String Version, out Sunder.Runtime.Contracts.PackageHostRoles HostRoles, out System.String? Summary, out Sunder.Runtime.Contracts.PackageIconDescriptor? Icon, out System.Boolean IsEnabled, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageDependencyDescriptor> DependsOn, out System.DateTimeOffset InstalledAtUtc, out System.String? StatusMessage, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor>? RpcContractUses, out Sunder.Runtime.Contracts.InstalledPackageProvenance? Provenance)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.InstalledPackageDescriptor? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.InstalledPackageProvenance : System.IEquatable<Sunder.Runtime.Contracts.InstalledPackageProvenance>
+  method .ctor(Sunder.Runtime.Contracts.InstalledPackageSourceKind SourceKind, Sunder.Runtime.Contracts.InstalledPackageVersionPolicy VersionPolicy, System.String? RegistryOrigin = null, System.String? SourcePackageId = null, System.String? RequestedTag = null, System.String? RequestedVersion = null, System.String? VersionRange = null, System.String? SourceIdentity = null, System.Boolean IncludePrerelease = false)
+  property System.Boolean IncludePrerelease { get; init; }
+  property System.String? RegistryOrigin { get; init; }
+  property System.String? RequestedTag { get; init; }
+  property System.String? RequestedVersion { get; init; }
+  property System.String? SourceIdentity { get; init; }
+  property Sunder.Runtime.Contracts.InstalledPackageSourceKind SourceKind { get; init; }
+  property System.String? SourcePackageId { get; init; }
+  property static Sunder.Runtime.Contracts.InstalledPackageProvenance Unknown { get; }
+  property Sunder.Runtime.Contracts.InstalledPackageVersionPolicy VersionPolicy { get; init; }
+  property System.String? VersionRange { get; init; }
+  method Sunder.Runtime.Contracts.InstalledPackageProvenance <Clone>$()
+  method System.Void Deconstruct(out Sunder.Runtime.Contracts.InstalledPackageSourceKind SourceKind, out Sunder.Runtime.Contracts.InstalledPackageVersionPolicy VersionPolicy, out System.String? RegistryOrigin, out System.String? SourcePackageId, out System.String? RequestedTag, out System.String? RequestedVersion, out System.String? VersionRange, out System.String? SourceIdentity, out System.Boolean IncludePrerelease)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.InstalledPackageProvenance? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type enum Sunder.Runtime.Contracts.InstalledPackageSourceKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Runtime.Contracts.InstalledPackageSourceKind Development = 3
+  field static Sunder.Runtime.Contracts.InstalledPackageSourceKind LocalArchive = 2
+  field static Sunder.Runtime.Contracts.InstalledPackageSourceKind Registry = 1
+  field static Sunder.Runtime.Contracts.InstalledPackageSourceKind Unknown = 0
+  field System.Int32 value__
+type enum Sunder.Runtime.Contracts.InstalledPackageVersionPolicy : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Runtime.Contracts.InstalledPackageVersionPolicy ExplicitVersion = 2
+  field static Sunder.Runtime.Contracts.InstalledPackageVersionPolicy FollowTag = 1
+  field static Sunder.Runtime.Contracts.InstalledPackageVersionPolicy TransitiveDependency = 3
+  field static Sunder.Runtime.Contracts.InstalledPackageVersionPolicy Unmanaged = 0
+  field System.Int32 value__
 type enum Sunder.Runtime.Contracts.PackageAuthFlowKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Runtime.Contracts.PackageAuthFlowKind Browser = 0
   field System.Int32 value__
 type sealed class Sunder.Runtime.Contracts.PackageAuthSessionStartResponse : System.IEquatable<Sunder.Runtime.Contracts.PackageAuthSessionStartResponse>
-  method .ctor(System.String PackageId, System.String AuthSessionId, Sunder.Runtime.Contracts.PackageAuthFlowKind Flow, System.String LaunchUrl, System.String Message)
+  method .ctor(System.String PackageId, System.String AuthSessionId, Sunder.Runtime.Contracts.PackageAuthFlowKind Flow, System.String LaunchUrl, System.String Message, System.DateTimeOffset ExpiresAtUtc)
   property System.String AuthSessionId { get; init; }
+  property System.DateTimeOffset ExpiresAtUtc { get; init; }
   property Sunder.Runtime.Contracts.PackageAuthFlowKind Flow { get; init; }
   property System.String LaunchUrl { get; init; }
   property System.String Message { get; init; }
   property System.String PackageId { get; init; }
   method Sunder.Runtime.Contracts.PackageAuthSessionStartResponse <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String AuthSessionId, out Sunder.Runtime.Contracts.PackageAuthFlowKind Flow, out System.String LaunchUrl, out System.String Message)
+  method System.Void Deconstruct(out System.String PackageId, out System.String AuthSessionId, out Sunder.Runtime.Contracts.PackageAuthFlowKind Flow, out System.String LaunchUrl, out System.String Message, out System.DateTimeOffset ExpiresAtUtc)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageAuthSessionStartResponse? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -149,18 +181,20 @@ type sealed class Sunder.Runtime.Contracts.PackageAuthSessionStartResponse : Sys
 type enum Sunder.Runtime.Contracts.PackageAuthSessionState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Runtime.Contracts.PackageAuthSessionState Cancelled = 3
   field static Sunder.Runtime.Contracts.PackageAuthSessionState Connected = 1
+  field static Sunder.Runtime.Contracts.PackageAuthSessionState Expired = 4
   field static Sunder.Runtime.Contracts.PackageAuthSessionState Failed = 2
   field static Sunder.Runtime.Contracts.PackageAuthSessionState Pending = 0
   field System.Int32 value__
 type sealed class Sunder.Runtime.Contracts.PackageAuthSessionStatusResponse : System.IEquatable<Sunder.Runtime.Contracts.PackageAuthSessionStatusResponse>
-  method .ctor(System.String PackageId, System.String AuthSessionId, Sunder.Runtime.Contracts.PackageAuthSessionState State, System.String Message, System.String? LaunchUrl)
+  method .ctor(System.String PackageId, System.String AuthSessionId, Sunder.Runtime.Contracts.PackageAuthSessionState State, System.String Message, System.String? LaunchUrl, System.DateTimeOffset ExpiresAtUtc)
   property System.String AuthSessionId { get; init; }
+  property System.DateTimeOffset ExpiresAtUtc { get; init; }
   property System.String? LaunchUrl { get; init; }
   property System.String Message { get; init; }
   property System.String PackageId { get; init; }
   property Sunder.Runtime.Contracts.PackageAuthSessionState State { get; init; }
   method Sunder.Runtime.Contracts.PackageAuthSessionStatusResponse <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String AuthSessionId, out Sunder.Runtime.Contracts.PackageAuthSessionState State, out System.String Message, out System.String? LaunchUrl)
+  method System.Void Deconstruct(out System.String PackageId, out System.String AuthSessionId, out Sunder.Runtime.Contracts.PackageAuthSessionState State, out System.String Message, out System.String? LaunchUrl, out System.DateTimeOffset ExpiresAtUtc)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageAuthSessionStatusResponse? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -572,14 +606,16 @@ type enum Sunder.Runtime.Contracts.PackageStoreMutationKind : System.IComparable
   field static Sunder.Runtime.Contracts.PackageStoreMutationKind Upgrade = 1
   field System.Int32 value__
 type sealed class Sunder.Runtime.Contracts.PackageStoreMutationRequest : System.IEquatable<Sunder.Runtime.Contracts.PackageStoreMutationRequest>
-  method .ctor(Sunder.Runtime.Contracts.PackageStoreMutationKind Kind, System.String? PackageId = null, System.String? UploadId = null, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
+  method .ctor(Sunder.Runtime.Contracts.PackageStoreMutationKind Kind, System.String? PackageId = null, System.String? UploadId = null, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false, System.Boolean AllowCascade = false, System.String? ConfirmationToken = null)
+  property System.Boolean AllowCascade { get; init; }
   property System.Boolean AllowDowngrade { get; init; }
+  property System.String? ConfirmationToken { get; init; }
   property Sunder.Runtime.Contracts.PackageStoreMutationKind Kind { get; init; }
   property System.String? PackageId { get; init; }
   property System.Boolean Reinstall { get; init; }
   property System.String? UploadId { get; init; }
   method Sunder.Runtime.Contracts.PackageStoreMutationRequest <Clone>$()
-  method System.Void Deconstruct(out Sunder.Runtime.Contracts.PackageStoreMutationKind Kind, out System.String? PackageId, out System.String? UploadId, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
+  method System.Void Deconstruct(out Sunder.Runtime.Contracts.PackageStoreMutationKind Kind, out System.String? PackageId, out System.String? UploadId, out System.Boolean AllowDowngrade, out System.Boolean Reinstall, out System.Boolean AllowCascade, out System.String? ConfirmationToken)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageStoreMutationRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -646,6 +682,47 @@ type sealed class Sunder.Runtime.Contracts.PackageUiSnapshotRequest : System.IEq
   method Sunder.Runtime.Contracts.PackageUiSnapshotRequest <Clone>$()
   method System.Void Deconstruct(out System.String AppRid)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageUiSnapshotRequest? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type enum Sunder.Runtime.Contracts.PackageUninstallDataBehavior : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Runtime.Contracts.PackageUninstallDataBehavior Retain = 0
+  field System.Int32 value__
+type sealed class Sunder.Runtime.Contracts.PackageUninstallPlan : System.IEquatable<Sunder.Runtime.Contracts.PackageUninstallPlan>
+  method .ctor(System.String PackageId, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageUninstallPlanPackage> DirectRemovals, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageUninstallPlanPackage> CascadingRemovals, System.Collections.Generic.IReadOnlyList<System.String> ExpectedRemovalPackageIds, Sunder.Runtime.Contracts.PackageLifecycleChangeSet ReloadImpact, Sunder.Runtime.Contracts.PackageUninstallDataBehavior DataBehavior, System.Collections.Generic.IReadOnlyList<System.String> RetainedDataPackageIds, System.String ConfirmationToken)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageUninstallPlanPackage> CascadingRemovals { get; }
+  property System.String ConfirmationToken { get; init; }
+  property Sunder.Runtime.Contracts.PackageUninstallDataBehavior DataBehavior { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageUninstallPlanPackage> DirectRemovals { get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> ExpectedRemovalPackageIds { get; }
+  property System.String PackageId { get; init; }
+  property Sunder.Runtime.Contracts.PackageLifecycleChangeSet ReloadImpact { get; }
+  property System.Boolean RequiresCascadeConsent { get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> RetainedDataPackageIds { get; }
+  method Sunder.Runtime.Contracts.PackageUninstallPlan <Clone>$()
+  method System.Void Deconstruct(out System.String PackageId, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageUninstallPlanPackage> DirectRemovals, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageUninstallPlanPackage> CascadingRemovals, out System.Collections.Generic.IReadOnlyList<System.String> ExpectedRemovalPackageIds, out Sunder.Runtime.Contracts.PackageLifecycleChangeSet ReloadImpact, out Sunder.Runtime.Contracts.PackageUninstallDataBehavior DataBehavior, out System.Collections.Generic.IReadOnlyList<System.String> RetainedDataPackageIds, out System.String ConfirmationToken)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageUninstallPlan? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.PackageUninstallPlanPackage : System.IEquatable<Sunder.Runtime.Contracts.PackageUninstallPlanPackage>
+  method .ctor(System.String PackageId, System.String Name, System.String Version)
+  property System.String Name { get; init; }
+  property System.String PackageId { get; init; }
+  property System.String Version { get; init; }
+  method Sunder.Runtime.Contracts.PackageUninstallPlanPackage <Clone>$()
+  method System.Void Deconstruct(out System.String PackageId, out System.String Name, out System.String Version)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageUninstallPlanPackage? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.PackageUninstallRequest : System.IEquatable<Sunder.Runtime.Contracts.PackageUninstallRequest>
+  method .ctor(System.Boolean AllowCascade = false, System.String? ConfirmationToken = null)
+  property System.Boolean AllowCascade { get; init; }
+  property System.String? ConfirmationToken { get; init; }
+  method Sunder.Runtime.Contracts.PackageUninstallRequest <Clone>$()
+  method System.Void Deconstruct(out System.Boolean AllowCascade, out System.String? ConfirmationToken)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageUninstallRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
@@ -990,6 +1067,7 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeResult : 
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageInstallPlanItem> PlanItems { get; }
   property System.Boolean RequiresAppRestart { get; init; }
   property System.Boolean RuntimeSessionApplied { get; init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> SkippedPackageIds { get; init; }
   property System.Boolean Success { get; init; }
   property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; }
   method Sunder.Runtime.Contracts.RuntimeRegistryPackageChangeResult <Clone>$()
@@ -1148,6 +1226,23 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRegistryResolveInstallPlanResp
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRegistrySourceAdoptionRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistrySourceAdoptionRequest>
+  method .ctor(System.String PackageId, System.String RegistryOrigin, System.String? Tag = null, System.String? Version = null, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets = null, System.Boolean Confirm = false, System.Boolean DryRun = false)
+  property System.Boolean AllowDowngrade { get; init; }
+  property System.Boolean Confirm { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets { get; init; }
+  property System.Boolean DryRun { get; init; }
+  property System.Boolean IncludePrerelease { get; init; }
+  property System.String PackageId { get; init; }
+  property System.String RegistryOrigin { get; init; }
+  property System.String? Tag { get; init; }
+  property System.String? Version { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRegistrySourceAdoptionRequest <Clone>$()
+  method System.Void Deconstruct(out System.String PackageId, out System.String RegistryOrigin, out System.String? Tag, out System.String? Version, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets, out System.Boolean Confirm, out System.Boolean DryRun)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRegistrySourceAdoptionRequest? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRegistryStarRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistryStarRequest>
   method .ctor(System.String RegistryOrigin, System.String ResourceId, System.Boolean Starred)
   property System.String RegistryOrigin { get; init; }
@@ -1160,13 +1255,13 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRegistryStarRequest : System.I
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRegistryUpdateRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistryUpdateRequest>
-  method .ctor(System.String RegistryOrigin, System.String? PackageId = null, System.Boolean IncludePrerelease = false, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets = null)
+  method .ctor(System.String? RegistryOrigin = null, System.String? PackageId = null, System.Boolean IncludePrerelease = false, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets = null)
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets { get; init; }
   property System.Boolean IncludePrerelease { get; init; }
   property System.String? PackageId { get; init; }
-  property System.String RegistryOrigin { get; init; }
+  property System.String? RegistryOrigin { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRegistryUpdateRequest <Clone>$()
-  method System.Void Deconstruct(out System.String RegistryOrigin, out System.String? PackageId, out System.Boolean IncludePrerelease, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets)
+  method System.Void Deconstruct(out System.String? RegistryOrigin, out System.String? PackageId, out System.Boolean IncludePrerelease, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageTargetRequest>? DesiredTargets)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRegistryUpdateRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1225,6 +1320,36 @@ type sealed class Sunder.Runtime.Contracts.RuntimeResetDrainResponse : System.IE
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeCloseRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeCloseRequest>
+  method .ctor(System.String SessionId, System.String CallScopeId)
+  property System.String CallScopeId { get; init; }
+  property System.String SessionId { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeCloseRequest <Clone>$()
+  method System.Void Deconstruct(out System.String SessionId, out System.String CallScopeId)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeCloseRequest? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeDescriptor>
+  method .ctor(System.String CallScopeId, System.DateTimeOffset DeadlineUtc)
+  property System.String CallScopeId { get; init; }
+  property System.DateTimeOffset DeadlineUtc { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeDescriptor <Clone>$()
+  method System.Void Deconstruct(out System.String CallScopeId, out System.DateTimeOffset DeadlineUtc)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeDescriptor? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeOpenRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeOpenRequest>
+  method .ctor(System.String SessionId, System.DateTimeOffset? DeadlineUtc)
+  property System.DateTimeOffset? DeadlineUtc { get; init; }
+  property System.String SessionId { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeOpenRequest <Clone>$()
+  method System.Void Deconstruct(out System.String SessionId, out System.DateTimeOffset? DeadlineUtc)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppCallScopeOpenRequest? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppCatalogFrame : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppCatalogFrame>
   method .ctor(System.String Type, Sunder.Runtime.Contracts.RuntimeRpcCatalogEventDescriptor? Event, Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor? Error)
   property Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor? Error { get; init; }
@@ -1236,12 +1361,51 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppCatalogFrame : System.IE
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppContentOpenRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppContentOpenRequest>
+  method .ctor(System.String SessionId, System.String CallScopeId, Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor Reference)
+  property System.String CallScopeId { get; init; }
+  property Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor Reference { get; init; }
+  property System.String SessionId { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcAppContentOpenRequest <Clone>$()
+  method System.Void Deconstruct(out System.String SessionId, out System.String CallScopeId, out Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor Reference)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppContentOpenRequest? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterMetadata : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterMetadata>
+  method .ctor(System.String SessionId, System.String CallScopeId, System.String EndpointReference, System.String MediaType, System.String FileName, System.Int64? Length, System.DateTimeOffset? ExpiresAtUtc, Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatability, System.Int32 MaximumUses)
+  property System.String CallScopeId { get; init; }
+  property System.String EndpointReference { get; init; }
+  property System.DateTimeOffset? ExpiresAtUtc { get; init; }
+  property System.String FileName { get; init; }
+  property System.Int64? Length { get; init; }
+  property System.Int32 MaximumUses { get; init; }
+  property System.String MediaType { get; init; }
+  property Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatability { get; init; }
+  property System.String SessionId { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterMetadata <Clone>$()
+  method System.Void Deconstruct(out System.String SessionId, out System.String CallScopeId, out System.String EndpointReference, out System.String MediaType, out System.String FileName, out System.Int64? Length, out System.DateTimeOffset? ExpiresAtUtc, out Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatability, out System.Int32 MaximumUses)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterMetadata? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterResponse : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterResponse>
+  method .ctor(Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor? Content, Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor? Error)
+  property Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor? Content { get; init; }
+  property Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor? Error { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterResponse <Clone>$()
+  method System.Void Deconstruct(out Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor? Content, out Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor? Error)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppContentRegisterResponse? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppDiscoverRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppDiscoverRequest>
-  method .ctor(System.String SessionId, System.String ContractId)
+  method .ctor(System.String SessionId, System.String ContractId, System.String? CallScopeId = null)
+  property System.String? CallScopeId { get; init; }
   property System.String ContractId { get; init; }
   property System.String SessionId { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRpcAppDiscoverRequest <Clone>$()
-  method System.Void Deconstruct(out System.String SessionId, out System.String ContractId)
+  method System.Void Deconstruct(out System.String SessionId, out System.String ContractId, out System.String? CallScopeId)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppDiscoverRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1257,7 +1421,8 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppDiscoverResponse : Syste
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppInvokeRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppInvokeRequest>
-  method .ctor(System.String SessionId, System.String EndpointReference, System.String ServiceId, System.String MethodId, System.Text.Json.JsonElement Request, System.DateTimeOffset? DeadlineUtc)
+  method .ctor(System.String SessionId, System.String EndpointReference, System.String ServiceId, System.String MethodId, System.Text.Json.JsonElement Request, System.DateTimeOffset? DeadlineUtc, System.String? CallScopeId = null)
+  property System.String? CallScopeId { get; init; }
   property System.DateTimeOffset? DeadlineUtc { get; init; }
   property System.String EndpointReference { get; init; }
   property System.String MethodId { get; init; }
@@ -1265,7 +1430,7 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppInvokeRequest : System.I
   property System.String ServiceId { get; init; }
   property System.String SessionId { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRpcAppInvokeRequest <Clone>$()
-  method System.Void Deconstruct(out System.String SessionId, out System.String EndpointReference, out System.String ServiceId, out System.String MethodId, out System.Text.Json.JsonElement Request, out System.DateTimeOffset? DeadlineUtc)
+  method System.Void Deconstruct(out System.String SessionId, out System.String EndpointReference, out System.String ServiceId, out System.String MethodId, out System.Text.Json.JsonElement Request, out System.DateTimeOffset? DeadlineUtc, out System.String? CallScopeId)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppInvokeRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1281,11 +1446,12 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppInvokeResponse : System.
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppProviderRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppProviderRequest>
-  method .ctor(System.String SessionId, System.String EndpointReference)
+  method .ctor(System.String SessionId, System.String EndpointReference, System.String? CallScopeId = null)
+  property System.String? CallScopeId { get; init; }
   property System.String EndpointReference { get; init; }
   property System.String SessionId { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRpcAppProviderRequest <Clone>$()
-  method System.Void Deconstruct(out System.String SessionId, out System.String EndpointReference)
+  method System.Void Deconstruct(out System.String SessionId, out System.String EndpointReference, out System.String? CallScopeId)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppProviderRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1348,12 +1514,13 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppSubscriptionFrame : Syst
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcAppWatchRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcAppWatchRequest>
-  method .ctor(System.String SessionId, System.Int64 AfterRevision, System.Int64 AfterSequence)
+  method .ctor(System.String SessionId, System.Int64 AfterRevision, System.Int64 AfterSequence, System.String? CallScopeId = null)
   property System.Int64 AfterRevision { get; init; }
   property System.Int64 AfterSequence { get; init; }
+  property System.String? CallScopeId { get; init; }
   property System.String SessionId { get; init; }
   method Sunder.Runtime.Contracts.RuntimeRpcAppWatchRequest <Clone>$()
-  method System.Void Deconstruct(out System.String SessionId, out System.Int64 AfterRevision, out System.Int64 AfterSequence)
+  method System.Void Deconstruct(out System.String SessionId, out System.Int64 AfterRevision, out System.Int64 AfterSequence, out System.String? CallScopeId)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcAppWatchRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -1402,6 +1569,25 @@ type sealed class Sunder.Runtime.Contracts.RuntimeRpcCatalogSnapshot : System.IE
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor>
+  method .ctor(System.String Id, System.Int64 Length, System.String Sha256, System.String MediaType, System.String FileName, System.DateTimeOffset ExpiresAtUtc, Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatability)
+  property System.DateTimeOffset ExpiresAtUtc { get; init; }
+  property System.String FileName { get; init; }
+  property System.String Id { get; init; }
+  property System.Int64 Length { get; init; }
+  property System.String MediaType { get; init; }
+  property Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatability { get; init; }
+  property System.String Sha256 { get; init; }
+  method Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor <Clone>$()
+  method System.Void Deconstruct(out System.String Id, out System.Int64 Length, out System.String Sha256, out System.String MediaType, out System.String FileName, out System.DateTimeOffset ExpiresAtUtc, out Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatability)
+  method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRpcContentReferenceDescriptor? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type enum Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability Repeatable = 1
+  field static Sunder.Runtime.Contracts.RuntimeRpcContentRepeatability SingleUse = 0
+  field System.Int32 value__
 type sealed class Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRpcErrorDescriptor>
   method .ctor(Sunder.Runtime.Contracts.RuntimeRpcErrorKind Kind, System.String Code, System.String Message)
   property System.String Code { get; init; }
@@ -1707,6 +1893,10 @@ type sealed class Sunder.Runtime.Contracts.RuntimeStackImportedItemDescriptor : 
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type enum Sunder.Runtime.Contracts.RuntimeStackInputSensitivity : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Runtime.Contracts.RuntimeStackInputSensitivity Public = 0
+  field static Sunder.Runtime.Contracts.RuntimeStackInputSensitivity Secret = 1
+  field System.Int32 value__
 type sealed class Sunder.Runtime.Contracts.RuntimeStackMediaInput : System.IEquatable<Sunder.Runtime.Contracts.RuntimeStackMediaInput>
   method .ctor(System.String UploadId, System.String ContentPath, System.String FileName, System.String ContentType, System.String? AltText = null, System.Int32 SortOrder = 0)
   property System.String? AltText { get; init; }
@@ -1722,7 +1912,7 @@ type sealed class Sunder.Runtime.Contracts.RuntimeStackMediaInput : System.IEqua
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Runtime.Contracts.RuntimeStackRequiredInputDescriptor : System.IEquatable<Sunder.Runtime.Contracts.RuntimeStackRequiredInputDescriptor>
-  method .ctor(System.String InputId, System.String OwnerPackageId, System.String ContributorId, System.String LocalInputId, System.String Label, System.Boolean Required, System.String? Description = null, System.String? DefaultValue = null)
+  method .ctor(System.String InputId, System.String OwnerPackageId, System.String ContributorId, System.String LocalInputId, System.String Label, Sunder.Runtime.Contracts.RuntimeStackInputSensitivity Sensitivity, System.Boolean Required, System.String? Description = null, System.String? DefaultValue = null)
   property System.String ContributorId { get; init; }
   property System.String? DefaultValue { get; init; }
   property System.String? Description { get; init; }
@@ -1731,8 +1921,9 @@ type sealed class Sunder.Runtime.Contracts.RuntimeStackRequiredInputDescriptor :
   property System.String LocalInputId { get; init; }
   property System.String OwnerPackageId { get; init; }
   property System.Boolean Required { get; init; }
+  property Sunder.Runtime.Contracts.RuntimeStackInputSensitivity Sensitivity { get; init; }
   method Sunder.Runtime.Contracts.RuntimeStackRequiredInputDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String InputId, out System.String OwnerPackageId, out System.String ContributorId, out System.String LocalInputId, out System.String Label, out System.Boolean Required, out System.String? Description, out System.String? DefaultValue)
+  method System.Void Deconstruct(out System.String InputId, out System.String OwnerPackageId, out System.String ContributorId, out System.String LocalInputId, out System.String Label, out Sunder.Runtime.Contracts.RuntimeStackInputSensitivity Sensitivity, out System.Boolean Required, out System.String? Description, out System.String? DefaultValue)
   method virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeStackRequiredInputDescriptor? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()

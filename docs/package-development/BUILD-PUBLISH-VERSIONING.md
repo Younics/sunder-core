@@ -1,6 +1,6 @@
 # Build, Validate, Publish, And Version
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 3. Use the matching `sdk/v*` tag for released build behavior.
 
 `Sunder.Package.Build` turns compiled package metadata into generated development output and immutable distributable archives. Package authors own C# metadata and normal MSBuild version properties; they do not maintain `sunder-package.json`.
 
@@ -41,6 +41,8 @@ using Sunder.Sdk.Packaging;
 
 `Version` is separate assembly/package build metadata. Runtime dependencies use `[assembly: SunderPackageDependency(...)]`; NuGet `PackageReference` items are compile/build dependencies and do not create installed-package dependencies.
 
+The generated aggregate imports `Sunder.Package.props` from every leaf. Edit its single `<Version>` value; do not duplicate versions across the aggregate, Runtime, App, or Protocol projects. A standalone custom project may keep the same single `Version` property in its project or a shared imported props file.
+
 ## Build Output
 
 ```powershell
@@ -69,22 +71,22 @@ It contains generated metadata, exact target requirements, authored assemblies, 
 
 `SunderDevOutputPath` may override only the direct `TargetDir/sunder-dev` child. This restriction lets the build safely delete stale generated output without accepting an arbitrary directory.
 
-## Publish An Archive
+## Pack An Archive
 
 ```powershell
-dotnet publish .\MyPackage.csproj -c Release --no-restore
+dotnet msbuild .\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
 The output includes:
 
 ```text
-bin/Release/net10.0/publish/MyPackage.1.2.3.sunderpkg
+bin/Release/net10.0/MyPackage.1.2.3.sunderpkg
 ```
 
-For an archive without a full publish command:
+`PackSunderPackage` is the canonical explicit archive target and depends on the build plus the correct leaf/aggregate preparation target. `dotnet publish` also creates an archive in the publish directory when a pipeline separately needs publish output:
 
 ```powershell
-dotnet msbuild .\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+dotnet publish .\MyPackage.csproj -c Release --no-restore
 ```
 
 The pack task validates its indexed staging tree, creates the deterministic archive, then independently extracts and validates that exact written file. A final validation failure removes the new archive. `SunderPackageFileName`, `SunderPackageOutputPath`, and `SunderPublishPackageOutputPath` customize names/locations when release automation needs them. Prefer defaults unless the pipeline has one explicit artifact convention.
@@ -109,7 +111,7 @@ Do not add broad acknowledgements to silence a failure you have not reviewed. `S
 ## Validate The Exact Artifact
 
 ```powershell
-sunder package validate .\bin\Release\net10.0\publish\MyPackage.1.2.3.sunderpkg
+sunder dev package validate .\bin\Release\net10.0\MyPackage.1.2.3.sunderpkg
 ```
 
 Validation is local and covers archive integrity and format. It does not execute package code, prove publisher identity, or make code safe. See [Package Trust And Security](SECURITY.md).
@@ -117,7 +119,7 @@ Validation is local and covers archive integrity and format. It does not execute
 Optionally install that same file into a development profile:
 
 ```powershell
-sunder install --file .\bin\Release\net10.0\publish\MyPackage.1.2.3.sunderpkg
+sunder package install --file .\bin\Release\net10.0\MyPackage.1.2.3.sunderpkg
 ```
 
 ## Publish To A Registry
@@ -125,18 +127,20 @@ sunder install --file .\bin\Release\net10.0\publish\MyPackage.1.2.3.sunderpkg
 Authenticate, then upload the exact validated file:
 
 ```powershell
-sunder auth login
-sunder publish --file .\bin\Release\net10.0\publish\MyPackage.1.2.3.sunderpkg
+sunder registry auth login
+sunder registry package publish --file .\bin\Release\net10.0\MyPackage.1.2.3.sunderpkg
 ```
 
-Registry artifacts are immutable by package id/version and duplicate publication is rejected. Ownership is enforced. Normal publish promotes the `latest` dist tag; use `--no-latest` for a prerelease/channel version and assign an appropriate tag separately:
+Registry artifacts are immutable by package id/version and duplicate publication is rejected. Ownership is enforced. Stable publication promotes `latest` by default; prerelease publication leaves `latest` unchanged by default. Use an explicit channel tag for a prerelease, or `--set-latest` only when intentionally promoting it:
 
 ```powershell
-sunder publish --file .\bin\Release\net10.0\publish\MyPackage.1.3.0-beta.1.sunderpkg --no-latest
-sunder dist-tag set my.company.package beta 1.3.0-beta.1
+sunder registry package publish --file .\bin\Release\net10.0\MyPackage.1.3.0-beta.1.sunderpkg
+sunder registry package tag set my.company.package beta 1.3.0-beta.1
 ```
 
-`latest` is only a movable Registry dist tag, not special installed state. Use `--dev-local` solely against the development-only local Registry endpoint.
+`--no-latest` suppresses stable promotion and `--set-latest` overrides the prerelease default. `latest` is only a movable Registry dist tag, not special installed state. Loopback development publication uses the separate `sunder dev registry package publish-local` command.
+
+Human publication defaults to the credential protected and supplied by Runtime after `sunder registry auth login`. Protected CI may instead use `--credential-source environment` with `SUNDER_REGISTRY_PUBLISH_TOKEN`, or pipe one scoped token with `--credential-source stdin`. Never put a publish token in command arguments or logs; see the [CLI reference](../SUNDER-CLI.md#ci-publication-credentials).
 
 ## Version Policy
 

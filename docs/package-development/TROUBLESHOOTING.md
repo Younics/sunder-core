@@ -10,7 +10,7 @@ Start with the first failing boundary: build, archive validation, Runtime activa
 
 - Verify the package references `Sunder.Package.Build` with `PrivateAssets="all"`.
 - Check that build/publish completed successfully and was not a design-time build.
-- Look under the actual configuration/target-framework output, such as `bin/Debug/net10.0/sunder-dev` or `bin/Release/net10.0/publish`.
+- Look under the actual configuration/target-framework output: `bin/Debug/net10.0/sunder-dev`, the canonical pack output under `bin/Release/net10.0`, or the publish directory only when the pipeline explicitly used `dotnet publish`.
 - Do not add a source `sunder-package.json`; metadata must come from `[assembly: SunderPackage(...)]`.
 
 ### Package Metadata Or Module Discovery Fails
@@ -40,7 +40,7 @@ Start with the first failing boundary: build, archive validation, Runtime activa
 - Rebuild after changing metadata or dependencies.
 - Include a dependency and all dependent development packages in the same App invocation so Runtime receives one complete desired set.
 - Close an older App invocation that owns the same development package before starting another.
-- Check `sunder system status` and the Runtime connection configuration when the Host/Runtime is unavailable.
+- Check `sunder runtime status` and the Runtime connection configuration when the Host/Runtime is unavailable.
 
 ### Watch Rebuild Does Not Activate
 

@@ -100,7 +100,8 @@
           "Sunder.Package.Format": "[1.0.0, )",
           "Sunder.Registry.Contracts": "[1.0.0, )",
           "Sunder.Runtime.Client": "[1.0.0, )",
-          "Sunder.Runtime.Contracts": "[1.0.0, )"
+          "Sunder.Runtime.Contracts": "[1.0.0, )",
+          "System.CommandLine": "[2.0.10, )"
         }
       },
       "sunder.host.client": {
@@ -160,6 +161,12 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.8"
         }
+      },
+      "System.CommandLine": {
+        "type": "CentralTransitive",
+        "requested": "[2.0.10, )",
+        "resolved": "2.0.10",
+        "contentHash": "6i1D6/U3i1f/PiXTt9pDvbJwdXEe0F2DZPup6BHzeIu5yPk/lkFzgtrJnPbj54JWUh8Y9vJeKG/TZIT6MkF8TA=="
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "CentralTransitive",

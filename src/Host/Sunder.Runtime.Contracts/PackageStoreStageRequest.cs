@@ -14,7 +14,9 @@ public sealed record PackageStoreMutationRequest(
     string? PackageId = null,
     string? UploadId = null,
     bool AllowDowngrade = false,
-    bool Reinstall = false);
+    bool Reinstall = false,
+    bool AllowCascade = false,
+    string? ConfirmationToken = null);
 
 public sealed record PackageStoreStageRequest(
     IReadOnlyList<PackageStoreMutationRequest> Mutations)

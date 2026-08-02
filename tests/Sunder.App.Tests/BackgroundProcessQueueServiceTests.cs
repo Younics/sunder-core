@@ -64,6 +64,70 @@ public sealed class BackgroundProcessQueueServiceTests
         await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
     }
 
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public async Task ReportProgress_WithNonFiniteValue_FailsProcess(double progress)
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+
+        var process = queue.Enqueue(CreateRequest("progress", "work", context =>
+        {
+            context.ReportProgress(progress);
+            return Task.CompletedTask;
+        }));
+
+        await WaitForConditionAsync(() => queue.GetProcess(process.ProcessId)?.IsTerminal == true);
+        var failed = queue.GetProcess(process.ProcessId);
+        Assert.Equal(BackgroundProcessState.Failed, failed?.State);
+        Assert.False(failed?.CanCancel);
+    }
+
+    [Fact]
+    public async Task Snapshots_FreezeMetadataAndOnlyAdvertiseActionableCancellation()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["item"] = "original",
+        };
+        var request = CreateRequest("metadata", "work", _ => Task.CompletedTask) with
+        {
+            Metadata = metadata,
+        };
+
+        metadata["item"] = "changed";
+        var queued = queue.Enqueue(request);
+        Assert.True(queued.CanCancel);
+        Assert.Equal("original", queued.Metadata["ITEM"]);
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, string>)queued.Metadata).Clear());
+
+        await WaitForConditionAsync(() => queue.GetProcess(queued.ProcessId)?.IsTerminal == true);
+        var completed = queue.GetProcess(queued.ProcessId);
+        Assert.NotNull(completed);
+        Assert.False(completed.CanCancel);
+        Assert.Equal("original", completed.Metadata["ITEM"]);
+    }
+
+    [Fact]
+    public void Enqueue_RejectsNullDelegateAndUnknownEnumValues()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+
+        Assert.Throws<ArgumentNullException>(() => queue.Enqueue(null!));
+        Assert.Throws<ArgumentException>(() => queue.Enqueue(CreateRequest("invalid", "work", null!)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => queue.Enqueue(CreateRequest("invalid", "work", _ => Task.CompletedTask) with
+        {
+            Indicator = (BackgroundProcessIndicator)99,
+        }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => queue.Enqueue(CreateRequest("invalid", "work", _ => Task.CompletedTask) with
+        {
+            ConcurrencyMode = (BackgroundProcessConcurrencyMode)99,
+        }));
+    }
+
     [Fact]
     public void ProcessChanged_WhenSubscriberThrows_ContinuesNotifyingRemainingSubscribers()
     {
@@ -106,6 +170,7 @@ public sealed class BackgroundProcessQueueServiceTests
 
         var cancelled = queue.GetProcess(queued.ProcessId);
         Assert.Equal(BackgroundProcessState.Cancelled, cancelled?.State);
+        Assert.False(cancelled?.CanCancel);
         Assert.DoesNotContain("b", started);
 
         release.SetResult();

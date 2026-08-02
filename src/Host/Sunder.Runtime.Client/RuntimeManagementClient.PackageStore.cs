@@ -17,6 +17,35 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
         => UploadAsync(filePath, "uploads/stack-media", contentType, token);
 
+    public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(
+        string packageId,
+        CancellationToken token = default)
+        => GetRequiredAsync<PackageUninstallPlan>(
+            $"packages/{Uri.EscapeDataString(packageId)}/uninstall-plan",
+            token);
+
+    public Task<PackageOperationResult> UninstallPackageAsync(
+        string packageId,
+        PackageUninstallRequest request,
+        CancellationToken token = default)
+        => PostAsync<PackageUninstallRequest, PackageOperationResult>(
+            $"packages/{Uri.EscapeDataString(packageId)}/uninstall",
+            request,
+            token);
+
+    public async Task<PackageOperationResult> SetPackageEnabledAsync(
+        string packageId,
+        bool enabled,
+        CancellationToken token = default)
+    {
+        using var response = await _httpClient.PostAsync(
+            CreateUri($"packages/{Uri.EscapeDataString(packageId)}/{(enabled ? "enable" : "disable")}"),
+            content: null,
+            token).ConfigureAwait(false);
+        return await _responses.ReadRequiredJsonAsync<PackageOperationResult>(response, token)
+            .ConfigureAwait(false);
+    }
+
     public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(
         PackageStoreStageRequest request,
         CancellationToken token = default)

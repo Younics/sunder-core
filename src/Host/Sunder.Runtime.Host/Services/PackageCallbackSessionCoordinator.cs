@@ -204,6 +204,27 @@ internal sealed class PackageCallbackSessionCoordinator
         return _sessions.GetStatus(packageId, callbackSessionId, lease.Generation);
     }
 
+    public bool Cancel(
+        PackageSessionLease lease,
+        string packageId,
+        string callbackSessionId)
+    {
+        var now = _timeProvider.GetUtcNow();
+        SweepExpired(now);
+        var cancellation = _sessions.TryCancel(
+            packageId,
+            callbackSessionId,
+            lease.Generation,
+            now + _policy.TerminalSessionRetention);
+        if (cancellation is null)
+        {
+            return false;
+        }
+
+        ScheduleCancellations([cancellation.Value]);
+        return true;
+    }
+
     public async Task<bool> CompleteAsync(
         PackageSessionLease lease,
         string callbackSessionId,

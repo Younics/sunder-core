@@ -1,8 +1,8 @@
 <div align="center">
   <img src="src/Host/Sunder.App/Assets/Images/logo.png" alt="Sunder logo" width="128" />
   <h1>Sunder Core</h1>
-  <p><strong>Local-first desktop package platform for .NET and Avalonia.</strong></p>
-  <p>Build installable packages that contribute UI, services, settings, background work, and runtime capabilities to a desktop shell.</p>
+  <p><strong>Local-first desktop package platform with an open, canonical package format.</strong></p>
+  <p>Build installable packages that contribute UI, services, settings, background work, and runtime capabilities from managed or process toolchains.</p>
   <p>
     <a href="docs/SUNDER.md"><strong>Overview</strong></a> &middot;
     <a href="docs/SUNDER-PACKAGE-DEVELOPMENT.md"><strong>Package Development</strong></a> &middot;
@@ -21,6 +21,8 @@
 
 ---
 
+> **Source channel:** The default branch and its documentation describe current source and may be ahead of published App, CLI, NuGet, or npm releases. Use the matching `app/v*`, `cli/v*`, `host/v*`, or `sdk/v*` tag and the README shipped inside a package when evaluating a released artifact.
+
 Sunder Core is the public foundation of Sunder: the desktop app, current-user Host gateway (`Sunder.Host.Supervisor`), nested Runtime worker (`Sunder.Runtime.Host`), CLI, package SDK, package build pipeline, package template, archive validation, and public Registry contracts.
 
 First-party AI Agent packages live in [`Younics/sunder-agent-package`](https://github.com/Younics/sunder-agent-package). The private Registry implementation is not part of this repository.
@@ -33,13 +35,13 @@ First-party AI Agent packages live in [`Younics/sunder-agent-package`](https://g
 | Current-user Host | Public authenticated loopback gateway, private Runtime worker lifecycle, durable lifecycle intent, and per-user Host identity. |
 | Runtime worker | Nested package worker that owns local package state, archive validation, install/update/uninstall, activation, runtime services, and package asset serving. |
 | CLI | Commands for Registry discovery/publishing and local package operations through the Host gateway. |
-| SDK | Public contracts for package metadata, modules, views, extensions, configuration, secrets, storage, logging, callbacks, and theme resources. |
-| Build tooling | MSBuild targets that generate manifests, emit `sunder-dev`, and create distributable `.sunderpkg` archives. |
-| Templates | `dotnet new sunder-package` scaffolding for package authors. |
+| SDK | Managed and TypeScript subsets for package metadata, modules, views, RPC, process workers, browser bridges, and host capabilities. |
+| Build tooling | MSBuild and npm tooling that emit canonical manifests, `sunder-dev`, exact targets, and distributable `.sunderpkg` archives. |
+| Templates | Managed .NET/Avalonia and Node/React presets that demonstrate supported authoring routes without defining separate package formats. |
 
 ## Quick Start
 
-Create a Sunder package project with the public template:
+Create the current managed .NET Runtime preset with the public template:
 
 ```powershell
 dotnet new install Sunder.Package.Templates
@@ -59,12 +61,14 @@ Load it into Sunder App during development:
 Sunder.App.exe --dev-package .\MyPackage\bin\Debug\net10.0\sunder-dev
 ```
 
-Publish a distributable package archive:
+Set the package version once in `MyPackage/Sunder.Package.props`, then create and validate the distributable archive with the canonical pack target:
 
 ```powershell
-dotnet publish .\MyPackage\MyPackage.csproj -c Release
-sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
+
+Current authoring presets are managed .NET Runtime, Avalonia App, Node process Runtime, and framework-agnostic web App with React/Vite as one template. The package format is not tied to those presets. Future Python, Rust, Go, or other process toolchains, other .NET UI approaches, and other web frameworks can participate when their tooling emits the canonical archive and uses a target kind/protocol supported by the Host.
 
 ## Architecture
 
@@ -102,6 +106,8 @@ These are the public NuGet packages intended for package authors:
 | [`Sunder.Package.Templates`](https://www.nuget.org/packages/Sunder.Package.Templates) | `dotnet new sunder-package` project template. |
 
 `Sunder.Runtime.Contracts`, `Sunder.Package.Format`, and `Sunder.Registry.Contracts` are source projects used by Sunder, but they are not the public package-author SDK surface.
+
+For Node process Runtime and web App authoring, use [`@sunder/sdk`](https://www.npmjs.com/package/@sunder/sdk), [`@sunder/package-tool`](https://www.npmjs.com/package/@sunder/package-tool), and [`create-sunder-package`](https://www.npmjs.com/package/create-sunder-package). The TypeScript SDK is a deliberate RPC/process/browser subset, not a port of every managed `Sunder.Sdk` capability.
 
 ## Build From Source
 
@@ -144,7 +150,7 @@ Release automation is tag-driven:
 | `app/v*` | Sunder desktop app |
 | `host/v*` | Standalone current-user Host archive (Supervisor gateway with nested Runtime worker) |
 | `cli/v*` | Sunder CLI |
-| `sdk/v*` | SDK contract packages, build tooling, and templates |
+| `sdk/v*` | Five coordinated NuGet packages and three coordinated npm packages for SDKs, build tooling, and templates |
 
 See [`docs/SUNDER-CORE-RELEASES.md`](docs/SUNDER-CORE-RELEASES.md) for workflow checks, draft publishing, and signing status.
 
@@ -156,4 +162,4 @@ For vulnerability reports, use the private process in [`SECURITY.md`](SECURITY.m
 
 ## License
 
-Sunder Core is distributed under the [GNU General Public License v3.0](LICENSE).
+Sunder Core is distributed under the [GNU General Public License v3.0](LICENSE). The three published Node authoring packages carry their own MIT `LICENSE` and `NOTICE` files.

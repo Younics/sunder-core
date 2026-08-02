@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -108,9 +109,14 @@ public sealed class ProcessRuntimeWorkerTests
     {
         await using var fixture = await WorkerFixture.CreateAsync("normal");
         var activation = await fixture.PublishBrokerSessionAsync();
-        var input = await fixture.RegisterCallerContentAsync("caller-payload");
+        await using var scope = await activation.Client.CreateCallScopeAsync();
+        await using var inputStream = new MemoryStream(Encoding.UTF8.GetBytes("caller-payload"));
+        var input = await scope.RegisterContentAsync(
+            activation.Endpoint,
+            inputStream,
+            new SunderRpcContentRegistrationOptions("text/plain", "caller.txt", inputStream.Length));
 
-        var result = await activation.Client.InvokeAsync(
+        var result = await scope.InvokeAsync(
             activation.Endpoint,
             "messages",
             "content-roundtrip",
@@ -123,19 +129,9 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.True(result.GetProperty("accepted").GetBoolean());
         Assert.True(result.GetProperty("openedFileDiscarded").GetBoolean());
         var output = ReadContentReference(result.GetProperty("content"));
-        var lease = Assert.IsType<RuntimeRpcContentLease>(fixture.Transfers.AcquireRpcContent(
-            output,
-            "process.test",
-            "caller.package",
-            fixture.Owner.Generation));
-        try
-        {
-            Assert.Equal("caller-payload-processed", await File.ReadAllTextAsync(lease.FilePath));
-        }
-        finally
-        {
-            fixture.Transfers.ReleaseRpcContent(lease);
-        }
+        await using var outputStream = await scope.OpenContentAsync(output);
+        using var reader = new StreamReader(outputStream, Encoding.UTF8, leaveOpen: false);
+        Assert.Equal("caller-payload-processed", await reader.ReadToEndAsync());
     }
 
     [Fact]
@@ -286,7 +282,7 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task Broker_ForwardsSafeNestedRpcErrorWithoutFaultingProcess()
+    public async Task Broker_RejectsProcessProviderForgedInfrastructureError()
     {
         await using var fixture = await WorkerFixture.CreateAsync("forwarded-error");
         var activation = await fixture.PublishBrokerSessionAsync();
@@ -298,9 +294,9 @@ public sealed class ProcessRuntimeWorkerTests
                 "send",
                 JsonSerializer.SerializeToElement(new { message = "hello" })));
 
-        Assert.Equal(SunderRpcErrorKind.PermissionDenied, failure.Error.Kind);
-        Assert.Single(fixture.Catalog.GetSnapshot().Providers);
-        Assert.Equal(PackageReadinessState.Ready, fixture.Owner.State.GetSessionPackage("process.test")!.Readiness);
+        Assert.Equal(SunderRpcErrorKind.ProviderFaulted, failure.Error.Kind);
+        Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
+        Assert.Equal(PackageReadinessState.Failed, fixture.Owner.State.GetSessionPackage("process.test")!.Readiness);
     }
 
     [Fact]
@@ -474,15 +470,11 @@ public sealed class ProcessRuntimeWorkerTests
                 owner,
                 hostStopping: CancellationToken.None,
                 policy: null,
-                timeProvider: null);
+                timeProvider: null,
+                contentStore: transfers,
+                transportPolicy: new RuntimeTransportPolicyOptions());
             var activationId = Guid.NewGuid();
             var context = new RuntimePackageContext("process.test", "1.0.0", shadow, paths.PackageDataRootPath);
-            var contentClient = new RuntimeRpcContentClient(
-                transfers,
-                owner.State,
-                new RuntimeTransportPolicyOptions(),
-                "process.test",
-                activationId);
             var worker = new ProcessRuntimeWorker(
                 logger ?? NullLogger.Instance,
                 prepared,
@@ -490,8 +482,7 @@ public sealed class ProcessRuntimeWorkerTests
                 activationId,
                 broker,
                 policy,
-                hostStopping,
-                contentClient);
+                hostStopping);
             return new WorkerFixture(root, prepared, activationId, worker, catalog, permissions, owner, context, transfers);
         }
 
@@ -643,7 +634,9 @@ public sealed class ProcessRuntimeWorkerTests
                     _owner,
                     hostStopping: CancellationToken.None,
                     policy: null,
-                    timeProvider: null),
+                    timeProvider: null,
+                    contentStore: _transfers,
+                    transportPolicy: new RuntimeTransportPolicyOptions()),
                 new RuntimeRpcCallerStamp("caller.package", caller.RuntimeActivationId));
             var endpoint = Assert.Single((await client.DiscoverAsync(Contract.ContractId)).Providers).Endpoint;
             return new BrokerActivation(client, endpoint);
@@ -658,23 +651,6 @@ public sealed class ProcessRuntimeWorkerTests
                 SunderRpcProtocol.InvokeAction,
                 state,
                 CancellationToken.None);
-
-        public async Task<SunderRpcContentReference> RegisterCallerContentAsync(string value)
-        {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(value);
-            await using var source = new MemoryStream(bytes, writable: false);
-            return await _transfers.RegisterRpcContentAsync(
-                source,
-                bytes.Length,
-                "text/plain",
-                "caller.txt",
-                "caller.package",
-                "process.test",
-                _owner.Generation,
-                DateTimeOffset.UtcNow.AddMinutes(1),
-                SunderRpcContentRepeatability.SingleUse,
-                maximumUses: 1);
-        }
 
         public SunderRpcInvocationContext InvocationContext()
             => new(

@@ -132,6 +132,27 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
+    public void GenerateManifest_InfersStackRpcCapabilityFromClientOnlyUse()
+    {
+        var assemblyPath = CopyFixtureAssemblyToIsolatedDirectory("MissingSdkDependency");
+        var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
+        task.ReferencePaths =
+        [
+            new MSBuildTaskItem(typeof(SunderPackageAttribute).Assembly.Location),
+            new MSBuildTaskItem(typeof(StackContributorRpcClient).Assembly.Location),
+        ];
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        AssertContainsCapabilities(
+            ReadCapabilities(document.RootElement),
+            SunderSdkCapabilities.StacksV1,
+            SunderSdkCapabilities.StacksRpcV1);
+    }
+
+    [Fact]
     public void GenerateManifest_IncludesManualSdkCapabilityOverrides()
     {
         var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
@@ -242,6 +263,7 @@ public sealed class PackageBuildManifestTests
             BuildEngine = emitEngine,
             ManifestPath = manifestPath,
             DevPackagePath = devPackage,
+            DiscoveryRoot = root,
             TargetDirectory = targetDirectory,
             ManagedFiles = [new MSBuildTaskItem(assemblyPath)],
             ContractFiles = task.ResolvedContractFiles,
@@ -558,6 +580,7 @@ public sealed class PackageBuildManifestTests
             DevOutputPath = output,
             ProjectDirectory = project,
             TargetDirectory = target,
+            DiscoveryRoot = target,
         };
 
         Assert.False(task.Execute());
@@ -575,10 +598,30 @@ public sealed class PackageBuildManifestTests
             DevOutputPath = Path.Combine(target, "sunder-dev"),
             ProjectDirectory = project,
             TargetDirectory = target,
+            DiscoveryRoot = target,
         };
 
         Assert.True(task.Execute());
         Assert.True(Path.EndsInDirectorySeparator(task.NormalizedDevOutputPath));
+    }
+
+    [Theory]
+    [InlineData("src")]
+    [InlineData("Assets")]
+    public void ValidateDevOutputPath_RejectsSourceTreeTarget(string sourceDirectory)
+    {
+        var project = CreateTempDirectory();
+        var target = Path.Combine(project, sourceDirectory, "generated");
+        var task = new ValidateSunderDevOutputPathTask
+        {
+            BuildEngine = new TestBuildEngine(),
+            DevOutputPath = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            DiscoveryRoot = target,
+        };
+
+        Assert.False(task.Execute());
     }
 
     [Fact]
@@ -595,6 +638,7 @@ public sealed class PackageBuildManifestTests
             DevOutputPath = output,
             ProjectDirectory = project,
             TargetDirectory = target,
+            DiscoveryRoot = target,
         };
 
         Assert.False(task.Execute());
@@ -615,6 +659,7 @@ public sealed class PackageBuildManifestTests
             DevOutputPath = output,
             ProjectDirectory = project,
             TargetDirectory = target,
+            DiscoveryRoot = target,
         };
 
         Assert.True(task.Execute());
@@ -669,19 +714,22 @@ public sealed class PackageBuildManifestTests
     public async Task PackPackage_IndexesAssetNamedContentIndexJson()
     {
         var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
         var devPackage = Path.Combine(root, "sunder-dev");
         var manifestEngine = new TestBuildEngine();
         CreateValidDevPackage(devPackage, manifestEngine);
         Directory.CreateDirectory(Path.Combine(devPackage, "payload", "shared", "assets"));
         File.WriteAllText(Path.Combine(devPackage, "payload", "shared", "assets", "content-index.json"), "asset");
-        var output = Path.Combine(root, "package.sunderpkg");
+        var output = Path.Combine(project, "bin", "package.sunderpkg");
         var buildEngine = new TestBuildEngine();
 
         Assert.True(new PackSunderPackageTask
         {
             BuildEngine = buildEngine,
             DevPackagePath = devPackage,
+            DevPackageDiscoveryRoot = root,
             PackageOutputPath = output,
+            ProjectDirectory = project,
         }.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
 
         using var archive = ZipFile.OpenRead(output);
@@ -701,22 +749,54 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
+    public void PackPackage_RecoversAdjacentLockOwnedByDeadProcess()
+    {
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var devPackage = Path.Combine(root, "sunder-dev");
+        var output = Path.Combine(project, "bin", "recovered.sunderpkg");
+        CreateValidDevPackage(devPackage, new TestBuildEngine());
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        var lockPath = output + ".sunder-output.lock";
+        using var deadOwnerMarker = CreateOwnerDirectory(
+            lockPath,
+            int.MaxValue,
+            Environment.MachineName,
+            DateTime.UtcNow.AddMinutes(-1));
+        var buildEngine = new TestBuildEngine();
+
+        Assert.True(new PackSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            DevPackagePath = devPackage,
+            DevPackageDiscoveryRoot = root,
+            PackageOutputPath = output,
+            ProjectDirectory = project,
+        }.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        Assert.True(File.Exists(output));
+        Assert.False(Directory.Exists(lockPath));
+    }
+
+    [Fact]
     public void PackPackage_RejectsPackageThatFailsConsumerFormatValidation()
     {
         var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
         var devPackage = Path.Combine(root, "sunder-dev");
         Directory.CreateDirectory(Path.Combine(devPackage, "manifest"));
         Directory.CreateDirectory(Path.Combine(devPackage, "payload", "shared", "lib"));
         File.WriteAllText(Path.Combine(devPackage, "manifest", "sunder-package.json"), "{}");
         File.WriteAllText(Path.Combine(devPackage, "payload", "shared", "lib", "Package.dll"), "assembly");
-        var output = Path.Combine(root, "package.sunderpkg");
+        var output = Path.Combine(project, "bin", "package.sunderpkg");
         var buildEngine = new TestBuildEngine();
 
         Assert.False(new PackSunderPackageTask
         {
             BuildEngine = buildEngine,
             DevPackagePath = devPackage,
+            DevPackageDiscoveryRoot = root,
             PackageOutputPath = output,
+            ProjectDirectory = project,
         }.Execute());
 
         Assert.Contains(buildEngine.Errors, error =>
@@ -725,14 +805,62 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
+    public void PackPackage_RejectsNonPackageExtensionWithoutOverwritingFile()
+    {
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var output = Path.Combine(project, "bin", "keep.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        File.WriteAllText(output, "keep");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new PackSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            DevPackagePath = Path.Combine(root, "missing-dev-package"),
+            DevPackageDiscoveryRoot = root,
+            PackageOutputPath = output,
+            ProjectDirectory = project,
+        }.Execute());
+
+        Assert.Contains(buildEngine.Errors, error => error.Contains(".sunderpkg", StringComparison.Ordinal));
+        Assert.Equal("keep", File.ReadAllText(output));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("src")]
+    [InlineData("Assets")]
+    public void PackPackage_RejectsSourceTreeArchiveWithoutOverwritingFile(string sourceDirectory)
+    {
+        var project = CreateTempDirectory();
+        var output = Path.Combine(project, sourceDirectory, "keep.sunderpkg");
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        File.WriteAllText(output, "keep");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new PackSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            DevPackagePath = Path.Combine(project, "missing-dev-package"),
+            DevPackageDiscoveryRoot = project,
+            PackageOutputPath = output,
+            ProjectDirectory = project,
+        }.Execute());
+
+        Assert.Contains(buildEngine.Errors, error => error.Contains("source", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("keep", File.ReadAllText(output));
+    }
+
+    [Fact]
     public void PackTask_ValidatesTheWrittenArchiveAfterDeterministicCreation()
     {
         var source = File.ReadAllText(Path.Combine(FindTaskDirectory(), "PackSunderPackageTask.cs"));
         var writeIndex = source.IndexOf(
-            "DeterministicPackageArchiveWriter.Write(DevPackagePath, PackageOutputPath)",
+            "DeterministicPackageArchiveWriter.Write(devPackagePath, stagedPackagePath)",
             StringComparison.Ordinal);
         var archiveValidationIndex = source.IndexOf(
-            "ExtractAndValidateAsync(PackageOutputPath, archiveValidationPath)",
+            "ExtractAndValidateAsync(stagedPackagePath, archiveValidationPath)",
             StringComparison.Ordinal);
 
         Assert.True(writeIndex >= 0, "The deterministic package archive write was not found.");
@@ -787,6 +915,7 @@ public sealed class PackageBuildManifestTests
             BuildEngine = emitEngine,
             ManifestPath = manifestPath,
             DevPackagePath = devPackage,
+            DiscoveryRoot = root,
             TargetDirectory = targetDirectory,
             ManagedFiles = [new MSBuildTaskItem(assemblyPath)],
             NativeRuntimeFiles = [new MSBuildTaskItem(winNative), new MSBuildTaskItem(linuxNative)],
@@ -804,18 +933,308 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
+    public async Task EmitDevOutput_PreservesPriorCanonicalTreeWhenReplacementFails()
+    {
+        var root = CreateTempDirectory();
+        var devPackage = CreateCanonicalLeaf(root, "runtime", "win-x64", "native");
+        var leafRoot = Path.Combine(root, "runtime-win-x64-leaf");
+        var priorIndex = await File.ReadAllBytesAsync(Path.Combine(devPackage, "manifest", "content-index.json"));
+        var priorManifest = await File.ReadAllBytesAsync(Path.Combine(devPackage, "manifest", "sunder-package.json"));
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new EmitSunderDevOutputTask
+        {
+            BuildEngine = buildEngine,
+            ManifestPath = Path.Combine(leafRoot, "sunder-package.json"),
+            DevPackagePath = devPackage,
+            DiscoveryRoot = root,
+            TargetDirectory = Path.Combine(leafRoot, "target"),
+            ManagedFiles = [new MSBuildTaskItem(Path.Combine(leafRoot, "target", "missing.dll"))],
+        }.Execute());
+
+        Assert.Equal(priorIndex, await File.ReadAllBytesAsync(Path.Combine(devPackage, "manifest", "content-index.json")));
+        Assert.Equal(priorManifest, await File.ReadAllBytesAsync(Path.Combine(devPackage, "manifest", "sunder-package.json")));
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+    }
+
+    [Fact]
+    public void EmitDevOutput_RejectsMarkerDirectoryWithoutDeletingIt()
+    {
+        var root = CreateTempDirectory();
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var manifestEngine = new TestBuildEngine();
+        Assert.True(CreateTask(manifestPath, manifestEngine).Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
+        var output = Path.Combine(root, "sunder-dev");
+        var markerDirectory = ValidateSunderDevOutputPathTask.GetOwnershipMarkerPath(output);
+        var sentinel = Path.Combine(markerDirectory, "sentinel.txt");
+        Directory.CreateDirectory(markerDirectory);
+        File.WriteAllText(sentinel, "preserve");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new EmitSunderDevOutputTask
+        {
+            BuildEngine = buildEngine,
+            ManifestPath = manifestPath,
+            DevPackagePath = output,
+            DiscoveryRoot = root,
+            TargetDirectory = root,
+        }.Execute());
+
+        Assert.True(Directory.Exists(markerDirectory));
+        Assert.Equal("preserve", File.ReadAllText(sentinel));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("must be a regular file", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EmitDevOutput_SerializesConcurrentMsbuildProducersWithoutMixedTrees()
+    {
+        var root = CreateTempDirectory();
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var manifestEngine = new TestBuildEngine();
+        Assert.True(CreateTask(manifestPath, manifestEngine).Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
+        var output = Path.Combine(root, "sunder-dev");
+        var projectFiles = new List<string>();
+        foreach (var generation in new[] { "first", "second" })
+        {
+            var target = Path.Combine(root, generation, "target");
+            var assets = Path.Combine(root, generation, "assets");
+            Directory.CreateDirectory(target);
+            Directory.CreateDirectory(assets);
+            var assemblyPath = Path.Combine(target, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+            File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+            var assetPath = Path.Combine(assets, "generation.txt");
+            File.WriteAllText(assetPath, generation);
+            var projectFile = Path.Combine(root, generation, "Emit.proj");
+            File.WriteAllText(projectFile, $$"""
+                <Project>
+                  <UsingTask TaskName="Sunder.Package.Build.Tasks.EmitSunderDevOutputTask"
+                             AssemblyFile="{{typeof(EmitSunderDevOutputTask).Assembly.Location}}" />
+                  <ItemGroup>
+                    <Managed Include="{{assemblyPath}}" />
+                    <Asset Include="{{assetPath}}" />
+                  </ItemGroup>
+                  <Target Name="Run">
+                    <EmitSunderDevOutputTask ManifestPath="{{manifestPath}}"
+                                             DevPackagePath="{{output}}"
+                                             DiscoveryRoot="{{root}}"
+                                             TargetDirectory="{{target}}"
+                                             AssetsDirectory="{{assets}}"
+                                             ManagedFiles="@(Managed)"
+                                             AssetFiles="@(Asset)" />
+                  </Target>
+                </Project>
+                """);
+            projectFiles.Add(projectFile);
+        }
+
+        var processes = projectFiles.Select(projectFile => StartMsbuild(projectFile, Path.GetDirectoryName(projectFile)!)).ToArray();
+        var results = await Task.WhenAll(processes.Select(ReadProcessAsync));
+
+        Assert.All(results, result => Assert.True(result.ExitCode == 0, result.Output));
+        Assert.Contains(
+            File.ReadAllText(Path.Combine(output, "payload", "shared", "assets", "generation.txt")),
+            new[] { "first", "second" });
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(output);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        Assert.True(File.Exists(ValidateSunderDevOutputPathTask.GetOwnershipMarkerPath(output)));
+        Assert.False(Directory.Exists(output + ".sunder-output.lock"));
+        Assert.False(Directory.Exists(output + ".sunder-output.lock.transition"));
+    }
+
+    [Fact]
+    public void SharedOutputLock_ReclaimsSameHostPidWithDifferentProcessStart()
+    {
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        using var ownerMarker = CreateOwnerDirectory(
+            output + GeneratedOutputLock.LockSuffix,
+            Environment.ProcessId,
+            Environment.MachineName,
+            DateTime.UtcNow.AddYears(-10));
+
+        using var outputLock = GeneratedOutputLock.Acquire([output], TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public void SharedOutputLock_SameHostOwnerWithoutProcessMarkerTimesOutWithoutReclamation()
+    {
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        var lockPath = output + GeneratedOutputLock.LockSuffix;
+        using var ownerMarker = CreateOwnerDirectory(
+            lockPath,
+            int.MaxValue,
+            Environment.MachineName,
+            DateTime.UtcNow.AddYears(-10));
+        ownerMarker.Delete();
+
+        Assert.Throws<TimeoutException>(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromMilliseconds(250)));
+        Assert.True(Directory.Exists(lockPath));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SharedOutputLock_LinuxBootOrPidNamespaceMismatchTimesOutWithoutReclamation(bool mismatchBoot)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        var lockPath = output + GeneratedOutputLock.LockSuffix;
+        using var ownerMarker = CreateOwnerDirectory(
+            lockPath,
+            int.MaxValue,
+            Environment.MachineName,
+            DateTime.UtcNow.AddYears(-10),
+            linuxBootIdOverride: mismatchBoot ? Guid.NewGuid().ToString("D") : null,
+            linuxPidNamespaceOverride: mismatchBoot ? null : "pid:[0]");
+
+        Assert.Throws<TimeoutException>(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromMilliseconds(250)));
+        Assert.True(Directory.Exists(lockPath));
+    }
+
+    [Fact]
+    public void SharedOutputLock_UnknownHostOwnerAndGuardTimeOutWithoutReclamation()
+    {
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        var lockPath = output + GeneratedOutputLock.LockSuffix;
+        var unknownHost = Environment.MachineName + ".unknown-host";
+        using var ownerMarker = CreateOwnerDirectory(lockPath, Environment.ProcessId, unknownHost, DateTime.UtcNow.AddYears(-10));
+        File.SetLastWriteTimeUtc(Path.Combine(lockPath, GeneratedOutputLock.OwnerFileName), DateTime.UtcNow.AddDays(-1));
+
+        Assert.Throws<TimeoutException>(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromMilliseconds(250)));
+        Assert.True(Directory.Exists(lockPath));
+
+        Directory.Delete(lockPath, recursive: true);
+        var guardPath = lockPath + ".transition";
+        using var guardMarker = CreateOwnerDirectory(guardPath, Environment.ProcessId, unknownHost, DateTime.UtcNow.AddYears(-10));
+        File.SetLastWriteTimeUtc(Path.Combine(guardPath, GeneratedOutputLock.OwnerFileName), DateTime.UtcNow.AddDays(-1));
+        Assert.Throws<TimeoutException>(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromMilliseconds(250)));
+        Assert.True(Directory.Exists(guardPath));
+    }
+
+    [Fact]
+    public async Task SharedOutputLock_RetainsLiveStaleHeartbeatAndSerializesTwoReclaimers()
+    {
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        var holder = AcquireGeneratedOutputLock(output);
+        var heartbeatPath = Path.Combine(output + ".sunder-output.lock", "owner.json");
+        File.SetLastWriteTimeUtc(heartbeatPath, DateTime.UtcNow.AddMinutes(-10));
+        var waiterTask = Task.Run(() => AcquireGeneratedOutputLock(output));
+        await Task.Delay(300);
+        Assert.False(waiterTask.IsCompleted, "A stale heartbeat must not override a live same-host PID.");
+        holder.Dispose();
+        using (await waiterTask.WaitAsync(TimeSpan.FromSeconds(5)))
+        {
+        }
+
+        using var deadOwnerMarker = CreateDeadOwnerLock(output);
+        using var guardMarker = CreateOwnerDirectory(
+            output + GeneratedOutputLock.LockSuffix + ".transition",
+            int.MaxValue,
+            Environment.MachineName,
+            DateTime.UtcNow.AddMinutes(-1));
+        var acquired = new SemaphoreSlim(0, 2);
+        var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        var release = new[] { new ManualResetEventSlim(), new ManualResetEventSlim() };
+        var reclaimers = Enumerable.Range(0, 2).Select(index => Task.Run(() =>
+        {
+            using var outputLock = AcquireGeneratedOutputLock(output);
+            order.Enqueue(index);
+            acquired.Release();
+            release[index].Wait(TimeSpan.FromSeconds(10));
+        })).ToArray();
+        Assert.True(await acquired.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Task.Delay(250);
+        Assert.Single(order);
+        Assert.True(order.TryPeek(out var first));
+        release[first].Set();
+        Assert.True(await acquired.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, order.Count);
+        release[first == 0 ? 1 : 0].Set();
+        await Task.WhenAll(reclaimers).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(Directory.Exists(output + ".sunder-output.lock"));
+        Assert.False(Directory.Exists(output + ".sunder-output.lock.transition"));
+        Assert.Single(Directory.EnumerateDirectories(root, "shared-output.sunder-output.lock.transition.stale-*"));
+    }
+
+    [Fact]
+    public async Task SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable()
+    {
+        var helper = Path.Combine(
+            FindRepositoryRoot(),
+            "js",
+            "packages",
+            "package-tool",
+            "dist-test",
+            "test",
+            "output-child.js");
+        if (!File.Exists(helper) || !CanStartNode()) return;
+        var root = CreateTempDirectory();
+        var output = Path.Combine(root, "shared-output");
+        var ready = Path.Combine(root, "node.ready");
+        var release = Path.Combine(root, "node.release");
+        var holder = AcquireGeneratedOutputLock(output);
+        var node = StartNode(helper, "hold", output, ready, release);
+        await Task.Delay(300);
+        Assert.False(File.Exists(ready));
+        holder.Dispose();
+        await WaitForFileAsync(ready, TimeSpan.FromSeconds(5));
+        File.WriteAllText(release, "release");
+        var result = await ReadProcessAsync(node);
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.False(Directory.Exists(output + ".sunder-output.lock"));
+
+        using (CreateDeadOwnerLock(output))
+        {
+            var nodeRecovery = StartNode(helper, "recover", output);
+            var recoveryResult = await ReadProcessAsync(nodeRecovery);
+            Assert.True(recoveryResult.ExitCode == 0, recoveryResult.Output);
+            Assert.False(Directory.Exists(output + ".sunder-output.lock"));
+        }
+
+        var crashedReady = Path.Combine(root, "crashed-node.ready");
+        var crashedRelease = Path.Combine(root, "crashed-node.release");
+        var crashedNode = StartNode(helper, "hold", output, crashedReady, crashedRelease);
+        await WaitForFileAsync(crashedReady, TimeSpan.FromSeconds(5));
+        using var ownerDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            output + GeneratedOutputLock.LockSuffix,
+            GeneratedOutputLock.OwnerFileName)));
+        using var crashedNodeMarker = new TemporaryProcessMarker(
+            ownerDocument.RootElement.GetProperty("processMarkerPath").GetString()
+            ?? throw new InvalidDataException("Node lock owner omitted its process marker path."));
+        var reclaimerTask = Task.Run(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromSeconds(5)));
+        await Task.Delay(250);
+        Assert.False(reclaimerTask.IsCompleted, "A live Node owner must remain ambiguous on inexact process identity.");
+        crashedNode.Kill();
+        var crashedResult = await ReadProcessAsync(crashedNode);
+        Assert.NotEqual(0, crashedResult.ExitCode);
+        Assert.True(File.Exists(crashedNodeMarker.Path));
+        using var reclaimed = await reclaimerTask.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task AggregateTask_FactorsIdenticalFilesAndProducesDeterministicUniversalTree()
     {
         var root = CreateTempDirectory();
         var appLeaf = CreateCanonicalLeaf(root, "app", "win-x64", "app-native");
         var runtimeLeaf = CreateCanonicalLeaf(root, "runtime", "win-x64", "runtime-native");
-        var output = Path.Combine(root, "universal");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
         var buildEngine = new TestBuildEngine();
         var task = new AggregateSunderPackageTask
         {
             BuildEngine = buildEngine,
-            TargetLeaves = [new MSBuildTaskItem(appLeaf), new MSBuildTaskItem(runtimeLeaf)],
+            TargetLeaves = [TargetLeafItem(appLeaf), TargetLeafItem(runtimeLeaf)],
             OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
         };
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
@@ -832,17 +1251,229 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
+    public async Task AggregateTask_WaitsForConfiguredAncestorDiscoveryRootAcrossNestedSwapGap()
+    {
+        var root = CreateTempDirectory();
+        var discoveryRoot = Path.Combine(root, "inputs");
+        var leaf = CreateCanonicalLeaf(discoveryRoot, "runtime", "linux-x64", "native");
+        var backup = leaf + ".manual-backup-" + Guid.NewGuid().ToString("N");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        var buildEngine = new TestBuildEngine();
+        var aggregate = new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(leaf, discoveryRoot)],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        };
+        using var gapLock = GeneratedOutputLock.Acquire(
+            [GeneratedOutputLock.TargetLeafDiscoveryKey(discoveryRoot, leaf)],
+            []);
+        Directory.Move(leaf, backup);
+        var aggregateTask = Task.Run(aggregate.Execute);
+        try
+        {
+            await Task.Delay(200);
+            Assert.False(aggregateTask.IsCompleted, "Aggregation must not inspect a nested leaf during its discovery-root swap gap.");
+            Directory.Move(backup, leaf);
+            gapLock.Dispose();
+            Assert.True(await aggregateTask.WaitAsync(TimeSpan.FromSeconds(5)), string.Join(Environment.NewLine, buildEngine.Errors));
+        }
+        finally
+        {
+            if (Directory.Exists(backup) && !Directory.Exists(leaf)) Directory.Move(backup, leaf);
+            gapLock.Dispose();
+            try
+            {
+                await aggregateTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch
+            {
+                // Preserve the primary assertion failure.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AggregateAndPackTasks_SerializeConcurrentMsbuildProcesses()
+    {
+        var root = CreateTempDirectory();
+        var appLeaf = CreateCanonicalLeaf(root, "app", "win-x64", "app-native");
+        var runtimeLeaf = CreateCanonicalLeaf(root, "runtime", "win-x64", "runtime-native");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        var archive = Path.Combine(project, "bin", "concurrent.sunderpkg");
+        Directory.CreateDirectory(project);
+        var projectFile = Path.Combine(project, "Concurrent.proj");
+        File.WriteAllText(projectFile, $$"""
+            <Project>
+              <UsingTask TaskName="Sunder.Package.Build.Tasks.AggregateSunderPackageTask"
+                         AssemblyFile="{{typeof(AggregateSunderPackageTask).Assembly.Location}}" />
+              <UsingTask TaskName="Sunder.Package.Build.Tasks.PackSunderPackageTask"
+                         AssemblyFile="{{typeof(PackSunderPackageTask).Assembly.Location}}" />
+              <ItemGroup>
+                <Leaf Include="{{appLeaf}}" DiscoveryRoot="{{Path.GetDirectoryName(appLeaf)}}" />
+                <Leaf Include="{{runtimeLeaf}}" DiscoveryRoot="{{Path.GetDirectoryName(runtimeLeaf)}}" />
+              </ItemGroup>
+              <Target Name="Run">
+                <AggregateSunderPackageTask TargetLeaves="@(Leaf)"
+                                             OutputPath="{{output}}"
+                                             OutputDiscoveryRoot="{{target}}"
+                                             ProjectDirectory="{{project}}"
+                                             TargetDirectory="{{target}}"
+                                             ExpectedPackageVersion="1.2.3" />
+                <PackSunderPackageTask DevPackagePath="{{output}}"
+                                       DevPackageDiscoveryRoot="{{target}}"
+                                       PackageOutputPath="{{archive}}"
+                                       ProjectDirectory="{{project}}" />
+              </Target>
+            </Project>
+            """);
+
+        var first = StartMsbuild(projectFile, project);
+        var second = StartMsbuild(projectFile, project);
+        var results = await Task.WhenAll(ReadProcessAsync(first), ReadProcessAsync(second));
+
+        Assert.All(results, result => Assert.True(result.ExitCode == 0, result.Output));
+        var aggregateValidation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(output);
+        Assert.True(aggregateValidation.Success, string.Join(Environment.NewLine, aggregateValidation.Errors));
+        var archiveValidation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            archive,
+            Path.Combine(root, "concurrent-validation"));
+        Assert.True(archiveValidation.Success, string.Join(Environment.NewLine, archiveValidation.Errors));
+        Assert.Equal(2, archiveValidation.Manifest!.Targets!.Count);
+        Assert.DoesNotContain(
+            Directory.EnumerateFileSystemEntries(target),
+            path => Path.GetFileName(path).Contains(".stage-", StringComparison.Ordinal)
+                    || Path.GetFileName(path).Contains(".backup-", StringComparison.Ordinal)
+                    || Path.GetFileName(path).Contains("transaction", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AggregateTask_RollsBackInterruptedCrossProcessReplacementBeforeReadingInputs()
+    {
+        var root = CreateTempDirectory();
+        var leaf = CreateCanonicalLeaf(root, "runtime", "linux-x64", "native");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        var marker = output + AggregateSunderPackageTask.MarkerFileSuffix;
+        var firstEngine = new TestBuildEngine();
+        Assert.True(new AggregateSunderPackageTask
+        {
+            BuildEngine = firstEngine,
+            TargetLeaves = [TargetLeafItem(leaf)],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        }.Execute(), string.Join(Environment.NewLine, firstEngine.Errors));
+        var priorIndex = await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json"));
+
+        var token = Guid.NewGuid().ToString("D");
+        var outputStage = output + ".stage-" + Guid.NewGuid().ToString("N");
+        var markerStage = marker + ".stage-" + Guid.NewGuid().ToString("N");
+        var outputBackup = output + ".backup-" + token;
+        var markerBackup = marker + ".backup-" + token;
+        Directory.CreateDirectory(outputStage);
+        File.WriteAllText(Path.Combine(outputStage, "replacement.txt"), "replacement");
+        File.WriteAllText(markerStage, "replacement marker");
+        Directory.Move(output, outputBackup);
+        File.Move(marker, markerBackup);
+        File.WriteAllText(output + ".sunder-output-transaction.json", JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            token,
+            coordinatorPath = output,
+            outputs = new[]
+            {
+                new { finalPath = output, stagedPath = outputStage, backupPath = outputBackup, existed = true },
+                new { finalPath = marker, stagedPath = markerStage, backupPath = markerBackup, existed = true },
+            },
+        }));
+
+        var recoveryEngine = new TestBuildEngine();
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = recoveryEngine,
+            TargetLeaves = [TargetLeafItem(Path.Combine(root, "missing-leaf"))],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        }.Execute());
+
+        Assert.Equal(priorIndex, await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json")));
+        Assert.True(File.Exists(marker));
+        Assert.False(Directory.Exists(outputStage));
+        Assert.False(Directory.Exists(outputBackup));
+        Assert.False(File.Exists(output + ".sunder-output-transaction.json"));
+    }
+
+    [Fact]
+    public async Task PackTask_PreservesPriorValidatedArchiveWhenReplacementFails()
+    {
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var devPackage = Path.Combine(root, "sunder-dev");
+        var output = Path.Combine(project, "bin", "preserved.sunderpkg");
+        var firstEngine = new TestBuildEngine();
+        CreateValidDevPackage(devPackage, firstEngine);
+        var first = new PackSunderPackageTask
+        {
+            BuildEngine = firstEngine,
+            DevPackagePath = devPackage,
+            DevPackageDiscoveryRoot = root,
+            PackageOutputPath = output,
+            ProjectDirectory = project,
+        };
+        Assert.True(first.Execute(), string.Join(Environment.NewLine, firstEngine.Errors));
+        var priorBytes = await File.ReadAllBytesAsync(output);
+
+        File.WriteAllText(Path.Combine(devPackage, "manifest", "sunder-package.json"), "{}");
+        var secondEngine = new TestBuildEngine();
+        Assert.False(new PackSunderPackageTask
+        {
+            BuildEngine = secondEngine,
+            DevPackagePath = devPackage,
+            DevPackageDiscoveryRoot = root,
+            PackageOutputPath = output,
+            ProjectDirectory = project,
+        }.Execute());
+
+        Assert.Equal(priorBytes, await File.ReadAllBytesAsync(output));
+        var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            output,
+            Path.Combine(root, "preserved-validation"));
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+    }
+
+    [Fact]
     public void AggregateTask_RejectsDuplicateExactTargets()
     {
         var root = CreateTempDirectory();
         var leaf = CreateCanonicalLeaf(root, "runtime", "linux-x64", "native");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
         var buildEngine = new TestBuildEngine();
 
         Assert.False(new AggregateSunderPackageTask
         {
             BuildEngine = buildEngine,
-            TargetLeaves = [new MSBuildTaskItem(leaf), new MSBuildTaskItem(leaf)],
-            OutputPath = Path.Combine(root, "universal"),
+            TargetLeaves = [TargetLeafItem(leaf), TargetLeafItem(leaf)],
+            OutputPath = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
         }.Execute());
         Assert.Contains(buildEngine.Errors, error => error.Contains("more than once", StringComparison.Ordinal));
     }
@@ -853,14 +1484,20 @@ public sealed class PackageBuildManifestTests
         var root = CreateTempDirectory();
         var first = CreateProcessLeaf(root, "linux-x64", "linux-sea");
         var second = CreateProcessLeaf(root, "osx-arm64", "mac-sea");
-        var output = Path.Combine(root, "universal");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
         var buildEngine = new TestBuildEngine();
 
         Assert.True(new AggregateSunderPackageTask
         {
             BuildEngine = buildEngine,
-            TargetLeaves = [new MSBuildTaskItem(first), new MSBuildTaskItem(second)],
+            TargetLeaves = [TargetLeafItem(first), TargetLeafItem(second)],
             OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.0.0",
         }.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
 
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(output);
@@ -872,6 +1509,66 @@ public sealed class PackageBuildManifestTests
             new SunderPackageTargetKey("runtime", "linux-x64"));
         Assert.Contains(linux.Files, file => file.LogicalPath.ToString() == "bin/worker");
         Assert.DoesNotContain(linux.Files, file => file.PhysicalPath.ToString().Contains("osx-arm64", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AggregateTask_RejectsLeafVersionThatDiffersFromAggregateVersion()
+    {
+        var root = CreateTempDirectory();
+        var leaf = CreateCanonicalLeaf(root, "runtime", "linux-x64", "native");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(leaf)],
+            OutputPath = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "9.9.9",
+        }.Execute());
+
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("aggregate expected version '9.9.9'", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("outside")]
+    [InlineData("wrong-name")]
+    [InlineData("nested")]
+    [InlineData("source")]
+    public void AggregateTask_RejectsUnsafeGeneratedOutputPath(string kind)
+    {
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "aggregate-project");
+        var target = kind == "source"
+            ? Path.Combine(project, "src", "generated")
+            : Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = kind switch
+        {
+            "outside" => Path.Combine(root, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            "wrong-name" => Path.Combine(target, "universal"),
+            "nested" => Path.Combine(target, "nested", ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            _ => Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+        };
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(Path.Combine(root, "unused-leaf"))],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.0.0",
+        }.Execute());
+
+        Assert.Contains(buildEngine.Errors, error => error.Contains("unsafe", StringComparison.OrdinalIgnoreCase));
+        Assert.False(Directory.Exists(output));
     }
 
     [Fact]
@@ -920,6 +1617,148 @@ public sealed class PackageBuildManifestTests
             ReferencePaths = SdkReferencePaths(includeAvalonia: true),
         };
 
+    private static Process StartMsbuild(string projectFile, string workingDirectory)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("msbuild");
+        startInfo.ArgumentList.Add(projectFile);
+        startInfo.ArgumentList.Add("-t:Run");
+        startInfo.ArgumentList.Add("-nologo");
+        startInfo.ArgumentList.Add("-nodeReuse:false");
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start concurrent MSBuild process.");
+    }
+
+    private static async Task<ProcessResult> ReadProcessAsync(Process process)
+    {
+        using (process)
+        {
+            var standardOutput = process.StandardOutput.ReadToEndAsync();
+            var standardError = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            return new ProcessResult(
+                process.ExitCode,
+                await standardOutput + Environment.NewLine + await standardError);
+        }
+    }
+
+    private static IDisposable AcquireGeneratedOutputLock(params string[] paths)
+        => GeneratedOutputLock.Acquire(paths);
+
+    private static TemporaryProcessMarker CreateDeadOwnerLock(string output)
+        => CreateOwnerDirectory(
+            output + GeneratedOutputLock.LockSuffix,
+            int.MaxValue,
+            Environment.MachineName,
+            DateTime.UtcNow.AddMinutes(-1));
+
+    private static TemporaryProcessMarker CreateOwnerDirectory(
+        string directory,
+        int pid,
+        string hostname,
+        DateTime processStartedAt,
+        string? linuxBootIdOverride = null,
+        string? linuxPidNamespaceOverride = null)
+    {
+        var platform = OperatingSystem.IsLinux() ? "linux"
+            : OperatingSystem.IsWindows() ? "win32"
+            : OperatingSystem.IsMacOS() ? "darwin"
+            : throw new PlatformNotSupportedException();
+        string? linuxBootId = null;
+        string? linuxPidNamespace = null;
+        if (OperatingSystem.IsLinux())
+        {
+            linuxBootId = linuxBootIdOverride
+                ?? File.ReadAllText("/proc/sys/kernel/random/boot_id").Trim().ToLowerInvariant();
+            linuxPidNamespace = linuxPidNamespaceOverride
+                ?? new FileInfo("/proc/self/ns/pid").LinkTarget
+                ?? throw new InvalidDataException("Linux PID namespace identity is unavailable.");
+        }
+        var processStartedAtValue = processStartedAt.ToUniversalTime().ToString("O");
+        var processMarkerToken = Guid.NewGuid().ToString("D");
+        var processMarkerRoot = Path.Combine(Path.GetTempPath(), "sunder-generated-output", "processes");
+        Directory.CreateDirectory(processMarkerRoot);
+        var processMarkerPath = Path.Combine(processMarkerRoot, processMarkerToken + ".json");
+        File.WriteAllText(processMarkerPath, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            token = processMarkerToken,
+            pid,
+            hostname,
+            processStartedAt = processStartedAtValue,
+            platform,
+            linuxBootId,
+            linuxPidNamespace,
+            createdAt = DateTime.UtcNow,
+        }));
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, GeneratedOutputLock.OwnerFileName), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 2,
+            token = Guid.NewGuid().ToString("D"),
+            pid,
+            hostname,
+            processStartedAt = processStartedAtValue,
+            platform,
+            processMarkerPath,
+            processMarkerToken,
+            linuxBootId,
+            linuxPidNamespace,
+            acquiredAt = DateTime.UtcNow.AddMinutes(-1),
+        }));
+        return new TemporaryProcessMarker(processMarkerPath);
+    }
+
+    private static bool CanStartNode()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "node",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList = { "--version" },
+            });
+            if (process is null) return false;
+            process.WaitForExit(5_000);
+            return process.HasExited && process.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static Process StartNode(string helper, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = FindRepositoryRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add(helper);
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start Node lock helper.");
+    }
+
+    private static async Task WaitForFileAsync(string path, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!File.Exists(path))
+        {
+            if (DateTime.UtcNow >= deadline) throw new TimeoutException($"Timed out waiting for '{path}'.");
+            await Task.Delay(25);
+        }
+    }
+
     private static void CreateValidDevPackage(string devPackage, TestBuildEngine buildEngine)
     {
         Directory.CreateDirectory(Path.Combine(devPackage, "manifest"));
@@ -958,11 +1797,20 @@ public sealed class PackageBuildManifestTests
             BuildEngine = emitEngine,
             ManifestPath = manifestPath,
             DevPackagePath = devPackage,
+            DiscoveryRoot = leafRoot,
             TargetDirectory = targetDirectory,
             ManagedFiles = [new MSBuildTaskItem(assemblyPath)],
             NativeRuntimeFiles = [new MSBuildTaskItem(nativePath)],
         }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
         return devPackage;
+    }
+
+    private static MSBuildTaskItem TargetLeafItem(string path, string? discoveryRoot = null)
+    {
+        var item = new MSBuildTaskItem(path);
+        item.SetMetadata("DiscoveryRoot", discoveryRoot ?? Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException($"Target leaf '{path}' has no discovery root."));
+        return item;
     }
 
     private static string CreateProcessLeaf(string root, string rid, string executableContent)
@@ -1003,7 +1851,9 @@ public sealed class PackageBuildManifestTests
         {
             BuildEngine = buildEngine,
             DevPackagePath = leaf,
+            DevPackageDiscoveryRoot = root,
             PackageOutputPath = Path.Combine(root, $"process-{rid}.sunderpkg"),
+            ProjectDirectory = leaf,
         }.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         return leaf;
     }
@@ -1151,6 +2001,20 @@ public sealed class PackageBuildManifestTests
         {
         }
     }
+
+    private sealed class TemporaryProcessMarker(string path) : IDisposable
+    {
+        public string Path { get; } = path;
+
+        public void Delete()
+        {
+            if (File.Exists(Path)) File.Delete(Path);
+        }
+
+        public void Dispose() => Delete();
+    }
+
+    private sealed record ProcessResult(int ExitCode, string Output);
 }
 
 public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderAppPackageModule

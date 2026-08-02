@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Abstractions;
@@ -60,7 +61,17 @@ public sealed record BackgroundProcessRequest(
     BackgroundProcessConcurrencyMode ConcurrencyMode,
     bool CanCancel,
     Func<BackgroundProcessContext, Task> ExecuteAsync,
-    IReadOnlyDictionary<string, string>? Metadata = null);
+    IReadOnlyDictionary<string, string>? Metadata = null)
+{
+    private IReadOnlyDictionary<string, string>? _metadata = BackgroundProcessMetadata.FreezeNullable(Metadata);
+
+    /// <summary>Gets the immutable optional descriptive values supplied by the package.</summary>
+    public IReadOnlyDictionary<string, string>? Metadata
+    {
+        get => _metadata;
+        init => _metadata = BackgroundProcessMetadata.FreezeNullable(value);
+    }
+}
 
 /// <summary>Provides an immutable point-in-time view of host-managed process state.</summary>
 /// <param name="ProcessId">Host-generated identity for cancellation and change correlation.</param>
@@ -94,6 +105,23 @@ public sealed record BackgroundProcessSnapshot(
     DateTimeOffset? StartedAtUtc,
     DateTimeOffset? CompletedAtUtc)
 {
+    private bool _canCancel = CanCancel;
+    private IReadOnlyDictionary<string, string> _metadata = BackgroundProcessMetadata.Freeze(Metadata);
+
+    /// <summary>Gets whether cancellation is both supported and still actionable.</summary>
+    public bool CanCancel
+    {
+        get => _canCancel && State is BackgroundProcessState.Queued or BackgroundProcessState.Running;
+        init => _canCancel = value;
+    }
+
+    /// <summary>Gets the immutable host-owned snapshot of request metadata.</summary>
+    public IReadOnlyDictionary<string, string> Metadata
+    {
+        get => _metadata;
+        init => _metadata = BackgroundProcessMetadata.Freeze(value);
+    }
+
     /// <summary>Gets whether work is queued, running, or cancelling.</summary>
     public bool IsActive => State is BackgroundProcessState.Queued or BackgroundProcessState.Running or BackgroundProcessState.Cancelling;
 
@@ -115,23 +143,50 @@ public sealed class BackgroundProcessChangedEventArgs(BackgroundProcessSnapshot 
 /// <summary>Provides cancellation and thread-safe progress reporting to one executing request.</summary>
 /// <remarks>The host owns the context. The delegate may report from any thread and must not retain it after completion.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.BackgroundProcessesV1)]
-public sealed class BackgroundProcessContext(
-    CancellationToken cancellationToken,
-    Action<string> reportStatus,
-    Action<double, string?> reportProgress,
-    Action<string> reportIndeterminate)
+public sealed class BackgroundProcessContext
 {
+    private readonly Action<string> _reportStatus;
+    private readonly Action<double, string?> _reportProgress;
+    private readonly Action<string> _reportIndeterminate;
+
+    /// <summary>Creates an execution context backed by host-owned reporting callbacks.</summary>
+    public BackgroundProcessContext(
+        CancellationToken cancellationToken,
+        Action<string> reportStatus,
+        Action<double, string?> reportProgress,
+        Action<string> reportIndeterminate)
+    {
+        ArgumentNullException.ThrowIfNull(reportStatus);
+        ArgumentNullException.ThrowIfNull(reportProgress);
+        ArgumentNullException.ThrowIfNull(reportIndeterminate);
+        CancellationToken = cancellationToken;
+        _reportStatus = reportStatus;
+        _reportProgress = reportProgress;
+        _reportIndeterminate = reportIndeterminate;
+    }
+
     /// <summary>Gets the token signalled when host or user cancellation is requested.</summary>
-    public CancellationToken CancellationToken { get; } = cancellationToken;
+    public CancellationToken CancellationToken { get; }
 
     /// <summary>Replaces status text without changing numeric progress.</summary>
-    public void ReportStatus(string statusText) => reportStatus(statusText);
+    public void ReportStatus(string statusText) => _reportStatus(statusText);
 
-    /// <summary>Reports clamped percentage progress and optionally replaces status text.</summary>
-    public void ReportProgress(double progressPercent, string? statusText = null) => reportProgress(progressPercent, statusText);
+    /// <summary>Reports clamped finite percentage progress and optionally replaces status text.</summary>
+    public void ReportProgress(double progressPercent, string? statusText = null)
+    {
+        if (!double.IsFinite(progressPercent))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(progressPercent),
+                progressPercent,
+                "Background process progress must be finite.");
+        }
+
+        _reportProgress(Math.Clamp(progressPercent, 0, 100), statusText);
+    }
 
     /// <summary>Switches to indeterminate progress and replaces status text.</summary>
-    public void ReportIndeterminate(string statusText) => reportIndeterminate(statusText);
+    public void ReportIndeterminate(string statusText) => _reportIndeterminate(statusText);
 }
 
 /// <summary>Schedules package work and exposes thread-safe immutable snapshots.</summary>
@@ -149,4 +204,37 @@ public interface IBackgroundProcessQueue
 
     /// <summary>Requests cancellation, returning <see langword="false"/> when absent, terminal, or not cancellable.</summary>
     bool Cancel(Guid processId);
+}
+
+internal static class BackgroundProcessMetadata
+{
+    public static IReadOnlyDictionary<string, string>? FreezeNullable(
+        IReadOnlyDictionary<string, string>? metadata)
+        => metadata is null ? null : Freeze(metadata);
+
+    public static IReadOnlyDictionary<string, string> Freeze(
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        if (metadata.Count == 0)
+        {
+            return ReadOnlyDictionary<string, string>.Empty;
+        }
+
+        var copy = new Dictionary<string, string>(metadata.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in metadata)
+        {
+            if (pair.Key is null || pair.Value is null)
+            {
+                throw new ArgumentException("Background process metadata keys and values cannot be null.", nameof(metadata));
+            }
+
+            if (!copy.TryAdd(pair.Key, pair.Value))
+            {
+                throw new ArgumentException("Background process metadata keys must be unique ignoring case.", nameof(metadata));
+            }
+        }
+
+        return new ReadOnlyDictionary<string, string>(copy);
+    }
 }

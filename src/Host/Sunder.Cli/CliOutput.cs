@@ -10,15 +10,19 @@ internal sealed partial class CliOutput
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
     private readonly bool _json;
+    private readonly string _commandPath;
     private readonly List<CliMessage> _messages = [];
     private readonly HashSet<CliMessage> _uniqueMessages = [];
+    private readonly List<CliStructuredError> _errors = [];
+    private readonly HashSet<CliStructuredError> _uniqueErrors = [];
     private object? _data;
 
-    public CliOutput(TextWriter stdout, TextWriter stderr, bool json)
+    public CliOutput(TextWriter stdout, TextWriter stderr, bool json, string commandPath = "")
     {
         _stdout = stdout;
         _stderr = stderr;
         _json = json;
+        _commandPath = commandPath;
     }
 
     public void Line(string message = "")
@@ -31,8 +35,28 @@ internal sealed partial class CliOutput
     public void Info(string message) => WriteMessage("info", message, error: false);
     public void Success(string message) => WriteMessage("success", message, error: false);
     public void Warning(string message) => WriteMessage("warning", message, error: true);
-    public void Error(string message) => WriteMessage("error", message, error: true);
-    public void Progress(string message) => _stderr.WriteLine(CliText.Sanitize(message));
+    public void Error(string message) => Error(message, "cli.operation.failed");
+
+    public void Error(string message, string code, string? correlationId = null)
+    {
+        var safeMessage = CliText.Sanitize(message);
+        var safeCode = CliText.SanitizeToken(code) ?? "cli.operation.failed";
+        var safeCorrelationId = CliText.SanitizeToken(correlationId);
+        var structured = new CliStructuredError(safeCode, safeMessage, safeCorrelationId);
+        if (_uniqueErrors.Add(structured)) _errors.Add(structured);
+
+        var diagnostic = safeCorrelationId is null
+            ? safeMessage
+            : $"{safeMessage} (code: {safeCode}; correlation: {safeCorrelationId})";
+        WriteMessage("error", diagnostic, error: true);
+    }
+
+    public void Error(CliErrorDescriptor error) => Error(error.Message, error.Code, error.CorrelationId);
+
+    public void Progress(string message)
+    {
+        if (!_json) _stderr.WriteLine(CliText.Sanitize(message));
+    }
 
     public void Data(object? data) => _data = data;
 
@@ -43,12 +67,20 @@ internal sealed partial class CliOutput
         SanitizeNode(dataNode);
         var envelope = new JsonObject
         {
+            ["schemaVersion"] = 1,
+            ["command"] = _commandPath,
             ["exitCode"] = exitCode,
             ["success"] = exitCode == CliExitCodes.Success,
             ["messages"] = new JsonArray(_messages.Select(message => new JsonObject
             {
                 ["level"] = message.Level,
                 ["message"] = message.Message,
+            }).ToArray()),
+            ["errors"] = new JsonArray(_errors.Select(error => new JsonObject
+            {
+                ["code"] = error.Code,
+                ["message"] = error.Message,
+                ["correlationId"] = error.CorrelationId,
             }).ToArray()),
             ["data"] = dataNode,
         };
@@ -96,6 +128,7 @@ internal sealed partial class CliOutput
            || name.Contains("password", StringComparison.OrdinalIgnoreCase);
 
     private sealed record CliMessage(string Level, string Message);
+    private sealed record CliStructuredError(string Code, string Message, string? CorrelationId);
 }
 
 internal static partial class CliText
@@ -109,6 +142,9 @@ internal static partial class CliText
     [GeneratedRegex(@"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")]
     private static partial Regex JwtRegex();
 
+    [GeneratedRegex(@"(?i)sunder_(?:cli|pub_v1)_[A-Za-z0-9_-]{8,}")]
+    private static partial Regex SunderCredentialRegex();
+
     public static string Sanitize(string? value, int maxLength = 1000)
     {
         if (string.IsNullOrEmpty(value)) return string.Empty;
@@ -117,7 +153,14 @@ internal static partial class CliText
         if (HtmlRegex().IsMatch(text)) text = "The server returned an untrusted HTML response.";
         text = SecretRegex().Replace(text, match => $"{match.Groups[1].Value}[REDACTED]");
         text = JwtRegex().Replace(text, "[REDACTED]");
+        text = SunderCredentialRegex().Replace(text, "[REDACTED]");
         return text.Length <= maxLength ? text.Trim() : $"{text[..maxLength].Trim()}...";
+    }
+
+    public static string? SanitizeToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128) return null;
+        return value.All(character => character is >= '!' and <= '~') ? value : null;
     }
 }
 

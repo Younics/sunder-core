@@ -25,12 +25,25 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     [Required]
     public string OutputPath { get; set; } = string.Empty;
 
+    [Required]
+    public string OutputDiscoveryRoot { get; set; } = string.Empty;
+
+    [Required]
+    public string ProjectDirectory { get; set; } = string.Empty;
+
+    [Required]
+    public string TargetDirectory { get; set; } = string.Empty;
+
+    [Required]
+    public string ExpectedPackageVersion { get; set; } = string.Empty;
+
     [Output]
     public string NormalizedOutputPath { get; private set; } = string.Empty;
 
     public override bool Execute()
     {
         string? temporaryPath = null;
+        string? temporaryMarkerPath = null;
         try
         {
             if (TargetLeaves.Length == 0)
@@ -39,13 +52,54 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            var output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputPath));
+            if (!GeneratedOutputPathSafety.TryValidateDirectory(
+                    OutputPath,
+                    ProjectDirectory,
+                    TargetDirectory,
+                    ValidateSunderDevOutputPathTask.GeneratedDirectoryName,
+                    out var output,
+                    out var pathError))
+            {
+                Log.LogError($"Aggregate output '{OutputPath}' is unsafe. {pathError}");
+                return false;
+            }
+
             var markerPath = output + MarkerFileSuffix;
+            var leafInputs = TargetLeaves
+                .Select(item =>
+                {
+                    var leafRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(item.ItemSpec));
+                    var discoveryRoot = item.GetMetadata("DiscoveryRoot");
+                    if (string.IsNullOrWhiteSpace(discoveryRoot))
+                    {
+                        throw new InvalidDataException($"SunderPackageTargetLeaf '{item.ItemSpec}' requires explicit DiscoveryRoot metadata.");
+                    }
+                    return (LeafRoot: leafRoot, DiscoveryRoot: discoveryRoot);
+                })
+                .ToArray();
+            var leafRoots = leafInputs.Select(static input => input.LeafRoot).ToArray();
+            var discoveryKeys = leafInputs
+                .Select(input => GeneratedOutputLock.TargetLeafDiscoveryKey(input.DiscoveryRoot, input.LeafRoot))
+                .Append(GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output));
+            using var outputLock = GeneratedOutputLock.Acquire(discoveryKeys, leafRoots.Append(output));
+            GeneratedOutputTransaction.RecoverAndCleanup(output, markerPath);
+            foreach (var leafRoot in leafRoots)
+            {
+                GeneratedOutputTransaction.RecoverAndCleanup(
+                    leafRoot,
+                    ValidateSunderDevOutputPathTask.GetOwnershipMarkerPath(leafRoot),
+                    leafRoot + MarkerFileSuffix);
+            }
+            if (File.Exists(output))
+            {
+                Log.LogError($"Aggregate output '{OutputPath}' is a file and will not be replaced.");
+                return false;
+            }
             if (Directory.Exists(output))
             {
                 if (!File.Exists(markerPath)
-                    || (File.GetAttributes(output) & FileAttributes.ReparsePoint) != 0
-                    || (File.GetAttributes(markerPath) & FileAttributes.ReparsePoint) != 0)
+                    || GeneratedOutputPathSafety.IsReparsePoint(output)
+                    || GeneratedOutputPathSafety.IsReparsePoint(markerPath))
                 {
                     Log.LogError(
                         $"Aggregate output '{OutputPath}' already exists without its safe generated-output marker and will not be replaced.");
@@ -75,7 +129,8 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             var parent = Path.GetDirectoryName(output)
                          ?? throw new InvalidOperationException($"Aggregate output '{output}' has no parent directory.");
             Directory.CreateDirectory(parent);
-            temporaryPath = Path.Combine(parent, $".{Path.GetFileName(output)}.aggregate-{Guid.NewGuid():N}");
+            temporaryPath = output + ".stage-" + Guid.NewGuid().ToString("N");
+            temporaryMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(temporaryPath);
             WriteAggregate(temporaryPath, leaves[0].Manifest, targets);
 
@@ -97,9 +152,12 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            Publish(temporaryPath, output);
+            File.WriteAllText(temporaryMarkerPath, "Sunder.Package.Build aggregate generated output v1\n");
+            GeneratedOutputTransaction.Commit(
+                new GeneratedOutputTransaction.StagedOutput(output, temporaryPath),
+                new GeneratedOutputTransaction.StagedOutput(markerPath, temporaryMarkerPath));
             temporaryPath = null;
-            File.WriteAllText(markerPath, "Sunder.Package.Build aggregate generated output v1\n");
+            temporaryMarkerPath = null;
             NormalizedOutputPath = output + Path.DirectorySeparatorChar;
             Log.LogMessage(MessageImportance.High, $"Aggregated canonical Sunder package at {output}");
             return true;
@@ -112,6 +170,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         finally
         {
             TryDeleteDirectory(temporaryPath);
+            TryDeleteFile(temporaryMarkerPath);
         }
     }
 
@@ -140,6 +199,13 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             }
 
             var manifest = validation.Manifest!;
+            if (!string.Equals(manifest.Version, ExpectedPackageVersion, StringComparison.Ordinal))
+            {
+                Log.LogError(
+                    $"Target leaf '{item.ItemSpec}' package version '{manifest.Version}' does not match "
+                    + $"aggregate expected version '{ExpectedPackageVersion}'.");
+                continue;
+            }
             var contentIndex = validation.ContentIndex!;
             var indexEntries = contentIndex.Files!
                 .Where(static entry => entry?.Path is not null)
@@ -317,29 +383,6 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             Provides = source.Provides,
         };
 
-    private static void Publish(string temporaryPath, string outputPath)
-    {
-        string? backupPath = null;
-        if (Directory.Exists(outputPath))
-        {
-            backupPath = outputPath + ".replace-" + Guid.NewGuid().ToString("N");
-            Directory.Move(outputPath, backupPath);
-        }
-        try
-        {
-            Directory.Move(temporaryPath, outputPath);
-            TryDeleteDirectory(backupPath);
-        }
-        catch
-        {
-            if (!Directory.Exists(outputPath) && backupPath is not null && Directory.Exists(backupPath))
-            {
-                Directory.Move(backupPath, outputPath);
-            }
-            throw;
-        }
-    }
-
     private static string? OptionalMetadata(ITaskItem item, string name)
     {
         var value = item.GetMetadata(name);
@@ -363,6 +406,18 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             {
                 Directory.Delete(path, recursive: true);
             }
+        }
+        catch
+        {
+            // Preserve the primary aggregation result or failure.
+        }
+    }
+
+    private static void TryDeleteFile(string? path)
+    {
+        try
+        {
+            if (path is not null && File.Exists(path)) File.Delete(path);
         }
         catch
         {

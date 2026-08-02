@@ -36,6 +36,10 @@ internal static class PackageCallbackEndpoints
                 var status = callbacks.GetStatus(packageId, callbackSessionId);
                 return Results.Ok(RuntimeEndpointErrors.Required(status, "Package callback session"));
             });
+        group.MapDelete(
+            "{packageId}/callbacks/sessions/{callbackSessionId}",
+            (string packageId, string callbackSessionId, PackageCallbackAccessService callbacks) =>
+                Results.Ok(callbacks.Cancel(packageId, callbackSessionId)));
         return endpoints;
     }
 }

@@ -12,23 +12,56 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
     [Required]
     public string PackageOutputPath { get; set; } = string.Empty;
 
+    [Required]
+    public string DevPackageDiscoveryRoot { get; set; } = string.Empty;
+
+    [Required]
+    public string ProjectDirectory { get; set; } = string.Empty;
+
     public override bool Execute()
     {
+        string? stagedPackagePath = null;
         try
         {
-            if (!Directory.Exists(DevPackagePath))
+            if (!GeneratedOutputPathSafety.TryValidateArchive(
+                    PackageOutputPath,
+                    ProjectDirectory,
+                    out var packageOutputPath,
+                    out var pathError))
+            {
+                Log.LogError($"Sunder package output path '{PackageOutputPath}' is unsafe. {pathError}");
+                return false;
+            }
+
+            var devPackagePath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(DevPackagePath));
+            var discoveryKey = GeneratedOutputLock.TargetLeafDiscoveryKey(DevPackageDiscoveryRoot, devPackagePath);
+            using var outputLock = GeneratedOutputLock.Acquire([discoveryKey], [devPackagePath, packageOutputPath]);
+            GeneratedOutputTransaction.RecoverAndCleanup(packageOutputPath);
+            GeneratedOutputTransaction.RecoverAndCleanup(
+                devPackagePath,
+                ValidateSunderDevOutputPathTask.GetOwnershipMarkerPath(devPackagePath),
+                devPackagePath + AggregateSunderPackageTask.MarkerFileSuffix);
+            if (Directory.Exists(packageOutputPath)
+                || File.Exists(packageOutputPath)
+                && GeneratedOutputPathSafety.IsReparsePoint(packageOutputPath))
+            {
+                Log.LogError($"Sunder package output path '{PackageOutputPath}' is no longer a safe regular file after lock acquisition.");
+                return false;
+            }
+
+            if (!Directory.Exists(devPackagePath))
             {
                 Log.LogError($"Sunder dev package folder '{DevPackagePath}' does not exist.");
                 return false;
             }
 
-            if ((File.GetAttributes(DevPackagePath) & FileAttributes.ReparsePoint) != 0)
+            if ((File.GetAttributes(devPackagePath) & FileAttributes.ReparsePoint) != 0)
             {
                 Log.LogError($"Sunder dev package folder '{DevPackagePath}' must not be a symbolic link or reparse point.");
                 return false;
             }
 
-            var manifestPath = ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath).ToPlatformPath(DevPackagePath);
+            var manifestPath = ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath).ToPlatformPath(devPackagePath);
             if (!File.Exists(manifestPath))
             {
                 Log.LogError(
@@ -49,10 +82,10 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 Guid.NewGuid().ToString("N"));
             try
             {
-                PackageContentIndexer.Write(DevPackagePath);
+                PackageContentIndexer.Write(devPackagePath);
 
                 var stagingValidation = SunderPackageArchiveInspector
-                    .ValidateExtractedPackageAsync(DevPackagePath)
+                    .ValidateExtractedPackageAsync(devPackagePath)
                     .GetAwaiter()
                     .GetResult();
                 if (!LogValidation(stagingValidation, logWarnings: false))
@@ -60,31 +93,26 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                     return false;
                 }
 
-                var packageOutputDirectory = Path.GetDirectoryName(PackageOutputPath);
+                var packageOutputDirectory = Path.GetDirectoryName(packageOutputPath);
                 if (!string.IsNullOrWhiteSpace(packageOutputDirectory))
                 {
                     Directory.CreateDirectory(packageOutputDirectory);
                 }
 
-                DeterministicPackageArchiveWriter.Write(DevPackagePath, PackageOutputPath);
-                try
+                stagedPackagePath = packageOutputPath + ".stage-" + Guid.NewGuid().ToString("N");
+                DeterministicPackageArchiveWriter.Write(devPackagePath, stagedPackagePath);
+                var archiveValidation = SunderPackageArchiveInspector
+                    .ExtractAndValidateAsync(stagedPackagePath, archiveValidationPath)
+                    .GetAwaiter()
+                    .GetResult();
+                if (!LogValidation(archiveValidation))
                 {
-                    var archiveValidation = SunderPackageArchiveInspector
-                        .ExtractAndValidateAsync(PackageOutputPath, archiveValidationPath)
-                        .GetAwaiter()
-                        .GetResult();
-                    if (!LogValidation(archiveValidation))
-                    {
-                        TryDeleteFile(PackageOutputPath);
-                        return false;
-                    }
+                    return false;
                 }
-                catch
-                {
-                    TryDeleteFile(PackageOutputPath);
-                    throw;
-                }
-                Log.LogMessage(MessageImportance.High, $"Packed Sunder package to {PackageOutputPath}");
+                GeneratedOutputTransaction.Commit(
+                    new GeneratedOutputTransaction.StagedOutput(packageOutputPath, stagedPackagePath));
+                stagedPackagePath = null;
+                Log.LogMessage(MessageImportance.High, $"Packed Sunder package to {packageOutputPath}");
                 return true;
             }
             finally
@@ -96,6 +124,10 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
         {
             Log.LogErrorFromException(ex, showStackTrace: false);
             return false;
+        }
+        finally
+        {
+            if (stagedPackagePath is not null) TryDeleteFile(stagedPackagePath);
         }
     }
 

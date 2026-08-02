@@ -13,18 +13,20 @@ Runtime and App consume the Protocol project through private project references.
 
 ## Build
 
+Set the package version once in `Sunder.Package.props`; the aggregate and every generated leaf import it.
+
 ```bash
 dotnet build Sunder.Package.Template.csproj
-dotnet msbuild Sunder.Package.Template.csproj -t:PackSunderPackage
+dotnet msbuild Sunder.Package.Template.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Build emits `bin/Debug/net10.0/sunder-dev` with `manifest/*`, `payload/shared`, and exact App/Runtime RID layers. The pack target emits one validated `.sunderpkg` beside it.
+Build emits `bin/Debug/net10.0/sunder-dev` with `manifest/*`, `payload/shared`, and exact App/Runtime RID layers. The canonical pack target emits one validated `.sunderpkg` under `bin/Release/net10.0`.
 
 All coordinated Sunder references use `SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE`. `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` are included only by their matching options. `--withHostDependency` adds only runtime package dependency metadata.
 
 Package identity and dependencies come from `PackageMetadata.cs`; `Sunder.Package.Build` generates all manifests and indexes. Treat `context.ContentRootPath` as read-only. Use `context.Storage.RoleLocalWorkspace` for writable local paths, `context.Storage.State` for opaque operational state, `context.Settings` for schema-declared preferences, and `context.Secrets` for sensitive values.
 
-TypeScript process leaves produced by `npm create sunder-package@latest` may join the same aggregate through `SunderNodePackageTargetLeaf`. Do not include two leaves for the same exact role/RID key.
+TypeScript process leaves produced by `npm create sunder-package@latest` may join the same aggregate through `SunderNodePackageTargetLeaf`; set each item's `DiscoveryRoot` metadata to the producer's `dist/targets` root. Do not include two leaves for the same exact role/RID key.
 
 ## Documentation
 

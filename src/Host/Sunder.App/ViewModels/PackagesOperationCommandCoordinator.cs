@@ -92,22 +92,16 @@ internal sealed class PackagesOperationCommandCoordinator(
 
     public Task UpdateAllPackagesAsync()
     {
-        if (TryResolveRegistryUrl(out var registryUrl))
-        {
-            operationExecutor.EnqueueUpdateAll(registryUrl);
-            MarkQueued("Queued updates for installed packages.");
-        }
+        operationExecutor.EnqueueUpdateAll();
+        MarkQueued("Queued updates for installed packages.");
 
         return Task.CompletedTask;
     }
 
     private Task EnqueueMarketplaceUpdateAsync(RegistryPackageUpdate update, string displayName)
     {
-        if (TryResolveRegistryUrl(out var registryUrl))
-        {
-            operationExecutor.EnqueueMarketplaceUpdate(update.PackageId, displayName, update.AvailableVersion, registryUrl);
-            MarkQueued($"Queued update for {update.PackageId}.");
-        }
+        operationExecutor.EnqueueMarketplaceUpdate(update.PackageId, displayName, update.AvailableVersion);
+        MarkQueued($"Queued update for {update.PackageId}.");
 
         return Task.CompletedTask;
     }

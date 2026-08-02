@@ -115,7 +115,10 @@ public sealed class PackagesWindowViewModelTests
             Updates = [CreateUpdate("sunder.package.agent", "1.0.0", "1.1.0")],
         };
         using var viewModel = CreateViewModel(
-            new FakeRuntimeApiClient([CreateInstalledPackage("sunder.package.agent", isEnabled: true)])
+            new FakeRuntimeApiClient([CreateInstalledPackage(
+                "sunder.package.agent",
+                isEnabled: true,
+                isRegistryManaged: true)])
             {
                 RegistryUpdates = registryClient.Updates,
             },
@@ -917,7 +920,8 @@ public sealed class PackagesWindowViewModelTests
         string packageId,
         bool isEnabled,
         PackageIconDescriptor? icon = null,
-        IReadOnlyList<PackageRpcContractUseDescriptor>? rpcContractUses = null
+        IReadOnlyList<PackageRpcContractUseDescriptor>? rpcContractUses = null,
+        bool isRegistryManaged = false
     ) =>
         new(
             packageId,
@@ -930,7 +934,16 @@ public sealed class PackagesWindowViewModelTests
             DependsOn: [],
             DateTimeOffset.UtcNow,
             StatusMessage: isEnabled ? null : "Disabled",
-            RpcContractUses: rpcContractUses
+            RpcContractUses: rpcContractUses,
+            Provenance: isRegistryManaged
+                ? new InstalledPackageProvenance(
+                    InstalledPackageSourceKind.Registry,
+                    InstalledPackageVersionPolicy.FollowTag,
+                    "https://registry.example/",
+                    packageId,
+                    RequestedTag: "latest",
+                    SourceIdentity: new string('a', 64))
+                : null
         );
 
     private static RegistryPackageSummary CreateRegistryPackage(string packageId, string latestVersion = "1.0.0") =>
@@ -1057,11 +1070,10 @@ public sealed class PackagesWindowViewModelTests
         public BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
             string packageId,
             string displayName,
-            string version,
-            Uri registryUrl)
+            string version)
             => CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName);
 
-        public BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl)
+        public BackgroundProcessSnapshot EnqueueUpdateAll()
             => CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages");
 
         public BackgroundProcessSnapshot EnqueueLocalInstall(
@@ -1079,7 +1091,7 @@ public sealed class PackagesWindowViewModelTests
         public BackgroundProcessSnapshot EnqueueDisable(string packageId, string displayName)
             => CreateSnapshot(packageId, PackageOperationKind.Disable, displayName);
 
-        public BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName)
+        public BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName, bool allowCascade = false)
             => CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName);
 
         private static BackgroundProcessSnapshot CreateSnapshot(
@@ -1360,10 +1372,26 @@ public sealed class PackagesWindowViewModelTests
             );
         }
 
+        public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(
+            string packageId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(CreateUninstallPlan(packageId));
+
         public Uri CreatePackageAssetUri(string packageId, string assetPath) =>
             new(
                 $"file:///packages/{Uri.EscapeDataString(packageId)}/assets/{assetPath.Replace('\\', '/')}"
             );
+
+        private static PackageUninstallPlan CreateUninstallPlan(string packageId)
+            => new(
+                packageId,
+                [new PackageUninstallPlanPackage(packageId, packageId, "1.0.0")],
+                [],
+                [packageId],
+                new PackageLifecycleChangeSet([packageId], [packageId], [packageId], [packageId], false),
+                PackageUninstallDataBehavior.Retain,
+                [packageId],
+                new string('a', 64));
 
         public Task<ContentUploadDescriptor> UploadPackageAsync(string packagePath, CancellationToken cancellationToken = default)
             => Task.FromResult(new ContentUploadDescriptor("package-upload", "test-hash", 0, Path.GetFileName(packagePath), "application/vnd.sunder.package"));

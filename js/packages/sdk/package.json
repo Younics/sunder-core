@@ -3,12 +3,25 @@
   "version": "1.1.0",
   "description": "Zero-dependency TypeScript SDK for Sunder RPC contracts and process Runtime workers.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Younics/sunder-core.git",
+    "directory": "js/packages/sdk"
+  },
+  "homepage": "https://github.com/Younics/sunder-core/tree/main/js/packages/sdk#readme",
+  "bugs": "https://github.com/Younics/sunder-core/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "bin": {
     "sunder-rpc-gen": "dist/generator-cli.js"

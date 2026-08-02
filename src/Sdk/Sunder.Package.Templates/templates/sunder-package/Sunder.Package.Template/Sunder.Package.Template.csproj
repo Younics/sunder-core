@@ -1,12 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="Sunder.Package.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
-    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,8 +23,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Runtime\bin\$(Configuration)\$(TargetFramework)\sunder-dev" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Runtime\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Runtime\bin\$(Configuration)\$(TargetFramework)" />
     <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.App\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.App\bin\$(Configuration)\$(TargetFramework)"
                              Condition="Exists('$(MSBuildProjectDirectory)\Sunder.Package.Template.App\Sunder.Package.Template.App.csproj')" />
     <SunderPackageTargetLeaf Include="@(SunderNodePackageTargetLeaf)" />
   </ItemGroup>

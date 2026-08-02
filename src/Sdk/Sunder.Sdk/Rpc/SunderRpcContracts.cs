@@ -335,6 +335,8 @@ public sealed record SunderRpcError(SunderRpcErrorKind Kind, string Code, string
 [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public sealed class SunderRpcException : Exception
 {
+    private readonly bool _hostAuthenticated;
+
     /// <summary>Creates an exception from a safe typed error.</summary>
     public SunderRpcException(SunderRpcError error)
         : base((error ?? throw new ArgumentNullException(nameof(error))).Message)
@@ -342,8 +344,22 @@ public sealed class SunderRpcException : Exception
         Error = error;
     }
 
+    internal SunderRpcException(SunderRpcError error, bool hostAuthenticated)
+        : this(error)
+    {
+        _hostAuthenticated = hostAuthenticated;
+    }
+
     /// <summary>Gets the safe typed error.</summary>
     public SunderRpcError Error { get; }
+
+    internal bool IsHostAuthenticated => _hostAuthenticated;
+
+    internal static SunderRpcException Infrastructure(
+        SunderRpcErrorKind kind,
+        string code,
+        string message)
+        => new(new SunderRpcError(kind, code, message), hostAuthenticated: true);
 }
 
 /// <summary>Controls whether a content reference can be acquired once or repeatedly.</summary>
@@ -383,48 +399,25 @@ public sealed record SunderRpcContentRegistrationOptions(
     SunderRpcContentRepeatability Repeatability = SunderRpcContentRepeatability.SingleUse,
     int MaximumUses = 1);
 
-/// <summary>Registers and acquires package-scoped content references during an exact RPC invocation.</summary>
-/// <remarks>
-/// The Host binds every operation to the provider activation, caller audience, Runtime generation,
-/// expiry, hash, and use count stamped by each invocation context. Returned streams are local
-/// conveniences and never cross the RPC boundary.
-/// </remarks>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
-public interface ISunderRpcContentClient
-{
-    /// <summary>Copies a bounded readable stream into Host-mediated content for the invocation caller.</summary>
-    ValueTask<SunderRpcContentReference> RegisterAsync(
-        SunderRpcInvocationContext context,
-        Stream source,
-        SunderRpcContentRegistrationOptions options,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Copies a bounded file into Host-mediated content for the invocation caller.</summary>
-    ValueTask<SunderRpcContentReference> RegisterFileAsync(
-        SunderRpcInvocationContext context,
-        string filePath,
-        SunderRpcContentRegistrationOptions options,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Acquires validated content published by the invocation caller for this provider activation.</summary>
-    ValueTask<Stream> OpenReadAsync(
-        SunderRpcInvocationContext context,
-        SunderRpcContentReference reference,
-        CancellationToken cancellationToken = default);
-}
-
 /// <summary>Contains host-stamped information for one provider invocation.</summary>
+/// <remarks>
+/// The Host creates this context and revokes its content authority when the handler or stream ends.
+/// Retaining a context never extends an invocation. Returned streams are local conveniences and
+/// never cross the RPC boundary.
+/// </remarks>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public sealed class SunderRpcInvocationContext
 {
-    /// <summary>Creates a host-stamped invocation context for a broker adapter.</summary>
-    public SunderRpcInvocationContext(
+    private readonly ISunderRpcInvocationAuthority _authority;
+
+    internal SunderRpcInvocationContext(
         string callerPackageId,
         string callerPackageVersion,
         SunderRpcProviderSnapshot provider,
         DateTimeOffset deadlineUtc,
         int callDepth,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ISunderRpcInvocationAuthority? authority = null)
     {
         CallerPackageId = callerPackageId;
         CallerPackageVersion = callerPackageVersion;
@@ -432,6 +425,7 @@ public sealed class SunderRpcInvocationContext
         DeadlineUtc = deadlineUtc;
         CallDepth = callDepth;
         CancellationToken = cancellationToken;
+        _authority = authority ?? UnavailableSunderRpcInvocationAuthority.Instance;
     }
 
     /// <summary>Gets the host-stamped caller package identifier.</summary>
@@ -451,6 +445,87 @@ public sealed class SunderRpcInvocationContext
 
     /// <summary>Gets cancellation linked to request, deadline, activations, session, and Host shutdown.</summary>
     public CancellationToken CancellationToken { get; }
+
+    /// <summary>Copies bounded provider content into a reference readable by this invocation's caller scope.</summary>
+    public ValueTask<SunderRpcContentReference> RegisterContentAsync(
+        Stream source,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken = default)
+        => _authority.RegisterContentAsync(source, options, cancellationToken);
+
+    /// <summary>Copies a bounded provider-owned file into a reference readable by this invocation's caller scope.</summary>
+    public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+        string filePath,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken = default)
+        => _authority.RegisterContentFileAsync(filePath, options, cancellationToken);
+
+    /// <summary>Opens validated request content registered by this invocation's caller scope.</summary>
+    public ValueTask<Stream> OpenContentAsync(
+        SunderRpcContentReference reference,
+        CancellationToken cancellationToken = default)
+        => _authority.OpenContentAsync(reference, cancellationToken);
+
+    internal void Revoke() => _authority.Revoke();
+}
+
+internal interface ISunderRpcInvocationAuthority
+{
+    CancellationToken RevocationToken { get; }
+
+    ValueTask<SunderRpcContentReference> RegisterContentAsync(
+        Stream source,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken);
+
+    ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+        string filePath,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken);
+
+    ValueTask<Stream> OpenContentAsync(
+        SunderRpcContentReference reference,
+        CancellationToken cancellationToken);
+
+    void Revoke();
+}
+
+internal sealed class UnavailableSunderRpcInvocationAuthority : ISunderRpcInvocationAuthority
+{
+    public static UnavailableSunderRpcInvocationAuthority Instance { get; } = new();
+
+    private UnavailableSunderRpcInvocationAuthority()
+    {
+    }
+
+    public CancellationToken RevocationToken => CancellationToken.None;
+
+    public ValueTask<SunderRpcContentReference> RegisterContentAsync(
+        Stream source,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken)
+        => ValueTask.FromException<SunderRpcContentReference>(Unavailable());
+
+    public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+        string filePath,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken)
+        => ValueTask.FromException<SunderRpcContentReference>(Unavailable());
+
+    public ValueTask<Stream> OpenContentAsync(
+        SunderRpcContentReference reference,
+        CancellationToken cancellationToken)
+        => ValueTask.FromException<Stream>(Unavailable());
+
+    public void Revoke()
+    {
+    }
+
+    private static SunderRpcException Unavailable()
+        => SunderRpcException.Infrastructure(
+            SunderRpcErrorKind.Unavailable,
+            "rpc.content.authority-unavailable",
+            "Host-mediated RPC content authority is unavailable for this invocation.");
 }
 
 /// <summary>Supplies an optional earlier deadline for an RPC call.</summary>
@@ -483,6 +558,14 @@ public interface ISunderRpcServiceHandler
 [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public interface ISunderRpcClient
 {
+    /// <summary>Creates caller-owned authority for calls and Host-mediated request or response content.</summary>
+    /// <remarks>Dispose the scope to cancel its work and revoke all remaining content references.</remarks>
+    ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
+        SunderRpcCallOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromException<ISunderRpcCallScope>(new NotSupportedException(
+            "This RPC client does not provide caller-owned call scopes."));
+
     /// <summary>Gets a visible exact provider snapshot by opaque endpoint reference.</summary>
     ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
         SunderRpcEndpointReference endpoint,
@@ -518,6 +601,38 @@ public interface ISunderRpcClient
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Owns bounded RPC call and content authority until asynchronously disposed.</summary>
+/// <remarks>
+/// A scope may call more than one endpoint. Request content registration names its exact target;
+/// response content is readable only when it was produced for this scope. Disposal cancels active
+/// work and revokes every unconsumed content reference owned by the scope.
+/// </remarks>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+public interface ISunderRpcCallScope : ISunderRpcClient, IAsyncDisposable
+{
+    /// <summary>Gets the Host-clamped deadline shared by work started through this scope.</summary>
+    DateTimeOffset DeadlineUtc { get; }
+
+    /// <summary>Registers bounded request content for one exact target endpoint.</summary>
+    ValueTask<SunderRpcContentReference> RegisterContentAsync(
+        SunderRpcEndpointReference endpoint,
+        Stream source,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Registers a bounded caller-owned file as request content for one exact target endpoint.</summary>
+    ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+        SunderRpcEndpointReference endpoint,
+        string filePath,
+        SunderRpcContentRegistrationOptions options,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Opens validated response content produced for this scope.</summary>
+    ValueTask<Stream> OpenContentAsync(
+        SunderRpcContentReference reference,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Provides generated-binding-friendly typed JSON adapters.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
 public static class SunderRpcClientExtensions
@@ -550,10 +665,10 @@ public static class SunderRpcClientExtensions
             options,
             cancellationToken).ConfigureAwait(false);
         return response.Deserialize<TResponse>(JsonOptions)
-               ?? throw new SunderRpcException(new SunderRpcError(
+               ?? throw SunderRpcException.Infrastructure(
                    SunderRpcErrorKind.Protocol,
                    "rpc.binding.null-response",
-                   "The RPC response could not be deserialized as the generated response type."));
+                   "The RPC response could not be deserialized as the generated response type.");
     }
 
     /// <summary>Serializes a typed request and deserializes typed server-stream events.</summary>
@@ -580,10 +695,10 @@ public static class SunderRpcClientExtensions
                            cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             yield return item.Deserialize<TEvent>(JsonOptions)
-                         ?? throw new SunderRpcException(new SunderRpcError(
+                         ?? throw SunderRpcException.Infrastructure(
                              SunderRpcErrorKind.Protocol,
                              "rpc.binding.null-event",
-                             "An RPC event could not be deserialized as the generated event type."));
+                             "An RPC event could not be deserialized as the generated event type.");
         }
     }
 }

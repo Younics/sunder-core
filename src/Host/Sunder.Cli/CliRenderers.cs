@@ -110,7 +110,7 @@ internal static class CliRenderers
 
     public static int RegistryPackageChange(CliOutput output, RuntimeRegistryPackageChangeResult result)
     {
-        output.Data(result);
+        output.Data(CliJsonData.RegistryPackageChange(result));
         if (result.PlanItems.Count > 0)
         {
             output.Info("Install plan:");
@@ -123,7 +123,8 @@ internal static class CliRenderers
         foreach (var warning in result.Warnings) output.Warning(warning);
         if (!result.Success)
         {
-            foreach (var error in result.Errors.DefaultIfEmpty(result.Message)) output.Error(error);
+            var code = $"runtime.registry.{CliJsonData.RegistryErrorCode(result.ErrorCode)}";
+            foreach (var error in result.Errors.DefaultIfEmpty(result.Message)) output.Error(error, code);
             return CliErrorMapper.FromRegistryCode(result.ErrorCode);
         }
         output.Success(result.Message);
@@ -132,9 +133,9 @@ internal static class CliRenderers
 
     public static int PackageOperation(CliOutput output, PackageOperationResult result)
     {
-        output.Data(result);
+        output.Data(CliJsonData.PackageOperation(result));
         foreach (var warning in result.Warnings) output.Warning(warning);
-        foreach (var error in result.Errors) output.Error(error);
+        foreach (var error in result.Errors) output.Error(error, "runtime.package.operation_failed");
         if (!string.IsNullOrWhiteSpace(result.Message)) WriteOutcome(output, result.Success, result.Message);
         if (result.RequiresAppRestart) output.Warning("Restart Sunder to apply this package change.");
         return result.Success ? CliExitCodes.Success : CliExitCodes.Failure;
@@ -142,55 +143,77 @@ internal static class CliRenderers
 
     public static int PackageValidation(CliOutput output, SunderPackageArchiveValidationResult result)
     {
-        output.Data(new { result.Success, result.Manifest, result.Warnings, result.Errors });
+        output.Data(CliJsonData.PackageValidation(result));
         foreach (var warning in result.Warnings) output.Warning(warning);
-        foreach (var error in result.Errors) output.Error(error);
+        foreach (var error in result.Errors) output.Error(error, "cli.package.invalid");
         if (result.Success) output.Success($"Package is valid: {result.Manifest!.Id} {result.Manifest.Version}");
         return result.Success ? CliExitCodes.Success : CliExitCodes.Failure;
     }
 
     public static int StackValidation(CliOutput output, SunderStackArchiveValidationResult result)
     {
-        output.Data(new { result.Success, result.Manifest, result.Warnings, result.Errors });
+        output.Data(CliJsonData.StackValidation(result));
         foreach (var warning in result.Warnings) output.Warning(warning);
-        foreach (var error in result.Errors) output.Error(error);
+        foreach (var error in result.Errors) output.Error(error, "cli.stack.invalid");
         if (result.Success) output.Success($"Stack is valid: {result.Manifest!.StackId} ({result.Manifest.Name})");
         return result.Success ? CliExitCodes.Success : CliExitCodes.Failure;
     }
 
     public static int PackagePublish(CliOutput output, RegistryPublishPackageResponse result)
     {
-        output.Data(result);
-        foreach (var warning in result.Warnings) output.Warning(warning);
-        foreach (var error in result.Errors) output.Error(error);
+        output.Data(CliJsonData.PackagePublish(result));
+        foreach (var warning in result.Warnings ?? []) output.Warning(warning);
+        foreach (var error in result.Errors ?? []) output.Error(error, result.ErrorCode ?? "registry.package.publish_failed");
         if (!string.IsNullOrWhiteSpace(result.Message)) WriteOutcome(output, result.Success, result.Message);
-        return result.Success ? CliExitCodes.Success : result.Forbidden ? CliExitCodes.Forbidden : CliExitCodes.Failure;
+        if (result.Success) return CliExitCodes.Success;
+        if (result.Forbidden || result.ErrorCode == RegistryV1ErrorCodes.Forbidden) return CliExitCodes.Forbidden;
+        return result.ErrorCode switch
+        {
+            RegistryV1ErrorCodes.Unauthorized => CliExitCodes.Authentication,
+            RegistryV1ErrorCodes.NotFound => CliExitCodes.NotFound,
+            RegistryV1ErrorCodes.Conflict or RegistryV1ErrorCodes.PackageVersionExists => CliExitCodes.Conflict,
+            RegistryV1ErrorCodes.RateLimited => CliExitCodes.Unavailable,
+            RegistryV1ErrorCodes.RequestTooLarge => CliExitCodes.Failure,
+            _ => CliExitCodes.Failure,
+        };
     }
 
     public static int StackPublish(CliOutput output, RegistryPublishStackResponse result)
     {
-        output.Data(result);
-        foreach (var warning in result.Warnings) output.Warning(warning);
-        foreach (var error in result.Errors) output.Error(error);
+        output.Data(CliJsonData.StackPublish(result));
+        foreach (var warning in result.Warnings ?? []) output.Warning(warning);
+        foreach (var error in result.Errors ?? []) output.Error(error, "registry.stack.publish_failed");
         if (!string.IsNullOrWhiteSpace(result.Message)) WriteOutcome(output, result.Success, result.Message);
         if (result.Success && result.StackId is not null) output.Info($"Show link: sunder://stacks/{Uri.EscapeDataString(result.StackId)}");
-        return result.Success ? CliExitCodes.Success : result.Forbidden ? CliExitCodes.Forbidden : CliExitCodes.Failure;
+        return result.Success
+            ? CliExitCodes.Success
+            : result.Forbidden
+                ? CliExitCodes.Forbidden
+                : result.NotFound ? CliExitCodes.NotFound : CliExitCodes.Failure;
     }
 
     public static int Management(CliOutput output, RegistryPackageManagementOperationResponse result)
     {
-        output.Data(result);
-        foreach (var error in result.Errors) output.Error(error);
+        output.Data(CliJsonData.Management(result.Success, result.Message, result.Errors ?? []));
+        foreach (var error in result.Errors ?? []) output.Error(error, "registry.package.management_failed");
         if (!string.IsNullOrWhiteSpace(result.Message)) WriteOutcome(output, result.Success, result.Message);
-        return result.Success ? CliExitCodes.Success : result.Forbidden ? CliExitCodes.Forbidden : CliExitCodes.Failure;
+        return result.Success
+            ? CliExitCodes.Success
+            : result.Forbidden
+                ? CliExitCodes.Forbidden
+                : result.NotFound ? CliExitCodes.NotFound : CliExitCodes.Failure;
     }
 
     public static int StackManagement(CliOutput output, RegistryStackManagementOperationResponse result)
     {
-        output.Data(result);
-        foreach (var error in result.Errors) output.Error(error);
+        output.Data(CliJsonData.Management(result.Success, result.Message, result.Errors ?? []));
+        foreach (var error in result.Errors ?? []) output.Error(error, "registry.stack.management_failed");
         if (!string.IsNullOrWhiteSpace(result.Message)) WriteOutcome(output, result.Success, result.Message);
-        return result.Success ? CliExitCodes.Success : result.Forbidden ? CliExitCodes.Forbidden : CliExitCodes.Failure;
+        return result.Success
+            ? CliExitCodes.Success
+            : result.Forbidden
+                ? CliExitCodes.Forbidden
+                : result.NotFound ? CliExitCodes.NotFound : CliExitCodes.Failure;
     }
 
     private static string PackageRequirement(RegistryStackPackageRequirement package)

@@ -1,6 +1,10 @@
 # Sunder.Package.Templates
 
+> **Release/source channel:** The NuGet README describes that published template version. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+
 `Sunder.Package.Templates` provides `dotnet new sunder-package`, an aggregate .NET scaffold for one universal Sunder package.
+
+It is the current managed .NET Runtime/Avalonia preset, not the only valid authoring route. Node process/web presets use `npm create sunder-package@latest`; future Python, Rust, Go, other process toolchains, other .NET UI approaches, and other web frameworks may emit the same canonical package format with their own tooling.
 
 ## Install
 
@@ -34,7 +38,7 @@ Package dependency metadata:
 dotnet new sunder-package --name MyExtension --packageId my.company.extension --packageName "My Extension" --withHostDependency --hostPackageId sunder.package.agent --hostPackageVersionRange ">=1.1.0 <1.2.0"
 ```
 
-Use `--createInPlace --output .\MyPackage` to write directly into an existing empty package root.
+Use `--output .\MyPackage` to choose an explicit empty destination.
 
 ## Options
 
@@ -48,7 +52,6 @@ Use `--createInPlace --output .\MyPackage` to write directly into an existing em
 | `--withHostDependency` | Adds `[SunderPackageDependency]` metadata. |
 | `--hostPackageId <id>` | Required package id for `--withHostDependency`. |
 | `--hostPackageVersionRange <range>` | Dependency range; defaults to `>=1.1.0 <1.2.0`. |
-| `--createInPlace` | Uses the output directory itself as the package root. |
 
 ## Generated Shape
 
@@ -56,6 +59,7 @@ Every generated package contains:
 
 ```text
 MyPackage/
+  Sunder.Package.props           # single Version source for every generated project
   MyPackage.csproj
   PackageMetadata.cs
   Assets/
@@ -86,10 +90,10 @@ Coordinated Sunder references use the bounded minor range derived from the templ
 ```powershell
 dotnet restore .\MyPackage\MyPackage.csproj
 dotnet build .\MyPackage\MyPackage.csproj --no-restore
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Build emits `bin/Debug/net10.0/sunder-dev` with the canonical manifest, content index, shared descriptor, and exact target layers. The pack target emits one validated `.sunderpkg` beside it.
+Build emits `bin/Debug/net10.0/sunder-dev` with the canonical manifest, content index, shared descriptor, and exact target layers. Edit the package version only in `Sunder.Package.props`; every generated project imports it. The canonical pack target emits one validated `.sunderpkg` under `bin/Release/net10.0`.
 
 Package identity and dependencies come from `PackageMetadata.cs`; authors do not maintain a source package manifest. Use `context.Storage.RoleLocalWorkspace` for writable local paths and treat `context.ContentRootPath` as read-only.
 

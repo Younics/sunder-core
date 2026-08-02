@@ -2,6 +2,8 @@
 
 This document is the normative V1 package-format contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
 
+The contract is independent of authoring language and UI framework. Current tooling emits managed .NET Runtime (`dotnet`), Avalonia App (`avalonia`), Node Runtime (`process`), and static web App (`web`) targets. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other process toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target kinds, protocols, or required capabilities they do not support.
+
 ## Universal Package
 
 A package version is published as one canonical universal `.sunderpkg` archive. The archive owns:
@@ -11,7 +13,7 @@ A package version is published as one canonical universal `.sunderpkg` archive. 
 - language-neutral RPC contract descriptors, imports, and providers;
 - one content index covering the canonical manifest and every payload file.
 
-Package authors declare identity and runtime dependencies with `Sunder.Sdk.Packaging` attributes. `Sunder.Package.Build` generates the manifest, development tree, and archive. A source project must not contain an authored package manifest.
+Managed .NET authors declare identity and runtime dependencies with `Sunder.Sdk.Packaging` attributes, and `Sunder.Package.Build` generates the manifest, development tree, and archive. Other toolchains may use their own validated source configuration. No authoring route should hand-copy the canonical output `manifest/sunder-package.json`; tooling must generate and validate it with the content index and target payload.
 
 A package normally declares at least one exact target. A shared-only package may declare zero targets only when it bundles at least one RPC contract descriptor.
 
@@ -226,7 +228,7 @@ Each projection contains `manifest/sunder-projection.json`, the canonical packag
 
 ## Build Outputs
 
-`dotnet build` emits a validated unpacked tree at `bin/<Configuration>/<TFM>/sunder-dev`. `dotnet publish` and `PackSunderPackage` emit a deterministic `.sunderpkg`.
+`dotnet build` emits a validated unpacked tree at `bin/<Configuration>/<TFM>/sunder-dev`. The canonical explicit archive target is `PackSunderPackage`, which emits a deterministic `.sunderpkg` beside that target output; `dotnet publish` also invokes the pack task and places its archive in the publish directory.
 
 The generated dotnet template uses an aggregate project with Runtime and optional App leaves. It always creates a non-packable package-local `*.Protocol` project containing a bundled descriptor and generated bindings. Role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata.
 
@@ -238,9 +240,19 @@ Archives are deterministic ZIP files with fixed entry timestamps and ordinal pat
 
 Default extraction limits are 4,096 entries, 256 MiB per entry, 1 GiB total uncompressed bytes, a 200:1 per-entry compression ratio, 240-character physical paths, and 32 path segments. Metadata JSON is limited to 1 MiB. Contract descriptors are limited to 4 MiB.
 
-Package icons must resolve from the shared logical payload, be at most 1 MiB and 8192 by 8192 pixels, and use a supported BMP, GIF, ICO, JPEG, PNG, or WebP signature matching the extension. SVG is not accepted.
+### Package Icons
+
+Package icons must resolve from the shared logical payload, be at most 1 MiB and 8192 by 8192 pixels, and use a supported BMP, GIF, ICO, JPEG, PNG, or WebP signature matching the extension. SVG is not accepted. Format validation establishes bounded image structure and signature/extension agreement; it does not make image bytes or the package source trusted.
 
 Extraction writes to a temporary sibling and publishes atomically only after validation succeeds. Install, update, Registry publication, and projection generation all use the same package-format validator.
+
+## Stack Archive Validation
+
+A canonical `.sunderstack` uses `manifest/sunder-stack.json`, `manifest/content-index.json`, and only `payload/fragments/`, `payload/files/`, and `payload/media/` content. The same ZIP path, entry-count, expansion, metadata, and atomic-extraction limits apply as package archives. The exact content index rejects missing, extra, duplicate, case-colliding, hash-mismatched, size-mismatched, or unsafe entries.
+
+Stack manifest schema version `1` requires at least one package requirement or fragment. Unknown optional features produce warnings; unknown required features fail validation. Fragment JSON must be one object no larger than 4 MiB. Media is limited to signature-matched PNG, JPEG, WebP, or GIF files no larger than 10 MiB and 8192 by 8192 pixels. Required inputs explicitly declare `Public` or `Secret`; secret inputs cannot carry portable defaults.
+
+The validator also performs bounded heuristic secret scanning of UTF-8 text. A finding rejects the archive, but no scanner can prove that an archive contains no secret or that imported content is safe. Treat every Stack as untrusted input after structural validation and require a side-effect-free preview before apply.
 
 ## Dependency Boundaries
 

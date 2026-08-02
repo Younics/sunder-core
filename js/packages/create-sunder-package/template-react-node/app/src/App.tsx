@@ -6,6 +6,10 @@ type Status =
   | { readonly kind: "ready"; readonly message: string }
   | { readonly kind: "error"; readonly message: string };
 
+const packageId = "__SUNDER_PACKAGE_ID_JSON__";
+const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
+const providerId = "__SUNDER_PROVIDER_ID_JSON__";
+
 export function App() {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
 
@@ -27,8 +31,8 @@ export function App() {
   return (
     <main className="shell">
       <section className="hero">
-        <p className="eyebrow">SUNDER_PACKAGE_ID</p>
-        <h1>SUNDER_PACKAGE_NAME</h1>
+        <p className="eyebrow">{packageId}</p>
+        <h1>{packageName}</h1>
         <p className="lede">A sandboxed React view backed by an exact Node Runtime activation.</p>
       </section>
       <section className={`status status--${status.kind}`} aria-live="polite">
@@ -50,7 +54,7 @@ export function App() {
 async function greet(signal: AbortSignal): Promise<string> {
   const rpc = getSunder().rpc;
   const catalog = await rpc.discover("example.messages", { signal });
-  const provider = catalog.providers.find((candidate) => candidate.providerId === "SUNDER_PACKAGE_ID.provider");
+  const provider = catalog.providers.find((candidate) => candidate.providerId === providerId);
   if (provider === undefined) throw new Error("The exact package provider is not active.");
   const response = await rpc.invoke<{ readonly message: string }, { readonly message: string }>(
     provider.providerHandle,

@@ -106,6 +106,8 @@ public enum PackageCallbackCancellationReason
     PackageUnloaded = 1,
     /// <summary>The Runtime is shutting down.</summary>
     HostShutdown = 2,
+    /// <summary>App package code explicitly requested cancellation.</summary>
+    CallerRequested = 3,
 }
 
 /// <summary>Supplies cancellation details for a pending callback session.</summary>
@@ -139,7 +141,11 @@ public sealed record PackageCallbackSessionStatus(
     PackageCallbackSessionState State,
     string Message,
     Uri? LaunchUri,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc)
+{
+    /// <summary>Gets whether the session has stopped awaiting callback work.</summary>
+    public bool IsTerminal => State != PackageCallbackSessionState.Pending;
+}
 
 /// <summary>Describes the user action required to continue a callback flow.</summary>
 /// <param name="PackageId">Package that owns the flow.</param>

@@ -8,7 +8,7 @@ namespace Sunder.Sdk.Abstractions;
 [SunderSdkCapability(SunderSdkCapabilities.CallbacksV1)]
 public interface IPackageCallbackClient
 {
-    /// <summary>Gets whether callback launching is available in the current host context.</summary>
+    /// <summary>Gets whether callback sessions are available in the current host context.</summary>
     bool IsAvailable { get; }
 
     /// <summary>Starts or reuses a pending session for a stable package-local handler id.</summary>
@@ -20,6 +20,17 @@ public interface IPackageCallbackClient
     /// <summary>Gets the current status of a session created by this package activation.</summary>
     ValueTask<PackageCallbackSessionStatus> GetStatusAsync(
         string callbackSessionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Requests cancellation of a pending session, returning false when it is absent or no longer pending.</summary>
+    ValueTask<bool> CancelAsync(
+        string callbackSessionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Polls until a session is terminal or throws <see cref="TimeoutException"/> after the required timeout.</summary>
+    ValueTask<PackageCallbackSessionStatus> WaitForCompletionAsync(
+        string callbackSessionId,
+        TimeSpan timeout,
         CancellationToken cancellationToken = default);
 
     /// <summary>Opens an absolute launch URI through the App host shell.</summary>
@@ -43,7 +54,12 @@ public sealed class NullPackageCallbackClient : IPackageCallbackClient
         string callbackHandlerId,
         IReadOnlyDictionary<string, string>? parameters = null,
         CancellationToken cancellationToken = default)
-        => Unavailable(callbackHandlerId, cancellationToken);
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackHandlerId);
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = PackageCallbackParameters.CopyAndValidate(parameters);
+        return Unavailable(callbackHandlerId, cancellationToken);
+    }
 
     /// <inheritdoc />
     public ValueTask<PackageCallbackSessionStatus> GetStatusAsync(
@@ -52,18 +68,46 @@ public sealed class NullPackageCallbackClient : IPackageCallbackClient
         => Unavailable(callbackSessionId, cancellationToken);
 
     /// <inheritdoc />
+    public ValueTask<bool> CancelAsync(
+        string callbackSessionId,
+        CancellationToken cancellationToken = default)
+        => Unavailable<bool>(callbackSessionId, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<PackageCallbackSessionStatus> WaitForCompletionAsync(
+        string callbackSessionId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackSessionId);
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "The callback wait timeout must be positive.");
+        }
+
+        return Unavailable<PackageCallbackSessionStatus>(callbackSessionId, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public ValueTask OpenLaunchUriAsync(Uri launchUri, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(launchUri);
+        if (!launchUri.IsAbsoluteUri)
+        {
+            throw new ArgumentException("The launch URI must be absolute.", nameof(launchUri));
+        }
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromException(new NotSupportedException("Package callback launching is available only in an App activation."));
     }
 
     private static ValueTask<PackageCallbackSessionStatus> Unavailable(string value, CancellationToken cancellationToken)
+        => Unavailable<PackageCallbackSessionStatus>(value, cancellationToken);
+
+    private static ValueTask<T> Unavailable<T>(string value, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromException<PackageCallbackSessionStatus>(
-            new NotSupportedException("Package callback launching is available only in an App activation."));
+        return ValueTask.FromException<T>(
+            new NotSupportedException("Package callback sessions are available only in an App activation."));
     }
 }

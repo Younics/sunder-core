@@ -40,6 +40,11 @@ public sealed partial class RuntimeApiClient : IRuntimeApiClient, IRuntimeRpcMan
         CancellationToken cancellationToken = default)
         => _management.StagePackageStoreChangesAsync(request, cancellationToken);
 
+    public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+        => _management.GetPackageUninstallPlanAsync(packageId, cancellationToken);
+
     public Task<PackageOperationResult> CommitPackageStoreStageAsync(
         string stageId,
         CancellationToken cancellationToken = default)

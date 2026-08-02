@@ -26,4 +26,10 @@ internal sealed class PackageCallbackAccessService(RuntimeSessionOwner sessions)
         using var lease = sessions.State.AcquireLease();
         return sessions.Callbacks.GetStatus(lease, packageId, callbackSessionId);
     }
+
+    public bool Cancel(string packageId, string callbackSessionId)
+    {
+        using var lease = sessions.State.AcquireLease();
+        return sessions.Callbacks.Cancel(lease, packageId, callbackSessionId);
+    }
 }

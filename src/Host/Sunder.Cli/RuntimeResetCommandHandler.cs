@@ -59,12 +59,18 @@ internal sealed class RuntimeResetCommandHandler(
             reset,
             alreadyEmpty,
             partial,
-            categories = result.Categories,
+            categories = result.Categories.Select(category => new
+            {
+                name = category.Category,
+                status = category.Status,
+            }).ToArray(),
         });
 
         if (!result.Success)
         {
-            output.Error("Runtime V1 reset was partial. Re-run the command after resolving locked files or credential-provider access.");
+            output.Error(
+                "Runtime V1 reset was partial. Re-run the command after resolving locked files or credential-provider access.",
+                "runtime.reset.partial");
             return CliExitCodes.Failure;
         }
 

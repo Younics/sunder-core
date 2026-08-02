@@ -24,15 +24,7 @@ internal sealed class PackageScopedBackgroundProcessQueue(
 
     internal BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request, Guid processId)
     {
-        if (string.IsNullOrWhiteSpace(request.Title))
-        {
-            throw new ArgumentException("Background process title is required.", nameof(request));
-        }
-
-        if (string.IsNullOrWhiteSpace(request.GroupKey))
-        {
-            throw new ArgumentException("Background process group key is required.", nameof(request));
-        }
+        BackgroundProcessRequestValidator.Validate(request);
 
         var metadata = PackageScopedBackgroundProcessMetadata.Create(
             _packageId,

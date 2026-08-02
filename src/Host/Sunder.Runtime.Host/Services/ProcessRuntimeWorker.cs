@@ -30,7 +30,6 @@ internal sealed class ProcessRuntimeWorker :
     private readonly RuntimePackageContext _packageContext;
     private readonly Guid _activationId;
     private readonly RuntimeRpcBroker _broker;
-    private readonly ISunderRpcContentClient _contentClient;
     private readonly RuntimeRpcCallerStamp _callerStamp;
     private readonly RuntimeProcessPolicyOptions _policy;
     private readonly CancellationToken _hostStopping;
@@ -72,15 +71,13 @@ internal sealed class ProcessRuntimeWorker :
         Guid activationId,
         RuntimeRpcBroker broker,
         RuntimeProcessPolicyOptions? policy = null,
-        CancellationToken hostStopping = default,
-        ISunderRpcContentClient? contentClient = null)
+        CancellationToken hostStopping = default)
     {
         _logger = logger;
         _package = package;
         _packageContext = packageContext;
         _activationId = activationId;
         _broker = broker;
-        _contentClient = contentClient ?? UnavailableRuntimeRpcContentClient.Instance;
         _callerStamp = new RuntimeRpcCallerStamp(package.PackageId, activationId);
         _policy = ValidatePolicy(policy ?? new RuntimeProcessPolicyOptions());
         _hostStopping = hostStopping;
@@ -807,13 +804,15 @@ internal sealed class ProcessRuntimeWorker :
                     if (!call.Cancelled) call.Events.Writer.TryComplete();
                     return;
                 default:
+                    var exception = call.Cancelled
+                        ? null
+                        : ReadWorkerError(SunderWorkerProtocol.RequiredValue(root, "error"));
                     call.Terminal = true;
                     _hostCalls.Remove(id);
                     CleanupWorkerContentFiles(call);
-                    var exception = ReadWorkerError(SunderWorkerProtocol.RequiredValue(root, "error"));
                     if (!call.Cancelled)
                     {
-                        call.UnaryCompletion.TrySetException(exception);
+                        call.UnaryCompletion.TrySetException(exception!);
                         call.Events.Writer.TryComplete(exception);
                     }
                     return;
@@ -835,23 +834,12 @@ internal sealed class ProcessRuntimeWorker :
         {
             return new ProcessRpcProviderFaultException(code);
         }
-        var kind = kindText switch
+        if (kindText != "domain")
         {
-            "domain" => SunderRpcErrorKind.Domain,
-            "permission-denied" => SunderRpcErrorKind.PermissionDenied,
-            "not-found" => SunderRpcErrorKind.NotFound,
-            "stale-endpoint" => SunderRpcErrorKind.StaleEndpoint,
-            "validation" => SunderRpcErrorKind.Validation,
-            "cancelled" => SunderRpcErrorKind.Cancelled,
-            "deadline-exceeded" => SunderRpcErrorKind.DeadlineExceeded,
-            "resource-exhausted" => SunderRpcErrorKind.ResourceExhausted,
-            "unavailable" => SunderRpcErrorKind.Unavailable,
-            "provider-faulted" => SunderRpcErrorKind.ProviderFaulted,
-            "protocol" => SunderRpcErrorKind.Protocol,
-            _ => throw new SunderWorkerProtocolException(
-                $"Process worker returned unsupported provider error kind '{kindText}'."),
-        };
-        return new SunderRpcException(new SunderRpcError(kind, code, message));
+            throw new SunderWorkerProtocolException(
+                $"Process worker attempted to return unauthenticated infrastructure error kind '{kindText}'.");
+        }
+        return new SunderRpcException(new SunderRpcError(SunderRpcErrorKind.Domain, code, message));
     }
 
     private void BeginWorkerCall(string type, JsonElement root)
@@ -1041,8 +1029,7 @@ internal sealed class ProcessRuntimeWorker :
                     "filePath",
                     "options");
                 var hostCall = GetContentHostCall(root);
-                var reference = await _contentClient.RegisterFileAsync(
-                    hostCall.Context,
+                var reference = await hostCall.Context.RegisterContentFileAsync(
                     ResolveWorkerOwnedFilePath(SunderWorkerProtocol.RequiredString(root, "filePath", 4096)),
                     ReadContentRegistrationOptions(SunderWorkerProtocol.RequiredValue(root, "options")),
                     call.Cancellation.Token).ConfigureAwait(false);
@@ -1059,8 +1046,7 @@ internal sealed class ProcessRuntimeWorker :
                     "reference");
                 var hostCall = GetContentHostCall(root);
                 var reference = ReadContentReference(SunderWorkerProtocol.RequiredValue(root, "reference"));
-                await using var source = await _contentClient.OpenReadAsync(
-                    hostCall.Context,
+                await using var source = await hostCall.Context.OpenContentAsync(
                     reference,
                     call.Cancellation.Token).ConfigureAwait(false);
                 var contentDirectory = Path.Combine(

@@ -25,6 +25,8 @@ internal static class RegistryEndpoints
             Results.Ok(await orchestrator.ExecuteAsync(request, token)));
         group.MapPost("packages/update", async (RuntimeRegistryUpdateRequest request, RegistryPackageChangeOrchestrator orchestrator, CancellationToken token) =>
             Results.Ok(await orchestrator.UpdateAsync(request, token)));
+        group.MapPost("packages/adopt-source", async (RuntimeRegistrySourceAdoptionRequest request, RegistryPackageChangeOrchestrator orchestrator, CancellationToken token) =>
+            Results.Ok(await orchestrator.AdoptSourceAsync(request, token)));
 
         group.MapPost("packages/star", async (RuntimeRegistryStarRequest request, RegistryAuthenticatedOperations operations, CancellationToken token) =>
             Results.Ok(await operations.SetPackageStarAsync(request, token)));

@@ -1,5 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Sunder.Package.Format;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Services;
@@ -92,6 +95,38 @@ internal static class PackageStorePolicy
         return removals.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    public static PackageUninstallPlan CreateUninstallPlan(
+        string packageId,
+        IEnumerable<InstalledPackageRecord> packages)
+    {
+        var all = packages.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase).ToArray();
+        var target = all.First(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+        var removalIds = BuildRemovalSet(target.PackageId, all);
+        var removals = removalIds
+            .Select(id => all.First(package => string.Equals(package.PackageId, id, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var direct = new PackageUninstallPlanPackage(target.PackageId, target.Name, target.Version);
+        var cascading = removals
+            .Where(package => !string.Equals(package.PackageId, target.PackageId, StringComparison.OrdinalIgnoreCase))
+            .Select(package => new PackageUninstallPlanPackage(package.PackageId, package.Name, package.Version))
+            .ToArray();
+        var reloadImpact = new PackageLifecycleChangeSet(
+            removalIds,
+            removalIds,
+            removalIds,
+            removalIds,
+            SharedAssemblyResetRequired: false);
+        return new PackageUninstallPlan(
+            target.PackageId,
+            [direct],
+            cascading,
+            removalIds,
+            reloadImpact,
+            PackageUninstallDataBehavior.Retain,
+            removalIds,
+            ComputeUninstallConfirmationToken(target.PackageId, all));
+    }
+
     public static void AddImpactedDependents(ISet<string> impactedPackageIds, IReadOnlyList<InstalledPackageRecord> packages)
     {
         var changed = true;
@@ -113,6 +148,21 @@ internal static class PackageStorePolicy
         => messages.Count switch { 0 => "No package changes required.", 1 => messages[0], _ => $"Applied {impactedCount} package store change(s)." };
 
     public static bool CatalogsEqual(IReadOnlyList<InstalledPackageRecord> left, IReadOnlyList<InstalledPackageRecord> right)
-        => JsonSerializer.Serialize(left.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase), InstalledPackageStore.JsonOptions)
-           == JsonSerializer.Serialize(right.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase), InstalledPackageStore.JsonOptions);
+        => JsonSerializer.Serialize(
+               InstalledPackageStore.NormalizeCatalogForCompatibility(left)
+                   .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
+               InstalledPackageStore.JsonOptions)
+           == JsonSerializer.Serialize(
+               InstalledPackageStore.NormalizeCatalogForCompatibility(right)
+                   .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
+               InstalledPackageStore.JsonOptions);
+
+    private static string ComputeUninstallConfirmationToken(
+        string packageId,
+        IReadOnlyList<InstalledPackageRecord> packages)
+    {
+        var catalog = JsonSerializer.Serialize(packages, InstalledPackageStore.JsonOptions);
+        var payload = Encoding.UTF8.GetBytes($"sunder-uninstall-v1\n{packageId}\n{catalog}");
+        return Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
+    }
 }

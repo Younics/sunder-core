@@ -9,6 +9,7 @@ namespace Sunder.Runtime.Client;
 public sealed partial class RuntimeManagementClient
 {
     private static readonly JsonSerializerOptions RpcStreamJsonOptions = new(JsonSerializerDefaults.Web);
+    private const string RpcContentMetadataHeader = "X-Sunder-Rpc-Content-Metadata";
 
     public Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcCatalogSnapshot>(
@@ -73,6 +74,24 @@ public sealed partial class RuntimeManagementClient
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
+    public Task<RuntimeRpcAppCallScopeDescriptor> OpenAppRpcCallScopeAsync(
+        RuntimeRpcAppCallScopeOpenRequest request,
+        CancellationToken token = default)
+        => PostAsync<RuntimeRpcAppCallScopeOpenRequest, RuntimeRpcAppCallScopeDescriptor>(
+            "rpc/app/call-scopes/open",
+            request,
+            RuntimeProtocolFeatures.AppWebRpcV1,
+            token);
+
+    public async Task CloseAppRpcCallScopeAsync(
+        RuntimeRpcAppCallScopeCloseRequest closeRequest,
+        CancellationToken token = default)
+    {
+        using var request = CreateRpcRequest("rpc/app/call-scopes/close", closeRequest);
+        using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
+    }
+
     public Task<RuntimeRpcAppDiscoverResponse> DiscoverAppRpcAsync(
         RuntimeRpcAppDiscoverRequest request,
         CancellationToken token = default)
@@ -116,6 +135,66 @@ public sealed partial class RuntimeManagementClient
             request,
             token);
 
+    public async Task<RuntimeRpcAppContentRegisterResponse> RegisterAppRpcContentAsync(
+        RuntimeRpcAppContentRegisterMetadata metadata,
+        Stream source,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            CreateUri("rpc/app/call-scopes/content/register"))
+        {
+            Content = new StreamContent(new NonDisposingReadStream(source)),
+        };
+        if (metadata.Length is { } length) request.Content.Headers.ContentLength = length;
+        request.Headers.TryAddWithoutValidation(
+            RpcContentMetadataHeader,
+            Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(metadata, RpcStreamJsonOptions)));
+        request.Options.Set(
+            RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
+            new[] { RuntimeProtocolFeatures.AppWebRpcV1 });
+        using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
+        return await _responses.ReadRequiredJsonAsync<RuntimeRpcAppContentRegisterResponse>(response, token)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<RuntimeRpcAppContentOpenResult> OpenAppRpcContentAsync(
+        RuntimeRpcAppContentOpenRequest openRequest,
+        CancellationToken token = default)
+    {
+        using var request = CreateRpcRequest("rpc/app/call-scopes/content/open", openRequest);
+        var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            try
+            {
+                var error = await _responses.ReadJsonAsync<RuntimeRpcErrorDescriptor>(response, token)
+                    .ConfigureAwait(false);
+                return new RuntimeRpcAppContentOpenResult(null, error);
+            }
+            finally
+            {
+                response.Dispose();
+            }
+        }
+        try
+        {
+            var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            return new RuntimeRpcAppContentOpenResult(
+                new RpcResponseReadStream(stream, response),
+                null);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
     private HttpRequestMessage CreateRpcRequest<TRequest>(string path, TRequest payload)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, CreateUri(path))
@@ -154,5 +233,68 @@ public sealed partial class RuntimeManagementClient
             yield return JsonSerializer.Deserialize<TFrame>(line, RpcStreamJsonOptions)
                          ?? throw new InvalidDataException("Runtime RPC stream returned an empty frame.");
         }
+    }
+}
+
+public sealed record RuntimeRpcAppContentOpenResult(
+    Stream? Content,
+    RuntimeRpcErrorDescriptor? Error);
+
+internal sealed class NonDisposingReadStream(Stream inner) : Stream
+{
+    public override bool CanRead => inner.CanRead;
+    public override bool CanSeek => inner.CanSeek;
+    public override bool CanWrite => false;
+    public override long Length => inner.Length;
+    public override long Position { get => inner.Position; set => inner.Position = value; }
+    public override void Flush() => inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+    public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+    public override int Read(Span<byte> buffer) => inner.Read(buffer);
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        => inner.ReadAsync(buffer, cancellationToken);
+    public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    protected override void Dispose(bool disposing) => base.Dispose(disposing);
+    public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+internal sealed class RpcResponseReadStream(Stream inner, HttpResponseMessage response) : Stream
+{
+    private int _disposed;
+    public override bool CanRead => inner.CanRead;
+    public override bool CanSeek => inner.CanSeek;
+    public override bool CanWrite => false;
+    public override long Length => inner.Length;
+    public override long Position { get => inner.Position; set => inner.Position = value; }
+    public override void Flush() => inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+    public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+    public override int Read(Span<byte> buffer) => inner.Read(buffer);
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        => inner.ReadAsync(buffer, cancellationToken);
+    public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            inner.Dispose();
+            response.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            await inner.DisposeAsync().ConfigureAwait(false);
+            response.Dispose();
+        }
+        GC.SuppressFinalize(this);
     }
 }

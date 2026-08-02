@@ -1,4 +1,5 @@
 import type { JsonValue, RpcContractDescriptor } from "./types";
+import { isPackageId, isSemanticVersion } from "./validation";
 
 const MAXIMUM_DESCRIPTOR_BYTES = 4 * 1024 * 1024;
 const MAXIMUM_DEPTH = 64;
@@ -552,17 +553,6 @@ function only(object: JsonObject, path: string, ...allowed: readonly string[]): 
 
 function has(object: JsonObject, name: string): boolean {
   return Object.prototype.hasOwnProperty.call(object, name);
-}
-
-function isPackageId(value: string): boolean {
-  return value.length <= 128 && value.split(".").every((segment) => segment.length > 0 && /^[a-z0-9]+$/u.test(segment));
-}
-
-function isSemanticVersion(value: string): boolean {
-  if (value.length === 0 || value.length > 256) return false;
-  const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(value);
-  if (match === null) return false;
-  return match[4] === undefined || match[4].split(".").every((identifier) => !/^[0-9]+$/u.test(identifier) || identifier === "0" || !identifier.startsWith("0"));
 }
 
 function isMemberId(value: string): boolean {

@@ -187,7 +187,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         _documentGeneration,
                         cancellationToken,
                         _lifetime.Token,
-                        RequestTimeout);
+                        RequestTimeout,
+                        request.DeadlineUtc);
                     _pending.Add(request.RequestId, pending);
                     _ = FinishErrorAsync(
                         request.RequestId,
@@ -202,7 +203,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     _documentGeneration,
                     cancellationToken,
                     _lifetime.Token,
-                    RequestTimeout);
+                    RequestTimeout,
+                    request.DeadlineUtc);
                 _pending.Add(request.RequestId, pending);
             }
 
@@ -240,6 +242,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
     {
         try
         {
+            pending.Token.ThrowIfCancellationRequested();
             switch (request.Method)
             {
                 case "rpc.discover":
@@ -284,7 +287,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         invocation.ServiceId,
                         invocation.MethodId,
                         invocation.Request,
-                        invocation.DeadlineUtc,
+                        request.DeadlineUtc,
                         pending.Token).ConfigureAwait(false);
                     EnsureBounded(response);
                     _contracts.ValidateOutput(provider, method, response);
@@ -306,7 +309,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                                        invocation.ServiceId,
                                        invocation.MethodId,
                                        invocation.Request,
-                                       invocation.DeadlineUtc,
+                                       request.DeadlineUtc,
                                        pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
                     {
                         EnsureBounded(item);
@@ -325,6 +328,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     {
                         throw Validation("bridge.external.invalid", "The external link is invalid.");
                     }
+                    pending.Token.ThrowIfCancellationRequested();
                     _externalBrowser.Open(uri);
                     await FinishResultAsync(request.RequestId, pending, new { opened = true }).ConfigureAwait(false);
                     return;
@@ -348,6 +352,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     {
                         throw Validation("bridge.navigation.invalid", "The package route is invalid.");
                     }
+                    pending.Token.ThrowIfCancellationRequested();
                     _navigate(_contentServer.GetRouteUri(route));
                     await FinishResultAsync(request.RequestId, pending, new { accepted = true }).ConfigureAwait(false);
                     return;
@@ -361,8 +366,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
             var error = pending.TimedOut
                 ? new SunderRpcError(
                     SunderRpcErrorKind.DeadlineExceeded,
-                    "rpc.bridge.timeout",
-                    "The browser bridge request timed out.")
+                    "rpc.call.deadline-exceeded",
+                    "The browser bridge request deadline elapsed.")
                 : new SunderRpcError(
                     SunderRpcErrorKind.Cancelled,
                     "rpc.bridge.cancelled",
@@ -417,37 +422,14 @@ internal sealed class AppWebBridge : IAsyncDisposable
             "providerHandle",
             "serviceId",
             "methodId",
-            "request",
-            "deadlineUtc");
-        var deadlineText = OptionalText(payload, "deadlineUtc", 64);
-        DateTimeOffset? deadline = null;
-        if (deadlineText is not null
-            && (!DateTimeOffset.TryParseExact(
-                    deadlineText,
-                    "O",
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.AssumeUniversal,
-                    out var parsed)
-                || parsed.Offset != TimeSpan.Zero))
-        {
-            throw Validation("rpc.bridge.deadline", "The RPC deadline must be a UTC ISO-8601 timestamp.");
-        }
-        else if (deadlineText is not null)
-        {
-            deadline = DateTimeOffset.ParseExact(
-                deadlineText,
-                "O",
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal);
-        }
+            "request");
         var request = payload.GetProperty("request").Clone();
         EnsureBounded(request);
         return new BridgeInvocation(
             RequiredId(payload, "providerHandle"),
             RequiredText(payload, "serviceId", 128),
             RequiredText(payload, "methodId", 128),
-            request,
-            deadline);
+            request);
     }
 
     private SunderRpcProviderSnapshot ResolveProvider(string handle)
@@ -685,7 +667,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                   if (state.done || state.cancelSent) return;
                   state.cancelSent = true;
                   try {
-                    window.invokeCSharpAction(JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method: 'bridge.cancel', payload: { targetRequestId: requestId } }));
+                    window.invokeCSharpAction(JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method: 'bridge.cancel', deadlineUtc: null, payload: { targetRequestId: requestId } }));
                   } catch {
                     finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.'));
                   }
@@ -694,7 +676,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 pending.set(requestId, state);
                 let body;
                 try {
-                  body = JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method, payload });
+                  body = JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method, deadlineUtc: options?.deadline?.toISOString?.() ?? null, payload });
                 } catch {
                   finish(state, failure('validation', 'rpc.bridge.serialization', 'The browser bridge request is not valid JSON.'));
                 }
@@ -770,8 +752,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
               const rpc = Object.freeze({
                 discover: (contractId, options) => send('rpc.discover', { contractId }, options, false),
                 watch: (afterRevision, afterSequence, options) => send('rpc.watch', { afterRevision, afterSequence }, options, true),
-                invoke: (providerHandle, serviceId, methodId, request, options) => send('rpc.invoke', { providerHandle, serviceId, methodId, request, deadlineUtc: options?.deadline?.toISOString?.() ?? null }, options, false),
-                subscribe: (providerHandle, serviceId, methodId, request, options) => send('rpc.subscribe', { providerHandle, serviceId, methodId, request, deadlineUtc: options?.deadline?.toISOString?.() ?? null }, options, true)
+                invoke: (providerHandle, serviceId, methodId, request, options) => send('rpc.invoke', { providerHandle, serviceId, methodId, request }, options, false),
+                subscribe: (providerHandle, serviceId, methodId, request, options) => send('rpc.subscribe', { providerHandle, serviceId, methodId, request }, options, true)
               });
               const api = Object.freeze({
                 version,
@@ -793,7 +775,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
         error = "The browser bridge envelope is invalid.";
         if (root.ValueKind != JsonValueKind.Object
             || root.EnumerateObject().Any(static property => property.Name is not
-                ("protocol" or "version" or "nonce" or "origin" or "requestId" or "method" or "payload"))
+                ("protocol" or "version" or "nonce" or "origin" or "requestId" or "method" or "deadlineUtc" or "payload"))
             || !root.TryGetProperty("protocol", out var protocol)
             || protocol.ValueKind != JsonValueKind.String
             || protocol.GetString() != Protocol
@@ -811,6 +793,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
             || !root.TryGetProperty("method", out var method)
             || method.ValueKind != JsonValueKind.String
             || method.GetString() is not { Length: > 0 and <= 64 } methodValue
+            || !TryReadDeadline(root, out var deadlineUtc)
             || !root.TryGetProperty("payload", out var payload))
         {
             return false;
@@ -820,8 +803,29 @@ internal sealed class AppWebBridge : IAsyncDisposable
             origin.GetString()!,
             requestId.GetString()!,
             methodValue,
+            deadlineUtc,
             payload.Clone());
         error = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadDeadline(JsonElement root, out DateTimeOffset? deadlineUtc)
+    {
+        deadlineUtc = null;
+        if (!root.TryGetProperty("deadlineUtc", out var value)) return false;
+        if (value.ValueKind == JsonValueKind.Null) return true;
+        if (value.ValueKind != JsonValueKind.String
+            || !DateTimeOffset.TryParseExact(
+                value.GetString(),
+                "O",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsed)
+            || parsed.Offset != TimeSpan.Zero)
+        {
+            return false;
+        }
+        deadlineUtc = parsed;
         return true;
     }
 
@@ -859,15 +863,6 @@ internal sealed class AppWebBridge : IAsyncDisposable
             throw Validation("bridge.payload.id", $"Bridge payload property '{name}' is not a valid id.");
         }
         return value;
-    }
-
-    private static string? OptionalText(JsonElement root, string name, int maximum)
-    {
-        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
-        {
-            return null;
-        }
-        return RequiredText(root, name, maximum);
     }
 
     private static long RequiredNonNegativeInteger(JsonElement root, string name)
@@ -963,41 +958,39 @@ internal sealed class AppWebBridge : IAsyncDisposable
         string Origin,
         string RequestId,
         string Method,
+        DateTimeOffset? DeadlineUtc,
         JsonElement Payload);
 
     private sealed record BridgeInvocation(
         string ProviderHandle,
         string ServiceId,
         string MethodId,
-        JsonElement Request,
-        DateTimeOffset? DeadlineUtc);
+        JsonElement Request);
 
     private sealed class PendingRequest : IDisposable
     {
-        private readonly CancellationTokenSource _timeout;
-        private readonly CancellationTokenSource _linked;
-        private readonly CancellationToken _timeoutToken;
-        private readonly CancellationToken _token;
+        private readonly CancellationTokenSource _deadline;
+        private readonly CancellationTokenSource _cancellation = new();
+        private CancellationTokenRegistration _requestRegistration;
+        private CancellationTokenRegistration _lifetimeRegistration;
+        private CancellationTokenRegistration _deadlineRegistration;
+        private int _cancellationReason;
         private int _completed;
         private int _disposed;
 
         private PendingRequest(
             long documentGeneration,
-            CancellationTokenSource timeout,
-            CancellationTokenSource linked)
+            TimeSpan timeout)
         {
             DocumentGeneration = documentGeneration;
-            _timeout = timeout;
-            _linked = linked;
-            _timeoutToken = timeout.Token;
-            _token = linked.Token;
+            _deadline = new CancellationTokenSource(timeout);
         }
 
         public long DocumentGeneration { get; }
 
-        public CancellationToken Token => _token;
+        public CancellationToken Token => _cancellation.Token;
 
-        public bool TimedOut => _timeoutToken.IsCancellationRequested;
+        public bool TimedOut => Volatile.Read(ref _cancellationReason) == (int)CancellationReason.Deadline;
 
         public bool IsCompleted => Volatile.Read(ref _completed) != 0;
 
@@ -1005,22 +998,45 @@ internal sealed class AppWebBridge : IAsyncDisposable
             long documentGeneration,
             CancellationToken request,
             CancellationToken lifetime,
-            TimeSpan timeout)
+            TimeSpan timeout,
+            DateTimeOffset? requestedDeadline)
         {
-            var deadline = new CancellationTokenSource(timeout);
-            return new PendingRequest(
-                documentGeneration,
-                deadline,
-                CancellationTokenSource.CreateLinkedTokenSource(request, lifetime, deadline.Token));
+            var effectiveTimeout = timeout;
+            if (requestedDeadline is { } deadlineUtc)
+            {
+                var remaining = deadlineUtc - DateTimeOffset.UtcNow;
+                if (remaining < effectiveTimeout) effectiveTimeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+            }
+            var pending = new PendingRequest(documentGeneration, effectiveTimeout);
+            pending._requestRegistration = request.Register(
+                static state => ((PendingRequest)state!).TryCancel(CancellationReason.Cancelled),
+                pending);
+            pending._lifetimeRegistration = lifetime.Register(
+                static state => ((PendingRequest)state!).TryCancel(CancellationReason.Cancelled),
+                pending);
+            pending._deadlineRegistration = pending._deadline.Token.Register(
+                static state => ((PendingRequest)state!).TryCancel(CancellationReason.Deadline),
+                pending);
+            return pending;
         }
 
         public bool TryComplete() => Interlocked.Exchange(ref _completed, 1) == 0;
 
         public void Cancel()
         {
+            TryCancel(CancellationReason.Cancelled);
+        }
+
+        private void TryCancel(CancellationReason reason)
+        {
+            if (Interlocked.CompareExchange(ref _cancellationReason, (int)reason, (int)CancellationReason.None)
+                != (int)CancellationReason.None)
+            {
+                return;
+            }
             try
             {
-                _linked.Cancel();
+                _cancellation.Cancel();
             }
             catch (ObjectDisposedException)
             {
@@ -1034,8 +1050,18 @@ internal sealed class AppWebBridge : IAsyncDisposable
             {
                 return;
             }
-            _linked.Dispose();
-            _timeout.Dispose();
+            _requestRegistration.Dispose();
+            _lifetimeRegistration.Dispose();
+            _deadlineRegistration.Dispose();
+            _deadline.Dispose();
+            _cancellation.Dispose();
+        }
+
+        private enum CancellationReason
+        {
+            None,
+            Cancelled,
+            Deadline,
         }
     }
 }

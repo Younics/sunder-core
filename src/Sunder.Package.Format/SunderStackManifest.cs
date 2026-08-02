@@ -155,6 +155,9 @@ public sealed class SunderStackRequiredInputManifest
     [JsonPropertyName("description")]
     public string? Description { get; init; }
 
+    [JsonPropertyName("sensitivity")]
+    public string? Sensitivity { get; init; }
+
     [JsonPropertyName("defaultValue")]
     public string? DefaultValue { get; init; }
 

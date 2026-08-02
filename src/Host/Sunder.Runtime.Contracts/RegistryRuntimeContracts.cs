@@ -93,10 +93,21 @@ public sealed record RuntimeRegistryPackageBatchRequest(
 }
 
 public sealed record RuntimeRegistryUpdateRequest(
-    string RegistryOrigin,
+    string? RegistryOrigin = null,
     string? PackageId = null,
     bool IncludePrerelease = false,
     IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null);
+
+public sealed record RuntimeRegistrySourceAdoptionRequest(
+    string PackageId,
+    string RegistryOrigin,
+    string? Tag = null,
+    string? Version = null,
+    bool IncludePrerelease = false,
+    bool AllowDowngrade = false,
+    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null,
+    bool Confirm = false,
+    bool DryRun = false);
 
 public sealed record RuntimeRegistryPackageDependency(
     string PackageId,
@@ -200,6 +211,8 @@ public sealed record RuntimeRegistryPackageChangeResult(
     IReadOnlyList<string> ImpactedPackageIds,
     IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems)
 {
+    private IReadOnlyList<string> _skippedPackageIds = Array.AsReadOnly(Array.Empty<string>());
+
     public IReadOnlyList<string> Warnings { get; } = Array.AsReadOnly(Warnings.ToArray());
     public IReadOnlyList<string> Errors { get; } = Array.AsReadOnly(Errors.ToArray());
     public IReadOnlyList<string> ImpactedPackageIds { get; }
@@ -207,6 +220,12 @@ public sealed record RuntimeRegistryPackageChangeResult(
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems { get; }
         = Array.AsReadOnly(PlanItems.ToArray());
     public RuntimePackageStamp? CommittedStamp { get; init; }
+
+    public IReadOnlyList<string> SkippedPackageIds
+    {
+        get => _skippedPackageIds;
+        init => _skippedPackageIds = Array.AsReadOnly((value ?? []).ToArray());
+    }
 }
 
 public sealed record RuntimeRegistryStarRequest(string RegistryOrigin, string ResourceId, bool Starred);

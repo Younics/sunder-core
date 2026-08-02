@@ -14,5 +14,7 @@
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj"
                       ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\Sdk\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

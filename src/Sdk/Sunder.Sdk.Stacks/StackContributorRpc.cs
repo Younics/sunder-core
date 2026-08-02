@@ -1,11 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Sdk.Stacks;
 
 /// <summary>Defines the authoritative Stack contributor RPC contract and local adapter factories.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
 public static class SunderStackContributorRpc
 {
     /// <summary>The Stack contributor contract id.</summary>
@@ -26,16 +29,14 @@ public static class SunderStackContributorRpc
     public static SunderRpcContractDescriptor Descriptor => ContractDescriptor.Value;
 
     /// <summary>Creates a JSON RPC handler over convenient package-local Stack interfaces.</summary>
-    public static ISunderRpcServiceHandler CreateHandler(
-        object contributor,
-        ISunderRpcContentClient contentClient)
-        => new StackContributorRpcHandler(contributor, contentClient);
+    public static ISunderRpcServiceHandler CreateHandler(IPackageStackContributor contributor)
+        => new StackContributorRpcHandler(contributor);
 
     /// <summary>Creates a typed client for one exact Stack contributor endpoint.</summary>
     public static StackContributorRpcClient CreateClient(
-        ISunderRpcClient client,
+        ISunderRpcCallScope scope,
         SunderRpcEndpointReference endpoint)
-        => new(client, endpoint);
+        => new(scope, endpoint);
 
     private static SunderRpcContractDescriptor LoadDescriptor()
     {
@@ -50,36 +51,24 @@ public static class SunderStackContributorRpc
 }
 
 /// <summary>Registers a package-local Stack contributor as a manifest-declared RPC provider.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
 public static class SunderStackContributionRegistryExtensions
 {
-    /// <summary>Registers a Stack provider using the package-scoped content client from Runtime services.</summary>
+    /// <summary>Registers a typed Stack provider using invocation-bound Host content authority.</summary>
     public static void RegisterStackContributor(
         this ISunderRuntimeContributionRegistry registry,
         string providerId,
-        object contributor,
+        IPackageStackContributor contributor,
         IServiceProvider services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        var contentClient = services.GetService(typeof(ISunderRpcContentClient)) as ISunderRpcContentClient
-            ?? throw new InvalidOperationException(
-                "The Runtime Host did not provide the package-scoped RPC content client.");
-        RegisterStackContributor(registry, providerId, contributor, contentClient);
-    }
-
-    /// <summary>Registers a Stack provider using an explicit package-scoped content client.</summary>
-    public static void RegisterStackContributor(
-        this ISunderRuntimeContributionRegistry registry,
-        string providerId,
-        object contributor,
-        ISunderRpcContentClient contentClient)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
         ArgumentNullException.ThrowIfNull(contributor);
-        ArgumentNullException.ThrowIfNull(contentClient);
+        ArgumentNullException.ThrowIfNull(services);
         registry.RegisterRpcProvider(
             providerId,
-            SunderStackContributorRpc.CreateHandler(contributor, contentClient));
+            SunderStackContributorRpc.CreateHandler(contributor));
     }
 }
 
@@ -144,17 +133,19 @@ public sealed record StackRpcImportRequest(
     IReadOnlyList<string> SelectedActionIds);
 
 /// <summary>Invokes one exact Stack contributor endpoint through the Sunder RPC broker.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
 public sealed class StackContributorRpcClient
 {
-    private readonly ISunderRpcClient _client;
+    private readonly ISunderRpcCallScope _scope;
     private readonly SunderRpcEndpointReference _endpoint;
 
     /// <summary>Creates a client for one exact endpoint reference.</summary>
     public StackContributorRpcClient(
-        ISunderRpcClient client,
+        ISunderRpcCallScope scope,
         SunderRpcEndpointReference endpoint)
     {
-        _client = client ?? throw new ArgumentNullException(nameof(client));
+        _scope = scope ?? throw new ArgumentNullException(nameof(scope));
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
     }
 
@@ -217,7 +208,7 @@ public sealed class StackContributorRpcClient
         CancellationToken cancellationToken)
         where TRequest : notnull
         where TResponse : notnull
-        => _client.InvokeAsync<TRequest, TResponse>(
+        => _scope.InvokeAsync<TRequest, TResponse>(
             _endpoint,
             SunderStackContributorRpc.ServiceId,
             methodId,
@@ -237,15 +228,14 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
     private readonly IPackageStackExporter? _exporter;
     private readonly IPackageStackImporter? _importer;
     private readonly IPackageStackImportAppliedHandler? _appliedHandler;
-    private readonly ISunderRpcContentClient _contentClient;
     private readonly StackContributorMetadata _metadata;
 
-    public StackContributorRpcHandler(object contributor, ISunderRpcContentClient contentClient)
+    public StackContributorRpcHandler(IPackageStackContributor contributor)
     {
+        ArgumentNullException.ThrowIfNull(contributor);
         _exporter = contributor as IPackageStackExporter;
         _importer = contributor as IPackageStackImporter;
         _appliedHandler = contributor as IPackageStackImportAppliedHandler;
-        _contentClient = contentClient;
         if (_exporter is null && _importer is null && _appliedHandler is null)
         {
             throw new ArgumentException(
@@ -253,27 +243,22 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
                 nameof(contributor));
         }
 
-        var contributorIds = new[]
-            {
-                _exporter?.ContributorId,
-                _importer?.ContributorId,
-                _appliedHandler?.ContributorId,
-            }
-            .Where(static value => value is not null)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (contributorIds.Length != 1 || string.IsNullOrWhiteSpace(contributorIds[0]))
+        if (string.IsNullOrWhiteSpace(contributor.ContributorId))
         {
             throw new ArgumentException(
-                "All local Stack interfaces on one RPC provider must expose the same non-empty contributor id.",
+                "A Stack RPC contributor must expose a non-empty contributor id.",
+                nameof(contributor));
+        }
+        if (string.IsNullOrWhiteSpace(contributor.DisplayName))
+        {
+            throw new ArgumentException(
+                "A Stack RPC contributor must expose a non-empty display name.",
                 nameof(contributor));
         }
 
         _metadata = new StackContributorMetadata(
-            contributorIds[0]!,
-            string.IsNullOrWhiteSpace(_exporter?.DisplayName)
-                ? contributorIds[0]!
-                : _exporter.DisplayName,
+            contributor.ContributorId,
+            contributor.DisplayName,
             _exporter is not null,
             _importer is not null,
             _appliedHandler is not null);
@@ -340,8 +325,7 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
             foreach (var file in fragment.Files ?? [])
             {
                 await using var stream = await file.OpenReadAsync(cancellationToken).ConfigureAwait(false);
-                var content = await _contentClient.RegisterAsync(
-                    context,
+                var content = await context.RegisterContentAsync(
                     stream,
                     new SunderRpcContentRegistrationOptions(
                         "application/octet-stream",
@@ -419,8 +403,7 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
             fragment.Description,
             fragment.Files?.Select(file => new StackImportPayloadHandle(
                 file.RelativePath,
-                cancellationToken => _contentClient.OpenReadAsync(
-                    context,
+                cancellationToken => context.OpenContentAsync(
                     file.Content,
                     cancellationToken),
                 file.Content.Length)).ToArray());
@@ -442,8 +425,8 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
         where T : notnull
         => JsonSerializer.SerializeToElement(value, JsonOptions);
 
-    private static SunderRpcException NotFound(string code, string message)
-        => new(new SunderRpcError(SunderRpcErrorKind.NotFound, code, message));
+    private static Exception NotFound(string code, string message)
+        => new InvalidOperationException($"{code}: {message}");
 }
 
 internal sealed class StackRpcEmpty

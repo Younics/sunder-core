@@ -3,6 +3,18 @@ namespace Sunder.Cli.Tests;
 public sealed class CliArchitectureTests
 {
     [Fact]
+    public void Production_cli_source_files_stay_focused()
+    {
+        var files = Directory.GetFiles(FindCliDirectory(), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                           && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+        Assert.All(files, path => Assert.True(
+            File.ReadLines(path).Count() < 500,
+            $"{Path.GetFileName(path)} should stay below 500 lines."));
+    }
+
+    [Fact]
     public void Cli_has_no_runtime_transport_mutation_or_credential_implementation()
     {
         var directory = FindCliDirectory();
@@ -14,7 +26,12 @@ public sealed class CliArchitectureTests
         Assert.DoesNotContain("PackageStoreMutationRequest", allSource, StringComparison.Ordinal);
         Assert.DoesNotContain("RuntimeConnectionInfoStore", allSource, StringComparison.Ordinal);
         Assert.DoesNotContain("BearerToken", allSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Headers.Authorization", allSource, StringComparison.Ordinal);
+        foreach (var file in files.Where(path => !path.EndsWith("RegistryClient.Publish.cs", StringComparison.Ordinal)))
+            Assert.DoesNotContain("Headers.Authorization", File.ReadAllText(file), StringComparison.Ordinal);
+        var automationPublisher = File.ReadAllText(Path.Combine(directory, "RegistryClient.Publish.cs"));
+        Assert.Contains("Headers.Authorization", automationPublisher, StringComparison.Ordinal);
+        Assert.Contains("RegistryPublishCredential", automationPublisher, StringComparison.Ordinal);
+        Assert.DoesNotContain("sunder_cli_", automationPublisher, StringComparison.Ordinal);
         foreach (var file in files.Where(path => !path.EndsWith("RegistryClient.cs", StringComparison.Ordinal)))
             Assert.DoesNotContain("new HttpClient", File.ReadAllText(file), StringComparison.Ordinal);
     }
@@ -93,9 +110,12 @@ public sealed class CliArchitectureTests
         var directory = FindCliDirectory();
         var expectedRoles = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["SystemCommandHandler.cs"] = "ICliRuntimeSystemClient",
+            ["RuntimeStatusCommandHandler.cs"] = "ICliRuntimeSystemClient",
             ["RuntimeResetCommandHandler.cs"] = "ICliRuntimeResetClient",
             ["PackageCommandHandler.cs"] = "ICliRuntimePackageClient",
+            ["PackageSettingsCommandHandler.cs"] = "ICliRuntimePackageSettingsClient",
+            ["PackageAuthCommandHandler.cs"] = "ICliRuntimePackageAuthClient",
+            ["RuntimeStackCommandHandler.cs"] = "ICliRuntimeStackClient",
             ["RegistryAuthCommandHandler.cs"] = "ICliRuntimeAuthClient",
             ["RegistryManagementCommandHandler.cs"] = "ICliRuntimeManagementClient",
             ["DeveloperPublishCommandHandler.cs"] = "ICliRuntimePublishClient",
@@ -106,6 +126,11 @@ public sealed class CliArchitectureTests
             Assert.Contains(pair.Value, source, StringComparison.Ordinal);
             Assert.DoesNotContain("ICliRuntimeClient runtime", source, StringComparison.Ordinal);
         });
+
+        var lifecycle = File.ReadAllText(Path.Combine(directory, "RuntimeLifecycleCommandHandler.cs"));
+        var status = File.ReadAllText(Path.Combine(directory, "RuntimeStatusCommandHandler.cs"));
+        Assert.Contains("ICliHostLifecycleClient", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("ICliHostStatusClient", status, StringComparison.Ordinal);
     }
 
     private static string FindCliDirectory()

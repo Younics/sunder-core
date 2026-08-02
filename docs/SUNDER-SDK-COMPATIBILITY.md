@@ -18,7 +18,7 @@ The V1 App and Runtime use protocol revision `3`. Dev sessions require `dev-pack
 
 V1 targets contain distinct V1-form capability ids. SDK-backed targets built on the coordinated 1.1 line require `sdkVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing, malformed, or unsupported target metadata is rejected before target code runs.
 
-Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`, and generated runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
+Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`. Coordinated npm package dependencies, generated Node templates, and runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
 
 ## Compatibility Rules
 
@@ -72,7 +72,7 @@ Current SDK capabilities are:
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |
 
-`Sunder.Package.Build` infers target requirements from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the target assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
+`Sunder.Package.Build` infers target requirements from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the target assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Stack provider registration and client-only use of `StackContributorRpcClient` both infer `stacks.rpc.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
 
 Manual MSBuild capability entries are required for unusual dynamic/reflection scenarios. Declare every capability that dynamically reached code can use and add the exact `SunderSdkDynamicAccess` call-site acknowledgment printed by the build. A capability declaration does not acknowledge unrelated unresolved sites:
 
@@ -89,7 +89,7 @@ Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one
 
 ## Callback And Auth
 
-`callbacks.v1` is the generic host-owned callback-session capability. It includes Runtime handler registration, immutable bounded start parameters, App-side start/poll/launch access through `IPackageContext.Callbacks`, single callback completion, expiry, and activation/shutdown cancellation. Package-owned network listeners are outside V1.
+`callbacks.v1` is the generic host-owned callback-session capability. It includes Runtime handler registration, immutable bounded start parameters, App-side start/status/bounded-wait/cancel/launch access through `IPackageContext.Callbacks`, single callback completion, expiry, and activation/shutdown cancellation. Package-owned network listeners are outside V1.
 
 `auth.v1` is only for auth-specific Host/App integration, including status and disconnect behavior. It always implies `callbacks.v1`; non-auth callback packages require only `callbacks.v1`.
 
@@ -98,6 +98,10 @@ Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one
 Cross-package Runtime contracts are strict, versioned JSON descriptors bundled in package content and identified by canonical SHA-256. Manifests declare imported contracts, requested actions, and provided endpoints. Installing or updating consents to every declared action for that exact package version and manifest; undeclared actions remain default-deny. Runtime validates descriptor compatibility and payload schemas before dispatch.
 
 Discovery and watch results contain Host-stamped package, provider, contract, and activation identities. An endpoint reference remains bound to that exact activation and never retargets a replacement provider.
+
+Content-bearing callers create an `ISunderRpcCallScope`. Request content is bound to that scope and exact target endpoint; response content is bound to the originating caller scope. Disposing the scope cancels its active work and revokes unconsumed references.
+
+Only the Host creates `SunderRpcInvocationContext`. Its content authority is valid only while the provider handler or subscription is active, regardless of retained CLR references. Provider code may return contract-level `Domain` errors; only Host-authenticated paths may originate infrastructure error kinds.
 
 ## RPC Invocation Leases
 

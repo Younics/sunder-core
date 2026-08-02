@@ -162,6 +162,12 @@ export interface RpcProviderIdentity {
   readonly contractSha256: string;
 }
 
+export interface RpcContractIdentity {
+  readonly contractId: string;
+  readonly contractVersion: string;
+  readonly contractSha256: string;
+}
+
 export interface RpcInvocationContext {
   readonly callerPackageId: string;
   readonly callerPackageVersion: string;
@@ -194,14 +200,20 @@ export interface RpcProviderRegistration extends RpcProviderIdentity {
 export interface WorkerOptions {
   readonly providers: readonly RpcProviderRegistration[];
   readonly onActivated?: (client: RpcClient) => Promise<void> | void;
+  readonly onShutdown?: (context: WorkerShutdownContext) => Promise<void> | void;
   readonly limits?: Partial<WorkerLimits>;
+}
+
+export interface WorkerShutdownContext {
+  readonly reason: string;
 }
 
 export interface WorkerLimits {
   readonly maxFrameBytes: number;
   readonly maxHeaderBytes: number;
   readonly maxMessageDepth: number;
-  readonly maxOutstandingCalls: number;
+  readonly maxInboundCalls: number;
+  readonly maxOutboundCalls: number;
   readonly maxStreamQueueMessages: number;
   readonly maxWriteQueue: number;
   readonly maxRememberedIds: number;

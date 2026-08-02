@@ -76,6 +76,11 @@ internal sealed class RuntimeRpcHostClient(
     RuntimeRpcBroker broker,
     RuntimeRpcHostCallerActivation caller) : ISunderRpcClient
 {
+    public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
+        SunderRpcCallOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => broker.CreateHostCallScopeAsync(caller, options, cancellationToken);
+
     public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
         SunderRpcEndpointReference endpoint,
         CancellationToken cancellationToken = default)

@@ -1,5 +1,6 @@
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
@@ -31,6 +32,8 @@ internal sealed class RuntimeStackExportService
     {
         using var lease = _sessions.State.AcquireLease();
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
+        await using var callScope = await _rpcClient.CreateCallScopeAsync(
+            cancellationToken: linked.Token).ConfigureAwait(false);
         var items = new List<RuntimeStackExportItemDescriptor>();
         var errors = new List<string>();
         var exporters = await RuntimeStackContributorCatalog.GetExportersAsync(
@@ -41,7 +44,8 @@ internal sealed class RuntimeStackExportService
         {
             try
             {
-                var discovered = await registration.Client.ListExportItemsAsync(
+                var client = SunderStackContributorRpc.CreateClient(callScope, registration.Provider.Endpoint);
+                var discovered = await client.ListExportItemsAsync(
                     new StackExportDiscoveryContext(registration.PackageId),
                     linked.Token).ConfigureAwait(false);
                 if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration.ContributorId, errors))
@@ -69,6 +73,8 @@ internal sealed class RuntimeStackExportService
         if (string.IsNullOrWhiteSpace(request.Name)) return Failed("Stack name is required.");
         var packageRequirements = BuildSelectedPackageRequirements(lease, request.SelectedPackages ?? []).ToList();
         if (request.SelectedItems.Count == 0 && packageRequirements.Count == 0) return Failed("Select at least one package or setup item to export.");
+        await using var callScope = await _rpcClient.CreateCallScopeAsync(
+            cancellationToken: linked.Token).ConfigureAwait(false);
 
         var fragments = new List<StackOwnedFragment>();
         var previews = new Dictionary<string, SunderStackFragmentPreview>(StringComparer.OrdinalIgnoreCase);
@@ -90,6 +96,9 @@ internal sealed class RuntimeStackExportService
             }
             try
             {
+                var scopedClient = SunderStackContributorRpc.CreateClient(
+                    callScope,
+                    registration.Provider.Endpoint);
                 var selections = group.GroupBy(item => item.ItemId, StringComparer.OrdinalIgnoreCase)
                     .Select(itemGroup => new StackExportItemSelection(
                         itemGroup.Key,
@@ -99,14 +108,14 @@ internal sealed class RuntimeStackExportService
                             detail.ValueOverride,
                             Enum.TryParse<StackValueSensitivity>(detail.SensitivityOverride, true, out var sensitivity) ? sensitivity : null)).ToArray()))
                     .ToArray();
-                var discovered = await registration.Client.ListExportItemsAsync(
+                var discovered = await scopedClient.ListExportItemsAsync(
                     new StackExportDiscoveryContext(registration.PackageId),
                     linked.Token).ConfigureAwait(false);
                 if (!RuntimeStackContributorCatalog.ValidateExportItemIds(discovered, registration.ContributorId, errors))
                 {
                     continue;
                 }
-                var contribution = await registration.Client.ExportAsync(
+                var contribution = await scopedClient.ExportAsync(
                     new StackExportRequest(selections),
                     linked.Token).ConfigureAwait(false);
                 packageRequirements.Add(BuildPackageRequirement(lease, registration.PackageId));
@@ -139,7 +148,15 @@ internal sealed class RuntimeStackExportService
         if (errors.Count > 0) return new RuntimeStackExportResponse(false, null, warnings, errors);
         if (fragments.Count == 0 && packageRequirements.Count == 0) return new RuntimeStackExportResponse(false, null, warnings, ["Selected setup items did not produce Stack content."]);
 
-        return await _archiveBuilder.BuildAsync(request, packageRequirements, fragments, previews, lease.Generation, warnings, linked.Token);
+        return await _archiveBuilder.BuildAsync(
+            request,
+            packageRequirements,
+            fragments,
+            previews,
+            callScope,
+            lease.Generation,
+            warnings,
+            linked.Token);
     }
 
     private IReadOnlyList<StackPackageRequirement> BuildSelectedPackageRequirements(

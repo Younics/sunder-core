@@ -334,6 +334,82 @@ public sealed class PackageOperationServiceTests
     }
 
     [Fact]
+    public async Task EnqueueMarketplaceUpdate_UsesRecordedRuntimeUpdatePolicy()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        using var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")));
+
+        var operation = service.EnqueueMarketplaceUpdate(
+            "agent",
+            "Agent",
+            "2.0.0");
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        var request = Assert.Single(runtimeClient.UpdateRequests);
+        Assert.Equal("agent", request.PackageId);
+        Assert.Null(request.RegistryOrigin);
+    }
+
+    [Fact]
+    public async Task EnqueueUpdateAll_DoesNotSupplyAnOriginOverride()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        using var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")));
+
+        var operation = service.EnqueueUpdateAll();
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        var request = Assert.Single(runtimeClient.UpdateRequests);
+        Assert.Null(request.PackageId);
+        Assert.Null(request.RegistryOrigin);
+    }
+
+    [Fact]
+    public async Task EnqueueUninstall_PreflightsPlanWithoutImplicitCascadeConsent()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient
+        {
+            UninstallPlan = new PackageUninstallPlan(
+                "agent",
+                [new PackageUninstallPlanPackage("agent", "Agent", "1.0.0")],
+                [new PackageUninstallPlanPackage("agent.extension", "Extension", "1.0.0")],
+                ["agent", "agent.extension"],
+                new PackageLifecycleChangeSet(
+                    ["agent", "agent.extension"],
+                    ["agent", "agent.extension"],
+                    ["agent", "agent.extension"],
+                    ["agent", "agent.extension"],
+                    false),
+                PackageUninstallDataBehavior.Retain,
+                ["agent", "agent.extension"],
+                new string('b', 64)),
+        };
+        using var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (_, _) => Task.CompletedTask,
+            new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")));
+
+        var operation = service.EnqueueUninstall("agent", "Agent");
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        var mutation = Assert.Single(Assert.Single(runtimeClient.StagedRequests).Mutations);
+        Assert.False(mutation.AllowCascade);
+        Assert.Equal(new string('b', 64), mutation.ConfirmationToken);
+    }
+
+    [Fact]
     public async Task EnqueueEnable_WhenCommitAndDiscardFail_PreservesCommitFailure()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -687,6 +763,8 @@ public sealed class PackageOperationServiceTests
 
         public List<string> DiscardedStageIds { get; } = [];
 
+        public List<PackageStoreStageRequest> StagedRequests { get; } = [];
+
         public TimeSpan InstallDelay { get; init; }
 
         public TimeSpan EnableDelay { get; init; }
@@ -707,8 +785,15 @@ public sealed class PackageOperationServiceTests
 
         public int StageStatusCallCount { get; private set; }
 
+        public List<RuntimeRegistryUpdateRequest> UpdateRequests { get; } = [];
+
+        public PackageUninstallPlan UninstallPlan { get; init; } = CreateUninstallPlan("agent");
+
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([]);
+
+        public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(string packageId, CancellationToken cancellationToken = default)
+            => Task.FromResult(UninstallPlan);
 
         public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
         {
@@ -756,13 +841,17 @@ public sealed class PackageOperationServiceTests
             => Task.FromResult(RegistryChangeResult(request.Packages.Select(package => package.PackageId).ToArray()));
 
         public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(RegistryChangeResult([]));
+        {
+            UpdateRequests.Add(request);
+            return Task.FromResult(RegistryChangeResult([]));
+        }
 
         public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RegistryPackageStarResponse(true, null, null, []));
 
         public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
         {
+            StagedRequests.Add(request);
             if (InstallDelay > TimeSpan.Zero && request.Mutations.Any(mutation => mutation.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade))
             {
                 await Task.Delay(InstallDelay, cancellationToken);
@@ -867,6 +956,17 @@ public sealed class PackageOperationServiceTests
             {
                 CommittedStamp = this.CommittedStamp,
             };
+
+        private static PackageUninstallPlan CreateUninstallPlan(string packageId)
+            => new(
+                packageId,
+                [new PackageUninstallPlanPackage(packageId, packageId, "1.0.0")],
+                [],
+                [packageId],
+                new PackageLifecycleChangeSet([packageId], [packageId], [packageId], [packageId], false),
+                PackageUninstallDataBehavior.Retain,
+                [packageId],
+                new string('a', 64));
     }
 
     private sealed class ThrowingRuntimeClientFactory : IRuntimeApiClientFactory

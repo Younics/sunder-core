@@ -288,6 +288,15 @@ internal static class StackManifestSchemaValidator
                 errors.Add($"{label} required input '{input.InputId ?? "unknown"}' is missing label.");
             }
 
+            if (input.Sensitivity is not ("Public" or "Secret"))
+            {
+                errors.Add($"{label} required input '{input.InputId ?? "unknown"}' must declare sensitivity as Public or Secret.");
+            }
+            else if (input.Sensitivity == "Secret" && input.DefaultValue is not null)
+            {
+                errors.Add($"{label} secret required input '{input.InputId ?? "unknown"}' must not declare a portable default value.");
+            }
+
             if (input.Required is null)
             {
                 errors.Add($"{label} required input '{input.InputId ?? "unknown"}' must declare required.");

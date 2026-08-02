@@ -1,19 +1,20 @@
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackExporter
+type interface Sunder.Sdk.Stacks.IPackageStackContributor
   property System.String ContributorId { get; }
   property System.String DisplayName { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
+type interface Sunder.Sdk.Stacks.IPackageStackExporter : Sunder.Sdk.Stacks.IPackageStackContributor
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackExportContribution> ExportAsync(Sunder.Sdk.Stacks.StackExportRequest request, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor>> ListExportItemsAsync(Sunder.Sdk.Stacks.StackExportDiscoveryContext context, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackImportAppliedHandler
-  property System.String ContributorId { get; }
+type interface Sunder.Sdk.Stacks.IPackageStackImportAppliedHandler : Sunder.Sdk.Stacks.IPackageStackContributor
   method abstract System.Threading.Tasks.ValueTask OnStackImportAppliedAsync(Sunder.Sdk.Stacks.StackImportAppliedContext context, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackImporter
-  property System.String ContributorId { get; }
+type interface Sunder.Sdk.Stacks.IPackageStackImporter : Sunder.Sdk.Stacks.IPackageStackContributor
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportPreview> PreviewImportAsync(Sunder.Sdk.Stacks.StackImportPreviewRequest request, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportResult> ImportAsync(Sunder.Sdk.Stacks.StackImportRequest request, System.Threading.CancellationToken cancellationToken = null)
 type sealed class Sunder.Sdk.Stacks.StackContributorMetadata : System.IEquatable<Sunder.Sdk.Stacks.StackContributorMetadata>
@@ -29,8 +30,10 @@ type sealed class Sunder.Sdk.Stacks.StackContributorMetadata : System.IEquatable
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.StackContributorRpcClient
-  method .ctor(Sunder.Sdk.Rpc.ISunderRpcClient client, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint)
+  method .ctor(Sunder.Sdk.Rpc.ISunderRpcCallScope scope, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint)
   method System.Threading.Tasks.ValueTask ImportAppliedAsync(Sunder.Sdk.Stacks.StackImportAppliedContext context, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackContributorMetadata> GetMetadataAsync(System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportPreview> PreviewImportAsync(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest request, System.Threading.CancellationToken cancellationToken = null)
@@ -149,10 +152,10 @@ type sealed class Sunder.Sdk.Stacks.StackExportRequest : System.IEquatable<Sunde
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.StackExportSelectionExtensions
   method static Sunder.Sdk.Stacks.StackExportItemSelection? GetItemSelection(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId)
-  method static Sunder.Sdk.Stacks.StackValueSensitivity GetDetailSensitivity(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, Sunder.Sdk.Stacks.StackValueSensitivity fallback)
-  method static System.Boolean IsDetailSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId)
+  method static Sunder.Sdk.Stacks.StackValueSensitivity GetDetailSensitivity(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, Sunder.Sdk.Stacks.StackValueSensitivity fallback, System.Boolean defaultSelected)
+  method static System.Boolean IsDetailSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.Boolean defaultSelected)
   method static System.Boolean IsItemSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId)
-  method static System.String GetDetailValue(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.String fallback)
+  method static System.String GetDetailValue(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.String fallback, System.Boolean defaultSelected)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.StackFragmentExport : System.IEquatable<Sunder.Sdk.Stacks.StackFragmentExport>
   method .ctor(System.String FragmentId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files = null, System.String? SourceItemId = null)
@@ -340,14 +343,15 @@ type sealed class Sunder.Sdk.Stacks.StackPackageRequirement : System.IEquatable<
   method virtual System.String ToString()
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.StackRequiredInputDescriptor : System.IEquatable<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>
-  method .ctor(System.String InputId, System.String Label, System.Boolean Required = true, System.String? Description = null, System.String? DefaultValue = null)
-  property System.String? DefaultValue { get; init; }
+  method .ctor(System.String InputId, System.String Label, Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity, System.Boolean Required = true, System.String? Description = null, System.String? DefaultValue = null)
+  property System.String? DefaultValue { get; }
   property System.String? Description { get; init; }
   property System.String InputId { get; init; }
   property System.String Label { get; init; }
   property System.Boolean Required { get; init; }
+  property Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity { get; }
   method Sunder.Sdk.Stacks.StackRequiredInputDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String InputId, out System.String Label, out System.Boolean Required, out System.String? Description, out System.String? DefaultValue)
+  method System.Void Deconstruct(out System.String InputId, out System.String Label, out Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity, out System.Boolean Required, out System.String? Description, out System.String? DefaultValue)
   method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRequiredInputDescriptor? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -436,13 +440,16 @@ type enum Sunder.Sdk.Stacks.StackValueSensitivity : System.IComparable, System.I
   field static Sunder.Sdk.Stacks.StackValueSensitivity Public = 0
   field static Sunder.Sdk.Stacks.StackValueSensitivity Secret = 1
   field System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.SunderStackContributionRegistryExtensions
-  method static System.Void RegisterStackContributor(Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry registry, System.String providerId, System.Object contributor, Sunder.Sdk.Rpc.ISunderRpcContentClient contentClient)
-  method static System.Void RegisterStackContributor(Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry registry, System.String providerId, System.Object contributor, System.IServiceProvider services)
+  method static System.Void RegisterStackContributor(Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry registry, System.String providerId, Sunder.Sdk.Stacks.IPackageStackContributor contributor, System.IServiceProvider services)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.SunderStackContributorRpc
   field static System.String ContractId = "sunder.stack.contributor"
   field static System.String ContractVersion = "1.0.0"
   field static System.String ServiceId = "stack-contributor"
   property static Sunder.Sdk.Rpc.SunderRpcContractDescriptor Descriptor { get; }
-  method static Sunder.Sdk.Rpc.ISunderRpcServiceHandler CreateHandler(System.Object contributor, Sunder.Sdk.Rpc.ISunderRpcContentClient contentClient)
-  method static Sunder.Sdk.Stacks.StackContributorRpcClient CreateClient(Sunder.Sdk.Rpc.ISunderRpcClient client, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint)
+  method static Sunder.Sdk.Rpc.ISunderRpcServiceHandler CreateHandler(Sunder.Sdk.Stacks.IPackageStackContributor contributor)
+  method static Sunder.Sdk.Stacks.StackContributorRpcClient CreateClient(Sunder.Sdk.Rpc.ISunderRpcCallScope scope, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint)

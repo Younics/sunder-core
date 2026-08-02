@@ -45,7 +45,7 @@ Use typed Runtime operations for commands and queries, typed Runtime streams for
 
 An App-only package can use its App role-local workspace and App logging, but Runtime-backed state, files, settings, secrets, operations, and callbacks require an active Runtime role for that package. Packages needing durable shared data should implement both roles.
 
-All `IPackageContext` capabilities are scoped to one activation and must not escape it. Capability implementations are thread-safe unless their member documentation states otherwise. `RoleLocalWorkspace` is host-owned; package code must not dispose it.
+All `IPackageContext` capabilities are scoped to one activation and must not escape it. Host capability implementations are thread-safe unless a member explicitly says otherwise; that guarantee does not make package services, returned Avalonia controls, streams, or caller-owned collections thread-safe. Follow each member's ownership/threading contract and marshal control access to the App dispatcher. `RoleLocalWorkspace` is host-owned; package code must not dispose it.
 
 ## Typical Aggregate Project
 

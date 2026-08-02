@@ -54,6 +54,58 @@ public sealed class AppPackageCallbackClientTests
         Assert.Equal(AuthorizationUrl, capturedStartInfo.FileName);
     }
 
+    [Fact]
+    public async Task CancelAsync_RequestsRuntimeCancellation()
+    {
+        var handler = new CallbackLifecycleHandler();
+        using var transport = new RuntimePackageCallbackClient(
+            () => new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-token"),
+            handler);
+        var callbacks = new AppPackageCallbackClient(
+            "test.package",
+            transport,
+            new ExternalBrowserService(_ => { }));
+
+        Assert.True(await callbacks.CancelAsync("test-session"));
+        Assert.Equal(HttpMethod.Delete, handler.LastSessionMethod);
+    }
+
+    [Fact]
+    public async Task WaitForCompletionAsync_PollsUntilTerminal()
+    {
+        var handler = new CallbackLifecycleHandler(completeAfterStatusRequests: 2);
+        using var transport = new RuntimePackageCallbackClient(
+            () => new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-token"),
+            handler);
+        var callbacks = new AppPackageCallbackClient(
+            "test.package",
+            transport,
+            new ExternalBrowserService(_ => { }));
+
+        var status = await callbacks.WaitForCompletionAsync("test-session", TimeSpan.FromSeconds(2));
+
+        Assert.Equal(Sunder.Sdk.Callbacks.PackageCallbackSessionState.Completed, status.State);
+        Assert.True(status.IsTerminal);
+        Assert.Equal(2, handler.StatusRequestCount);
+    }
+
+    [Fact]
+    public async Task WaitForCompletionAsync_WhenTimeoutExpires_ThrowsTimeoutException()
+    {
+        var handler = new CallbackLifecycleHandler();
+        using var transport = new RuntimePackageCallbackClient(
+            () => new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-token"),
+            handler);
+        var callbacks = new AppPackageCallbackClient(
+            "test.package",
+            transport,
+            new ExternalBrowserService(_ => { }));
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            callbacks.WaitForCompletionAsync("test-session", TimeSpan.FromMilliseconds(25)).AsTask());
+        Assert.Equal(1, handler.StatusRequestCount);
+    }
+
     private sealed class CallbackResponseHandler(string launchUri) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -88,6 +140,63 @@ public sealed class AppPackageCallbackClientTests
                     PackageCallbackSessionState.Pending,
                     "Continue in the browser.",
                     launchUri,
+                    DateTimeOffset.UtcNow.AddMinutes(5))),
+            });
+        }
+    }
+
+    private sealed class CallbackLifecycleHandler(int completeAfterStatusRequests = int.MaxValue) : HttpMessageHandler
+    {
+        private int _statusRequestCount;
+
+        public int StatusRequestCount => Volatile.Read(ref _statusRequestCount);
+        public HttpMethod? LastSessionMethod { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.RequestUri?.AbsolutePath == "/api/handshake")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new RuntimeHandshakeResponse(
+                        RuntimeProtocol.Identity,
+                        RuntimeProtocol.CurrentRevision,
+                        RuntimeProtocol.MinimumSupportedRevision,
+                        RuntimeProtocol.MaximumSupportedRevision,
+                        Guid.NewGuid(),
+                        [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AtomicPackageSnapshotV1],
+                        new RuntimeProductVersionDiagnostics(
+                            "Sunder.Runtime.Host",
+                            "Development",
+                            "Development"))),
+                });
+            }
+
+            LastSessionMethod = request.Method;
+            if (request.Method == HttpMethod.Delete)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(true),
+                });
+            }
+
+            var requestCount = Interlocked.Increment(ref _statusRequestCount);
+            var state = requestCount >= completeAfterStatusRequests
+                ? PackageCallbackSessionState.Completed
+                : PackageCallbackSessionState.Pending;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new PackageCallbackSessionResponse(
+                    "test.package",
+                    "authentication",
+                    "test-session",
+                    state,
+                    state == PackageCallbackSessionState.Completed ? "Completed." : "Pending.",
+                    LaunchUri: null,
                     DateTimeOffset.UtcNow.AddMinutes(5))),
             });
         }

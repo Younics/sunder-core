@@ -1,5 +1,7 @@
 import { once } from "node:events";
 import { FrameDecoder, ProtocolError, encodeFrame } from "./framing";
+import { formatUtcTimestamp, parseUtcTimestamp } from "./timestamp";
+import { isPackageId, isSemanticVersion } from "./validation";
 import {
   SUNDER_WORKER_PROTOCOL,
   SUNDER_WORKER_PROTOCOL_VERSION,
@@ -28,7 +30,8 @@ const DEFAULT_LIMITS: WorkerLimits = Object.freeze({
   maxFrameBytes: 1024 * 1024,
   maxHeaderBytes: 8 * 1024,
   maxMessageDepth: 64,
-  maxOutstandingCalls: 64,
+  maxInboundCalls: 64,
+  maxOutboundCalls: 32,
   maxStreamQueueMessages: 32,
   maxWriteQueue: 128,
   maxRememberedIds: 2048,
@@ -60,6 +63,7 @@ class WorkerRuntime {
   readonly #client: RpcClient;
   #phase: "waiting-hello" | "ready" | "active" | "stopping" | "stopped" = "waiting-hello";
   #messageTail = Promise.resolve();
+  #activationOperation = Promise.resolve();
   #clientId = 0;
   #resolveRun: (() => void) | undefined;
   #rejectRun: ((error: unknown) => void) | undefined;
@@ -201,7 +205,8 @@ class WorkerRuntime {
     const sessionGeneration = integerValue(root, "sessionGeneration");
     this.#phase = "active";
     await this.#writer.write({ type: "worker.activated", sessionGeneration } satisfies WorkerEnvelope);
-    void Promise.resolve(this.#options.onActivated?.(this.#client)).catch((error: unknown) => this.#fail(error));
+    this.#activationOperation = Promise.resolve().then(() => this.#options.onActivated?.(this.#client));
+    void this.#activationOperation.catch((error: unknown) => this.#fail(error));
   }
 
   #beginHostInvocation(root: Readonly<Record<string, JsonValue>>): void {
@@ -209,7 +214,7 @@ class WorkerRuntime {
     if (this.#phase !== "active") throw new ProtocolError("Host invocation arrived before activation.");
     const id = idValue(root, "id");
     this.#rememberHostId(id);
-    if (this.#hostInvocations.size >= this.#limits.maxOutstandingCalls) {
+    if (this.#hostInvocations.size >= this.#limits.maxInboundCalls) {
       throw new ProtocolError("Host exceeded the worker outstanding invocation limit.");
     }
     const kind = stringValue(root, "kind", 32);
@@ -222,11 +227,11 @@ class WorkerRuntime {
     const contextValue = objectValue(root.context, "Host invocation context");
     only(contextValue, "callerPackageId", "callerPackageVersion", "deadlineUtc", "callDepth", "provider");
     const deadlineUtc = stringValue(contextValue, "deadlineUtc", 64);
-    const deadline = Date.parse(deadlineUtc);
-    if (!Number.isFinite(deadline) || !deadlineUtc.endsWith("Z")) throw new ProtocolError("Host invocation deadline is invalid.");
+    const deadline = parseUtcTimestamp(deadlineUtc);
+    if (!Number.isFinite(deadline)) throw new ProtocolError("Host invocation deadline is invalid.");
+    // The Host owns deadline cancellation so only it classifies authenticated deadline failures.
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error("deadline exceeded")), Math.max(0, deadline - Date.now()));
-    const invocation: HostInvocation = { id, controller, timeout, cancelled: false };
+    const invocation: HostInvocation = { id, controller, cancelled: false };
     this.#hostInvocations.set(id, invocation);
     const context: RpcInvocationContext = Object.freeze({
       callerPackageId: stringValue(contextValue, "callerPackageId", 256),
@@ -241,10 +246,7 @@ class WorkerRuntime {
     const operation = kind === "unary"
       ? this.#invokeUnary(invocation, provider, context, serviceId, methodId, request)
       : this.#invokeStream(invocation, provider, context, serviceId, methodId, request);
-    invocation.operation = operation.finally(() => {
-      clearTimeout(timeout);
-      this.#hostInvocations.delete(id);
-    });
+    invocation.operation = operation.finally(() => this.#hostInvocations.delete(id));
     void invocation.operation.catch((error: unknown) => this.#fail(error));
   }
 
@@ -342,11 +344,13 @@ class WorkerRuntime {
     only(root, "type", "shutdownId", "reason");
     if (this.#phase === "stopping" || this.#phase === "stopped") throw new ProtocolError("Host shutdown is duplicate.");
     const shutdownId = idValue(root, "shutdownId");
-    stringValue(root, "reason", 128);
+    const reason = stringValue(root, "reason", 128);
     this.#phase = "stopping";
     for (const invocation of this.#hostInvocations.values()) invocation.controller.abort(abortError());
     for (const call of this.#clientCalls.values()) this.#cancelClientCall(call);
     await Promise.allSettled([...this.#hostInvocations.values()].map((invocation) => invocation.operation ?? Promise.resolve()));
+    await this.#activationOperation;
+    await this.#options.onShutdown?.(Object.freeze({ reason }));
     await this.#writer.write({ type: "worker.shutdown-ack", shutdownId } satisfies WorkerEnvelope);
     await this.#writer.flush();
     this.#phase = "stopped";
@@ -430,25 +434,29 @@ class WorkerRuntime {
   }
 
   #unaryClientCall<T>(envelope: Readonly<Record<string, unknown>>, options?: RpcCallOptions): Promise<T> {
-    const call = this.#newClientCall("unary", options);
+    const call = this.#newClientCall("unary", options, Object.hasOwn(envelope, "deadlineUtc"));
     const request = { ...envelope, id: call.id } as WorkerEnvelope;
     void this.#writer.write(request).catch((error: unknown) => this.#fail(error));
     return call.promise as Promise<T>;
   }
 
   #streamClientCall<T>(envelope: Readonly<Record<string, unknown>>, options?: RpcCallOptions): AsyncIterable<T> {
-    const call = this.#newClientCall("stream", options);
+    const call = this.#newClientCall("stream", options, Object.hasOwn(envelope, "deadlineUtc"));
     const request = { ...envelope, id: call.id } as WorkerEnvelope;
     void this.#writer.write(request).catch((error: unknown) => this.#fail(error));
     return call.queue.iterate<T>(() => this.#cancelClientCall(call));
   }
 
-  #newClientCall(kind: "unary" | "stream", options?: RpcCallOptions): ClientCall {
+  #newClientCall(kind: "unary" | "stream", options: RpcCallOptions | undefined, hostOwnsDeadline: boolean): ClientCall {
     if (this.#phase !== "active") throw new RpcError({ kind: "unavailable", code: "rpc.worker.not-active", message: "The process worker activation is not active." });
-    if (this.#clientCalls.size >= this.#limits.maxOutstandingCalls) {
+    if (this.#clientCalls.size >= this.#limits.maxOutboundCalls) {
       throw new RpcError({ kind: "resource-exhausted", code: "rpc.worker.call-limit", message: "The worker RPC call limit was reached." });
     }
     if (options?.signal?.aborted === true) throw abortError();
+    const deadlineMilliseconds = options?.deadline?.getTime();
+    if (deadlineMilliseconds !== undefined && !Number.isFinite(deadlineMilliseconds)) {
+      throw new RangeError("RPC deadline must be a valid Date.");
+    }
     const id = `w${++this.#clientId}`;
     let resolvePromise: (value: JsonValue) => void = () => undefined;
     let rejectPromise: (error: unknown) => void = () => undefined;
@@ -468,17 +476,14 @@ class WorkerRuntime {
       terminal: false,
       cleanup: () => undefined,
     };
-    const controller = new AbortController();
     const onAbort = (): void => this.#cancelClientCall(call);
     options?.signal?.addEventListener("abort", onAbort, { once: true });
-    let timer: NodeJS.Timeout | undefined;
-    if (options?.deadline !== undefined) {
-      timer = setTimeout(onAbort, Math.max(0, options.deadline.getTime() - Date.now()));
-    }
+    const cancelDeadline = deadlineMilliseconds === undefined || hostOwnsDeadline
+      ? () => undefined
+      : scheduleDeadline(deadlineMilliseconds, onAbort);
     call.cleanup = () => {
       options?.signal?.removeEventListener("abort", onAbort);
-      if (timer !== undefined) clearTimeout(timer);
-      controller.abort();
+      cancelDeadline();
     };
     this.#clientCalls.set(id, call);
     return call;
@@ -487,6 +492,7 @@ class WorkerRuntime {
   #cancelClientCall(call: ClientCall): void {
     if (call.terminal || call.cancelled) return;
     call.cancelled = true;
+    call.cleanup();
     const error = abortError();
     call.reject(error);
     call.queue.close(error);
@@ -507,7 +513,6 @@ class WorkerRuntime {
     if (this.#phase === "stopped") return;
     this.#phase = "stopped";
     for (const invocation of this.#hostInvocations.values()) {
-      clearTimeout(invocation.timeout);
       invocation.controller.abort(error);
     }
     for (const call of this.#clientCalls.values()) {
@@ -612,7 +617,6 @@ class AsyncQueue {
 interface HostInvocation {
   readonly id: string;
   readonly controller: AbortController;
-  readonly timeout: NodeJS.Timeout;
   cancelled: boolean;
   operation?: Promise<void>;
 }
@@ -688,7 +692,7 @@ function contentRegistrationOptions(options: RpcContentRegistrationOptions): Rea
   if (options.expiresAt !== undefined && !Number.isFinite(options.expiresAt.getTime())) {
     throw new RangeError("RPC content expiry must be a valid Date.");
   }
-  const expiresAtUtc = options.expiresAt === undefined ? null : options.expiresAt.toISOString();
+  const expiresAtUtc = options.expiresAt === undefined ? null : formatUtcTimestamp(options.expiresAt);
   const repeatability = options.repeatability ?? "single-use";
   if (repeatability !== "single-use" && repeatability !== "repeatable") {
     throw new RangeError("RPC content repeatability is invalid.");
@@ -714,7 +718,7 @@ function contentReference(value: unknown): RpcContentReference {
   const sha256 = stringValue(root, "sha256", 64);
   if (!/^[0-9a-fA-F]{64}$/u.test(sha256)) throw new ProtocolError("RPC content SHA-256 is invalid.");
   const expiresAtUtc = stringValue(root, "expiresAtUtc", 64);
-  if (!expiresAtUtc.endsWith("Z") || !Number.isFinite(Date.parse(expiresAtUtc))) {
+  if (!Number.isFinite(parseUtcTimestamp(expiresAtUtc))) {
     throw new ProtocolError("RPC content expiry is invalid.");
   }
   const repeatability = stringValue(root, "repeatability", 32);
@@ -792,14 +796,10 @@ function rpcError(value: JsonValue | undefined): RpcError {
 }
 
 function validateProviderIdentity(provider: RpcProviderRegistration): void {
-  for (const [name, value, maximum] of [
-    ["providerId", provider.providerId, 256],
-    ["contractId", provider.contractId, 256],
-    ["contractVersion", provider.contractVersion, 128],
-    ["contractSha256", provider.contractSha256, 64],
-  ] as const) {
-    if (value.length === 0 || value.length > maximum) throw new Error(`Provider ${name} is invalid.`);
-  }
+  if (!isPackageId(provider.providerId)) throw new Error("Provider providerId is invalid.");
+  if (!isPackageId(provider.contractId)) throw new Error("Provider contractId is invalid.");
+  if (!isSemanticVersion(provider.contractVersion)) throw new Error("Provider contractVersion is invalid.");
+  if (!/^[0-9a-f]{64}$/u.test(provider.contractSha256)) throw new Error("Provider contractSha256 is invalid.");
 }
 
 function providerWire(provider: RpcProviderRegistration): ProviderWireIdentity {
@@ -818,7 +818,27 @@ function compareProviders(left: ProviderWireIdentity, right: ProviderWireIdentit
 function deadline(options?: RpcCallOptions): string | null {
   if (options?.deadline === undefined) return null;
   if (!Number.isFinite(options.deadline.getTime())) throw new RangeError("RPC deadline must be a valid Date.");
-  return options.deadline.toISOString();
+  return formatUtcTimestamp(options.deadline);
+}
+
+function scheduleDeadline(deadlineMilliseconds: number, callback: () => void): () => void {
+  const maximumDelay = 0x7fffffff;
+  let timer: NodeJS.Timeout | undefined;
+  let cancelled = false;
+  const schedule = (): void => {
+    if (cancelled) return;
+    const remaining = deadlineMilliseconds - Date.now();
+    if (remaining <= 0) {
+      timer = setTimeout(callback, 0);
+      return;
+    }
+    timer = setTimeout(schedule, Math.min(remaining, maximumDelay));
+  };
+  schedule();
+  return () => {
+    cancelled = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
 }
 
 function abortError(): Error {

@@ -204,6 +204,34 @@ public sealed class PackageCallbackSessionCoordinatorTests
         await callbacks.ShutdownAsync();
     }
 
+    [Fact]
+    public async Task Cancel_PendingSessionRetainsTerminalStatusAndNotifiesHandler()
+    {
+        var handler = new TestCallbackHandler();
+        var (state, callbacks) = await CreateCoordinatorAsync(handler);
+        await using var server = CreateServer();
+        using var lease = state.AcquireLease();
+        var started = (await callbacks.StartAsync(
+            lease,
+            "test.package",
+            handler.CallbackHandlerId,
+            null,
+            server))!;
+
+        Assert.True(callbacks.Cancel(lease, "test.package", started.CallbackSessionId));
+        await handler.CancellationEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var status = callbacks.GetStatus(lease, "test.package", started.CallbackSessionId);
+        Assert.NotNull(status);
+        Assert.Equal(Sunder.Runtime.Contracts.PackageCallbackSessionState.Cancelled, status.State);
+        Assert.Equal(PackageCallbackCancellationReason.CallerRequested, handler.CancellationReason);
+        Assert.False(callbacks.Cancel(lease, "test.package", started.CallbackSessionId));
+
+        await callbacks.ShutdownAsync();
+        lease.Dispose();
+        await state.ClearActiveSessionAsync();
+    }
+
     private static async Task<(PackageSessionState State, PackageCallbackSessionCoordinator Callbacks)> CreateCoordinatorAsync(
         TestCallbackHandler handler,
         CancellationToken hostStopping = default)
@@ -304,6 +332,7 @@ public sealed class PackageCallbackSessionCoordinatorTests
         public Task CancellationEntered => _cancellationEntered.Task;
         public CancellationToken StartToken { get; private set; }
         public int CancellationCount => Volatile.Read(ref _cancellationCount);
+        public PackageCallbackCancellationReason? CancellationReason { get; private set; }
         public string? CompletedCode { get; private set; }
         public Uri? CallbackUri { get; private set; }
 
@@ -363,6 +392,7 @@ public sealed class PackageCallbackSessionCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _cancellationCount);
+            CancellationReason = context.Reason;
             _cancellationEntered.TrySetResult();
             return Task.CompletedTask;
         }

@@ -229,6 +229,11 @@ internal sealed class UnavailableManagedAppRpcClient : ISunderRpcClient
     {
     }
 
+    public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
+        SunderRpcCallOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromException<ISunderRpcCallScope>(Unavailable());
+
     public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(SunderRpcEndpointReference endpoint, CancellationToken cancellationToken = default)
         => ValueTask.FromException<SunderRpcProviderSnapshot?>(Unavailable());
 

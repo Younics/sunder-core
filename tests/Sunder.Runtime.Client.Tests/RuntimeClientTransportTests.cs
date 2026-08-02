@@ -133,6 +133,51 @@ public sealed class RuntimeClientTransportTests
     }
 
     [Fact]
+    public async Task RegistrySourceAdoption_UsesDedicatedRuntimeEndpointAndPreservesSafetyMode()
+    {
+        RuntimeRegistrySourceAdoptionRequest? captured = null;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/registry/packages/adopt-source" => Json(new RuntimeRegistryPackageChangeResult(
+                true,
+                RuntimeRegistryErrorCode.None,
+                "Previewed.",
+                false,
+                false,
+                [],
+                [],
+                [],
+                [])),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        }, request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/v1/registry/packages/adopt-source")
+            {
+                captured = request.Content!.ReadFromJsonAsync<RuntimeRegistrySourceAdoptionRequest>()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        await client.AdoptRegistryPackageSourceAsync(new RuntimeRegistrySourceAdoptionRequest(
+            "demo",
+            "https://registry.test/",
+            Tag: "latest",
+            DryRun: true));
+
+        Assert.Equal(
+            ["/api/handshake", "/api/v1/registry/packages/adopt-source"],
+            handler.Paths);
+        Assert.Equal("demo", captured?.PackageId);
+        Assert.True(captured?.DryRun);
+        Assert.False(captured?.Confirm);
+    }
+
+    [Fact]
     public async Task RefreshHandshakeAsync_ReplacesCachedWorkerInstance()
     {
         var first = CreateHandshake();
@@ -295,6 +340,145 @@ public sealed class RuntimeClientTransportTests
         Assert.Equal(6, (await client.RevokeRpcPermissionAsync("caller.package", "example.rpc", "invoke")).Revision);
         Assert.Contains(handler.PathAndQueries, path =>
             path.EndsWith("afterRevision=2&afterSequence=1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UninstallClient_PreflightsAndCommitsExactPlanToken()
+    {
+        var changeSet = new PackageLifecycleChangeSet(["demo package"], ["demo package"], ["demo package"], ["demo package"], false);
+        var plan = new PackageUninstallPlan(
+            "demo package",
+            [new PackageUninstallPlanPackage("demo package", "Demo", "1.0.0")],
+            [],
+            ["demo package"],
+            changeSet,
+            PackageUninstallDataBehavior.Retain,
+            ["demo package"],
+            new string('a', 64));
+        PackageUninstallRequest? posted = null;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/packages/demo%20package/uninstall-plan" => Json(plan),
+            "/api/v1/packages/demo%20package/uninstall" => Json(new PackageOperationResult(
+                true,
+                "Uninstalled.",
+                true,
+                false,
+                [],
+                [])
+            {
+                ChangeSet = changeSet,
+            }),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        }, request =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri!.AbsolutePath.EndsWith("/uninstall", StringComparison.Ordinal))
+            {
+                posted = request.Content!.ReadFromJsonAsync<PackageUninstallRequest>()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var receivedPlan = await client.GetPackageUninstallPlanAsync("demo package");
+        var result = await client.UninstallPackageAsync(
+            "demo package",
+            new PackageUninstallRequest(false, receivedPlan.ConfirmationToken));
+
+        Assert.True(result.Success);
+        Assert.Equal(receivedPlan.ConfirmationToken, posted?.ConfirmationToken);
+        Assert.False(posted?.AllowCascade);
+        Assert.Equal(
+            [
+                "/api/handshake",
+                "/api/v1/packages/demo%20package/uninstall-plan",
+                "/api/v1/packages/demo%20package/uninstall",
+            ],
+            handler.Paths);
+    }
+
+    [Fact]
+    public async Task PackageSettingsClient_UsesTypedEscapedValueEndpoints()
+    {
+        SetPackageSettingValueRequest? posted = null;
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/packages/demo%20package/settings/api%20key" when request.Method == HttpMethod.Get
+                => Json(new PackageSettingValueResponse(true, "stored", "effective")),
+            "/api/v1/packages/demo%20package/settings/api%20key" => new HttpResponseMessage(HttpStatusCode.NoContent),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        }, request =>
+        {
+            if (request.Method == HttpMethod.Put)
+            {
+                posted = request.Content!.ReadFromJsonAsync<SetPackageSettingValueRequest>()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        var value = await client.GetPackageSettingValueAsync("demo package", "api key");
+        await client.SetPackageSettingValueAsync("demo package", "api key", "new-value");
+        await client.DeletePackageSettingValueAsync("demo package", "api key");
+
+        Assert.True(value.IsStored);
+        Assert.Equal("new-value", posted?.Value);
+        Assert.Equal(
+            [
+                "/api/handshake",
+                "/api/v1/packages/demo%20package/settings/api%20key",
+                "/api/v1/packages/demo%20package/settings/api%20key",
+                "/api/v1/packages/demo%20package/settings/api%20key",
+            ],
+            handler.Paths);
+    }
+
+    [Fact]
+    public async Task StackImportPlanDiscard_IsEscapedAndIdempotentForMissingPlans()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/stacks/import/plans/plan%20one" => new HttpResponseMessage(HttpStatusCode.NotFound),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        await client.DiscardStackImportPlanAsync("plan one");
+
+        Assert.Equal(
+            ["/api/handshake", "/api/v1/stacks/import/plans/plan%20one"],
+            handler.Paths);
+    }
+
+    [Fact]
+    public async Task PackageAuthSessionCancel_UsesTheBoundedCallbackSessionEndpoint()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(CreateHandshake()),
+            "/api/v1/packages/demo%20package/callbacks/sessions/auth%20one" => Json(true),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
+            handler);
+
+        Assert.True(await client.CancelPackageAuthSessionAsync("demo package", "auth one"));
+        Assert.Equal(
+            ["/api/handshake", "/api/v1/packages/demo%20package/callbacks/sessions/auth%20one"],
+            handler.Paths);
     }
 
     private static HttpResponseMessage Json<T>(T value)

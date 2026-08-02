@@ -15,7 +15,19 @@
         "description": null
       }
     ],
-    "requiredInputs": [],
+    "requiredInputs": [
+      {
+        "inputId": "input-key",
+        "ownerPackageId": "test.package",
+        "contributorId": "profiles",
+        "localInputId": "api-key",
+        "label": "API key",
+        "sensitivity": "Secret",
+        "required": true,
+        "description": "Provider credential.",
+        "defaultValue": null
+      }
+    ],
     "conflicts": [],
     "warnings": [],
     "errors": []

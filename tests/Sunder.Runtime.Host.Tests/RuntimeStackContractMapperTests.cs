@@ -51,6 +51,21 @@ public sealed class RuntimeStackContractMapperTests
             detail => Assert.Null(detail.Sensitivity));
     }
 
+    [Theory]
+    [InlineData(StackValueSensitivity.Public, RuntimeStackInputSensitivity.Public)]
+    [InlineData(StackValueSensitivity.Secret, RuntimeStackInputSensitivity.Secret)]
+    public void RequiredInputMapping_PreservesSensitivity(
+        StackValueSensitivity sensitivity,
+        RuntimeStackInputSensitivity expected)
+    {
+        var mapped = RuntimeStackContractMapper.ToRequiredInput(
+            "test.package",
+            "test.contributor",
+            new StackRequiredInputDescriptor("input", "Input", sensitivity));
+
+        Assert.Equal(expected, mapped.Sensitivity);
+    }
+
     [Fact]
     public void PackageRequirements_UseStrongestSemanticMinimum()
     {
@@ -155,17 +170,6 @@ public sealed class RuntimeStackContractMapperTests
         using var transfers = new RuntimeContentTransferStore(paths);
         var builder = new StackExportArchiveBuilder(transfers, paths, TimeProvider.System);
         var payload = new byte[] { 1, 2, 3, 4 };
-        var content = await transfers.RegisterRpcContentAsync(
-            new MemoryStream(payload, writable: false),
-            payload.Length,
-            "application/octet-stream",
-            "value.bin",
-            "host.package",
-            RuntimeRpcHostCallerActivation.StackPrincipalId,
-            generation: 4,
-            DateTimeOffset.UtcNow.AddMinutes(1),
-            SunderRpcContentRepeatability.SingleUse,
-            maximumUses: 1);
         var fragment = new StackRpcFragmentExport(
             "fragment",
             "schema",
@@ -174,7 +178,7 @@ public sealed class RuntimeStackContractMapperTests
             "{}",
             Files:
             [
-                new StackRpcPayloadFile("nested/value.bin", content),
+                new StackRpcPayloadFile("nested/value.bin", ContentReference(payload.Length)),
             ]);
 
         var response = await builder.BuildAsync(
@@ -182,6 +186,7 @@ public sealed class RuntimeStackContractMapperTests
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(4), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
+            new TestCallScope(payload),
             generation: 4,
             [],
             CancellationToken.None);
@@ -285,6 +290,7 @@ public sealed class RuntimeStackContractMapperTests
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
+            new TestCallScope(),
             generation: 1,
             [],
             CancellationToken.None);
@@ -314,6 +320,7 @@ public sealed class RuntimeStackContractMapperTests
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
+            new TestCallScope(),
             generation: 1,
             [],
             CancellationToken.None);
@@ -343,6 +350,7 @@ public sealed class RuntimeStackContractMapperTests
             [],
             [RuntimeStackContractMapper.OwnExportFragment("host.package", "host.contributor", Provider(), fragment)],
             new Dictionary<string, SunderStackFragmentPreview>(),
+            new TestCallScope(),
             generation: 1,
             [],
             CancellationToken.None);
@@ -385,4 +393,69 @@ public sealed class RuntimeStackContractMapperTests
             "value.bin",
             DateTimeOffset.UtcNow.AddMinutes(1),
             SunderRpcContentRepeatability.SingleUse);
+
+    private sealed class TestCallScope(byte[]? content = null) : ISunderRpcCallScope
+    {
+        public DateTimeOffset DeadlineUtc => DateTimeOffset.UtcNow.AddMinutes(1);
+
+        public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
+            SunderRpcEndpointReference endpoint,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<SunderRpcProviderSnapshot?>(Unsupported());
+
+        public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+            string contractId,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<SunderRpcCatalogSnapshot>(Unsupported());
+
+        public IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+            long afterRevision,
+            long afterSequence,
+            CancellationToken cancellationToken = default)
+            => throw Unsupported();
+
+        public ValueTask<System.Text.Json.JsonElement> InvokeAsync(
+            SunderRpcEndpointReference endpoint,
+            string serviceId,
+            string methodId,
+            System.Text.Json.JsonElement request,
+            SunderRpcCallOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<System.Text.Json.JsonElement>(Unsupported());
+
+        public IAsyncEnumerable<System.Text.Json.JsonElement> SubscribeAsync(
+            SunderRpcEndpointReference endpoint,
+            string serviceId,
+            string methodId,
+            System.Text.Json.JsonElement request,
+            SunderRpcCallOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw Unsupported();
+
+        public ValueTask<SunderRpcContentReference> RegisterContentAsync(
+            SunderRpcEndpointReference endpoint,
+            Stream source,
+            SunderRpcContentRegistrationOptions options,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<SunderRpcContentReference>(Unsupported());
+
+        public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+            SunderRpcEndpointReference endpoint,
+            string filePath,
+            SunderRpcContentRegistrationOptions options,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<SunderRpcContentReference>(Unsupported());
+
+        public ValueTask<Stream> OpenContentAsync(
+            SunderRpcContentReference reference,
+            CancellationToken cancellationToken = default)
+            => content is null
+                ? ValueTask.FromException<Stream>(Unsupported())
+                : ValueTask.FromResult<Stream>(new MemoryStream(content, writable: false));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private static NotSupportedException Unsupported()
+            => new("This test call scope only supplies response content.");
+    }
 }

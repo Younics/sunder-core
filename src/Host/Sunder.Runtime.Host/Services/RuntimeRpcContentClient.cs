@@ -2,55 +2,86 @@ using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class RuntimeRpcContentClient(
+internal sealed class RuntimeRpcInvocationAuthority(
     RuntimeContentTransferStore store,
     PackageSessionState sessions,
+    RuntimeRpcCatalog catalog,
     RuntimeTransportPolicyOptions policy,
-    string packageId,
-    Guid activationId,
-    TimeProvider? timeProvider = null) : ISunderRpcContentClient
+    string callerPackageId,
+    string providerPackageId,
+    long sessionGeneration,
+    RuntimeRpcContentEndpoint providerEndpoint,
+    DateTimeOffset deadlineUtc,
+    RuntimeRpcContentAuthority contentAuthority,
+    bool ownsContentAuthority,
+    CancellationToken invocationCancellation,
+    TimeProvider? timeProvider = null) : ISunderRpcInvocationAuthority
 {
+    private readonly CancellationTokenSource _revocation =
+        CancellationTokenSource.CreateLinkedTokenSource(invocationCancellation);
+    private readonly CancellationTokenRegistration _contentRetirement = ownsContentAuthority
+        ? invocationCancellation.UnsafeRegister(
+            static state =>
+            {
+                var (contentStore, authority) =
+                    ((RuntimeContentTransferStore, RuntimeRpcContentAuthority))state!;
+                contentStore.DiscardRpcContentAuthority(authority);
+            },
+            (store, contentAuthority))
+        : default;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private int _revoked;
 
-    public async ValueTask<SunderRpcContentReference> RegisterAsync(
-        SunderRpcInvocationContext context,
+    public CancellationToken RevocationToken => _revocation.Token;
+
+    public async ValueTask<SunderRpcContentReference> RegisterContentAsync(
         Stream source,
         SunderRpcContentRegistrationOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(options);
-        var generation = ValidateContext(context);
+        EnsureActive();
+        ValidateActivation();
         ValidateOptions(options);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-            context.CancellationToken,
+            _revocation.Token,
             cancellationToken);
         var now = _timeProvider.GetUtcNow();
         var expiresAt = Min(
             options.ExpiresAtUtc ?? now + policy.ContentTransferLifetime,
-            context.DeadlineUtc,
+            deadlineUtc,
             now + policy.ContentTransferLifetime);
-        return await store.RegisterRpcContentAsync(
-            source,
-            options.Length,
-            options.MediaType,
-            options.FileName,
-            packageId,
-            context.CallerPackageId,
-            generation,
-            expiresAt,
-            options.Repeatability,
-            options.MaximumUses,
-            linked.Token).ConfigureAwait(false);
+        try
+        {
+            return await store.RegisterRpcContentAsync(
+                source,
+                options.Length,
+                options.MediaType,
+                options.FileName,
+                providerPackageId,
+                callerPackageId,
+                sessionGeneration,
+                providerEndpoint,
+                expiresAt,
+                options.Repeatability,
+                options.MaximumUses,
+                linked.Token,
+                contentAuthority).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_revocation.IsCancellationRequested)
+        {
+            throw Revoked();
+        }
     }
 
-    public async ValueTask<SunderRpcContentReference> RegisterFileAsync(
-        SunderRpcInvocationContext context,
+    public async ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
         string filePath,
         SunderRpcContentRegistrationOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        EnsureActive();
         await using var stream = new FileStream(
             Path.GetFullPath(filePath),
             FileMode.Open,
@@ -58,38 +89,39 @@ internal sealed class RuntimeRpcContentClient(
             FileShare.Read,
             128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return await RegisterAsync(context, stream, options, cancellationToken).ConfigureAwait(false);
+        return await RegisterContentAsync(stream, options, cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask<Stream> OpenReadAsync(
-        SunderRpcInvocationContext context,
+    public ValueTask<Stream> OpenContentAsync(
         SunderRpcContentReference reference,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(reference);
         cancellationToken.ThrowIfCancellationRequested();
-        context.CancellationToken.ThrowIfCancellationRequested();
-        var generation = ValidateContext(context);
+        EnsureActive();
+        ValidateActivation();
         var lease = store.AcquireRpcContent(
             reference,
-            context.CallerPackageId,
-            packageId,
-            generation)
-            ?? throw new SunderRpcException(new SunderRpcError(
+            callerPackageId,
+            providerPackageId,
+            sessionGeneration,
+            providerEndpoint,
+            contentAuthority)
+            ?? throw SunderRpcException.Infrastructure(
                 SunderRpcErrorKind.NotFound,
                 "rpc.content.unavailable",
-                "The RPC content reference is stale, exhausted, or unavailable to this provider activation."));
+                "The RPC content reference is stale, exhausted, or unavailable to this invocation.");
         try
         {
             Stream stream = new RuntimeRpcContentReadStream(
-                new FileStream(
-                    lease.FilePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read | FileShare.Delete,
-                    128 * 1024,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan),
-                () => store.ReleaseRpcContent(lease));
+                lease.Content,
+                () => store.ReleaseRpcContent(lease),
+                _revocation.Token,
+                () =>
+                {
+                    EnsureActive();
+                    ValidateActivation();
+                });
             return ValueTask.FromResult(stream);
         }
         catch
@@ -99,32 +131,46 @@ internal sealed class RuntimeRpcContentClient(
         }
     }
 
-    private long ValidateContext(SunderRpcInvocationContext context)
+    public void Revoke()
     {
-        ArgumentNullException.ThrowIfNull(context);
-        if (!string.Equals(context.Provider.PackageId, packageId, StringComparison.Ordinal)
-            || context.Provider.ActivationId != activationId
-            || context.Provider.State != SunderRpcProviderState.Active)
+        if (Interlocked.Exchange(ref _revoked, 1) != 0) return;
+        _contentRetirement.Dispose();
+        if (ownsContentAuthority)
         {
-            throw new SunderRpcException(new SunderRpcError(
-                SunderRpcErrorKind.StaleEndpoint,
-                "rpc.content.activation-mismatch",
-                "The RPC content operation does not match this provider activation."));
+            store.DiscardRpcContentAuthority(contentAuthority);
         }
-
-        using var lease = sessions.AcquireLease();
-        if (lease.Generation != context.Provider.SessionGeneration
-            || sessions.GetLoadedPackage(lease, packageId)?.RuntimeActivationId != activationId)
-        {
-            throw new SunderRpcException(new SunderRpcError(
-                SunderRpcErrorKind.StaleEndpoint,
-                "rpc.content.generation-stale",
-                "The RPC content operation identifies a stale Runtime generation."));
-        }
-        return lease.Generation;
+        var callbacks = RuntimeCancellation.Signal(_revocation);
+        RuntimeCancellation.DisposeAfterCallbacks(_revocation, callbacks);
     }
 
-    private static void ValidateOptions(SunderRpcContentRegistrationOptions options)
+    private void EnsureActive()
+    {
+        if (Volatile.Read(ref _revoked) != 0 || _revocation.IsCancellationRequested) throw Revoked();
+    }
+
+    private void ValidateActivation()
+    {
+        using var lease = sessions.AcquireLease();
+        if (lease.Generation != sessionGeneration
+            || sessions.GetLoadedPackage(lease, providerPackageId)?.RuntimeActivationId != providerEndpoint.ActivationId
+            || !catalog.TryGetActiveEndpoint(
+                new SunderRpcEndpointReference(providerEndpoint.EndpointReference),
+                out var provider,
+                out _)
+            || provider?.Snapshot.ActivationId != providerEndpoint.ActivationId
+            || !string.Equals(
+                provider.Snapshot.Endpoint.Value,
+                providerEndpoint.EndpointReference,
+                StringComparison.Ordinal))
+        {
+            throw SunderRpcException.Infrastructure(
+                SunderRpcErrorKind.StaleEndpoint,
+                "rpc.content.activation-stale",
+                "The RPC content authority identifies a stale provider activation.");
+        }
+    }
+
+    internal static void ValidateOptions(SunderRpcContentRegistrationOptions options)
     {
         if (string.IsNullOrWhiteSpace(options.MediaType)
             || string.IsNullOrWhiteSpace(options.FileName)
@@ -137,26 +183,84 @@ internal sealed class RuntimeRpcContentClient(
         }
     }
 
-    private static DateTimeOffset Min(params DateTimeOffset[] values)
+    internal static DateTimeOffset Min(params DateTimeOffset[] values)
         => values.Min();
+
+    private static SunderRpcException Revoked()
+        => SunderRpcException.Infrastructure(
+            SunderRpcErrorKind.Unavailable,
+            "rpc.content.authority-revoked",
+            "The RPC invocation content authority has ended.");
 }
 
-internal sealed class RuntimeRpcContentReadStream(Stream inner, Action release) : Stream
+internal sealed class RuntimeRpcContentReadStream : Stream
 {
-    private Action? _release = release;
+    private readonly Stream _inner;
+    private readonly CancellationToken _revocationToken;
+    private readonly Action? _validate;
+    private CancellationTokenRegistration _revocationRegistration;
+    private Action? _release;
+    private int _disposed;
 
-    public override bool CanRead => inner.CanRead;
-    public override bool CanSeek => inner.CanSeek;
+    public RuntimeRpcContentReadStream(
+        Stream inner,
+        Action release,
+        CancellationToken revocationToken = default,
+        Action? validate = null)
+    {
+        _inner = inner;
+        _release = release;
+        _revocationToken = revocationToken;
+        _validate = validate;
+        if (revocationToken.CanBeCanceled)
+        {
+            _revocationRegistration = revocationToken.UnsafeRegister(
+                static state => ((RuntimeRpcContentReadStream)state!).Dispose(),
+                this);
+        }
+    }
+
+    public override bool CanRead => _inner.CanRead;
+    public override bool CanSeek => _inner.CanSeek;
     public override bool CanWrite => false;
-    public override long Length => inner.Length;
-    public override long Position { get => inner.Position; set => inner.Position = value; }
-    public override void Flush() => inner.Flush();
-    public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
-    public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
-    public override int Read(Span<byte> buffer) => inner.Read(buffer);
-    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        => inner.ReadAsync(buffer, cancellationToken);
-    public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+    public override long Length => _inner.Length;
+    public override long Position { get => _inner.Position; set => _inner.Position = value; }
+    public override void Flush() => _inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        _revocationToken.ThrowIfCancellationRequested();
+        _validate?.Invoke();
+        return _inner.Read(buffer, offset, count);
+    }
+
+    public override int Read(Span<byte> buffer)
+    {
+        _revocationToken.ThrowIfCancellationRequested();
+        _validate?.Invoke();
+        return _inner.Read(buffer);
+    }
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        _revocationToken.ThrowIfCancellationRequested();
+        _validate?.Invoke();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            _revocationToken,
+            cancellationToken);
+        return await _inner.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
+    }
+
+    public override long Seek(long offset, SeekOrigin origin)
+    {
+        _revocationToken.ThrowIfCancellationRequested();
+        _validate?.Invoke();
+        return _inner.Seek(offset, origin);
+    }
+
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
@@ -164,51 +268,39 @@ internal sealed class RuntimeRpcContentReadStream(Stream inner, Action release) 
     {
         if (disposing)
         {
-            inner.Dispose();
-            Interlocked.Exchange(ref _release, null)?.Invoke();
+            DisposeCore();
         }
         base.Dispose(disposing);
     }
 
     public override async ValueTask DisposeAsync()
     {
-        await inner.DisposeAsync().ConfigureAwait(false);
-        Interlocked.Exchange(ref _release, null)?.Invoke();
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _revocationRegistration.Unregister();
+            try
+            {
+                await _inner.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _release, null)?.Invoke();
+            }
+        }
         GC.SuppressFinalize(this);
     }
-}
 
-internal sealed class UnavailableRuntimeRpcContentClient : ISunderRpcContentClient
-{
-    public static UnavailableRuntimeRpcContentClient Instance { get; } = new();
-
-    private UnavailableRuntimeRpcContentClient()
+    private void DisposeCore()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _revocationRegistration.Unregister();
+        try
+        {
+            _inner.Dispose();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _release, null)?.Invoke();
+        }
     }
-
-    public ValueTask<SunderRpcContentReference> RegisterAsync(
-        SunderRpcInvocationContext context,
-        Stream source,
-        SunderRpcContentRegistrationOptions options,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromException<SunderRpcContentReference>(Unavailable());
-
-    public ValueTask<SunderRpcContentReference> RegisterFileAsync(
-        SunderRpcInvocationContext context,
-        string filePath,
-        SunderRpcContentRegistrationOptions options,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromException<SunderRpcContentReference>(Unavailable());
-
-    public ValueTask<Stream> OpenReadAsync(
-        SunderRpcInvocationContext context,
-        SunderRpcContentReference reference,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromException<Stream>(Unavailable());
-
-    private static SunderRpcException Unavailable()
-        => new(new SunderRpcError(
-            SunderRpcErrorKind.Unavailable,
-            "rpc.content.host-unavailable",
-            "Host-mediated RPC content transfer is unavailable in this Runtime context."));
 }

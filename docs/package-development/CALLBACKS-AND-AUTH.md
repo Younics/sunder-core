@@ -10,7 +10,7 @@ Callbacks let an App-started package flow open a browser and return values to a 
 | --- | --- |
 | `IPackageCallbackHandler` | Any browser/local callback flow with package-defined parameters and completion values. |
 | `IPackageAuthHandler` | Authorization status, browser authorization, callback completion, credential removal, and host auth UI. It extends `IPackageCallbackHandler` with reserved handler id `auth`. |
-| `IPackageCallbackClient` | App-side start, status polling, and launch-URI opening for the current package. |
+| `IPackageCallbackClient` | App-side start, bounded completion wait, cancellation, status lookup, and launch-URI opening for the current package. |
 
 Runtime and preflight contexts expose `Callbacks.IsAvailable == false`. App exposes callbacks only after its generation is published and only when Runtime is connected.
 
@@ -76,14 +76,13 @@ if (status.LaunchUri is not null)
     await context.Callbacks.OpenLaunchUriAsync(status.LaunchUri, cancellationToken);
 }
 
-while (status.State == PackageCallbackSessionState.Pending)
-{
-    await Task.Delay(500, cancellationToken);
-    status = await context.Callbacks.GetStatusAsync(status.CallbackSessionId, cancellationToken);
-}
+status = await context.Callbacks.WaitForCompletionAsync(
+    status.CallbackSessionId,
+    TimeSpan.FromMinutes(5),
+    cancellationToken);
 ```
 
-`StartAsync` reuses an existing starting/pending session for the same package generation, handler id, and ordinal parameter snapshot. Status access is scoped to the App package activation that created the session.
+`StartAsync` reuses an existing starting/pending session for the same package generation, handler id, and ordinal parameter snapshot. `WaitForCompletionAsync` performs bounded status polling and throws `TimeoutException` when its required positive timeout elapses; it does not implicitly cancel the Runtime session. Call `CancelAsync` when the user abandons a pending flow. Status and cancellation access remain scoped to the App package activation that created the session.
 
 ## Callback Limits
 

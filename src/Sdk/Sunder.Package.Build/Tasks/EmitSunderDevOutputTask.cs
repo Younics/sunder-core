@@ -21,6 +21,9 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
     public string DevPackagePath { get; set; } = string.Empty;
 
     [Required]
+    public string DiscoveryRoot { get; set; } = string.Empty;
+
+    [Required]
     public string TargetDirectory { get; set; } = string.Empty;
 
     public string? AssetsDirectory { get; set; }
@@ -35,6 +38,8 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
 
     public override bool Execute()
     {
+        string? stagingPath = null;
+        string? stagingMarkerPath = null;
         try
         {
             if (!File.Exists(ManifestPath))
@@ -43,7 +48,25 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            Directory.CreateDirectory(DevPackagePath);
+            var outputPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(DevPackagePath));
+            var markerPath = ValidateSunderDevOutputPathTask.GetOwnershipMarkerPath(outputPath);
+            var discoveryKey = GeneratedOutputLock.TargetLeafDiscoveryKey(DiscoveryRoot, outputPath);
+            using var outputLock = GeneratedOutputLock.Acquire([discoveryKey], [outputPath]);
+            GeneratedOutputTransaction.RecoverAndCleanup(outputPath, markerPath);
+            if (File.Exists(outputPath)
+                || Directory.Exists(outputPath)
+                && (GeneratedOutputPathSafety.IsReparsePoint(outputPath)
+                    || !File.Exists(markerPath)
+                    || GeneratedOutputPathSafety.IsReparsePoint(markerPath)))
+            {
+                Log.LogError(
+                    $"Sunder dev output '{DevPackagePath}' is not a safely marked generated directory and will not be replaced.");
+                return false;
+            }
+
+            stagingPath = outputPath + ".stage-" + Guid.NewGuid().ToString("N");
+            stagingMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
+            Directory.CreateDirectory(stagingPath);
             var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(ManifestPath), JsonOptions)
                            ?? throw new InvalidDataException("Generated Sunder package manifest is empty.");
             var targetKeys = SunderPackageTargetResolver.EnumerateTargets(manifest);
@@ -52,7 +75,8 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             Copy(
                 ManifestPath,
                 SunderPackageFormat.ManifestPath,
-                destinations);
+                destinations,
+                stagingPath);
             foreach (var item in ManagedFiles)
             {
                 var relative = GetRelativePath(TargetDirectory, item.ItemSpec, "managed output");
@@ -61,7 +85,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                 {
                     continue;
                 }
-                Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + "lib/" + relative, destinations);
+                Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + "lib/" + relative, destinations, stagingPath);
             }
 
             var assetRoot = string.IsNullOrWhiteSpace(AssetsDirectory)
@@ -70,7 +94,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             foreach (var item in AssetFiles)
             {
                 var relative = GetRelativePath(assetRoot, item.ItemSpec, "asset");
-                Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + "assets/" + relative, destinations);
+                Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + "assets/" + relative, destinations, stagingPath);
             }
 
             foreach (var item in ContractFiles)
@@ -80,7 +104,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                 {
                     throw new InvalidDataException($"Sunder contract file '{item.ItemSpec}' is missing DescriptorPath metadata.");
                 }
-                Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + descriptorPath, destinations);
+                Copy(item.ItemSpec, SunderPackageFormat.SharedPayloadRoot + descriptorPath, destinations, stagingPath);
             }
 
             foreach (var item in NativeRuntimeFiles)
@@ -99,13 +123,14 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                     Copy(
                         item.ItemSpec,
                         $"payload/{target.Role}/{target.Rid}/lib/{relative}",
-                        destinations);
+                        destinations,
+                        stagingPath);
                 }
             }
 
-            PackageContentIndexer.Write(DevPackagePath);
+            PackageContentIndexer.Write(stagingPath);
             var validation = SunderPackageArchiveInspector
-                .ValidateExtractedPackageAsync(DevPackagePath)
+                .ValidateExtractedPackageAsync(stagingPath)
                 .GetAwaiter()
                 .GetResult();
             foreach (var warning in validation.Warnings)
@@ -121,7 +146,13 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                 return false;
             }
 
-            Log.LogMessage(MessageImportance.High, $"Emitted canonical Sunder dev package to {DevPackagePath}");
+            File.WriteAllText(stagingMarkerPath, "Sunder.Package.Build generated output v1\n");
+            GeneratedOutputTransaction.Commit(
+                new GeneratedOutputTransaction.StagedOutput(outputPath, stagingPath),
+                new GeneratedOutputTransaction.StagedOutput(markerPath, stagingMarkerPath));
+            stagingPath = null;
+            stagingMarkerPath = null;
+            Log.LogMessage(MessageImportance.High, $"Emitted canonical Sunder dev package to {outputPath}");
             return true;
         }
         catch (Exception exception)
@@ -129,12 +160,18 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             Log.LogErrorFromException(exception, showStackTrace: false);
             return false;
         }
+        finally
+        {
+            TryDeleteDirectory(stagingPath);
+            TryDeleteFile(stagingMarkerPath);
+        }
     }
 
     private void Copy(
         string sourcePath,
         string archivePath,
-        IDictionary<string, string> destinations)
+        IDictionary<string, string> destinations,
+        string outputPath)
     {
         if (!File.Exists(sourcePath))
         {
@@ -164,7 +201,7 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
         }
         destinations.Add(normalizedPath.ToString(), sourcePath);
 
-        var destinationPath = normalizedPath.ToPlatformPath(DevPackagePath);
+        var destinationPath = normalizedPath.ToPlatformPath(outputPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         File.Copy(sourcePath, destinationPath, overwrite: false);
     }
@@ -186,4 +223,28 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
 
     private static StringComparison PathComparison
         => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static void TryDeleteDirectory(string? path)
+    {
+        try
+        {
+            if (path is not null && Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // Preserve the primary emit result or failure.
+        }
+    }
+
+    private static void TryDeleteFile(string? path)
+    {
+        try
+        {
+            if (path is not null && File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Preserve the primary emit result or failure.
+        }
+    }
 }

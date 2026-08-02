@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -96,6 +98,9 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.Contains("public sealed class Request", first, StringComparison.Ordinal);
         Assert.Contains("public interface IMessagesProvider", first, StringComparison.Ordinal);
         Assert.Contains("public sealed class MessagesClient", first, StringComparison.Ordinal);
+        Assert.Contains("SunderRpcInvocationContext context", first, StringComparison.Ordinal);
+        Assert.Contains("ISunderRpcCallScope scope", first, StringComparison.Ordinal);
+        Assert.Contains("public sealed class ExampleMessagesRpcHandler", first, StringComparison.Ordinal);
 
         var taggedUnion = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
             {
@@ -117,6 +122,37 @@ public sealed class SunderRpcContractDescriptorTests
             taggedUnionSource,
             StringComparison.Ordinal);
         Assert.DoesNotContain("class Command", taggedUnionSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CSharpGenerator_CompilesMapsOmittedRequiredCollisionsKeywordsAndControlLiterals()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":1,
+              "contractId":"example.generator",
+              "version":"1.0.0",
+              "services":{"foo-bar":{"methods":{
+                "do-it":{"kind":"unary","requestSchema":"#/$defs/foo-bar","responseSchema":"#/$defs/foo_bar"},
+                "do_it":{"kind":"server-stream","requestSchema":"#/$defs/StringMap","eventSchema":"#/$defs/Empty"}
+              }}},
+              "$defs":{
+                "Empty":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "StringMap":{"type":"object","properties":{},"additionalProperties":{"type":"string","minLength":0,"maxLength":8},"propertyNames":{"type":"string","minLength":1,"maxLength":16},"minProperties":0,"maxProperties":4},
+                "foo-bar":{"type":"object","properties":{"class":{"type":"string","minLength":0,"maxLength":8},"foo-bar":{"type":"integer","minimum":0,"maximum":8},"foo_bar":{"type":"boolean"},"line\u0001break":{"type":"string","minLength":0,"maxLength":8},"map":{"$ref":"#/$defs/StringMap"}},"required":["class","foo-bar","foo_bar","line\u0001break","map"],"additionalProperties":false},
+                "foo_bar":{"type":"object","properties":{"value":{"type":"boolean"}},"required":["value"],"additionalProperties":false}
+              }
+            }
+            """));
+
+        var source = SunderRpcCSharpGenerator.Generate(descriptor, "namespace.Generated");
+
+        Assert.Contains("namespace @namespace.Generated;", source, StringComparison.Ordinal);
+        Assert.Contains("IReadOnlyDictionary<string, string>", source, StringComparison.Ordinal);
+        Assert.Contains("public sealed class FooBar2", source, StringComparison.Ordinal);
+        Assert.Contains("DoItAsync2", source, StringComparison.Ordinal);
+        Assert.Contains("JsonPropertyName(\"line\\u0001break\")", source, StringComparison.Ordinal);
+        AssertCompiles(source);
     }
 
     [Fact]
@@ -166,9 +202,26 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.True(descriptor.IsValid("#/$defs/Request", nullValue.RootElement, out var nullError), nullError);
         Assert.True(descriptor.IsValid("#/$defs/Request", textValue.RootElement, out var textError), textError);
         Assert.Contains(
-            "public string? Value { get; init; } = default!;",
+            "public required string? Value { get; init; }",
             SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated"),
             StringComparison.Ordinal);
+    }
+
+    private static void AssertCompiles(string source)
+    {
+        var trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
+                                ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
+        var referencePaths = trustedAssemblies.Split(Path.PathSeparator).ToHashSet(StringComparer.Ordinal);
+        referencePaths.Add(typeof(SunderRpcContractDescriptor).Assembly.Location);
+        var compilation = CSharpCompilation.Create(
+            "GeneratedRpcBindings",
+            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview))],
+            referencePaths.Select(static path => MetadataReference.CreateFromFile(path)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        var errors = compilation.GetDiagnostics()
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(static error => error.ToString())));
     }
 
     private static void AssertRejected(string json)

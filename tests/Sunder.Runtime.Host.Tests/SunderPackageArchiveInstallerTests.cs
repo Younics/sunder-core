@@ -29,6 +29,46 @@ public sealed class SunderPackageArchiveInstallerTests
         Assert.Equal("test.package", installedPackage.PackageId);
         Assert.True(File.Exists(installedPackage.ManifestPath));
         Assert.True(File.Exists(GetEntryAssemblyPath(installedPackage)));
+        Assert.Equal(InstalledPackageSourceKind.LocalArchive, installedPackage.Provenance?.SourceKind);
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(archivePath))).ToLowerInvariant(),
+            installedPackage.Provenance?.SourceIdentity);
+    }
+
+    [Fact]
+    public async Task InstallFromPathAsync_WithTrustedRegistryProvenance_PersistsAndExposesUpdatePolicy()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var archivePath = CreatePackageArchive(root, "test.package", "1.0.0");
+        var provenance = new InstalledPackageProvenanceRecord(
+            InstalledPackageSourceKind.Registry,
+            InstalledPackageVersionPolicy.FollowTag,
+            "https://registry.example/",
+            "test.package",
+            RequestedTag: "beta",
+            VersionRange: ">=1.0.0",
+            SourceIdentity: new string('b', 64),
+            IncludePrerelease: true);
+
+        var result = await ExecuteAsync(
+            paths,
+            store,
+            new SunderPackageArchiveInstaller(paths),
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Install,
+                ArchiveFilePath: archivePath,
+                Provenance: provenance));
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        var installed = Assert.Single(await store.ListAsync());
+        Assert.Equal(provenance, installed.Provenance);
+        var descriptor = store.ToDescriptor(installed);
+        Assert.Equal(InstalledPackageSourceKind.Registry, descriptor.Provenance.SourceKind);
+        Assert.Equal("https://registry.example/", descriptor.Provenance.RegistryOrigin);
+        Assert.Equal("beta", descriptor.Provenance.RequestedTag);
+        Assert.True(descriptor.Provenance.IncludePrerelease);
     }
 
     [Fact]

@@ -2,6 +2,8 @@
 
 Sunder Core is the public core of the Sunder local-first package platform. It contains the Avalonia desktop shell, current-user Host gateway (`Sunder.Host.Supervisor`), nested Runtime worker (`Sunder.Runtime.Host`), CLI, package SDK/build pipeline, package template, package archive validation, and public Registry DTO contracts.
 
+The canonical package model is authoring-tool neutral. Current presets cover managed .NET Runtime targets, Avalonia App targets, Node process Runtime targets, and framework-agnostic web App targets with React/Vite as one template. Python, Rust, Go, other process toolchains, other .NET UI approaches, and other web frameworks are valid future authoring routes when they emit the canonical package format and target a kind/protocol the Host supports; a new toolchain does not create a new runtime package type.
+
 This document is the canonical current-state project map and architecture overview. In current documentation, **Host** or **Supervisor** means the public current-user gateway, **Runtime worker** means the nested `Sunder.Runtime.Host` process, and **standalone Runtime** means the direct-loopback development fallback. Package authoring, CLI commands, app development arguments, and Registry behavior are documented in the sibling Sunder docs.
 
 ## Project Map
@@ -105,7 +107,7 @@ If an app or runtime process locks normal build outputs, build affected projects
 dotnet build .\src\Host\Sunder.App\Sunder.App.csproj --no-restore -p:OutputPath=.\artifacts\tmp\sunder-app\bin\ -p:IntermediateOutputPath=.\artifacts\tmp\sunder-app\obj\
 ```
 
-For package development, `dotnet build` emits `sunder-dev`, and `dotnet publish` emits `.sunderpkg` in the publish directory.
+For managed package development, `dotnet build` emits `sunder-dev`; the canonical `PackSunderPackage` target emits `.sunderpkg` beside the target output, and `dotnet publish` also emits an archive when normal publish output is required.
 
 ## Current Docs
 

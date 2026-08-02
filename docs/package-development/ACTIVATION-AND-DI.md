@@ -112,7 +112,7 @@ Package services must:
 
 ## Threading
 
-- `IPackageContext` capabilities are thread-safe unless documented otherwise.
+- Host `IPackageContext` capability implementations are thread-safe unless documented otherwise; package services, controls, streams, and caller-owned values do not inherit that guarantee.
 - Module configuration and contribution registration have no App UI-thread guarantee; do not touch Avalonia controls there.
 - Runtime operation, stream, callback/auth, Stack, and RPC provider code may be invoked concurrently. Make activation-scoped services thread-safe.
 - Runtime background-service start/stop calls run outside a UI context.
@@ -124,5 +124,7 @@ Package services must:
 Sunder does not expose a generic CLR extension catalog or share arbitrary package contract assemblies. App contributions are limited to Host-defined registrations such as views and settings views. Runtime packages expose cross-package behavior through schema-first RPC providers declared in their manifests and registered with `RegisterRpcProvider`.
 
 RPC discovery returns Host-stamped owner and activation metadata. Endpoint references bind to one exact provider activation and never retarget a same-id replacement. Invocations and subscriptions hold provider leases, link cancellation to caller and generation retirement, and prevent provider disposal while work remains active.
+
+Content-bearing callers own an `ISunderRpcCallScope` and must dispose it after calls and streams finish. Providers use the Host-created `SunderRpcInvocationContext`; retaining it never extends its invocation-bound content authority.
 
 Use a typed RPC adapter when package-local code benefits from a CLR interface. `Sunder.Sdk.Stacks`, for example, adapts local Stack contributor interfaces to the `sunder.stack.contributor` RPC contract; those CLR objects never cross the package load-context boundary.

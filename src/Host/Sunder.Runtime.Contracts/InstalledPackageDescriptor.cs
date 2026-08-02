@@ -11,14 +11,22 @@ public sealed record InstalledPackageDescriptor(
     IReadOnlyList<PackageDependencyDescriptor> DependsOn,
     DateTimeOffset InstalledAtUtc,
     string? StatusMessage,
-    IReadOnlyList<PackageRpcContractUseDescriptor>? RpcContractUses = null)
+    IReadOnlyList<PackageRpcContractUseDescriptor>? RpcContractUses = null,
+    InstalledPackageProvenance? Provenance = null)
 {
     private IReadOnlyList<PackageRpcContractUseDescriptor> _rpcContractUses =
         RuntimeContractCollections.Freeze(RpcContractUses ?? []);
+    private InstalledPackageProvenance _provenance = Provenance ?? InstalledPackageProvenance.Unknown;
 
     public IReadOnlyList<PackageRpcContractUseDescriptor> RpcContractUses
     {
         get => _rpcContractUses;
         init => _rpcContractUses = RuntimeContractCollections.Freeze(value);
+    }
+
+    public InstalledPackageProvenance Provenance
+    {
+        get => _provenance;
+        init => _provenance = value ?? InstalledPackageProvenance.Unknown;
     }
 }

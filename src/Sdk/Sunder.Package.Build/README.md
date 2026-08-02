@@ -1,5 +1,7 @@
 # Sunder.Package.Build
 
+> **Release/source channel:** The NuGet README describes that published build package. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+
 `Sunder.Package.Build` contains the MSBuild targets and tasks that turn a Sunder package project into local development output and distributable `.sunderpkg` archives.
 
 Reference this package from Sunder package projects together with `Sunder.Sdk`.
@@ -105,25 +107,27 @@ Load this folder into Sunder App during development:
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev"
 ```
 
-## Publish A Package Archive
+## Pack A Package Archive
 
-Publish the package project:
+Use the canonical explicit pack target:
+
+```powershell
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+```
+
+The target builds the correct leaf or aggregate development tree, validates its index, writes a deterministic `.sunderpkg`, then re-extracts and validates that exact archive before reporting success. By default the archive is beside the Release target output:
+
+```text
+bin/Release/net10.0/MyPackage.1.0.0.sunderpkg
+```
+
+`dotnet publish` also invokes the pack task and writes its archive to the publish directory when a pipeline separately requires publish output:
 
 ```powershell
 dotnet publish .\MyPackage\MyPackage.csproj -c Release
 ```
 
-The publish target validates the indexed staging tree, writes a deterministic `.sunderpkg`, then re-extracts and validates that exact archive before reporting success. The archive is written to the publish directory:
-
-```text
-bin/Release/net10.0/publish/MyPackage.1.0.0.sunderpkg
-```
-
-Use the explicit pack target when you want an archive without a full publish operation:
-
-```powershell
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
-```
+Generated aggregates keep one package `Version` in `Sunder.Package.props`, imported by every leaf. Custom projects should likewise define one normal MSBuild `Version` source rather than overriding different leaves independently.
 
 ## Archive Shape
 
@@ -232,22 +236,24 @@ Aggregate projects can combine validated leaf trees without rebuilding them:
   <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
 </PropertyGroup>
 <ItemGroup>
-  <SunderPackageTargetLeaf Include="Runtime/bin/$(Configuration)/$(TargetFramework)/sunder-dev" />
-  <SunderPackageTargetLeaf Include="App/bin/$(Configuration)/$(TargetFramework)/sunder-dev" />
+  <SunderPackageTargetLeaf Include="Runtime/bin/$(Configuration)/$(TargetFramework)/sunder-dev"
+                           DiscoveryRoot="Runtime/bin/$(Configuration)/$(TargetFramework)" />
+  <SunderPackageTargetLeaf Include="App/bin/$(Configuration)/$(TargetFramework)/sunder-dev"
+                           DiscoveryRoot="App/bin/$(Configuration)/$(TargetFramework)" />
 </ItemGroup>
 ```
 
-`AggregateSunderPackage` verifies package-wide metadata agreement, rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output.
+Every target leaf requires explicit `DiscoveryRoot` metadata matching the producer's `SunderDevOutputDiscoveryRoot`. The default producer root is `TargetDir`; use the same configured ancestor on both sides when leaves are nested more deeply. `AggregateSunderPackage` holds those roots while locating and locking leaves, verifies package-wide metadata agreement, rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output.
 
 ## Validate Before Publishing
 
 Use the Sunder CLI to validate package artifacts before publishing:
 
 ```powershell
-sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
+sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
-Validation checks archive safety, manifest shape, exact target unions, target entry points, package id format, SemVer version, icon existence, content index hashes, content index sizes, and unindexed files.
+Validation checks canonical format and integrity, including archive safety, manifest shape, exact target unions, target entry points, package id/version, icons, content-index hashes/sizes, and unindexed files. It does not execute code, attest a publisher, or make an artifact trusted.
 
 ## More Documentation
 

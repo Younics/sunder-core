@@ -36,6 +36,69 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
+    public async Task UninstallPlan_RequiresExactCascadeConsentAndReportsRemovedPackages()
+    {
+        var fixture = await CreateFixtureAsync();
+        var dependent = CreatePackageArchive(
+            fixture.Root,
+            "test.dependent",
+            "1.0.0",
+            [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0 <2.0.0")]);
+        var dependency = CreatePackageArchive(fixture.Root, "test.dependency", "1.0.0");
+        Assert.True((await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: dependent),
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: dependency),
+        ])).Success);
+        var plan = PackageStorePolicy.CreateUninstallPlan("test.dependency", await fixture.Store.ListAsync());
+        var retainedDataPath = Path.Combine(fixture.Paths.PackageDataRootPath, "test.dependency", "data", "state.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(retainedDataPath)!);
+        await File.WriteAllTextAsync(retainedDataPath, "{}");
+
+        var denied = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Uninstall,
+                "test.dependency",
+                ConfirmationToken: plan.ConfirmationToken),
+        ]);
+
+        Assert.False(denied.Success);
+        Assert.Contains("cascade consent", denied.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["test.dependency"], plan.DirectRemovals.Select(package => package.PackageId));
+        Assert.Equal(["test.dependent"], plan.CascadingRemovals.Select(package => package.PackageId));
+        Assert.Equal(PackageUninstallDataBehavior.Retain, plan.DataBehavior);
+        Assert.Equal(plan.ExpectedRemovalPackageIds, plan.ReloadImpact.RemovedPackageIds);
+
+        Assert.True((await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Disable, "test.dependent"),
+        ])).Success);
+        var stale = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Uninstall,
+                "test.dependency",
+                AllowCascade: true,
+                ConfirmationToken: plan.ConfirmationToken),
+        ]);
+        Assert.False(stale.Success);
+        Assert.Contains("stale", stale.Message, StringComparison.OrdinalIgnoreCase);
+        var refreshedPlan = PackageStorePolicy.CreateUninstallPlan(
+            "test.dependency",
+            await fixture.Store.ListAsync());
+
+        var committed = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Uninstall,
+                "test.dependency",
+                AllowCascade: true,
+                ConfirmationToken: refreshedPlan.ConfirmationToken),
+        ]);
+
+        Assert.True(committed.Success, string.Join(Environment.NewLine, committed.Errors));
+        Assert.Empty(await fixture.Store.ListAsync());
+        Assert.Equal(["test.dependency", "test.dependent"], committed.ChangeSet.RemovedPackageIds);
+        Assert.True(File.Exists(retainedDataPath));
+    }
+
+    [Fact]
     public async Task Batch_WhenFinalGraphContainsCycle_CommitsNothing()
     {
         var fixture = await CreateFixtureAsync();

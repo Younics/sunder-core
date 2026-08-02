@@ -23,10 +23,9 @@ internal interface IPackageOperationExecutor
     BackgroundProcessSnapshot EnqueueMarketplaceUpdate(
         string packageId,
         string displayName,
-        string version,
-        Uri registryUrl);
+        string version);
 
-    BackgroundProcessSnapshot EnqueueUpdateAll(Uri registryUrl);
+    BackgroundProcessSnapshot EnqueueUpdateAll();
 
     BackgroundProcessSnapshot EnqueueLocalInstall(
         string packagePath,
@@ -37,5 +36,5 @@ internal interface IPackageOperationExecutor
 
     BackgroundProcessSnapshot EnqueueDisable(string packageId, string displayName);
 
-    BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName);
+    BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName, bool allowCascade = false);
 }

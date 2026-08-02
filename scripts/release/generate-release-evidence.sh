@@ -83,6 +83,12 @@ done
 {
   printf 'dotnet-version: %s\n' "$(dotnet --version)"
   printf 'dotnet-sdk: %s\n' "$(dotnet --list-sdks | tr '\n' ';')"
+  if command -v node >/dev/null 2>&1; then
+    printf 'node-version: %s\n' "$(node --version)"
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    printf 'npm-version: %s\n' "$(npm --version)"
+  fi
   printf 'runner-os: %s\n' "${RUNNER_OS:-unknown}"
   printf 'runner-arch: %s\n' "${RUNNER_ARCH:-unknown}"
   printf 'image-os: %s\n' "${ImageOS:-unknown}"

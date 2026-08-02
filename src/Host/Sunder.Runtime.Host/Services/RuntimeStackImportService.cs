@@ -85,14 +85,19 @@ internal sealed class RuntimeStackImportService : IDisposable
                         registration.ContributorId,
                         fragment)).ToArray());
                 RegisteredStackImportFragments? registered = null;
+                await using var callScope = await _rpcClient.CreateCallScopeAsync(
+                    cancellationToken: linked.Token).ConfigureAwait(false);
                 try
                 {
                     registered = await RegisterImportFragmentsAsync(
                         fragments,
                         registration,
-                        lease.Generation,
+                        callScope,
                         linked.Token).ConfigureAwait(false);
-                    var preview = await registration.Client.PreviewImportAsync(
+                    var scopedClient = SunderStackContributorRpc.CreateClient(
+                        callScope,
+                        registration.Provider.Endpoint);
+                    var preview = await scopedClient.PreviewImportAsync(
                         new StackRpcImportPreviewRequest(
                             registered.Fragments,
                             RuntimeStackContractMapper.ToContributorValues(
@@ -122,13 +127,6 @@ internal sealed class RuntimeStackImportService : IDisposable
                 catch (Exception) when (!linked.IsCancellationRequested)
                 {
                     errors.Add($"Stack importer '{registration.ContributorId}' preview failed.");
-                }
-                finally
-                {
-                    if (registered is not null)
-                    {
-                        DiscardRegisteredContent(registered, registration, lease.Generation);
-                    }
                 }
             }
 
@@ -242,15 +240,20 @@ internal sealed class RuntimeStackImportService : IDisposable
                     .Select(selected => binding.Actions.First(action => string.Equals(action.ActionId, selected, StringComparison.OrdinalIgnoreCase)).LocalActionId)
                     .ToArray();
                 RegisteredStackImportFragments? registered = null;
+                await using var callScope = await _rpcClient.CreateCallScopeAsync(
+                    cancellationToken: linked.Token).ConfigureAwait(false);
                 try
                 {
                     var contributorId = registration.ContributorId;
                     registered = await RegisterImportFragmentsAsync(
                         binding.Fragments,
                         registration,
-                        lease.Generation,
+                        callScope,
                         linked.Token).ConfigureAwait(false);
-                    var result = await registration.Client.ImportAsync(
+                    var scopedClient = SunderStackContributorRpc.CreateClient(
+                        callScope,
+                        registration.Provider.Endpoint);
+                    var result = await scopedClient.ImportAsync(
                         new StackRpcImportRequest(
                             registered.Fragments,
                             RuntimeStackContractMapper.ToContributorValues(
@@ -302,7 +305,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                             result.ImportedItems);
                         try
                         {
-                            await registration.Client.ImportAppliedAsync(appliedContext, linked.Token).ConfigureAwait(false);
+                            await scopedClient.ImportAppliedAsync(appliedContext, linked.Token).ConfigureAwait(false);
                         }
                         catch (OperationCanceledException) when (!linked.IsCancellationRequested)
                         {
@@ -350,13 +353,6 @@ internal sealed class RuntimeStackImportService : IDisposable
                         [message]));
                     errors.Add(message);
                 }
-                finally
-                {
-                    if (registered is not null)
-                    {
-                        DiscardRegisteredContent(registered, registration, lease.Generation);
-                    }
-                }
             }
 
             var outcome = GetOutcome(contributorResults);
@@ -386,7 +382,7 @@ internal sealed class RuntimeStackImportService : IDisposable
     private async Task<RegisteredStackImportFragments> RegisterImportFragmentsAsync(
         IReadOnlyList<StackFragmentImport> fragments,
         StackContributorRegistration registration,
-        long generation,
+        ISunderRpcCallScope callScope,
         CancellationToken cancellationToken)
     {
         var references = new List<SunderRpcContentReference>();
@@ -399,17 +395,16 @@ internal sealed class RuntimeStackImportService : IDisposable
                 foreach (var file in fragment.Files ?? [])
                 {
                     await using var source = await file.OpenReadAsync(cancellationToken).ConfigureAwait(false);
-                    var content = await _transfers.RegisterRpcContentAsync(
+                    var content = await callScope.RegisterContentAsync(
+                        registration.Provider.Endpoint,
                         source,
-                        file.Length,
-                        "application/octet-stream",
-                        Path.GetFileName(file.RelativePath),
-                        RuntimeRpcHostCallerActivation.StackPrincipalId,
-                        registration.PackageId,
-                        generation,
-                        _timeProvider.GetUtcNow() + _transportPolicy.ContentTransferLifetime,
-                        SunderRpcContentRepeatability.Repeatable,
-                        _transportPolicy.MaxRpcContentUses,
+                        new SunderRpcContentRegistrationOptions(
+                            "application/octet-stream",
+                            Path.GetFileName(file.RelativePath),
+                            file.Length,
+                            null,
+                            SunderRpcContentRepeatability.Repeatable,
+                            _transportPolicy.MaxRpcContentUses),
                         cancellationToken).ConfigureAwait(false);
                     references.Add(content);
                     files.Add(new StackRpcPayloadFile(file.RelativePath, content));
@@ -429,30 +424,7 @@ internal sealed class RuntimeStackImportService : IDisposable
         }
         catch
         {
-            foreach (var reference in references)
-            {
-                _transfers.DiscardRpcContent(
-                    reference,
-                    RuntimeRpcHostCallerActivation.StackPrincipalId,
-                    registration.PackageId,
-                    generation);
-            }
             throw;
-        }
-    }
-
-    private void DiscardRegisteredContent(
-        RegisteredStackImportFragments registered,
-        StackContributorRegistration registration,
-        long generation)
-    {
-        foreach (var reference in registered.References)
-        {
-            _transfers.DiscardRpcContent(
-                reference,
-                RuntimeRpcHostCallerActivation.StackPrincipalId,
-                registration.PackageId,
-                generation);
         }
     }
 

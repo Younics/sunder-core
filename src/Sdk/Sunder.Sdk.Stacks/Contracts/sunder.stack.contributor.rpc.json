@@ -266,11 +266,12 @@
       "properties": {
         "inputId": { "$ref": "#/$defs/Id" },
         "label": { "$ref": "#/$defs/ShortText" },
+        "sensitivity": { "$ref": "#/$defs/StackValueSensitivity" },
         "required": { "type": "boolean" },
         "description": { "$ref": "#/$defs/Text" },
         "defaultValue": { "$ref": "#/$defs/Text" }
       },
-      "required": ["inputId", "label", "required"],
+      "required": ["inputId", "label", "sensitivity", "required"],
       "additionalProperties": false
     },
     "StackRequiredInputDescriptorList": {

@@ -24,6 +24,56 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
+    public async Task ListAsync_MigratesSchemaOnePackagesToUnknownProvenance()
+    {
+        var paths = CreateRuntimePackagePaths();
+        Directory.CreateDirectory(paths.CatalogRootPath);
+        var legacyState = JsonSerializer.SerializeToNode(
+            new InstalledPackageStateFile(1, [CreatePackage(paths, "legacy.package")]),
+            TestJsonOptions)!.AsObject();
+        var legacyPackage = legacyState["packages"]!.AsArray()[0]!.AsObject();
+        legacyPackage.Remove("provenance");
+        await File.WriteAllTextAsync(paths.StateFilePath, legacyState.ToJsonString(TestJsonOptions));
+        var store = new InstalledPackageStore(paths);
+
+        var package = Assert.Single(await store.ListAsync());
+
+        Assert.Equal(InstalledPackageSourceKind.Unknown, package.Provenance?.SourceKind);
+        Assert.Equal(InstalledPackageVersionPolicy.Unmanaged, package.Provenance?.VersionPolicy);
+        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(paths.StateFilePath))!.AsObject();
+        Assert.Equal(3, migrated["schemaVersion"]!.GetValue<int>());
+        Assert.NotNull(migrated["packages"]!.AsArray()[0]!["provenance"]);
+    }
+
+    [Fact]
+    public async Task ListAsync_MigratesSchemaTwoWithoutGuessingThatExplicitPinsWereTransitive()
+    {
+        var paths = CreateRuntimePackagePaths();
+        Directory.CreateDirectory(paths.CatalogRootPath);
+        var package = CreatePackage(paths, "pinned.package") with
+        {
+            Provenance = new InstalledPackageProvenanceRecord(
+                InstalledPackageSourceKind.Registry,
+                InstalledPackageVersionPolicy.ExplicitVersion,
+                "https://registry.example/",
+                "pinned.package",
+                RequestedVersion: "1.0.0",
+                SourceIdentity: new string('a', 64)),
+        };
+        await File.WriteAllTextAsync(
+            paths.StateFilePath,
+            JsonSerializer.Serialize(new InstalledPackageStateFile(2, [package]), TestJsonOptions));
+        var store = new InstalledPackageStore(paths);
+
+        var migratedPackage = Assert.Single(await store.ListAsync());
+
+        Assert.Equal(InstalledPackageVersionPolicy.ExplicitVersion, migratedPackage.Provenance?.VersionPolicy);
+        Assert.Equal("1.0.0", migratedPackage.Provenance?.RequestedVersion);
+        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(paths.StateFilePath))!.AsObject();
+        Assert.Equal(3, migrated["schemaVersion"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task ListAsync_WhenPersistedPathIsOutsideVersionRoot_RejectsCatalog()
     {
         var paths = CreateRuntimePackagePaths();
@@ -194,6 +244,7 @@ public sealed class InstalledPackageStoreTests
 
         var descriptor = store.ToDescriptor(package);
 
+        Assert.Equal(InstalledPackageSourceKind.Unknown, descriptor.Provenance.SourceKind);
         var contractUse = Assert.Single(descriptor.RpcContractUses);
         Assert.Equal("dev.sunder.execution", contractUse.ContractId);
         Assert.Equal(">=1.0.0 <2.0.0", contractUse.VersionRange);

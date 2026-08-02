@@ -785,9 +785,13 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Runtime", _):
                 capabilities.Add(SunderSdkCapabilities.RuntimeOperationsV1);
                 break;
+            case ("Sunder.Sdk.Stacks", "IPackageStackContributor"):
             case ("Sunder.Sdk.Stacks", "IPackageStackExporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
+            case ("Sunder.Sdk.Stacks", "SunderStackContributorRpc"):
+            case ("Sunder.Sdk.Stacks", "SunderStackContributionRegistryExtensions"):
+            case ("Sunder.Sdk.Stacks", "StackContributorRpcClient"):
                 capabilities.UnionWith([SunderSdkCapabilities.StacksV1, SunderSdkCapabilities.StacksRpcV1]);
                 break;
             case ("Sunder.Sdk.Stacks", _):

@@ -7,7 +7,15 @@ internal sealed record PackageStoreMutation(
     string? PackageId = null,
     string? ArchiveFilePath = null,
     bool AllowDowngrade = false,
-    bool Reinstall = false);
+    bool Reinstall = false,
+    InstalledPackageProvenanceRecord? Provenance = null,
+    bool AllowCascade = false,
+    string? ConfirmationToken = null);
+
+internal sealed record RegistryPackageStateExpectation(
+    string PackageId,
+    string? Version,
+    InstalledPackageProvenanceRecord? Provenance);
 
 internal enum PackageStoreTransactionPhase
 {

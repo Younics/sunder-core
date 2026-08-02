@@ -68,7 +68,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl)));
         _marketplaceDetailSpinnerDelay = marketplaceDetailSpinnerDelay ?? MarketplaceDetailSpinnerDelay;
         _installedPackages = new InstalledPackagesPaneViewModel(
-            new PackagesInstalledCatalog(_runtimeApiClient, _registryClientProvider),
+            new PackagesInstalledCatalog(_runtimeApiClient),
             CreatePackageIconUri,
             SelectInstalledPackage);
         _marketplace = new MarketplacePackagesPaneViewModel(new PackagesMarketplaceCatalog(_registryClientProvider));

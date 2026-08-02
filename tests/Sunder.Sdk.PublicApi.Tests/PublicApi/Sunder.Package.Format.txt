@@ -412,3 +412,4 @@ type sealed class Sunder.Package.Format.SunderStackRequiredInputManifest
   property System.String? InputId { get; init; }
   property System.String? Label { get; init; }
   property System.Boolean? Required { get; init; }
+  property System.String? Sensitivity { get; init; }

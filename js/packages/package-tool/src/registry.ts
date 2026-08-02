@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import {
   canonicalizeDescriptor,
   generateTypeScriptBindings,
+  isPackageId,
+  isSemanticVersion,
   parseRpcContractDescriptor,
   type JsonValue,
   type RpcContractDescriptor,
@@ -189,16 +191,4 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false;
   for (let index = 0; index < left.byteLength; index++) if (left[index] !== right[index]) return false;
   return true;
-}
-
-function isPackageId(value: string): boolean {
-  return value.length > 0 && value.length <= 128
-    && value.split(".").every((segment) => segment.length > 0 && /^[a-z0-9]+$/u.test(segment));
-}
-
-function isSemanticVersion(value: string): boolean {
-  if (value.length === 0 || value.length > 256) return false;
-  const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(value);
-  return match !== null
-    && (match[4] === undefined || match[4].split(".").every((identifier) => !/^[0-9]+$/u.test(identifier) || identifier === "0" || !identifier.startsWith("0")));
 }

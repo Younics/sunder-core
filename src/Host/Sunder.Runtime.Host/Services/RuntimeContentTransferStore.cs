@@ -21,13 +21,29 @@ internal sealed record RuntimeUploadLease(
     string FileName,
     string ContentType);
 
+internal readonly record struct RuntimeRpcContentEndpoint(
+    string EndpointReference,
+    Guid ActivationId);
+
+internal sealed class RuntimeRpcContentAuthority(string id)
+{
+    private int _revoked;
+
+    public string Id { get; } = id;
+    public bool IsRevoked => Volatile.Read(ref _revoked) != 0;
+
+    public void Revoke() => Interlocked.Exchange(ref _revoked, 1);
+}
+
 internal sealed record RuntimeRpcContentLease(
     SunderRpcContentReference Reference,
-    string FilePath,
+    Stream Content,
     string OwnerPackageId,
     string AudiencePackageId,
     long Generation,
+    RuntimeRpcContentEndpoint ProviderEndpoint,
     int UseNumber,
+    string FilePath,
     bool DeleteOnRelease);
 
 internal sealed class RuntimeContentTransferStore : IDisposable
@@ -218,10 +234,12 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         string ownerPackageId,
         string audiencePackageId,
         long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
         DateTimeOffset expiresAtUtc,
         SunderRpcContentRepeatability repeatability,
         int maximumUses,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RuntimeRpcContentAuthority? authority = null)
     {
         var fullPath = Path.GetFullPath(filePath);
         if (!File.Exists(fullPath)) throw new FileNotFoundException("RPC content does not exist.", fullPath);
@@ -229,6 +247,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             ownerPackageId,
             audiencePackageId,
             generation,
+            providerEndpoint,
             expiresAtUtc,
             repeatability,
             maximumUses);
@@ -253,7 +272,17 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             NormalizeFileName(fileName, "content.bin"),
             expiresAtUtc,
             repeatability);
-        AddRpcContent(reference, fullPath, ownerPackageId, audiencePackageId, generation, maximumUses, ownsFile: false);
+        AddRpcContent(
+            reference,
+            fullPath,
+            ownerPackageId,
+            audiencePackageId,
+            generation,
+            providerEndpoint,
+            maximumUses,
+            ownsFile: false,
+            authority,
+            cancellationToken);
         return reference;
     }
 
@@ -265,10 +294,12 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         string ownerPackageId,
         string audiencePackageId,
         long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
         DateTimeOffset expiresAtUtc,
         SunderRpcContentRepeatability repeatability,
         int maximumUses,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RuntimeRpcContentAuthority? authority = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (!source.CanRead)
@@ -284,6 +315,7 @@ internal sealed class RuntimeContentTransferStore : IDisposable
             ownerPackageId,
             audiencePackageId,
             generation,
+            providerEndpoint,
             expiresAtUtc,
             repeatability,
             maximumUses);
@@ -337,7 +369,17 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 NormalizeFileName(fileName, "content.bin"),
                 expiresAtUtc,
                 repeatability);
-            AddRpcContent(reference, finalPath, ownerPackageId, audiencePackageId, generation, maximumUses, ownsFile: true);
+            AddRpcContent(
+                reference,
+                finalPath,
+                ownerPackageId,
+                audiencePackageId,
+                generation,
+                providerEndpoint,
+                maximumUses,
+                ownsFile: true,
+                authority,
+                cancellationToken);
             return reference;
         }
         catch
@@ -356,54 +398,149 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         SunderRpcContentReference reference,
         string ownerPackageId,
         string audiencePackageId,
-        long generation)
+        long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
+        RuntimeRpcContentAuthority? authority = null)
     {
         ArgumentNullException.ThrowIfNull(reference);
-        RpcContentEntry entry;
-        int useNumber;
-        bool exhausted;
+        RpcContentEntry? invalidEntry = null;
+        RuntimeRpcContentLease? lease = null;
         lock (_rpcContentGate)
         {
-            if (!_rpcContent.TryGetValue(reference.Id, out entry!)
+            if (!_rpcContent.TryGetValue(reference.Id, out var entry)
                 || entry.Reference != reference
                 || !string.Equals(entry.OwnerPackageId, ownerPackageId, StringComparison.Ordinal)
                 || !string.Equals(entry.AudiencePackageId, audiencePackageId, StringComparison.Ordinal)
                 || entry.Generation != generation
+                || entry.ProviderEndpoint != providerEndpoint
+                || !ReferenceEquals(entry.Authority, authority)
+                || authority?.IsRevoked == true
                 || entry.Reference.ExpiresAtUtc <= _timeProvider.GetUtcNow()
                 || entry.UseCount >= entry.MaximumUses)
             {
                 return null;
             }
-            useNumber = ++entry.UseCount;
-            exhausted = entry.UseCount >= entry.MaximumUses;
-            if (exhausted) _rpcContent.Remove(reference.Id);
-        }
 
-        var file = new FileInfo(entry.FilePath);
-        if (!file.Exists || file.Length != reference.Length)
-        {
-            RemoveInvalidRpcContent(entry);
-            return null;
+            FileStream? stream = null;
+            try
+            {
+                stream = new FileStream(
+                    entry.FilePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read | FileShare.Delete,
+                    128 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (stream.Length != reference.Length
+                    || !string.Equals(
+                        Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
+                        reference.Sha256,
+                        StringComparison.Ordinal))
+                {
+                    stream.Dispose();
+                    stream = null;
+                    _rpcContent.Remove(reference.Id);
+                    invalidEntry = entry;
+                }
+                else
+                {
+                    stream.Position = 0;
+                    var useNumber = ++entry.UseCount;
+                    var exhausted = entry.UseCount >= entry.MaximumUses;
+                    if (exhausted) _rpcContent.Remove(reference.Id);
+                    lease = new RuntimeRpcContentLease(
+                        reference,
+                        stream,
+                        entry.OwnerPackageId,
+                        entry.AudiencePackageId,
+                        entry.Generation,
+                        entry.ProviderEndpoint,
+                        useNumber,
+                        entry.FilePath,
+                        entry.OwnsFile && exhausted);
+                    stream = null;
+                }
+            }
+            catch (IOException)
+            {
+                stream?.Dispose();
+                _rpcContent.Remove(reference.Id);
+                invalidEntry = entry;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                stream?.Dispose();
+                _rpcContent.Remove(reference.Id);
+                invalidEntry = entry;
+            }
         }
-        using var stream = file.OpenRead();
-        var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        if (!string.Equals(hash, reference.Sha256, StringComparison.Ordinal))
+        if (invalidEntry?.OwnsFile == true) TryDeleteFile(invalidEntry.FilePath);
+        return lease;
+    }
+
+    public bool TryGetRpcContentEndpoint(
+        SunderRpcContentReference reference,
+        string audiencePackageId,
+        long generation,
+        RuntimeRpcContentAuthority authority,
+        out RuntimeRpcContentEndpoint providerEndpoint)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(authority);
+        lock (_rpcContentGate)
         {
-            RemoveInvalidRpcContent(entry);
-            return null;
+            if (_rpcContent.TryGetValue(reference.Id, out var entry)
+                && entry.Reference == reference
+                && string.Equals(entry.AudiencePackageId, audiencePackageId, StringComparison.Ordinal)
+                && entry.Generation == generation
+                && ReferenceEquals(entry.Authority, authority)
+                && !authority.IsRevoked
+                && entry.Reference.ExpiresAtUtc > _timeProvider.GetUtcNow()
+                && entry.UseCount < entry.MaximumUses)
+            {
+                providerEndpoint = entry.ProviderEndpoint;
+                return true;
+            }
         }
-        return new RuntimeRpcContentLease(
+        providerEndpoint = default;
+        return false;
+    }
+
+    public RuntimeRpcContentLease? AcquireRpcContentForAudience(
+        SunderRpcContentReference reference,
+        string audiencePackageId,
+        long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
+        RuntimeRpcContentAuthority authority)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(authority);
+        RpcContentEntry entry;
+        lock (_rpcContentGate)
+        {
+            if (!_rpcContent.TryGetValue(reference.Id, out entry!)
+                || entry.Reference != reference
+                || !string.Equals(entry.AudiencePackageId, audiencePackageId, StringComparison.Ordinal)
+                || entry.Generation != generation
+                || entry.ProviderEndpoint != providerEndpoint
+                || !ReferenceEquals(entry.Authority, authority)
+                || authority.IsRevoked)
+            {
+                return null;
+            }
+        }
+        return AcquireRpcContent(
             reference,
-            entry.FilePath,
             entry.OwnerPackageId,
-            entry.AudiencePackageId,
-            entry.Generation,
-            useNumber,
-            entry.OwnsFile && exhausted);
+            audiencePackageId,
+            generation,
+            providerEndpoint,
+            authority);
     }
 
     public void ReleaseRpcContent(RuntimeRpcContentLease lease)
     {
+        lease.Content.Dispose();
         if (lease.DeleteOnRelease) TryDeleteFile(lease.FilePath);
     }
 
@@ -411,7 +548,9 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         SunderRpcContentReference reference,
         string ownerPackageId,
         string audiencePackageId,
-        long generation)
+        long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
+        RuntimeRpcContentAuthority? authority = null)
     {
         RpcContentEntry? removed = null;
         lock (_rpcContentGate)
@@ -420,13 +559,36 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                 && entry.Reference == reference
                 && string.Equals(entry.OwnerPackageId, ownerPackageId, StringComparison.Ordinal)
                 && string.Equals(entry.AudiencePackageId, audiencePackageId, StringComparison.Ordinal)
-                && entry.Generation == generation)
+                && entry.Generation == generation
+                && entry.ProviderEndpoint == providerEndpoint
+                && ReferenceEquals(entry.Authority, authority))
             {
                 _rpcContent.Remove(reference.Id);
                 removed = entry;
             }
         }
         if (removed?.OwnsFile == true) TryDeleteFile(removed.FilePath);
+    }
+
+    public void DiscardRpcContentAuthority(RuntimeRpcContentAuthority authority)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        authority.Revoke();
+        RpcContentEntry[] removed;
+        lock (_rpcContentGate)
+        {
+            removed = _rpcContent.Values
+                .Where(entry => ReferenceEquals(entry.Authority, authority))
+                .ToArray();
+            foreach (var entry in removed)
+            {
+                _rpcContent.Remove(entry.Reference.Id);
+            }
+        }
+        foreach (var entry in removed)
+        {
+            if (entry.OwnsFile) TryDeleteFile(entry.FilePath);
+        }
     }
 
     public void Dispose()
@@ -487,11 +649,21 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         string ownerPackageId,
         string audiencePackageId,
         long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
         int maximumUses,
-        bool ownsFile)
+        bool ownsFile,
+        RuntimeRpcContentAuthority? authority,
+        CancellationToken cancellationToken)
     {
         lock (_rpcContentGate)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (authority?.IsRevoked == true)
+            {
+                throw new OperationCanceledException(
+                    "The RPC content authority was revoked during registration.",
+                    cancellationToken);
+            }
             _rpcContent.Add(
                 reference.Id,
                 new RpcContentEntry(
@@ -500,24 +672,18 @@ internal sealed class RuntimeContentTransferStore : IDisposable
                     ownerPackageId,
                     audiencePackageId,
                     generation,
+                    providerEndpoint,
                     maximumUses,
-                    ownsFile));
+                    ownsFile,
+                    authority));
         }
-    }
-
-    private void RemoveInvalidRpcContent(RpcContentEntry entry)
-    {
-        lock (_rpcContentGate)
-        {
-            _rpcContent.Remove(entry.Reference.Id);
-        }
-        if (entry.OwnsFile) TryDeleteFile(entry.FilePath);
     }
 
     private void ValidateRpcContentRegistration(
         string ownerPackageId,
         string audiencePackageId,
         long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
         DateTimeOffset expiresAtUtc,
         SunderRpcContentRepeatability repeatability,
         int maximumUses)
@@ -525,6 +691,8 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         if (generation < 0
             || string.IsNullOrWhiteSpace(ownerPackageId)
             || string.IsNullOrWhiteSpace(audiencePackageId)
+            || string.IsNullOrWhiteSpace(providerEndpoint.EndpointReference)
+            || providerEndpoint.ActivationId == Guid.Empty
             || maximumUses < 1
             || maximumUses > _policy.MaxRpcContentUses
             || repeatability == SunderRpcContentRepeatability.SingleUse && maximumUses != 1
@@ -576,16 +744,20 @@ internal sealed class RuntimeContentTransferStore : IDisposable
         string ownerPackageId,
         string audiencePackageId,
         long generation,
+        RuntimeRpcContentEndpoint providerEndpoint,
         int maximumUses,
-        bool ownsFile)
+        bool ownsFile,
+        RuntimeRpcContentAuthority? authority)
     {
         public SunderRpcContentReference Reference { get; } = reference;
         public string FilePath { get; } = filePath;
         public string OwnerPackageId { get; } = ownerPackageId;
         public string AudiencePackageId { get; } = audiencePackageId;
         public long Generation { get; } = generation;
+        public RuntimeRpcContentEndpoint ProviderEndpoint { get; } = providerEndpoint;
         public int MaximumUses { get; } = maximumUses;
         public bool OwnsFile { get; } = ownsFile;
+        public RuntimeRpcContentAuthority? Authority { get; } = authority;
         public int UseCount { get; set; }
     }
 }

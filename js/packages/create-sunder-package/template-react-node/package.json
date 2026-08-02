@@ -1,12 +1,12 @@
 {
-  "name": "SUNDER_NPM_PACKAGE_NAME",
+  "name": "__SUNDER_NPM_PACKAGE_NAME_JSON__",
   "version": "1.0.0",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
     "test": "npm run typecheck && node --test test/*.test.cjs",
     "sunder:dev": "sunder-package dev --watch",
     "sunder:dev:once": "sunder-package dev",
@@ -15,17 +15,17 @@
     "package": "sunder-package package"
   },
   "dependencies": {
-    "@sunder/sdk": "^1.1.0",
+    "@sunder/sdk": ">=1.1.0 <1.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@sunder/package-tool": "^1.1.0",
+    "@sunder/package-tool": ">=1.1.0 <1.2.0",
     "@types/node": "24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
     "typescript": "6.0.3",
-    "vite": "^8.0.10"
+    "vite": "^8.2.0"
   }
 }

@@ -9,6 +9,8 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 {
+    private const int CurrentSchemaVersion = 3;
+
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
@@ -36,7 +38,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is invalid.", ex);
         }
 
-        if (state?.SchemaVersion != 1)
+        if (state?.SchemaVersion is not 1 and not 2 and not CurrentSchemaVersion)
         {
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' has an unsupported schema version.");
         }
@@ -45,8 +47,13 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         {
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is missing packages.");
         }
-        ValidateCatalog(state.Packages);
-        return state.Packages.ToArray();
+        var packages = NormalizeCatalogForCompatibility(state.Packages);
+        ValidateCatalog(packages);
+        if (state.SchemaVersion != CurrentSchemaVersion)
+        {
+            await WriteAsync(packages, cancellationToken);
+        }
+        return packages;
     }
 
     public async Task<InstalledPackageRecord?> GetAsync(string packageId, CancellationToken cancellationToken = default)
@@ -57,10 +64,11 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         IReadOnlyList<InstalledPackageRecord> packages,
         CancellationToken cancellationToken = default)
     {
+        packages = NormalizeCatalogForCompatibility(packages);
         ValidateCatalog(packages);
         Directory.CreateDirectory(paths.CatalogRootPath);
         var state = new InstalledPackageStateFile(
-            1,
+            CurrentSchemaVersion,
             packages.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase).ToArray());
         await DurableJsonDocument.WriteAsync(paths.StateFilePath, state, JsonOptions, cancellationToken);
     }
@@ -84,6 +92,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             {
                 throw new InvalidDataException($"Installed package catalog contains duplicate package id '{package.PackageId}'.");
             }
+
+            ValidateProvenance(package);
 
             if (!paths.IsCanonicalInstalledPath(package.PackageId, package.Version, package.InstallPath))
             {
@@ -149,6 +159,13 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         }
     }
 
+    internal static IReadOnlyList<InstalledPackageRecord> NormalizeCatalogForCompatibility(
+        IReadOnlyList<InstalledPackageRecord> packages)
+        => packages.Select(static package => package.Provenance is null
+                ? package with { Provenance = InstalledPackageProvenanceRecord.Unknown }
+                : package)
+            .ToArray();
+
     public InstalledPackageDescriptor ToDescriptor(InstalledPackageRecord package)
     {
         var validation = SunderPackageArchiveInspector.ValidateExtractedPackageAsync(package.InstallPath)
@@ -202,7 +219,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                     use.VersionRange!,
                     use.Required!.Value,
                     (use.Actions ?? []).Where(static action => action is not null).Select(static action => action!).ToArray()))
-                .ToArray());
+                .ToArray(),
+            (package.Provenance ?? InstalledPackageProvenanceRecord.Unknown).ToDescriptor());
     }
 
     public async Task<string?> TryResolvePackageAssetPathAsync(
@@ -224,6 +242,71 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
     private static bool IsCanonicalHash(string? value)
         => value is { Length: 64 }
            && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static void ValidateProvenance(InstalledPackageRecord package)
+    {
+        var provenance = package.Provenance
+            ?? throw new InvalidDataException($"Installed package '{package.PackageId}' is missing provenance.");
+        if (!Enum.IsDefined(provenance.SourceKind) || !Enum.IsDefined(provenance.VersionPolicy))
+        {
+            throw new InvalidDataException($"Installed package '{package.PackageId}' has invalid provenance.");
+        }
+
+        if (provenance.SourceKind == InstalledPackageSourceKind.Registry)
+        {
+            Uri normalizedOrigin;
+            try
+            {
+                normalizedOrigin = RegistryOrigin.Normalize(provenance.RegistryOrigin ?? string.Empty);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid Registry origin.", exception);
+            }
+
+            if (!string.Equals(normalizedOrigin.AbsoluteUri, provenance.RegistryOrigin, StringComparison.Ordinal)
+                || !PackageId.TryParse(provenance.SourcePackageId, out _)
+                || !string.Equals(provenance.SourcePackageId, package.PackageId, StringComparison.Ordinal)
+                || !IsCanonicalHash(provenance.SourceIdentity)
+                || provenance.VersionRange is not null && !PackageVersionRange.TryParse(provenance.VersionRange, out _))
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' has invalid Registry provenance.");
+            }
+
+            var validSelection = provenance.VersionPolicy switch
+            {
+                InstalledPackageVersionPolicy.FollowTag => !string.IsNullOrWhiteSpace(provenance.RequestedTag)
+                    && provenance.RequestedVersion is null,
+                InstalledPackageVersionPolicy.ExplicitVersion => SemanticVersion.TryParse(provenance.RequestedVersion, out _)
+                    && provenance.RequestedTag is null
+                    && provenance.VersionRange is null,
+                InstalledPackageVersionPolicy.TransitiveDependency => provenance.RequestedTag is null
+                    && provenance.RequestedVersion is null
+                    && provenance.VersionRange is null
+                    && !provenance.IncludePrerelease,
+                _ => false,
+            };
+            if (!validSelection)
+            {
+                throw new InvalidDataException($"Installed package '{package.PackageId}' has an invalid Registry version policy.");
+            }
+            return;
+        }
+
+        if (provenance.VersionPolicy != InstalledPackageVersionPolicy.Unmanaged
+            || provenance.RegistryOrigin is not null
+            || provenance.SourcePackageId is not null
+            || provenance.RequestedTag is not null
+            || provenance.RequestedVersion is not null
+            || provenance.VersionRange is not null
+            || provenance.IncludePrerelease
+            || provenance.SourceKind == InstalledPackageSourceKind.LocalArchive && !IsCanonicalHash(provenance.SourceIdentity)
+            || provenance.SourceKind == InstalledPackageSourceKind.Unknown && provenance.SourceIdentity is not null
+            || provenance.SourceKind == InstalledPackageSourceKind.Development && string.IsNullOrWhiteSpace(provenance.SourceIdentity))
+        {
+            throw new InvalidDataException($"Installed package '{package.PackageId}' has invalid unmanaged provenance.");
+        }
+    }
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(

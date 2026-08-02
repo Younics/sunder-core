@@ -36,6 +36,73 @@ public sealed class SunderStackArchiveInspectorTests
     }
 
     [Fact]
+    public async Task RequiredInputSensitivity_RoundTripsThroughArchive()
+    {
+        var root = CreateTempDirectory();
+        var manifest = CreateManifest(requiredInputs:
+        [
+            new SunderStackRequiredInputManifest
+            {
+                InputId = "region",
+                Label = "Region",
+                Sensitivity = "Public",
+                DefaultValue = "us-east",
+                Required = true,
+            },
+            new SunderStackRequiredInputManifest
+            {
+                InputId = "api-key",
+                Label = "API key",
+                Sensitivity = "Secret",
+                Required = true,
+            },
+        ]);
+
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root, manifest),
+            Path.Combine(root, "staging"));
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        var inputs = Assert.Single(result.Manifest!.Fragments!).RequiredInputs!;
+        Assert.Collection(
+            inputs,
+            input =>
+            {
+                Assert.Equal("Public", input.Sensitivity);
+                Assert.Equal("us-east", input.DefaultValue);
+            },
+            input =>
+            {
+                Assert.Equal("Secret", input.Sensitivity);
+                Assert.Null(input.DefaultValue);
+            });
+    }
+
+    [Fact]
+    public async Task SecretRequiredInput_RejectsPortableDefaultValue()
+    {
+        var root = CreateTempDirectory();
+        var manifest = CreateManifest(requiredInputs:
+        [
+            new SunderStackRequiredInputManifest
+            {
+                InputId = "api-key",
+                Label = "API key",
+                Sensitivity = "Secret",
+                DefaultValue = "must-not-ship",
+                Required = true,
+            },
+        ]);
+
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root, manifest),
+            Path.Combine(root, "staging"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Contains("must not declare a portable default", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExtractAndValidateAsync_WhenArchiveIncludesValidMedia_ReturnsManifestMedia()
     {
         var root = CreateTempDirectory();
@@ -459,7 +526,8 @@ public sealed class SunderStackArchiveInspectorTests
         string? readmeMarkdown = null,
         IReadOnlyList<SunderStackMediaManifest>? media = null,
         IReadOnlyList<string>? features = null,
-        IReadOnlyList<string>? requiredFeatures = null)
+        IReadOnlyList<string>? requiredFeatures = null,
+        IReadOnlyList<SunderStackRequiredInputManifest>? requiredInputs = null)
         => new()
         {
             SchemaVersion = SunderStackFormat.CurrentSchemaVersion,
@@ -496,6 +564,7 @@ public sealed class SunderStackArchiveInspectorTests
                     Description = "A coding profile.",
                     DefaultSelected = true,
                     PayloadPath = "payload/fragments/agent-profile.fullstack.json",
+                    RequiredInputs = requiredInputs,
                 },
             ],
             Media = media,

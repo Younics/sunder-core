@@ -78,6 +78,31 @@ type sealed class Sunder.Registry.Contracts.RegistryContractDescriptorMetadata :
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest>
+  method .ctor(System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.Int32? LifetimeDays = null)
+  property System.String DisplayName { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants { get; init; }
+  property System.Int32? LifetimeDays { get; init; }
+  method Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest <Clone>$()
+  method System.Void Deconstruct(out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.Int32? LifetimeDays)
+  method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse>
+  method .ctor(System.Guid Id, System.String Token, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset ExpiresAtUtc)
+  property System.DateTimeOffset CreatedAtUtc { get; init; }
+  property System.String DisplayName { get; init; }
+  property System.DateTimeOffset ExpiresAtUtc { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants { get; init; }
+  property System.Guid Id { get; init; }
+  property System.String Token { get; init; }
+  method Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse <Clone>$()
+  method System.Void Deconstruct(out System.Guid Id, out System.String Token, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset ExpiresAtUtc)
+  method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryCurrentUserResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCurrentUserResponse>
   method .ctor(System.String UserId, System.String? DisplayName, System.String? Email, System.String? Username = null, System.String? AvatarUrl = null, System.Boolean RequiresUsername = false)
   property System.String? AvatarUrl { get; init; }
@@ -639,6 +664,9 @@ type sealed class Sunder.Registry.Contracts.RegistryPublishPackageResponse : Sys
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryPublishRequestHeaders
+  field static System.String ExpectedResourceId = "X-Sunder-Expected-Resource-Id"
+  field static System.String SetLatest = "X-Sunder-Set-Latest"
 type sealed class Sunder.Registry.Contracts.RegistryPublishStackResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishStackResponse>
   method .ctor(System.Boolean Success, System.String? StackId, System.String? Message, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; init; }
@@ -651,6 +679,34 @@ type sealed class Sunder.Registry.Contracts.RegistryPublishStackResponse : Syste
   method Sunder.Registry.Contracts.RegistryPublishStackResponse <Clone>$()
   method System.Void Deconstruct(out System.Boolean Success, out System.String? StackId, out System.String? Message, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishStackResponse? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryPublishTokenGrant : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishTokenGrant>
+  method .ctor(System.String Scope, System.String ResourceId)
+  property System.String ResourceId { get; init; }
+  property System.String Scope { get; init; }
+  method Sunder.Registry.Contracts.RegistryPublishTokenGrant <Clone>$()
+  method System.Void Deconstruct(out System.String Scope, out System.String ResourceId)
+  method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishTokenGrant? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryPublishTokenScopes
+  field static System.String PackagePromoteLatest = "package:promote-latest"
+  field static System.String PackagePublish = "package:publish"
+  field static System.String StackPublish = "stack:publish"
+type sealed class Sunder.Registry.Contracts.RegistryPublishTokenSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishTokenSummary>
+  method .ctor(System.Guid Id, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset? LastUsedAtUtc, System.DateTimeOffset ExpiresAtUtc)
+  property System.DateTimeOffset CreatedAtUtc { get; init; }
+  property System.String DisplayName { get; init; }
+  property System.DateTimeOffset ExpiresAtUtc { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants { get; init; }
+  property System.Guid Id { get; init; }
+  property System.DateTimeOffset? LastUsedAtUtc { get; init; }
+  method Sunder.Registry.Contracts.RegistryPublishTokenSummary <Clone>$()
+  method System.Void Deconstruct(out System.Guid Id, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset? LastUsedAtUtc, out System.DateTimeOffset ExpiresAtUtc)
+  method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishTokenSummary? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()

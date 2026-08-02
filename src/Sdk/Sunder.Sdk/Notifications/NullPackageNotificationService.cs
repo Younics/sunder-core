@@ -13,6 +13,7 @@ public sealed class NullPackageNotificationService : IPackageNotificationService
     /// <summary>Observes cancellation and otherwise completes without side effects.</summary>
     public ValueTask PublishAsync(PackageNotificationRequest request, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.CompletedTask;
     }

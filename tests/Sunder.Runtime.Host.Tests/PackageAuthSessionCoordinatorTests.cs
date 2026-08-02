@@ -44,6 +44,7 @@ public sealed class PackageAuthSessionCoordinatorTests
         Assert.Equal(1, authHandler.StartCount);
         Assert.Equal(Sunder.Runtime.Contracts.PackageAuthFlowKind.Browser, first.Flow);
         Assert.Equal("https://login.example.test", first.LaunchUrl);
+        Assert.True(first.ExpiresAtUtc > DateTimeOffset.UtcNow);
         Assert.Equal(callbackServer.GetAuthenticationCallbackUri(), authHandler.CallbackUri);
         Assert.Equal("/auth/callback", authHandler.CallbackUri?.AbsolutePath);
         await state.ClearActiveSessionAsync();
@@ -301,7 +302,7 @@ public sealed class PackageAuthSessionCoordinatorTests
         using (var lease = state.AcquireLease())
         {
             Assert.Equal(
-                Sunder.Runtime.Contracts.PackageAuthSessionState.Cancelled,
+                Sunder.Runtime.Contracts.PackageAuthSessionState.Expired,
                 coordinator.GetPackageAuthSessionStatus(lease, "test.package", started.AuthSessionId)?.State);
         }
 

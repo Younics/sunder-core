@@ -1,33 +1,51 @@
 #!/usr/bin/env node
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, relative, resolve } from "node:path";
-import { canonicalizeDescriptor, type JsonValue, type RpcContractDescriptor } from "@sunder/sdk";
-import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
+import { isPackageId } from "@sunder/sdk";
+
+const PRESETS: ReadonlyMap<string, ScaffoldPreset> = new Map([
+  ["node", {
+    templateDirectory: "template",
+    defaultOutput: "sunder-node-package",
+    label: "Node process",
+  }],
+  ["react-node", {
+    templateDirectory: "template-react-node",
+    defaultOutput: "sunder-react-node-package",
+    label: "React App + Node process",
+  }],
+]);
 
 async function main(): Promise<void> {
   const options = parse(process.argv.slice(2));
-  const output = resolve(options.output ?? options.name ?? (options.template === "react-node" ? "sunder-react-node-package" : "sunder-node-package"));
+  const preset = PRESETS.get(options.preset);
+  if (preset === undefined) throw new Error(`Unknown scaffold preset '${options.preset}'. Available presets: ${[...PRESETS.keys()].join(", ")}.`);
+  const output = resolve(options.output ?? options.name ?? preset.defaultOutput);
   const packageId = options.packageId ?? derivePackageId(basename(output));
   const packageName = options.packageName ?? title(packageId);
-  if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u.test(packageId)) throw new Error("--package-id must be lowercase dot-separated ASCII.");
+  if (!isPackageId(packageId)) throw new Error("--package-id must be lowercase dot-separated ASCII of at most 128 characters.");
+  if (packageName.length === 0 || packageName.length > 256 || packageName.trim() !== packageName || /\p{Cc}/u.test(packageName)) {
+    throw new Error("--package-name must be trimmed, non-empty, control-free, and at most 256 characters.");
+  }
   try {
     const existing = await readdir(output);
     if (existing.length > 0) throw new Error(`Output directory '${output}' is not empty.`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const templateRoot = resolve(__dirname, "..", options.template === "react-node" ? "template-react-node" : "template");
-  const descriptor = JSON.parse(await readFile(resolve(templateRoot, "contracts", "example.rpc.json"), "utf8")) as RpcContractDescriptor;
-  const contractSha = createHash("sha256").update(canonicalizeDescriptor(descriptor as unknown as JsonValue)).digest("hex");
+  const templateRoot = resolve(__dirname, "..", preset.templateDirectory);
   const replacements = new Map([
-    ["SUNDER_PACKAGE_ID", packageId],
-    ["SUNDER_PACKAGE_NAME", packageName],
-    ["SUNDER_NPM_PACKAGE_NAME", packageId.replaceAll(".", "-")],
-    ["SUNDER_CONTRACT_SHA256", contractSha],
+    ["__SUNDER_PACKAGE_ID_JSON__", escapeJsonString(packageId)],
+    ["__SUNDER_PROVIDER_ID_JSON__", escapeJsonString(`${packageId}.provider`)],
+    ["__SUNDER_VIEW_ID_JSON__", escapeJsonString(`${packageId}.main`)],
+    ["__SUNDER_PACKAGE_NAME_JSON__", escapeJsonString(packageName)],
+    ["__SUNDER_NPM_PACKAGE_NAME_JSON__", escapeJsonString(packageId.replaceAll(".", "-"))],
+    ["__SUNDER_PACKAGE_NAME_HTML__", escapeHtml(packageName)],
+    ["SUNDER_PACKAGE_ID", escapeMarkdown(packageId)],
+    ["SUNDER_PACKAGE_NAME", escapeMarkdown(packageName)],
   ]);
   await copyTemplate(templateRoot, output, replacements);
-  const kind = options.template === "react-node" ? "React App + Node process" : "Node process";
-  process.stdout.write(`Created Sunder ${kind} package at ${output}\n\nNext steps:\n  npm install\n  npm test\n  npm run sunder:dev\n  npm run build\n  npm run smoke\n  npm run package\n`);
+  process.stdout.write(`Created Sunder ${preset.label} package at ${output}\n\nNext steps:\n  npm install\n  npm test\n  npm run sunder:dev\n  npm run build\n  npm run smoke\n  npm run package\n`);
 }
 
 async function copyTemplate(source: string, destination: string, replacements: ReadonlyMap<string, string>): Promise<void> {
@@ -39,8 +57,11 @@ async function copyTemplate(source: string, destination: string, replacements: R
     if (entry.isDirectory()) {
       await copyTemplate(sourcePath, targetPath, replacements);
     } else if (entry.isFile()) {
-      let content = await readFile(sourcePath, "utf8");
-      for (const [token, value] of replacements) content = content.replaceAll(token, value);
+      const content = (await readFile(sourcePath, "utf8")).replace(/__SUNDER_[A-Z0-9_]+__|SUNDER_PACKAGE_(?:ID|NAME)/gu, (token) => {
+        const replacement = replacements.get(token);
+        if (replacement === undefined) throw new Error(`Template contains unknown scaffold token '${token}'.`);
+        return replacement;
+      });
       await mkdir(dirname(targetPath), { recursive: true });
       await writeFile(targetPath, content, "utf8");
     }
@@ -52,23 +73,22 @@ function parse(argumentsList: readonly string[]): Options {
   let output: string | undefined;
   let packageId: string | undefined;
   let packageName: string | undefined;
-  let template: TemplateKind = "node";
+  let preset = "node";
   for (let index = 0; index < argumentsList.length; index++) {
     const argument = argumentsList[index];
     if (argument === "--yes" || argument === "-y") continue;
     if (argument === "--output") output = value(argumentsList, ++index, argument);
     else if (argument === "--package-id") packageId = value(argumentsList, ++index, argument);
     else if (argument === "--package-name") packageName = value(argumentsList, ++index, argument);
-    else if (argument === "--template") {
+    else if (argument === "--preset" || argument === "--template") {
       const configured = value(argumentsList, ++index, argument);
-      if (configured !== "node" && configured !== "react-node") throw new Error("--template must be 'node' or 'react-node'.");
-      template = configured;
+      preset = configured;
     }
     else if (argument?.startsWith("-") === true) throw new Error(`Unknown option '${argument}'.`);
     else if (name === undefined) name = argument;
     else throw new Error(`Unexpected argument '${argument}'.`);
   }
-  return { name, output, packageId, packageName, template };
+  return { name, output, packageId, packageName, preset };
 }
 
 function value(argumentsList: readonly string[], index: number, option: string): string {
@@ -86,15 +106,37 @@ function title(value: string): string {
   return value.split(/[.-]/u).map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`).join(" ");
 }
 
+function escapeMarkdown(value: string): string {
+  return value.replace(/[\\`*_{}\[\]()<>#+.!|~-]/gu, "\\$&");
+}
+
+function escapeJsonString(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/gu, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  })[character]!);
+}
+
 interface Options {
   readonly name?: string;
   readonly output?: string;
   readonly packageId?: string;
   readonly packageName?: string;
-  readonly template: TemplateKind;
+  readonly preset: string;
 }
 
-type TemplateKind = "node" | "react-node";
+interface ScaffoldPreset {
+  readonly templateDirectory: string;
+  readonly defaultOutput: string;
+  readonly label: string;
+}
 
 void main().catch((error: unknown) => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

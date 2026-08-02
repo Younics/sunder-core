@@ -41,11 +41,19 @@ internal static class InstalledPackageEndpoints
                 return Results.Ok(result);
             });
 
-        group.MapDelete(
-            "{packageId}",
+        group.MapGet(
+            "{packageId}/uninstall-plan",
             async (string packageId, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
             {
-                var result = await installedPackages.UninstallAsync(packageId, cancellationToken);
+                var plan = await installedPackages.GetUninstallPlanAsync(packageId, cancellationToken);
+                return Results.Ok(RuntimeEndpointErrors.Required(plan, "Installed package"));
+            });
+
+        group.MapPost(
+            "{packageId}/uninstall",
+            async (string packageId, PackageUninstallRequest request, InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>
+            {
+                var result = await installedPackages.UninstallAsync(packageId, request, cancellationToken);
                 return Results.Ok(result);
             });
 

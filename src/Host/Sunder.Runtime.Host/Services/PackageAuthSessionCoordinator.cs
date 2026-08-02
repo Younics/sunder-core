@@ -55,7 +55,8 @@ internal sealed class PackageAuthSessionCoordinator(
             status.CallbackSessionId,
             PackageAuthFlowKind.Browser,
             status.LaunchUri ?? string.Empty,
-            status.Message);
+            status.Message,
+            status.ExpiresAtUtc);
     }
 
     public PackageAuthSessionStatusResponse? GetPackageAuthSessionStatus(
@@ -71,11 +72,13 @@ internal sealed class PackageAuthSessionCoordinator(
             {
                 ProtocolCallbackState.Pending => PackageAuthSessionState.Pending,
                 ProtocolCallbackState.Completed => PackageAuthSessionState.Connected,
-                ProtocolCallbackState.Cancelled or ProtocolCallbackState.Expired => PackageAuthSessionState.Cancelled,
+                ProtocolCallbackState.Cancelled => PackageAuthSessionState.Cancelled,
+                ProtocolCallbackState.Expired => PackageAuthSessionState.Expired,
                 _ => PackageAuthSessionState.Failed,
             },
             status.Message,
-            status.LaunchUri);
+            status.LaunchUri,
+            status.ExpiresAtUtc);
     }
 
     public Task<bool> CompletePackageAuthSessionAsync(

@@ -63,6 +63,7 @@ internal sealed record RuntimeRpcPolicyOptions
     public int MaxStreamEvents { get; init; } = 100_000;
     public int MaxStreamEventsPerSecond { get; init; } = 1000;
     public int MaxAppCallerSessions { get; init; } = 128;
+    public int MaxCallScopesPerCaller { get; init; } = 64;
     public TimeSpan DefaultDeadline { get; init; } = TimeSpan.FromMinutes(10);
 }
 

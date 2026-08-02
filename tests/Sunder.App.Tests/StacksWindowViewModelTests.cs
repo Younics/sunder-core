@@ -946,7 +946,7 @@ public sealed class StacksWindowViewModelTests
                 [
                     new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
                 ],
-                [new RuntimeStackRequiredInputDescriptor("input-key", "sunder.package.agent", "agent", "api-key", "API key", true, "Provider key.")],
+                [new RuntimeStackRequiredInputDescriptor("input-key", "sunder.package.agent", "agent", "api-key", "API key", RuntimeStackInputSensitivity.Secret, true, "Provider key.")],
                 [],
                 [],
                 []),
@@ -983,7 +983,11 @@ public sealed class StacksWindowViewModelTests
         Assert.False(viewModel.CanApply);
         Assert.Equal("input-key", Assert.Single(viewModel.RequiredInputs).InputId);
         Assert.Equal("Not provided", Assert.Single(viewModel.RequiredInputs).ReviewValue);
+        Assert.True(Assert.Single(viewModel.RequiredInputs).IsSecret);
+        Assert.Equal('*', Assert.Single(viewModel.RequiredInputs).PasswordCharacter);
         Assert.Single(viewModel.RequiredInputs).Value = "secret-local-value";
+        Assert.Equal("Provided locally", Assert.Single(viewModel.RequiredInputs).ReviewValue);
+        Assert.DoesNotContain("secret-local-value", Assert.Single(viewModel.RequiredInputs).ReviewValue, StringComparison.Ordinal);
         Assert.True(viewModel.CanApply);
 
         await viewModel.ApplyCommand.ExecuteAsync(null);
@@ -993,6 +997,24 @@ public sealed class StacksWindowViewModelTests
         Assert.Equal(["action-key"], runtimeApiClient.LastImportRequest.SelectedActionIds);
         Assert.Equal("plan-1", runtimeApiClient.LastImportRequest.PlanId);
         Assert.Equal("secret-local-value", runtimeApiClient.LastPreviewRequest?.InputValues["input-key"]);
+    }
+
+    [Fact]
+    public void UseStackRequiredInput_PublicValuesRemainVisible()
+    {
+        var input = new RuntimeStackRequiredInputDescriptor(
+            "input-key",
+            "test.package",
+            "test.contributor",
+            "region",
+            "Region",
+            RuntimeStackInputSensitivity.Public,
+            true);
+        var viewModel = new UseStackRequiredInputValueViewModel(input, "us-east", () => { });
+
+        Assert.False(viewModel.IsSecret);
+        Assert.Equal('\0', viewModel.PasswordCharacter);
+        Assert.Equal("us-east", viewModel.ReviewValue);
     }
 
     [Fact]
@@ -1296,7 +1318,7 @@ public sealed class StacksWindowViewModelTests
                     DefaultSelected = fragmentDefaultSelected,
                     PayloadPath = "payload/fragments/agent-profile.json",
                     RequiredInputs = includeRequiredInput
-                        ? [new SunderStackRequiredInputManifest { InputId = "api-key", Label = "API key", Required = true }]
+                        ? [new SunderStackRequiredInputManifest { InputId = "api-key", Label = "API key", Sensitivity = "Secret", Required = true }]
                         : [],
                     Preview = new SunderStackFragmentPreview
                     {
@@ -1573,6 +1595,17 @@ public sealed class StacksWindowViewModelTests
             => Task.CompletedTask;
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default) => Task.FromResult(InstalledPackages);
+
+        public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(string packageId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new PackageUninstallPlan(
+                packageId,
+                [new PackageUninstallPlanPackage(packageId, packageId, "1.0.0")],
+                [],
+                [packageId],
+                new PackageLifecycleChangeSet([packageId], [packageId], [packageId], [packageId], false),
+                PackageUninstallDataBehavior.Retain,
+                [packageId],
+                new string('a', 64)));
 
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
         {

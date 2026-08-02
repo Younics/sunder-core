@@ -61,10 +61,7 @@ internal static class RuntimeHostComposition
             rpcBroker: provider.GetRequiredService<RuntimeRpcBroker>(),
             processPolicy: provider.GetRequiredService<RuntimeProcessPolicyOptions>(),
             hostStopping: provider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
-                          ?? CancellationToken.None,
-            contentTransfers: provider.GetRequiredService<RuntimeContentTransferStore>(),
-            sessions: provider.GetRequiredService<PackageSessionState>(),
-            transportPolicy: provider.GetRequiredService<RuntimeTransportPolicyOptions>()));
+                          ?? CancellationToken.None));
         services.AddSingleton<PackageSessionReconciler>();
         services.AddSingleton<PackageSessionPublisher>();
         services.AddSingleton<PackageLifecycleStageStore>();

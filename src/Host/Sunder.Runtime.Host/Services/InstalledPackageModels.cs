@@ -18,7 +18,40 @@ internal sealed record InstalledPackageRecord(
     [property: JsonPropertyName("contentInventory")] IReadOnlyList<InstalledPackageContentRecord> ContentInventory,
     [property: JsonPropertyName("dependsOn")] IReadOnlyList<InstalledPackageDependencyRecord> DependsOn,
     [property: JsonPropertyName("isEnabled")] bool IsEnabled,
-    [property: JsonPropertyName("installedAtUtc")] DateTimeOffset InstalledAtUtc);
+    [property: JsonPropertyName("installedAtUtc")] DateTimeOffset InstalledAtUtc,
+    [property: JsonPropertyName("provenance")] InstalledPackageProvenanceRecord? Provenance = null);
+
+internal sealed record InstalledPackageProvenanceRecord(
+    [property: JsonPropertyName("sourceKind")] InstalledPackageSourceKind SourceKind,
+    [property: JsonPropertyName("versionPolicy")] InstalledPackageVersionPolicy VersionPolicy,
+    [property: JsonPropertyName("registryOrigin")] string? RegistryOrigin = null,
+    [property: JsonPropertyName("sourcePackageId")] string? SourcePackageId = null,
+    [property: JsonPropertyName("requestedTag")] string? RequestedTag = null,
+    [property: JsonPropertyName("requestedVersion")] string? RequestedVersion = null,
+    [property: JsonPropertyName("versionRange")] string? VersionRange = null,
+    [property: JsonPropertyName("sourceIdentity")] string? SourceIdentity = null,
+    [property: JsonPropertyName("includePrerelease")] bool IncludePrerelease = false)
+{
+    public static InstalledPackageProvenanceRecord Unknown { get; } = new(
+        InstalledPackageSourceKind.Unknown,
+        InstalledPackageVersionPolicy.Unmanaged);
+
+    public static InstalledPackageProvenanceRecord LocalArchive(string sourceIdentity) => new(
+        InstalledPackageSourceKind.LocalArchive,
+        InstalledPackageVersionPolicy.Unmanaged,
+        SourceIdentity: sourceIdentity);
+
+    public InstalledPackageProvenance ToDescriptor() => new(
+        SourceKind,
+        VersionPolicy,
+        RegistryOrigin,
+        SourcePackageId,
+        RequestedTag,
+        RequestedVersion,
+        VersionRange,
+        SourceIdentity,
+        IncludePrerelease);
+}
 
 internal sealed record InstalledPackageContentRecord(
     [property: JsonPropertyName("path")] string Path,

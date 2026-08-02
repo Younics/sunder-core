@@ -161,10 +161,53 @@ internal sealed partial class InstalledPackageLifecycleService
             new PackageStoreMutation(enabled ? PackageStoreMutationKind.Enable : PackageStoreMutationKind.Disable, packageId),
             cancellationToken);
 
-    public Task<PackageOperationResult> UninstallAsync(string packageId, CancellationToken cancellationToken = default)
-        => ExecutePreparedMutationAsync(new PackageStoreMutation(PackageStoreMutationKind.Uninstall, packageId), cancellationToken);
+    public Task<PackageOperationResult> UninstallAsync(
+        string packageId,
+        PackageUninstallRequest request,
+        CancellationToken cancellationToken = default)
+        => ExecutePreparedMutationAsync(
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Uninstall,
+                packageId,
+                AllowCascade: request.AllowCascade,
+                ConfirmationToken: request.ConfirmationToken),
+            cancellationToken);
 
-    public async Task<PackageStoreStageResult> StageAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
+    public async Task<PackageUninstallPlan?> GetUninstallPlanAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        var packages = await _installedPackages.ListAsync(cancellationToken);
+        return packages.Any(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+            ? PackageStorePolicy.CreateUninstallPlan(packageId, packages)
+            : null;
+    }
+
+    public Task<PackageStoreStageResult> StageAsync(
+        PackageStoreStageRequest request,
+        CancellationToken cancellationToken = default)
+        => StageCoreAsync(
+            request,
+            registryProvenanceByUploadId: null,
+            registryStateExpectations: null,
+            cancellationToken);
+
+    internal Task<PackageStoreStageResult> StageRegistryAsync(
+        PackageStoreStageRequest request,
+        IReadOnlyDictionary<string, InstalledPackageProvenanceRecord> registryProvenanceByUploadId,
+        IReadOnlyList<RegistryPackageStateExpectation> registryStateExpectations,
+        CancellationToken cancellationToken = default)
+        => StageCoreAsync(
+            request,
+            registryProvenanceByUploadId,
+            registryStateExpectations,
+            cancellationToken);
+
+    private async Task<PackageStoreStageResult> StageCoreAsync(
+        PackageStoreStageRequest request,
+        IReadOnlyDictionary<string, InstalledPackageProvenanceRecord>? registryProvenanceByUploadId,
+        IReadOnlyList<RegistryPackageStateExpectation>? registryStateExpectations,
+        CancellationToken cancellationToken)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
@@ -182,7 +225,15 @@ internal sealed partial class InstalledPackageLifecycleService
         PackageStoreStagePreparation preparation;
         try
         {
-            preparation = await _storeCoordinator.PrepareStageAsync(ResolveMutations(request.Mutations, leases, operationToken), operationToken);
+            if (registryStateExpectations is not null)
+            {
+                await ValidateRegistryStateExpectationsAsync(
+                    registryStateExpectations,
+                    operationToken);
+            }
+            preparation = await _storeCoordinator.PrepareStageAsync(
+                ResolveMutations(request.Mutations, leases, registryProvenanceByUploadId, operationToken),
+                operationToken);
         }
         catch (InvalidDataException exception)
         {
@@ -199,6 +250,62 @@ internal sealed partial class InstalledPackageLifecycleService
             sources,
             operationToken);
     }
+
+    private async Task ValidateRegistryStateExpectationsAsync(
+        IReadOnlyList<RegistryPackageStateExpectation> expectations,
+        CancellationToken cancellationToken)
+    {
+        Dictionary<string, RegistryPackageStateExpectation> expectedByPackageId;
+        try
+        {
+            expectedByPackageId = expectations.ToDictionary(
+                expectation => expectation.PackageId,
+                StringComparer.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidDataException(
+                "Registry package staging contains duplicate installed-state expectations.",
+                exception);
+        }
+
+        var current = (await _installedPackages.ListAsync(cancellationToken))
+            .ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
+        foreach (var expectation in expectedByPackageId.Values)
+        {
+            if (expectation.Version is null)
+            {
+                if (current.ContainsKey(expectation.PackageId))
+                {
+                    throw StaleRegistryPlan(expectation.PackageId);
+                }
+                continue;
+            }
+
+            if (!current.TryGetValue(expectation.PackageId, out var package)
+                || !string.Equals(package.Version, expectation.Version, StringComparison.Ordinal)
+                || !Equals(
+                    package.Provenance ?? InstalledPackageProvenanceRecord.Unknown,
+                    expectation.Provenance ?? InstalledPackageProvenanceRecord.Unknown))
+            {
+                throw StaleRegistryPlan(expectation.PackageId);
+            }
+        }
+
+        var expectedInstalledCount = expectedByPackageId.Values.Count(expectation => expectation.Version is not null);
+        if (current.Count != expectedInstalledCount)
+        {
+            var unexpected = current.Keys.FirstOrDefault(packageId =>
+                !expectedByPackageId.TryGetValue(packageId, out var expectation)
+                || expectation.Version is null);
+            throw StaleRegistryPlan(unexpected);
+        }
+    }
+
+    private static InvalidDataException StaleRegistryPlan(string? packageId)
+        => new(packageId is null
+            ? "Registry package staging is stale because the installed package catalog changed after resolution."
+            : $"Registry package staging is stale because installed state for package '{packageId}' changed after resolution.");
 
     private async Task<PackageStoreStageResult> PrepareCandidateAsync(
         PackageStoreStagePreparation preparation,
@@ -561,6 +668,7 @@ internal sealed partial class InstalledPackageLifecycleService
     private IReadOnlyList<PackageStoreMutation> ResolveMutations(
         IReadOnlyList<PackageStoreMutationRequest> requests,
         ICollection<RuntimeUploadLease> leases,
+        IReadOnlyDictionary<string, InstalledPackageProvenanceRecord>? registryProvenanceByUploadId,
         CancellationToken cancellationToken)
     {
         var mutations = new List<PackageStoreMutation>(requests.Count);
@@ -575,8 +683,31 @@ internal sealed partial class InstalledPackageLifecycleService
                     ?? throw new InvalidDataException("The package upload was not found or belongs to a stale Runtime generation.");
                 leases.Add(lease);
                 archivePath = lease.FilePath;
+                var provenance = registryProvenanceByUploadId is null
+                    ? InstalledPackageProvenanceRecord.LocalArchive(lease.ContentHash)
+                    : registryProvenanceByUploadId.TryGetValue(request.UploadId, out var registryProvenance)
+                        ? registryProvenance
+                        : throw new InvalidDataException(
+                            $"Registry provenance is missing for package upload '{request.UploadId}'.");
+                mutations.Add(new PackageStoreMutation(
+                    request.Kind,
+                    request.PackageId,
+                    archivePath,
+                    request.AllowDowngrade,
+                    request.Reinstall,
+                    provenance,
+                    request.AllowCascade,
+                    request.ConfirmationToken));
+                continue;
             }
-            mutations.Add(new PackageStoreMutation(request.Kind, request.PackageId, archivePath, request.AllowDowngrade, request.Reinstall));
+            mutations.Add(new PackageStoreMutation(
+                request.Kind,
+                request.PackageId,
+                archivePath,
+                request.AllowDowngrade,
+                request.Reinstall,
+                AllowCascade: request.AllowCascade,
+                ConfirmationToken: request.ConfirmationToken));
         }
         return mutations;
     }

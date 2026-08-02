@@ -66,6 +66,9 @@ internal static class RuntimeStackContractMapper
             contributorId,
             input.InputId,
             input.Label,
+            input.Sensitivity == StackValueSensitivity.Secret
+                ? RuntimeStackInputSensitivity.Secret
+                : RuntimeStackInputSensitivity.Public,
             input.Required,
             input.Description,
             input.DefaultValue);

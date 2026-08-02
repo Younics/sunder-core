@@ -57,14 +57,13 @@ internal sealed class RuntimePackageSessionTestHost
             _rpcPermissions,
             _owner.State,
             _owner,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider,
+            contentStore: transfers,
+            transportPolicy: transportPolicy);
         var loader = new PackageSessionLoadService(
             logger,
             packageArchiveInstaller.Paths,
-            rpcBroker: rpcBroker,
-            contentTransfers: transfers,
-            sessions: _owner.State,
-            transportPolicy: transportPolicy);
+            rpcBroker: rpcBroker);
         var reconciler = new PackageSessionReconciler(installedPackageStore, loader);
         var publisher = new PackageSessionPublisher(
             _owner,
@@ -169,7 +168,7 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageAuthStatusResponse?> DisconnectPackageAsync(string packageId, CancellationToken token = default) => _auth.DisconnectAsync(packageId, token);
     public Task<PackageLifecycleOperationResult> LoadInstalledPackagesAsync(CancellationToken token = default) => _installed.LoadInstalledPackagesAsync(token);
     public Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken token = default) => _installed.SetEnabledAsync(packageId, isEnabled, token);
-    public Task<PackageOperationResult> UninstallPackageAsync(string packageId, CancellationToken token = default) => _installed.UninstallAsync(packageId, token);
+    public Task<PackageOperationResult> UninstallPackageAsync(string packageId, PackageUninstallRequest request, CancellationToken token = default) => _installed.UninstallAsync(packageId, request, token);
     internal ActivePackageSession ActiveSession => _owner.State.ActiveSession;
     internal RuntimeRpcCatalog RpcCatalog => _rpcCatalog;
     internal ActivePackageSession? GetStagedLifecycleSession(string stageId) => _sessions.GetStagedSession(stageId);

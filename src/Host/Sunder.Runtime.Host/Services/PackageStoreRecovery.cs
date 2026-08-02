@@ -64,10 +64,19 @@ internal sealed class PackageStoreRecovery(
     {
         try
         {
-            return JsonSerializer.Deserialize<PackageStoreTransactionJournal>(
+            var journal = JsonSerializer.Deserialize<PackageStoreTransactionJournal>(
                        await File.ReadAllTextAsync(journalPath, cancellationToken),
                        InstalledPackageStore.JsonOptions)
                    ?? throw new InvalidDataException($"Package transaction journal '{journalPath}' is invalid.");
+            return journal with
+            {
+                PreviousPackages = journal.PreviousPackages is null
+                    ? null!
+                    : InstalledPackageStore.NormalizeCatalogForCompatibility(journal.PreviousPackages),
+                DesiredPackages = journal.DesiredPackages is null
+                    ? null!
+                    : InstalledPackageStore.NormalizeCatalogForCompatibility(journal.DesiredPackages),
+            };
         }
         catch (JsonException exception)
         {

@@ -6,7 +6,7 @@ internal sealed class RegistryBrowseCommandHandler(IRegistryBrowseClient registr
     {
         var packages = (await registry.SearchAsync(command.Query, command.Skip, command.Take, token).ConfigureAwait(false))
             .ToArray();
-        output.Data(packages);
+        output.Data(CliJsonData.PackageSummaries(packages));
         if (packages.Length == 0)
         {
             output.Info("No packages found.");
@@ -23,10 +23,10 @@ internal sealed class RegistryBrowseCommandHandler(IRegistryBrowseClient registr
             var version = await registry.GetVersionAsync(command.PackageId, command.Version, token).ConfigureAwait(false);
             if (version is null)
             {
-                output.Error($"Package '{command.PackageId}' {command.Version} was not found.");
+                output.Error($"Package '{command.PackageId}' {command.Version} was not found.", "cli.resource.not_found");
                 return CliExitCodes.NotFound;
             }
-            output.Data(version);
+            output.Data(CliJsonData.PackageVersion(version));
             CliRenderers.PackageVersion(output, version);
             return CliExitCodes.Success;
         }
@@ -34,10 +34,10 @@ internal sealed class RegistryBrowseCommandHandler(IRegistryBrowseClient registr
         var package = await registry.GetPackageAsync(command.PackageId, token).ConfigureAwait(false);
         if (package is null)
         {
-            output.Error($"Package '{command.PackageId}' was not found.");
+            output.Error($"Package '{command.PackageId}' was not found.", "cli.resource.not_found");
             return CliExitCodes.NotFound;
         }
-        output.Data(package);
+        output.Data(CliJsonData.PackageDetails(package));
         CliRenderers.PackageDetails(output, package);
         return CliExitCodes.Success;
     }

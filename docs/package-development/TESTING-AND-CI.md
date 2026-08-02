@@ -12,7 +12,7 @@ Package tests should cover package-owned behavior at the narrowest boundary, the
 | Handler/service | Runtime operation, stream, callback/auth, Stack, and background-service behavior using small test implementations of SDK interfaces. |
 | App view model | State transitions and commands without constructing the Sunder shell. Keep most UI behavior outside the control. |
 | Compiled package | Both module roles, contribution registration, Avalonia XAML, and SDK member names still compile. |
-| Artifact | Release publish emits one `.sunderpkg` and the exact archive passes `sunder package validate`. |
+| Artifact | `PackSunderPackage` emits one `.sunderpkg` and the exact archive passes `sunder dev package validate`. |
 | Host smoke | The package activates as a development package; primary App-to-Runtime behavior and unload/reload work. |
 
 The repository's [quickstart project](../samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds it in normal CI. Generated-template CI separately builds and publishes headless, Avalonia, Stack, and combined variants so the template and `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
@@ -59,8 +59,8 @@ Use a strict package version and build from a clean Release output:
 ```powershell
 dotnet restore .\MyPackage.slnx --locked-mode
 dotnet test .\MyPackage.slnx -c Release --no-restore
-dotnet publish .\src\MyPackage\MyPackage.csproj -c Release --no-restore
-sunder package validate .\src\MyPackage\bin\Release\net10.0\publish\MyPackage.1.2.3.sunderpkg
+dotnet msbuild .\src\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+sunder dev package validate .\src\MyPackage\bin\Release\net10.0\MyPackage.1.2.3.sunderpkg
 ```
 
 `Sunder.Package.Build` validates the archive it creates, but the explicit CLI check proves the exact file selected for upload. Fail CI unless exactly one expected archive exists. Do not validate one path and publish another.
@@ -102,11 +102,11 @@ jobs:
           dotnet-version: 10.0.100
       - run: dotnet restore MyPackage.slnx --locked-mode
       - run: dotnet test MyPackage.slnx -c Release --no-restore
-      - run: dotnet publish src/MyPackage/MyPackage.csproj -c Release --no-restore
-      - run: sunder package validate src/MyPackage/bin/Release/net10.0/publish/MyPackage.1.2.3.sunderpkg
+      - run: dotnet msbuild src/MyPackage/MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+      - run: sunder dev package validate src/MyPackage/bin/Release/net10.0/MyPackage.1.2.3.sunderpkg
 ```
 
-Use maintained major-version Action refs so CI receives compatible upstream fixes. Commit `packages.lock.json`, set `RestorePackagesWithLockFile`, use `--locked-mode` in CI, and keep credentials out of pull-request jobs and command lines. Publication should be a separate protected job that consumes the already validated artifact.
+Use maintained major-version Action refs so CI receives compatible upstream fixes. Commit `packages.lock.json`, set `RestorePackagesWithLockFile`, use `--locked-mode` in CI, and keep credentials out of pull-request jobs and command lines. Publication should be a separate protected job that consumes the already validated artifact. Supply a scoped Registry token only through `SUNDER_REGISTRY_PUBLISH_TOKEN` plus `--credential-source environment`, or redirected standard input plus `--credential-source stdin`; human browser auth remains Runtime-owned.
 
 ## Sunder Core Maintainers
 

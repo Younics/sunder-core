@@ -1,4 +1,5 @@
 using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Storage;
 
 namespace Sunder.Sdk.Abstractions;
 
@@ -19,6 +20,19 @@ public sealed record PackageViewRegistration
         PackageViewPlacement defaultPlacement = PackageViewPlacement.Middle,
         bool showInHotbarByDefault = true)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (iconAssetPath is not null && !PackageStorageValidation.IsValidRelativePath(iconAssetPath))
+        {
+            throw new ArgumentException(
+                "Package view icon paths must be portable forward-slash relative paths.",
+                nameof(iconAssetPath));
+        }
+        if (!Enum.IsDefined(defaultPlacement))
+        {
+            throw new ArgumentOutOfRangeException(nameof(defaultPlacement), defaultPlacement, "Unknown package view placement.");
+        }
+
         Id = id;
         Name = name;
         IconAssetPath = iconAssetPath;

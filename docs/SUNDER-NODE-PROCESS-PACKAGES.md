@@ -1,6 +1,20 @@
 # Sunder TypeScript Process Runtime Packages
 
-`npm create sunder-package@latest` scaffolds a TypeScript Runtime package that communicates with Sunder through `sunder.worker.v1` and ships as Node Single Executable Application (SEA) binaries. The `react-node` template adds a sandboxed React/Vite web App target to the same universal package.
+> **Source channel:** This page tracks current source and may be ahead of npm. For a release, use the page from the matching `sdk/v*` tag and the README embedded in each npm tarball.
+
+`npm create sunder-package@latest` scaffolds a TypeScript Runtime package that communicates with Sunder through `sunder.worker.v1` and ships as Node Single Executable Application (SEA) binaries. The `react-node` template adds a hosted React/Vite web App target to the same universal package.
+
+These are current authoring presets, not a closed package model. The canonical format permits future Python, Rust, Go, and other `process` toolchains, while `web` App targets are framework-agnostic and may use React, Vue, Svelte, Solid, or another static web build. Other .NET UI approaches may likewise be added as Host-supported App target kinds. Every toolchain must emit the canonical manifest, content index, payload layers, and exact targets, and the Host must support its declared kind/protocol.
+
+## npm Package Boundaries
+
+| Package | Included subset |
+| --- | --- |
+| `@sunder/sdk` | RPC descriptor parse/validation/generation, `sunder.worker.v1` process worker/client/content APIs, and browser bridge types. |
+| `@sunder/package-tool` | Canonical Node development output, pinned native SEA leaves, optional static web leaves, smoke, and package aggregation. |
+| `create-sunder-package` | `node` and `react-node` scaffolds. |
+
+The TypeScript SDK is not feature-parity with managed `Sunder.Sdk`. It does not expose managed module/DI contracts, package storage/settings/secrets/logging, callbacks, background services, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code must import only `@sunder/sdk/browser`; the main export is for Node/build contexts.
 
 ## Trust boundary
 
@@ -56,10 +70,10 @@ The template contains two target implementations:
 
 `npm run sunder:dev` watches both source trees and emits one canonical current-RID development package. `npm run build` emits the current RID's App and Runtime leaves. `npm run smoke` performs the native worker handshake. `npm run package` aggregates all available exact-RID leaves into one deterministic universal archive.
 
-Browser code imports only `@sunder/sdk/browser`. The Host injects a narrow bridge carrying opaque RPC provider handles; the web target never receives Runtime credentials, local filesystem paths, or broker endpoint references. Installing or updating a package consents to its manifest-declared RPC actions; undeclared actions remain default-deny.
+Browser code imports only `@sunder/sdk/browser`. The Host injects a narrow bridge carrying opaque RPC provider handles; the web target never receives Runtime credentials, local filesystem paths, or Runtime broker endpoint references. Installing or updating a package consents to its exact manifest-declared RPC actions and Runtime records version/manifest-fenced grants; undeclared actions remain default-deny. This authorization boundary does not make package code or web content trusted.
 
 ## Aggregate packages
 
-Each production build emits a canonical one-target leaf under `dist/targets/<rid>`. These leaves are accepted by `AggregateSunderPackageTask`. In a generated .NET aggregate project, include them as `SunderNodePackageTargetLeaf` items. Do not include two leaves for the same exact role/RID key.
+Each production build emits a canonical one-target leaf under `dist/targets/<rid>`. These leaves are accepted by `AggregateSunderPackageTask`. In a generated .NET aggregate project, include them as `SunderNodePackageTargetLeaf` items with `DiscoveryRoot` set to the same `dist/targets` root used by the producer. Do not include two leaves for the same exact role/RID key.
 
-The Sunder CLI remains a thin Runtime/Registry client and does not add a local `sunder package new react-node` command. Node and React/WebView authoring use `npm create sunder-package@latest` and `@sunder/package-tool`.
+The Sunder CLI remains a thin Runtime/Registry client and does not scaffold packages. Node and web authoring use `npm create sunder-package@latest` and `@sunder/package-tool`; managed .NET/Avalonia authoring uses `dotnet new sunder-package`.

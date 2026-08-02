@@ -1,6 +1,10 @@
 # @sunder/sdk
 
-Use `@sunder/sdk/browser` from App web targets. That export contains only browser types and bridge accessors; it does not import Node built-ins, worker framing, or package tooling.
+> **Release/source channel:** The npm tarball README describes that published version. The copy on the repository's default branch tracks current source and may be ahead of npm; use the matching `sdk/v*` tag when auditing a release.
+
+`@sunder/sdk` is the TypeScript subset for Sunder RPC descriptors, generated bindings, `sunder.worker.v1` process Runtime workers, and the web App bridge. It is not a TypeScript port of the managed `Sunder.Sdk` capability surface: it does not expose managed module/DI contracts, package storage/settings/secrets/logging, callbacks, background services, Stack contributor adapters, Avalonia, Registry clients, or package installation APIs.
+
+Use `@sunder/sdk/browser` from any framework-agnostic web App target. That export contains browser-safe RPC, navigation, and external-link bridge types only; it does not import Node built-ins, worker framing, or package tooling. React is one scaffold choice, not a web target requirement.
 
 ```ts
 import { getSunder } from "@sunder/sdk/browser";
@@ -8,7 +12,7 @@ import { getSunder } from "@sunder/sdk/browser";
 const catalog = await getSunder().rpc.discover("example.rpc");
 ```
 
-Dependency-free TypeScript types, descriptor binding generation, and the `sunder.worker.v1` Node process Runtime implementation.
+The main export is dependency-free and intended for Node process Runtime code and build-time descriptor generation. Keep browser code on the `/browser` export.
 
 Worker stdout is reserved for Content-Length framed protocol JSON. Use `safeStderr()` for bounded diagnostic logging.
 

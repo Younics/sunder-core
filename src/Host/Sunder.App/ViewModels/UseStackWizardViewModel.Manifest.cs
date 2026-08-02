@@ -98,6 +98,9 @@ public sealed partial class UseStackWizardViewModel
                     input.ContributorId,
                     inputId,
                     input.Input.Label ?? inputId,
+                    string.Equals(input.Input.Sensitivity, "Public", StringComparison.Ordinal)
+                        ? RuntimeStackInputSensitivity.Public
+                        : RuntimeStackInputSensitivity.Secret,
                     input.Input.Required != false,
                     input.Input.Description,
                     input.Input.DefaultValue),

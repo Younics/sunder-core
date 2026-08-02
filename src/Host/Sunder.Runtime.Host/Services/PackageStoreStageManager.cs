@@ -40,7 +40,8 @@ internal sealed class PackageStoreStageManager(
                 var preparation = await archiveInstaller.PrepareAsync(
                     mutation.ArchiveFilePath ?? string.Empty,
                     selected?.IsEnabled ?? true,
-                    cancellationToken);
+                    cancellationToken,
+                    mutation.Provenance);
                 if (!preparation.Success || preparation.Mutation is null)
                 {
                     return FailResult(preparation.Failure
@@ -137,7 +138,23 @@ internal sealed class PackageStoreStageManager(
                             return Fail($"Package '{mutation.PackageId}' is not installed.");
                         }
 
-                        var removalIds = PackageStorePolicy.BuildRemovalSet(package.PackageId, desired.Values);
+                        var uninstallPlan = PackageStorePolicy.CreateUninstallPlan(package.PackageId, desired.Values);
+                        if (uninstallPlan.RequiresCascadeConsent && !mutation.AllowCascade)
+                        {
+                            return Fail(
+                                $"Uninstalling package '{package.PackageId}' would also remove: {string.Join(", ", uninstallPlan.CascadingRemovals.Select(removal => removal.PackageId))}. Explicit cascade consent is required.");
+                        }
+                        if ((uninstallPlan.RequiresCascadeConsent || mutation.ConfirmationToken is not null)
+                            && !string.Equals(
+                                mutation.ConfirmationToken,
+                                uninstallPlan.ConfirmationToken,
+                                StringComparison.Ordinal))
+                        {
+                            return Fail(
+                                $"The uninstall plan for package '{package.PackageId}' is missing or stale. Request a new uninstall plan before committing.");
+                        }
+
+                        var removalIds = uninstallPlan.ExpectedRemovalPackageIds;
                         foreach (var packageId in removalIds)
                         {
                             desired.Remove(packageId);
@@ -167,9 +184,15 @@ internal sealed class PackageStoreStageManager(
             }
 
             PackageStorePolicy.AddImpactedDependents(impacted, desiredPackages);
+            var removedPackageIds = current
+                .Where(package => !desired.ContainsKey(package.PackageId))
+                .Select(package => package.PackageId)
+                .OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             var result = PackageOperationResults.Success(
                 PackageStorePolicy.BuildMessage(messages, impacted.Count),
-                impactedPackageIds: impacted.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase).ToArray());
+                impactedPackageIds: impacted.OrderBy(packageId => packageId, StringComparer.OrdinalIgnoreCase).ToArray(),
+                removedPackageIds: removedPackageIds);
             var stageId = Guid.NewGuid().ToString("N");
             var stage = new PendingStoreStage(
                 stageId,

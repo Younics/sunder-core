@@ -99,8 +99,12 @@ public static class StackExportSelectionExtensions
     public static StackExportItemSelection? GetItemSelection(this StackExportRequest request, string itemId)
         => request.ItemSelections.FirstOrDefault(selection => string.Equals(selection.ItemId, itemId, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Determines whether a detail is selected; absent detail choices default to selected.</summary>
-    public static bool IsDetailSelected(this StackExportRequest request, string itemId, string detailId)
+    /// <summary>Determines whether a detail is selected, using its discovery default when no explicit choice exists.</summary>
+    public static bool IsDetailSelected(
+        this StackExportRequest request,
+        string itemId,
+        string detailId,
+        bool defaultSelected)
     {
         if (!request.IsItemSelected(itemId))
         {
@@ -108,19 +112,19 @@ public static class StackExportSelectionExtensions
         }
 
         var itemSelection = request.GetItemSelection(itemId);
-        if (itemSelection?.Details is null)
-        {
-            return true;
-        }
-
-        var detail = itemSelection.Details.FirstOrDefault(detail => string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
-        return detail?.IsSelected ?? true;
+        var detail = itemSelection?.Details?.FirstOrDefault(detail => string.Equals(detail.DetailId, detailId, StringComparison.OrdinalIgnoreCase));
+        return detail?.IsSelected ?? defaultSelected;
     }
 
     /// <summary>Gets a nonblank value override or the supplied fallback.</summary>
-    public static string GetDetailValue(this StackExportRequest request, string itemId, string detailId, string fallback)
+    public static string GetDetailValue(
+        this StackExportRequest request,
+        string itemId,
+        string detailId,
+        string fallback,
+        bool defaultSelected)
     {
-        if (!request.IsDetailSelected(itemId, detailId))
+        if (!request.IsDetailSelected(itemId, detailId, defaultSelected))
         {
             return fallback;
         }
@@ -132,9 +136,14 @@ public static class StackExportSelectionExtensions
     }
 
     /// <summary>Gets a sensitivity override or the supplied fallback.</summary>
-    public static StackValueSensitivity GetDetailSensitivity(this StackExportRequest request, string itemId, string detailId, StackValueSensitivity fallback)
+    public static StackValueSensitivity GetDetailSensitivity(
+        this StackExportRequest request,
+        string itemId,
+        string detailId,
+        StackValueSensitivity fallback,
+        bool defaultSelected)
     {
-        if (!request.IsDetailSelected(itemId, detailId))
+        if (!request.IsDetailSelected(itemId, detailId, defaultSelected))
         {
             return fallback;
         }
@@ -244,16 +253,31 @@ public sealed record StackPackageRequirement(
 /// <summary>Describes a value that must be resolved before a fragment can be imported.</summary>
 /// <param name="InputId">Stable contributor-scoped input id.</param>
 /// <param name="Label">User-facing input label.</param>
+/// <param name="Sensitivity">Whether the input is public or secret.</param>
 /// <param name="Required">Whether import rejects an omitted value; defaults to true.</param>
 /// <param name="Description">Optional input guidance.</param>
-/// <param name="DefaultValue">Optional initial value; it is not implicitly treated as secret.</param>
+/// <param name="DefaultValue">Optional public initial value; secret inputs must not declare portable defaults.</param>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public sealed record StackRequiredInputDescriptor(
     string InputId,
     string Label,
+    StackValueSensitivity Sensitivity,
     bool Required = true,
     string? Description = null,
-    string? DefaultValue = null);
+    string? DefaultValue = null)
+{
+    /// <summary>Gets whether the input is public or secret.</summary>
+    public StackValueSensitivity Sensitivity { get; }
+        = Sensitivity is StackValueSensitivity.Public or StackValueSensitivity.Secret
+            ? Sensitivity
+            : throw new ArgumentOutOfRangeException(nameof(Sensitivity));
+
+    /// <summary>Gets the optional public initial value.</summary>
+    public string? DefaultValue { get; }
+        = Sensitivity == StackValueSensitivity.Secret && DefaultValue is not null
+            ? throw new ArgumentException("A secret Stack input must not declare a default value.", nameof(DefaultValue))
+            : DefaultValue;
+}
 
 /// <summary>Requests a side-effect-free import plan for selected fragments.</summary>
 /// <param name="Fragments">Validated immutable fragments and temporary payload files.</param>
@@ -436,7 +460,7 @@ public sealed record StackImportAppliedContext(
         = StackContractCollections.FreezeList(ImportedItems);
 }
 
-/// <summary>Classifies whether an exported value may be disclosed in a Stack archive.</summary>
+/// <summary>Classifies whether a Stack value may be disclosed or must remain secret.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 public enum StackValueSensitivity
 {

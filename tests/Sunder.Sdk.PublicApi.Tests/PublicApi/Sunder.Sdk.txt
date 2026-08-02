@@ -95,6 +95,8 @@ type interface Sunder.Sdk.Abstractions.IPackageCallbackClient
   method abstract System.Threading.Tasks.ValueTask OpenLaunchUriAsync(System.Uri launchUri, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> GetStatusAsync(System.String callbackSessionId, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> StartAsync(System.String callbackHandlerId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> WaitForCompletionAsync(System.String callbackSessionId, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask<System.Boolean> CancelAsync(System.String callbackSessionId, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
 type interface Sunder.Sdk.Abstractions.IPackageCallbackHandler
   property System.String CallbackHandlerId { get; }
@@ -207,6 +209,8 @@ type sealed class Sunder.Sdk.Abstractions.NullPackageCallbackClient : Sunder.Sdk
   method virtual System.Threading.Tasks.ValueTask OpenLaunchUriAsync(System.Uri launchUri, System.Threading.CancellationToken cancellationToken = null)
   method virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> GetStatusAsync(System.String callbackSessionId, System.Threading.CancellationToken cancellationToken = null)
   method virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> StartAsync(System.String callbackHandlerId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? parameters = null, System.Threading.CancellationToken cancellationToken = null)
+  method virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Callbacks.PackageCallbackSessionStatus> WaitForCompletionAsync(System.String callbackSessionId, System.TimeSpan timeout, System.Threading.CancellationToken cancellationToken = null)
+  method virtual System.Threading.Tasks.ValueTask<System.Boolean> CancelAsync(System.String callbackSessionId, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings-navigation.v1")
 type sealed class Sunder.Sdk.Abstractions.NullPackageSettingsNavigationService : Sunder.Sdk.Abstractions.IPackageSettingsNavigationService
   property static Sunder.Sdk.Abstractions.NullPackageSettingsNavigationService Instance { get; }
@@ -345,6 +349,7 @@ type sealed class Sunder.Sdk.Callbacks.PackageCallbackCancellationContext : Syst
   method virtual System.String ToString()
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
 type enum Sunder.Sdk.Callbacks.PackageCallbackCancellationReason : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Sdk.Callbacks.PackageCallbackCancellationReason CallerRequested = 3
   field static Sunder.Sdk.Callbacks.PackageCallbackCancellationReason Expired = 0
   field static Sunder.Sdk.Callbacks.PackageCallbackCancellationReason HostShutdown = 2
   field static Sunder.Sdk.Callbacks.PackageCallbackCancellationReason PackageUnloaded = 1
@@ -407,6 +412,7 @@ type sealed class Sunder.Sdk.Callbacks.PackageCallbackSessionStatus : System.IEq
   property System.String CallbackHandlerId { get; init; }
   property System.String CallbackSessionId { get; init; }
   property System.DateTimeOffset ExpiresAtUtc { get; init; }
+  property System.Boolean IsTerminal { get; }
   property System.Uri? LaunchUri { get; init; }
   property System.String Message { get; init; }
   property System.String PackageId { get; init; }
@@ -584,17 +590,19 @@ type sealed class Sunder.Sdk.Packaging.SunderPackageDependencyAttribute : System
   property System.String PackageId { get; set; }
   property System.String VersionRange { get; set; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+type interface Sunder.Sdk.Rpc.ISunderRpcCallScope : Sunder.Sdk.Rpc.ISunderRpcClient, System.IAsyncDisposable
+  property System.DateTimeOffset DeadlineUtc { get; }
+  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.IO.Stream source, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentFileAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String filePath, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask<System.IO.Stream> OpenContentAsync(Sunder.Sdk.Rpc.SunderRpcContentReference reference, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type interface Sunder.Sdk.Rpc.ISunderRpcClient
   method abstract System.Collections.Generic.IAsyncEnumerable<Sunder.Sdk.Rpc.SunderRpcCatalogEvent> WatchAsync(System.Int64 afterRevision, System.Int64 afterSequence, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> SubscribeAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcCatalogSnapshot> DiscoverAsync(System.String contractId, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcProviderSnapshot?> GetProviderAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> InvokeAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-type interface Sunder.Sdk.Rpc.ISunderRpcContentClient
-  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.IO.Stream source, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
-  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterFileAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String filePath, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
-  method abstract System.Threading.Tasks.ValueTask<System.IO.Stream> OpenReadAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, Sunder.Sdk.Rpc.SunderRpcContentReference reference, System.Threading.CancellationToken cancellationToken = null)
+  method virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.ISunderRpcCallScope> CreateCallScopeAsync(Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type interface Sunder.Sdk.Rpc.ISunderRpcServiceHandler
   method abstract System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> InvokeServerStreamAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
@@ -738,13 +746,15 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcException : System.Exception, System.R
   property Sunder.Sdk.Rpc.SunderRpcError Error { get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type sealed class Sunder.Sdk.Rpc.SunderRpcInvocationContext
-  method .ctor(System.String callerPackageId, System.String callerPackageVersion, Sunder.Sdk.Rpc.SunderRpcProviderSnapshot provider, System.DateTimeOffset deadlineUtc, System.Int32 callDepth, System.Threading.CancellationToken cancellationToken)
   property System.Int32 CallDepth { get; }
   property System.String CallerPackageId { get; }
   property System.String CallerPackageVersion { get; }
   property System.Threading.CancellationToken CancellationToken { get; }
   property System.DateTimeOffset DeadlineUtc { get; }
   property Sunder.Sdk.Rpc.SunderRpcProviderSnapshot Provider { get; }
+  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentAsync(System.IO.Stream source, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentFileAsync(System.String filePath, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.ValueTask<System.IO.Stream> OpenContentAsync(Sunder.Sdk.Rpc.SunderRpcContentReference reference, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type sealed class Sunder.Sdk.Rpc.SunderRpcMethodDescriptor
   property Sunder.Sdk.Rpc.SunderRpcMethodKind Kind { get; }

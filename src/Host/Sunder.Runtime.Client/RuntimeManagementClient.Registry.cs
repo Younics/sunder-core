@@ -29,6 +29,9 @@ public sealed partial class RuntimeManagementClient
     public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken token = default)
         => PostAsync<RuntimeRegistryUpdateRequest, RuntimeRegistryPackageChangeResult>("registry/packages/update", request, token);
 
+    public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token = default)
+        => PostAsync<RuntimeRegistrySourceAdoptionRequest, RuntimeRegistryPackageChangeResult>("registry/packages/adopt-source", request, token);
+
     public async Task<RegistryPublishPackageResponse> PublishRegistryPackageAsync(
         string origin, string packagePath, bool setLatest, CancellationToken token = default)
     {

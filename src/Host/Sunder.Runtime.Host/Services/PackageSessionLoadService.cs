@@ -17,10 +17,7 @@ internal sealed partial class PackageSessionLoadService
         string? runtimeIdentifier = null,
         RuntimeRpcBroker? rpcBroker = null,
         RuntimeProcessPolicyOptions? processPolicy = null,
-        CancellationToken hostStopping = default,
-        RuntimeContentTransferStore? contentTransfers = null,
-        PackageSessionState? sessions = null,
-        RuntimeTransportPolicyOptions? transportPolicy = null)
+        CancellationToken hostStopping = default)
     {
         _logger = logger;
         _preparer = new PackageSessionPreparer(runtimeIdentifier);
@@ -29,10 +26,7 @@ internal sealed partial class PackageSessionLoadService
             paths ?? new RuntimePackagePaths(),
             rpcBroker,
             processPolicy,
-            hostStopping,
-            contentTransfers,
-            sessions,
-            transportPolicy);
+            hostStopping);
     }
 
     public async Task<PackageSessionLoadResult> LoadInstalledAsync(

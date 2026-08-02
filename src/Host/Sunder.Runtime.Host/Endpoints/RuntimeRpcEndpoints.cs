@@ -11,6 +11,8 @@ internal static class RuntimeRpcEndpoints
     private static readonly byte[] NewLine = "\n"u8.ToArray();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const long MaxRequestBodyBytes = 2L * 1024 * 1024;
+    private const long MaxContentBodyBytes = 64L * 1024 * 1024;
+    private const string ContentMetadataHeader = "X-Sunder-Rpc-Content-Metadata";
 
     public static IEndpointRouteBuilder MapRuntimeRpcEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -58,6 +60,14 @@ internal static class RuntimeRpcEndpoints
             context.RequestServices.GetRequiredService<RuntimeRpcAppSessionManager>().Close(request.SessionId);
             return Results.NoContent();
         }).WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
+        rpc.MapPost("app/call-scopes/open", OpenAppCallScopeAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
+        rpc.MapPost("app/call-scopes/close", CloseAppCallScopeAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
+        rpc.MapPost("app/call-scopes/content/register", RegisterAppCallScopeContentAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(MaxContentBodyBytes));
+        rpc.MapPost("app/call-scopes/content/open", OpenAppCallScopeContentAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
         rpc.MapPost("app/discover", DiscoverAppAsync)
             .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
         rpc.MapPost("app/provider", GetAppProviderAsync)
@@ -78,6 +88,28 @@ internal static class RuntimeRpcEndpoints
         => context.RequestServices.GetRequiredService<RuntimeRpcAppSessionManager>()
             .OpenAsync(request, cancellationToken);
 
+    private static Task<RuntimeRpcAppCallScopeDescriptor> OpenAppCallScopeAsync(
+        RuntimeRpcAppCallScopeOpenRequest request,
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var scope = context.RequestServices.GetRequiredService<RuntimeRpcBroker>()
+            .CreateAppCallScope(
+                request.SessionId,
+                new SunderRpcCallOptions(request.DeadlineUtc),
+                cancellationToken);
+        return Task.FromResult(new RuntimeRpcAppCallScopeDescriptor(scope.Id, scope.DeadlineUtc));
+    }
+
+    private static async Task<IResult> CloseAppCallScopeAsync(
+        RuntimeRpcAppCallScopeCloseRequest request,
+        HttpContext context)
+    {
+        await context.RequestServices.GetRequiredService<RuntimeRpcBroker>()
+            .CloseAppCallScopeAsync(request.SessionId, request.CallScopeId).ConfigureAwait(false);
+        return Results.NoContent();
+    }
+
     private static async Task<IResult> DiscoverAppAsync(
         RuntimeRpcAppDiscoverRequest request,
         HttpContext context,
@@ -86,10 +118,15 @@ internal static class RuntimeRpcEndpoints
         var broker = context.RequestServices.GetRequiredService<RuntimeRpcBroker>();
         try
         {
-            var snapshot = await broker.DiscoverAppAsync(
-                request.SessionId,
-                request.ContractId,
-                cancellationToken).ConfigureAwait(false);
+            var snapshot = request.CallScopeId is null
+                ? await broker.DiscoverAppAsync(
+                    request.SessionId,
+                    request.ContractId,
+                    cancellationToken).ConfigureAwait(false)
+                : await broker.DiscoverScopeAsync(
+                    broker.GetAppCallScope(request.SessionId, request.CallScopeId),
+                    request.ContractId,
+                    cancellationToken).ConfigureAwait(false);
             return Results.Ok(new RuntimeRpcAppDiscoverResponse(
                 new RuntimeRpcCatalogSnapshot(
                     snapshot.Revision,
@@ -112,14 +149,23 @@ internal static class RuntimeRpcEndpoints
         var broker = context.RequestServices.GetRequiredService<RuntimeRpcBroker>();
         try
         {
-            var response = await broker.InvokeAppAsync(
-                request.SessionId,
-                Endpoint(request.EndpointReference),
-                request.ServiceId,
-                request.MethodId,
-                request.Request,
-                new SunderRpcCallOptions(request.DeadlineUtc),
-                cancellationToken).ConfigureAwait(false);
+            var response = request.CallScopeId is null
+                ? await broker.InvokeAppAsync(
+                    request.SessionId,
+                    Endpoint(request.EndpointReference),
+                    request.ServiceId,
+                    request.MethodId,
+                    request.Request,
+                    new SunderRpcCallOptions(request.DeadlineUtc),
+                    cancellationToken).ConfigureAwait(false)
+                : await broker.InvokeScopeAsync(
+                    broker.GetAppCallScope(request.SessionId, request.CallScopeId),
+                    Endpoint(request.EndpointReference),
+                    request.ServiceId,
+                    request.MethodId,
+                    request.Request,
+                    new SunderRpcCallOptions(request.DeadlineUtc),
+                    cancellationToken).ConfigureAwait(false);
             return Results.Ok(new RuntimeRpcAppInvokeResponse(response, null));
         }
         catch (SunderRpcException exception)
@@ -136,10 +182,15 @@ internal static class RuntimeRpcEndpoints
         var broker = context.RequestServices.GetRequiredService<RuntimeRpcBroker>();
         try
         {
-            var provider = await broker.GetProviderAppAsync(
-                request.SessionId,
-                Endpoint(request.EndpointReference),
-                cancellationToken).ConfigureAwait(false);
+            var provider = request.CallScopeId is null
+                ? await broker.GetProviderAppAsync(
+                    request.SessionId,
+                    Endpoint(request.EndpointReference),
+                    cancellationToken).ConfigureAwait(false)
+                : await broker.GetProviderScopeAsync(
+                    broker.GetAppCallScope(request.SessionId, request.CallScopeId),
+                    Endpoint(request.EndpointReference),
+                    cancellationToken).ConfigureAwait(false);
             return Results.Ok(new RuntimeRpcAppProviderResponse(
                 provider is null ? null : RuntimeRpcContractMapper.ToProtocol(provider),
                 null));
@@ -160,11 +211,18 @@ internal static class RuntimeRpcEndpoints
         response.ContentType = "application/x-ndjson; charset=utf-8";
         try
         {
-            await foreach (var item in broker.WatchAppAsync(
-                               request.SessionId,
-                               request.AfterRevision,
-                               request.AfterSequence,
-                               cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+            var items = request.CallScopeId is null
+                ? broker.WatchAppAsync(
+                    request.SessionId,
+                    request.AfterRevision,
+                    request.AfterSequence,
+                    cancellationToken)
+                : broker.WatchScopeAsync(
+                    broker.GetAppCallScope(request.SessionId, request.CallScopeId),
+                    request.AfterRevision,
+                    request.AfterSequence,
+                    cancellationToken);
+            await foreach (var item in items.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 await WriteFrameAsync(
                     response,
@@ -204,14 +262,24 @@ internal static class RuntimeRpcEndpoints
         response.ContentType = "application/x-ndjson; charset=utf-8";
         try
         {
-            await foreach (var item in broker.SubscribeAppAsync(
-                               request.SessionId,
-                               Endpoint(request.EndpointReference),
-                               request.ServiceId,
-                               request.MethodId,
-                               request.Request,
-                               new SunderRpcCallOptions(request.DeadlineUtc),
-                               cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+            var items = request.CallScopeId is null
+                ? broker.SubscribeAppAsync(
+                    request.SessionId,
+                    Endpoint(request.EndpointReference),
+                    request.ServiceId,
+                    request.MethodId,
+                    request.Request,
+                    new SunderRpcCallOptions(request.DeadlineUtc),
+                    cancellationToken)
+                : broker.SubscribeScopeAsync(
+                    broker.GetAppCallScope(request.SessionId, request.CallScopeId),
+                    Endpoint(request.EndpointReference),
+                    request.ServiceId,
+                    request.MethodId,
+                    request.Request,
+                    new SunderRpcCallOptions(request.DeadlineUtc),
+                    cancellationToken);
+            await foreach (var item in items.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 await WriteFrameAsync(
                     response,
@@ -240,6 +308,110 @@ internal static class RuntimeRpcEndpoints
                 cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private static async Task<IResult> RegisterAppCallScopeContentAsync(
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var broker = context.RequestServices.GetRequiredService<RuntimeRpcBroker>();
+        try
+        {
+            var metadata = ReadContentMetadata(context.Request);
+            var content = await broker.RegisterScopeContentAsync(
+                broker.GetAppCallScope(metadata.SessionId, metadata.CallScopeId),
+                Endpoint(metadata.EndpointReference),
+                context.Request.Body,
+                new SunderRpcContentRegistrationOptions(
+                    metadata.MediaType,
+                    metadata.FileName,
+                    metadata.Length,
+                    metadata.ExpiresAtUtc,
+                    metadata.Repeatability == RuntimeRpcContentRepeatability.SingleUse
+                        ? SunderRpcContentRepeatability.SingleUse
+                        : SunderRpcContentRepeatability.Repeatable,
+                    metadata.MaximumUses),
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(new RuntimeRpcAppContentRegisterResponse(ToProtocol(content), null));
+        }
+        catch (SunderRpcException exception)
+        {
+            return Results.Ok(new RuntimeRpcAppContentRegisterResponse(null, ToProtocol(exception.Error)));
+        }
+    }
+
+    private static async Task<IResult> OpenAppCallScopeContentAsync(
+        RuntimeRpcAppContentOpenRequest request,
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var broker = context.RequestServices.GetRequiredService<RuntimeRpcBroker>();
+        try
+        {
+            var reference = FromProtocol(request.Reference);
+            var stream = await broker.OpenScopeContentAsync(
+                broker.GetAppCallScope(request.SessionId, request.CallScopeId),
+                reference,
+                cancellationToken).ConfigureAwait(false);
+            context.Response.RegisterForDispose(stream);
+            return Results.Stream(
+                stream,
+                reference.MediaType,
+                reference.FileName,
+                enableRangeProcessing: false);
+        }
+        catch (SunderRpcException exception)
+        {
+            return Results.Json(ToProtocol(exception.Error), statusCode: StatusCodes.Status409Conflict);
+        }
+    }
+
+    private static RuntimeRpcAppContentRegisterMetadata ReadContentMetadata(HttpRequest request)
+    {
+        var encoded = request.Headers[ContentMetadataHeader].ToString();
+        if (encoded.Length is <= 0 or > 8192)
+        {
+            throw new RuntimeValidationException("RPC content metadata is missing or too large.");
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<RuntimeRpcAppContentRegisterMetadata>(
+                       Convert.FromBase64String(encoded),
+                       JsonOptions)
+                   ?? throw new RuntimeValidationException("RPC content metadata is empty.");
+        }
+        catch (FormatException)
+        {
+            throw new RuntimeValidationException("RPC content metadata encoding is invalid.");
+        }
+        catch (JsonException)
+        {
+            throw new RuntimeValidationException("RPC content metadata JSON is invalid.");
+        }
+    }
+
+    private static RuntimeRpcContentReferenceDescriptor ToProtocol(SunderRpcContentReference reference)
+        => new(
+            reference.Id,
+            reference.Length,
+            reference.Sha256,
+            reference.MediaType,
+            reference.FileName,
+            reference.ExpiresAtUtc,
+            reference.Repeatability == SunderRpcContentRepeatability.SingleUse
+                ? RuntimeRpcContentRepeatability.SingleUse
+                : RuntimeRpcContentRepeatability.Repeatable);
+
+    private static SunderRpcContentReference FromProtocol(RuntimeRpcContentReferenceDescriptor reference)
+        => new(
+            reference.Id,
+            reference.Length,
+            reference.Sha256,
+            reference.MediaType,
+            reference.FileName,
+            reference.ExpiresAtUtc,
+            reference.Repeatability == RuntimeRpcContentRepeatability.SingleUse
+                ? SunderRpcContentRepeatability.SingleUse
+                : SunderRpcContentRepeatability.Repeatable);
 
     private static SunderRpcEndpointReference Endpoint(string value)
     {

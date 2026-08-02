@@ -5,8 +5,7 @@ using Sunder.Registry.Contracts;
 namespace Sunder.App.ViewModels;
 
 internal sealed class PackagesInstalledCatalog(
-    IRuntimePackagesClient runtimeApiClient,
-    PackageRegistryClientProvider registryClientProvider)
+    IRuntimePackagesClient runtimeApiClient)
 {
     private readonly List<SessionPackageDescriptor> _sessionPackages = [];
     private readonly List<InstalledPackageDescriptor> _installedPackages = [];
@@ -56,35 +55,44 @@ internal sealed class PackagesInstalledCatalog(
     private async Task ResolveAvailableUpdatesAsync(Action<string> addWarning, CancellationToken cancellationToken)
     {
         _availableUpdates.Clear();
-        if (_installedPackages.Count == 0 || !registryClientProvider.TryResolve(out var registryUrl, out _) || registryUrl is null)
+        if (_installedPackages.Count == 0)
         {
             return;
         }
 
         try
         {
-            var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
-                new RuntimeRegistryPackageBatchRequest(
-                    registryUrl.AbsoluteUri,
-                    _installedPackages.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, [], "latest")).ToArray()),
-                cancellationToken).ConfigureAwait(false);
-            _availableUpdates.AddRange(plan.Items
-                .Where(item => item.CurrentVersion is not null && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase))
-                 .Select(item => new RegistryPackageUpdate(
-                     item.PackageId,
-                     item.CurrentVersion!,
-                     item.Version,
-                     item.DeprecatedMessage,
-                     item.Artifacts.Select(artifact => new RegistryPackageProjectionArtifact(
-                         artifact.Kind,
-                         artifact.Rid,
-                         artifact.Sha256,
-                         artifact.Size,
-                         artifact.DownloadUrl,
-                         artifact.SourceArchiveSha256,
-                         artifact.ManifestSha256,
-                         artifact.ProjectionContentIdentity,
-                         artifact.ProjectionFormatVersion)).ToArray())));
+            foreach (var request in InstalledPackageUpdateRequestBuilder.Build(_installedPackages))
+            {
+                var requestedPackageIds = request.Packages
+                    .Select(package => package.PackageId)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(request, cancellationToken).ConfigureAwait(false);
+                if (!plan.Success)
+                {
+                    addWarning($"Registry update check failed for {request.RegistryOrigin}: {plan.Errors.FirstOrDefault() ?? "plan resolution failed"}");
+                    continue;
+                }
+                _availableUpdates.AddRange(plan.Items
+                    .Where(item => requestedPackageIds.Contains(item.PackageId)
+                                   && item.CurrentVersion is not null
+                                   && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase))
+                    .Select(item => new RegistryPackageUpdate(
+                        item.PackageId,
+                        item.CurrentVersion!,
+                        item.Version,
+                        item.DeprecatedMessage,
+                        item.Artifacts.Select(artifact => new RegistryPackageProjectionArtifact(
+                            artifact.Kind,
+                            artifact.Rid,
+                            artifact.Sha256,
+                            artifact.Size,
+                            artifact.DownloadUrl,
+                            artifact.SourceArchiveSha256,
+                            artifact.ManifestSha256,
+                            artifact.ProjectionContentIdentity,
+                            artifact.ProjectionFormatVersion)).ToArray())));
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -15,6 +15,19 @@ internal sealed class RegistryAuthApiClient(RegistryHttpClient registryClient)
         return registryClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
+    public Task<HttpResponseMessage> RevokeCurrentTokenAsync(
+        Uri origin,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Delete, new Uri(origin, "api/v1/cli-auth/token"));
+        request.Headers.Authorization = new("Bearer", accessToken);
+        return registryClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+    }
+
+    public Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+        => registryClient.EnsureSuccessAsync(response, cancellationToken);
+
     public async Task<RegistryCredential> ExchangeAsync(
         Uri origin,
         string code,

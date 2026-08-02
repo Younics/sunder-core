@@ -24,6 +24,7 @@ Or reference `Sunder.Sdk.Stacks` with the same bounded minor range as `Sunder.Sd
 
 | Contract | Responsibility |
 | --- | --- |
+| `IPackageStackContributor` | Common contributor identity (`ContributorId` and `DisplayName`) required by typed registration. |
 | `IPackageStackExporter` | Discover user-selectable items and export selected fragments/files/requirements. |
 | `IPackageStackImporter` | Produce a side-effect-free preview, then apply selected actions. |
 | `IPackageStackImportAppliedHandler` | Refresh derived state after committed imports for one contributor id. |
@@ -35,9 +36,9 @@ var contributor = services.GetRequiredService<MyStackContributor>();
 registry.RegisterStackContributor("my.company.package.stack", contributor, services);
 ```
 
-A single class may implement multiple local contracts. The adapter publishes capability metadata over `sunder.stack.contributor` v1.0.0, and Runtime discovers only exact descriptor-compatible RPC endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
+A single class may implement multiple local contracts, which all derive from `IPackageStackContributor`. Registration accepts that common interface rather than `object`, so unrelated services cannot be registered accidentally. The adapter publishes capability metadata over `sunder.stack.contributor` v1.0.0, and Runtime discovers only exact descriptor-compatible RPC endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
 
-The generated template's [compiled Stack stub](../../src/Sdk/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/StackSupport.cs) is exercised by template tests and CI.
+The generated template's [compiled Stack stub](../../src/Sdk/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Runtime/StackSupport.cs) is exercised by template tests and CI.
 
 ## Export Lifecycle
 
@@ -48,9 +49,9 @@ The generated template's [compiled Stack stub](../../src/Sdk/Sunder.Package.Temp
 5. The package-local adapter converts fresh-stream payload handles into bounded, audience- and generation-fenced content references.
 6. Runtime consumes those references, validates and builds the archive, then validates the exact produced archive before exposing it.
 
-Item ids must be nonblank and case-insensitively unique within one contributor. Detail ids enable independent selection; details without ids are informational. Use `StackExportSelectionExtensions` to apply default selection/value/sensitivity behavior consistently.
+Item ids must be nonblank and case-insensitively unique within one contributor. Detail ids enable independent selection; details without ids are informational. A selection with `Details == null`, or without a matching detail choice, uses that discovery detail's `DefaultSelected` value. Pass the descriptor default explicitly to `StackExportSelectionExtensions`; the helpers do not guess it.
 
-Each `StackFragmentExport` needs a stable archive-wide `FragmentId`, stable `SchemaId`, positive contributor-defined `SchemaVersion`, JSON object payload, and optional files/required inputs. A payload handle exposes a relative path, optional declared length, and a factory that returns a **fresh readable stream** for each call. Do not expose local paths or return a reused/disposed stream.
+Each `StackFragmentExport` needs a stable archive-wide `FragmentId`, stable `SchemaId`, positive contributor-defined `SchemaVersion`, JSON object payload, and optional files/required inputs. Every `StackRequiredInputDescriptor` explicitly classifies its value as `Public` or `Secret`. Public inputs may declare a portable default; secret inputs may not. A payload handle exposes a relative path, optional declared length, and a factory that returns a **fresh readable stream** for each call. Do not expose local paths or return a reused/disposed stream.
 
 `StackValueSensitivity.Secret` means the value should be excluded, replaced, or converted into an import input. It does not encrypt a value placed in the archive.
 
@@ -78,7 +79,7 @@ A compatible installed version satisfies the requirement without resolving the d
 
 Plans expire after 15 minutes and are consumed even when apply fails. They become stale if the Runtime generation, archive, exact provider activation, or selected fragment set changes. Apply may choose any subset of the plan's known actions; unknown action ids are rejected. Preview actions and required-input ids must be nonblank and case-insensitively unique within that contributor.
 
-Runtime scopes action ids, required-input ids, and remap keys by owner package and contributor before exposing them to App. Importers receive their original local ids. Identical local ids from different contributors remain distinct; package code must not parse or persist host-scoped ids.
+Runtime scopes action ids, required-input ids, and remap keys by owner package and contributor before exposing them to App. Importers receive their original local ids. Identical local ids from different contributors remain distinct; package code must not parse or persist host-scoped ids. App masks only `Secret` inputs; public values remain visible for review. Never include secret input values in logs, warnings, errors, conflict messages, notifications, telemetry, or imported-item display text.
 
 An error-severity preview conflict blocks plan creation. Warnings require review but do not inherently block it.
 
@@ -100,4 +101,4 @@ Post-import handlers run after that contributor reports committed items. Their f
 
 Exporter, importer, and post-import calls hold Runtime session, caller, and provider activation leases and may run concurrently. Content references are additionally fenced by owner, audience, generation, expiry, hash, and use count. Observe cancellation before additional mutations and close all streams. Keep preview deterministic for the same immutable input; never reserve ids, write files, create records, or consume one-time credentials during preview.
 
-Do not export `IPackageSecrets`, access tokens, private keys, cookies, or environment secrets. Required inputs are the replacement mechanism. Runtime's Stack secret scan is defense in depth, not proof that an archive is safe. Review [Package Trust And Security](SECURITY.md) before handling third-party Stacks.
+Do not export `IPackageSecrets`, access tokens, private keys, cookies, or environment secrets. Secret-classified required inputs are the replacement mechanism. Runtime's Stack secret scan is defense in depth, not proof that an archive is safe. Review [Package Trust And Security](SECURITY.md) before handling third-party Stacks.

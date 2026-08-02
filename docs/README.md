@@ -2,12 +2,15 @@
 
 This folder contains current Sunder documentation for the implementation in this repository and a separate `design/` area for future designs.
 
+> **Source channel:** These pages track current source and may describe behavior not present in the latest published binaries or packages. For released behavior, read the same path from the matching component tag and the README embedded in the released NuGet/npm artifact.
+
 ## Current Documentation
 
 - [Sunder overview](SUNDER.md)
 - [Package development](SUNDER-PACKAGE-DEVELOPMENT.md)
 - [Package standard](SUNDER-PACKAGE-STANDARD.md): normative package and Stack format rules
 - [SDK compatibility](SUNDER-SDK-COMPATIBILITY.md)
+- [TypeScript process Runtime and web App packages](SUNDER-NODE-PROCESS-PACKAGES.md)
 - [Sunder V1 baseline](SUNDER-V1-BASELINE.md)
 - [CLI reference](SUNDER-CLI.md)
 - [Desktop app and development arguments](SUNDER-APP.md)

@@ -93,6 +93,7 @@ internal sealed class AppPackageBackgroundProcessQueue(
         {
             State = BackgroundProcessState.Cancelled,
             StatusText = "Cancelled",
+            CanCancel = false,
             CompletedAtUtc = DateTimeOffset.UtcNow,
         };
         ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(cancelled));

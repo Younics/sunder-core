@@ -16,10 +16,7 @@ internal sealed class RuntimePackageActivator(
     RuntimePackagePaths paths,
     RuntimeRpcBroker? rpcBroker = null,
     RuntimeProcessPolicyOptions? processPolicy = null,
-    CancellationToken hostStopping = default,
-    RuntimeContentTransferStore? contentTransfers = null,
-    PackageSessionState? sessions = null,
-    RuntimeTransportPolicyOptions? transportPolicy = null)
+    CancellationToken hostStopping = default)
 {
     private static readonly TimeSpan FailedActivationRetirementTimeout = TimeSpan.FromSeconds(5);
     private static readonly Type[] ReservedServiceTypes =
@@ -33,7 +30,6 @@ internal sealed class RuntimePackageActivator(
         typeof(IPackageRuntimeClient),
         typeof(IPackageCallbackClient),
         typeof(ISunderRpcClient),
-        typeof(ISunderRpcContentClient),
     ];
 
     public async Task<PackageActivationResult> ActivateAsync(
@@ -68,14 +64,6 @@ internal sealed class RuntimePackageActivator(
                     package.Version,
                     package.ShadowFolder,
                     paths.PackageDataRootPath);
-                ISunderRpcContentClient processContentClient = contentTransfers is null || sessions is null || transportPolicy is null
-                    ? UnavailableRuntimeRpcContentClient.Instance
-                    : new RuntimeRpcContentClient(
-                        contentTransfers,
-                        sessions,
-                        transportPolicy,
-                        package.PackageId,
-                        processActivationId);
                 var worker = new ProcessRuntimeWorker(
                     logger,
                     package,
@@ -83,8 +71,7 @@ internal sealed class RuntimePackageActivator(
                     processActivationId,
                     rpcBroker,
                     processPolicy,
-                    hostStopping,
-                    processContentClient);
+                    hostStopping);
                 var processServices = new ServiceCollection();
                 processServices.AddSingleton(_ => worker);
                 serviceProvider = processServices.BuildServiceProvider();
@@ -173,15 +160,6 @@ internal sealed class RuntimePackageActivator(
                 : new RuntimeRpcClient(
                     rpcBroker,
                     new RuntimeRpcCallerStamp(package.PackageId, runtimeActivationId)));
-            services.AddSingleton<ISunderRpcContentClient>(
-                contentTransfers is null || sessions is null || transportPolicy is null
-                    ? UnavailableRuntimeRpcContentClient.Instance
-                    : new RuntimeRpcContentClient(
-                        contentTransfers,
-                        sessions,
-                        transportPolicy,
-                        package.PackageId,
-                        runtimeActivationId));
             serviceProvider = services.BuildServiceProvider();
 
             var contributions = new RuntimePackageContributionRegistry(

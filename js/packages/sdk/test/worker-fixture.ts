@@ -28,6 +28,24 @@ async function outbound(client: RpcClient): Promise<void> {
   } else if (mode === "outbound-stream-overflow") {
     client.watch(0, 0);
     safeStderr("OUTBOUND_STARTED");
+  } else if (mode === "outbound-deadline") {
+    await client.invoke("rpc1_endpoint", "messages", "echo", null, {
+      deadline: new Date("2030-01-02T03:04:05.678Z"),
+    });
+    safeStderr("OUTBOUND_DEADLINE_OK");
+  } else if (mode === "outbound-expired-deadline") {
+    try {
+      await client.invoke("rpc1_endpoint", "messages", "echo", null, {
+        deadline: new Date("2020-01-02T03:04:05.678Z"),
+      });
+      throw new Error("Expired Host-authoritative deadline unexpectedly succeeded.");
+    } catch (error) {
+      if (!(error instanceof RpcError) || error.error.kind !== "deadline-exceeded") throw error;
+      safeStderr("OUTBOUND_HOST_DEADLINE_OK");
+    }
+  } else if (mode === "outbound-limit") {
+    client.watch(0, 0);
+    client.watch(0, 0);
   }
 }
 
@@ -54,10 +72,11 @@ void runWorker({
           if (typeof registerPath !== "string" || reference === null || Array.isArray(reference) || typeof reference !== "object") {
             throw new TypeError("Content test request is invalid.");
           }
-          const registered = await context.content.registerFile(registerPath, {
-            mediaType: "text/plain",
-            fileName: "provider.txt",
-            length: 16,
+           const registered = await context.content.registerFile(registerPath, {
+             mediaType: "text/plain",
+             fileName: "provider.txt",
+             length: 16,
+             expiresAt: new Date("2030-01-02T03:04:05.678Z"),
           });
           const opened = await context.content.openFile(reference as unknown as RpcContentReference);
           const openedValue = await readFile(opened.filePath, "utf8");
@@ -70,9 +89,18 @@ void runWorker({
     },
   }],
   onActivated: outbound,
+  onShutdown: async ({ reason }) => {
+    if (process.env.SUNDER_TEST_MODE !== "shutdown-lifecycle") return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    safeStderr(`SHUTDOWN_DONE:${reason}`);
+  },
   limits: process.env.SUNDER_TEST_MODE === "outbound-stream-overflow"
     ? { maxStreamQueueMessages: 2 }
-    : undefined,
+    : process.env.SUNDER_TEST_MODE === "inbound-limit"
+      ? { maxInboundCalls: 1 }
+      : process.env.SUNDER_TEST_MODE === "outbound-limit"
+        ? { maxOutboundCalls: 1 }
+        : undefined,
 }).catch(() => {
   process.exitCode = 70;
 });

@@ -3,6 +3,9 @@ import {
   type JsonValue,
   type RpcInvocationContext,
 } from "@sunder/sdk";
+import { contractIdentity } from "sunder:contracts";
+
+const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
 
 async function* watch(
   context: RpcInvocationContext,
@@ -15,13 +18,11 @@ async function* watch(
 void runWorker({
   providers: [
     {
-      providerId: "SUNDER_PACKAGE_ID.provider",
-      contractId: "example.messages",
-      contractVersion: "1.0.0",
-      contractSha256: "SUNDER_CONTRACT_SHA256",
+      providerId: "__SUNDER_PROVIDER_ID_JSON__",
+      ...contractIdentity("contracts/example.rpc.json"),
       handler: {
         invokeUnary: (_context, _serviceId, _methodId, request) => ({
-          message: `Hello from SUNDER_PACKAGE_NAME: ${JSON.stringify(request)}`,
+          message: `Hello from ${packageName}: ${JSON.stringify(request)}`,
         }),
         invokeServerStream: (context, _serviceId, _methodId, request) => watch(context, request),
       },

@@ -307,7 +307,7 @@
                           <TextBox Grid.Row="2"
                                    Text="{Binding Value}"
                                    PlaceholderText="{Binding Placeholder}"
-                                   PasswordChar="*" />
+                                   PasswordChar="{Binding PasswordCharacter}" />
                         </Grid>
                       </Border>
                     </DataTemplate>

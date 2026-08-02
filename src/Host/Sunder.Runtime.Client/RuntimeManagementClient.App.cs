@@ -192,6 +192,38 @@ public sealed partial class RuntimeManagementClient
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
+    public Task<PackageSettingValueResponse> GetPackageSettingValueAsync(
+        string packageId,
+        string key,
+        CancellationToken token = default)
+        => GetRequiredAsync<PackageSettingValueResponse>(
+            $"packages/{Uri.EscapeDataString(packageId)}/settings/{Uri.EscapeDataString(key)}",
+            token);
+
+    public async Task SetPackageSettingValueAsync(
+        string packageId,
+        string key,
+        string value,
+        CancellationToken token = default)
+    {
+        using var response = await _httpClient.PutAsJsonAsync(
+            CreateUri($"packages/{Uri.EscapeDataString(packageId)}/settings/{Uri.EscapeDataString(key)}"),
+            new SetPackageSettingValueRequest(value),
+            token).ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
+    }
+
+    public async Task DeletePackageSettingValueAsync(
+        string packageId,
+        string key,
+        CancellationToken token = default)
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreateUri($"packages/{Uri.EscapeDataString(packageId)}/settings/{Uri.EscapeDataString(key)}"),
+            token).ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
+    }
+
     public Task<PackageAuthStatusResponse> GetPackageAuthStatusAsync(string packageId, CancellationToken token = default)
         => GetRequiredAsync<PackageAuthStatusResponse>($"packages/{Uri.EscapeDataString(packageId)}/auth/status", token);
 
@@ -221,6 +253,17 @@ public sealed partial class RuntimeManagementClient
         return await _responses.ReadRequiredJsonAsync<PackageAuthStatusResponse>(response, token).ConfigureAwait(false);
     }
 
+    public async Task<bool> CancelPackageAuthSessionAsync(
+        string packageId,
+        string authSessionId,
+        CancellationToken token = default)
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreateUri($"packages/{Uri.EscapeDataString(packageId)}/callbacks/sessions/{Uri.EscapeDataString(authSessionId)}"),
+            token).ConfigureAwait(false);
+        return await _responses.ReadRequiredJsonAsync<bool>(response, token).ConfigureAwait(false);
+    }
+
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token = default)
         => GetRequiredAsync<RuntimeStackExportDiscoveryResponse>("stacks/export/items", token);
 
@@ -234,6 +277,17 @@ public sealed partial class RuntimeManagementClient
 
     public Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken token = default)
         => PostAsync<RuntimeStackImportRequest, RuntimeStackImportResponse>("stacks/import/apply", request, token);
+
+    public async Task DiscardStackImportPlanAsync(string planId, CancellationToken token = default)
+    {
+        using var response = await _httpClient.DeleteAsync(
+            CreateUri($"stacks/import/plans/{Uri.EscapeDataString(planId)}"),
+            token).ConfigureAwait(false);
+        if (response.StatusCode != HttpStatusCode.NotFound)
+        {
+            await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
+        }
+    }
 
     private async IAsyncEnumerable<T> ReadSseAsync<T>(
         string endpoint,

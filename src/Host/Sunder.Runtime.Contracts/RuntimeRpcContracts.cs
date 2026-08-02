@@ -119,18 +119,33 @@ public sealed record RuntimeRpcAppSessionDescriptor(string SessionId);
 
 public sealed record RuntimeRpcAppSessionCloseRequest(string SessionId);
 
+public sealed record RuntimeRpcAppCallScopeOpenRequest(
+    string SessionId,
+    DateTimeOffset? DeadlineUtc);
+
+public sealed record RuntimeRpcAppCallScopeDescriptor(
+    string CallScopeId,
+    DateTimeOffset DeadlineUtc);
+
+public sealed record RuntimeRpcAppCallScopeCloseRequest(
+    string SessionId,
+    string CallScopeId);
+
 public sealed record RuntimeRpcAppDiscoverRequest(
     string SessionId,
-    string ContractId);
+    string ContractId,
+    string? CallScopeId = null);
 
 public sealed record RuntimeRpcAppProviderRequest(
     string SessionId,
-    string EndpointReference);
+    string EndpointReference,
+    string? CallScopeId = null);
 
 public sealed record RuntimeRpcAppWatchRequest(
     string SessionId,
     long AfterRevision,
-    long AfterSequence);
+    long AfterSequence,
+    string? CallScopeId = null);
 
 public sealed record RuntimeRpcAppInvokeRequest(
     string SessionId,
@@ -138,7 +153,39 @@ public sealed record RuntimeRpcAppInvokeRequest(
     string ServiceId,
     string MethodId,
     JsonElement Request,
-    DateTimeOffset? DeadlineUtc);
+    DateTimeOffset? DeadlineUtc,
+    string? CallScopeId = null);
+
+public enum RuntimeRpcContentRepeatability
+{
+    SingleUse,
+    Repeatable,
+}
+
+public sealed record RuntimeRpcContentReferenceDescriptor(
+    string Id,
+    long Length,
+    string Sha256,
+    string MediaType,
+    string FileName,
+    DateTimeOffset ExpiresAtUtc,
+    RuntimeRpcContentRepeatability Repeatability);
+
+public sealed record RuntimeRpcAppContentRegisterMetadata(
+    string SessionId,
+    string CallScopeId,
+    string EndpointReference,
+    string MediaType,
+    string FileName,
+    long? Length,
+    DateTimeOffset? ExpiresAtUtc,
+    RuntimeRpcContentRepeatability Repeatability,
+    int MaximumUses);
+
+public sealed record RuntimeRpcAppContentOpenRequest(
+    string SessionId,
+    string CallScopeId,
+    RuntimeRpcContentReferenceDescriptor Reference);
 
 public enum RuntimeRpcErrorKind
 {
@@ -170,6 +217,10 @@ public sealed record RuntimeRpcAppProviderResponse(
 
 public sealed record RuntimeRpcAppInvokeResponse(
     JsonElement? Value,
+    RuntimeRpcErrorDescriptor? Error);
+
+public sealed record RuntimeRpcAppContentRegisterResponse(
+    RuntimeRpcContentReferenceDescriptor? Content,
     RuntimeRpcErrorDescriptor? Error);
 
 public static class RuntimeRpcAppStreamFrameTypes

@@ -1,4 +1,3 @@
-using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
@@ -8,9 +7,7 @@ namespace Sunder.App.Services;
 public sealed class PackageUpdateStartupCheckService(
     IBackgroundProcessQueue backgroundProcesses,
     IRuntimeApiClientFactory runtimeApiClientFactory,
-    IPackageNotificationService notificationService,
-    Func<Uri>? registryUrlProvider = null,
-    Func<Uri, IRegistryClient>? registryClientFactory = null)
+    IPackageNotificationService notificationService)
 {
     internal const string GroupKey = "sunder.package-update-check";
     private const string SourceMetadataKey = "sunder.packageUpdateCheck";
@@ -18,8 +15,6 @@ public sealed class PackageUpdateStartupCheckService(
     private readonly IBackgroundProcessQueue _backgroundProcesses = backgroundProcesses;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory = runtimeApiClientFactory;
     private readonly IPackageNotificationService _notificationService = notificationService;
-    private readonly Func<Uri> _registryUrlProvider = registryUrlProvider ?? (() => RegistryUrlHelper.DefaultRegistryUrl);
-    private readonly Func<Uri, IRegistryClient> _registryClientFactory = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
 
     public BackgroundProcessSnapshot EnqueueStartupCheck()
         => _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
@@ -48,19 +43,24 @@ public sealed class PackageUpdateStartupCheckService(
             }
 
             context.ReportProgress(35, "Resolving package updates...");
-            var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
-                new RuntimeRegistryPackageBatchRequest(
-                    _registryUrlProvider().AbsoluteUri,
-                    installedPackages.Select(package => new RuntimeRegistryPackageChangeRequest(package.PackageId, null, [], "latest")).ToArray()),
-                context.CancellationToken).ConfigureAwait(false);
-            if (!plan.Success)
+            var updateCount = 0;
+            foreach (var request in InstalledPackageUpdateRequestBuilder.Build(installedPackages))
             {
-                context.ReportProgress(100, "Package update check failed.");
-                return;
+                var requestedPackageIds = request.Packages
+                    .Select(package => package.PackageId)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var plan = await runtimeApiClient.ResolveRegistryPackagePlanAsync(
+                    request,
+                    context.CancellationToken).ConfigureAwait(false);
+                if (!plan.Success)
+                {
+                    context.ReportProgress(100, "Package update check failed.");
+                    return;
+                }
+                updateCount += plan.Items.Count(item => requestedPackageIds.Contains(item.PackageId)
+                                                        && item.CurrentVersion is not null
+                                                        && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase));
             }
-
-            var updateCount = plan.Items.Count(item => item.CurrentVersion is not null
-                                                       && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase));
 
             if (updateCount > 0)
             {

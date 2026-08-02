@@ -191,7 +191,14 @@
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
   <Style Selector="ListBoxItem:focus-visible, Button:focus-visible, CheckBox:focus-visible">
-    <Setter Property="FocusAdorner" Value="{x:Null}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Focus}" />
+    <Setter Property="FocusAdorner">
+      <FocusAdornerTemplate>
+        <Border BorderBrush="{DynamicResource Sunder.Brush.Focus}"
+                BorderThickness="2"
+                CornerRadius="{DynamicResource Sunder.Radius.Small}" />
+      </FocusAdornerTemplate>
+    </Setter>
   </Style>
   <Style Selector="CheckBox">
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />

@@ -102,9 +102,11 @@
            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true'">
     <PropertyGroup>
       <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))</SunderDevOutputPath>
+      <SunderDevOutputDiscoveryRoot Condition="'$(SunderDevOutputDiscoveryRoot)' == ''">$(TargetDir)</SunderDevOutputDiscoveryRoot>
     </PropertyGroup>
 
     <ValidateSunderDevOutputPathTask DevOutputPath="$(SunderDevOutputPath)"
+                                      DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
                                       ProjectDirectory="$(MSBuildProjectDirectory)"
                                       TargetDirectory="$(TargetDir)">
       <Output TaskParameter="NormalizedDevOutputPath" PropertyName="SunderDevOutputPath" />
@@ -116,14 +118,6 @@
            AfterTargets="Build"
            DependsOnTargets="GenerateSunderPackageManifest;_ValidateSunderDevOutputPath"
            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true'">
-    <RemoveDir Directories="$(SunderDevOutputPath)"
-                Condition="Exists('$(SunderDevOutputPath)')" />
-
-    <MakeDir Directories="$(SunderDevOutputPath)" />
-    <WriteLinesToFile File="$(SunderDevOutputMarkerPath)"
-                      Lines="Sunder.Package.Build generated output v1"
-                      Overwrite="true" />
-
     <ItemGroup>
       <_SunderRuntimeFiles Include="$(TargetDir)*.dll" />
       <_SunderRuntimeFiles Include="$(TargetDir)*.pdb" />
@@ -175,6 +169,7 @@
 
     <EmitSunderDevOutputTask ManifestPath="$(SunderGeneratedPackageManifest)"
                              DevPackagePath="$(SunderDevOutputPath)"
+                             DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
                              TargetDirectory="$(TargetDir)"
                              AssetsDirectory="$(SunderPackageAssetsDirectory)"
                              ManagedFiles="@(_SunderRuntimeFiles)"
@@ -189,9 +184,14 @@
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' == 'true'">
     <PropertyGroup>
       <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))</SunderDevOutputPath>
+      <SunderDevOutputDiscoveryRoot Condition="'$(SunderDevOutputDiscoveryRoot)' == ''">$(TargetDir)</SunderDevOutputDiscoveryRoot>
     </PropertyGroup>
     <AggregateSunderPackageTask TargetLeaves="@(SunderPackageTargetLeaf)"
-                                OutputPath="$(SunderDevOutputPath)">
+                                 OutputPath="$(SunderDevOutputPath)"
+                                 OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                                 ProjectDirectory="$(MSBuildProjectDirectory)"
+                                 TargetDirectory="$(TargetDir)"
+                                 ExpectedPackageVersion="$(Version)">
       <Output TaskParameter="NormalizedOutputPath" PropertyName="SunderDevOutputPath" />
     </AggregateSunderPackageTask>
   </Target>
@@ -207,7 +207,9 @@
     </PropertyGroup>
 
     <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)"
-                           PackageOutputPath="$(SunderPackageOutputPath)" />
+                            DevPackageDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                            PackageOutputPath="$(SunderPackageOutputPath)"
+                            ProjectDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 
   <Target Name="PackSunderPackageOnPublish"
@@ -223,6 +225,8 @@
 
     <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(SunderPublishPackageOutputPath)'))" />
     <PackSunderPackageTask DevPackagePath="$(SunderDevOutputPath)"
-                           PackageOutputPath="$(SunderPublishPackageOutputPath)" />
+                            DevPackageDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                            PackageOutputPath="$(SunderPublishPackageOutputPath)"
+                            ProjectDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 </Project>

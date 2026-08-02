@@ -1,4 +1,6 @@
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Callbacks;
+using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Settings;
 using Sunder.Sdk.Stacks;
 using Xunit;
@@ -7,6 +9,139 @@ namespace Sunder.Sdk.PublicApi.Tests;
 
 public sealed class SdkContractValidationTests
 {
+    [Fact]
+    public void BackgroundProcessContracts_DefensivelyFreezeMetadata()
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["item"] = "original",
+        };
+        var request = new BackgroundProcessRequest(
+            "Work",
+            "work",
+            BackgroundProcessIndicator.Hidden,
+            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            true,
+            _ => Task.CompletedTask,
+            metadata);
+        var snapshot = new BackgroundProcessSnapshot(
+            Guid.NewGuid(),
+            request.Title,
+            request.GroupKey,
+            request.Indicator,
+            request.ConcurrencyMode,
+            BackgroundProcessState.Queued,
+            "Queued",
+            null,
+            true,
+            metadata,
+            null,
+            DateTimeOffset.UtcNow,
+            null,
+            null);
+
+        metadata["item"] = "changed";
+
+        Assert.Equal("original", request.Metadata!["ITEM"]);
+        Assert.Equal("original", snapshot.Metadata["ITEM"]);
+        Assert.False((snapshot with { State = BackgroundProcessState.Completed }).CanCancel);
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, string>)request.Metadata).Clear());
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, string>)snapshot.Metadata).Clear());
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void BackgroundProcessContext_RejectsNonFiniteProgress(double progress)
+    {
+        var context = new BackgroundProcessContext(
+            CancellationToken.None,
+            _ => { },
+            (_, _) => { },
+            _ => { });
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => context.ReportProgress(progress));
+    }
+
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(42.5, 42.5)]
+    [InlineData(101, 100)]
+    public void BackgroundProcessContext_ClampsFiniteProgress(double progress, double expected)
+    {
+        double? reported = null;
+        var context = new BackgroundProcessContext(
+            CancellationToken.None,
+            _ => { },
+            (value, _) => reported = value,
+            _ => { });
+
+        context.ReportProgress(progress);
+
+        Assert.Equal(expected, reported);
+    }
+
+    [Fact]
+    public void PackageViewRegistration_ValidatesConstructorInputs()
+    {
+        Assert.Throws<ArgumentException>(() => new PackageViewRegistration(" ", "View"));
+        Assert.Throws<ArgumentException>(() => new PackageViewRegistration("package.view", " "));
+        Assert.Throws<ArgumentException>(() => new PackageViewRegistration(
+            "package.view",
+            "View",
+            "icons\\view.png"));
+        Assert.Throws<ArgumentException>(() => new PackageViewRegistration(
+            "package.view",
+            "View",
+            "../view.png"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new PackageViewRegistration(
+            "package.view",
+            "View",
+            defaultPlacement: (PackageViewPlacement)99));
+
+        var registration = new PackageViewRegistration("package.view", "View", "icons/view.png");
+        Assert.Equal("icons/view.png", registration.IconAssetPath);
+    }
+
+    [Fact]
+    public async Task UnavailableOptionalCapabilities_ValidateInputsAndCancellationConsistently()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            NullPackageCallbackClient.Instance.OpenLaunchUriAsync(new Uri("relative", UriKind.Relative)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NullPackageCallbackClient.Instance.WaitForCompletionAsync("session", TimeSpan.Zero));
+        Assert.Throws<ArgumentNullException>(() =>
+            NullPackageNotificationService.Instance.PublishAsync(null!));
+        var oversizedParameters = Enumerable.Range(0, PackageCallbackParameters.MaximumCount + 1)
+            .ToDictionary(index => $"key{index}", static _ => "value");
+        Assert.Throws<ArgumentException>(() =>
+            NullPackageCallbackClient.Instance.StartAsync("handler", oversizedParameters));
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            NullPackageCallbackClient.Instance.CancelAsync("session", cancellation.Token).AsTask());
+    }
+
+    [Fact]
+    public void PackageCallbackSessionStatus_IdentifiesTerminalStates()
+    {
+        var pending = new PackageCallbackSessionStatus(
+            "package",
+            "handler",
+            "session",
+            PackageCallbackSessionState.Pending,
+            "Pending",
+            null,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.False(pending.IsTerminal);
+        Assert.True((pending with { State = PackageCallbackSessionState.Cancelled }).IsTerminal);
+    }
+
     [Fact]
     public void PackageSettingsSchema_RejectsDuplicateFieldKeysAcrossSections()
     {
@@ -31,6 +166,20 @@ public sealed class SdkContractValidationTests
             defaultValue: "must-not-ship"));
 
     [Fact]
+    public void StackRequiredInput_RejectsSecretDefault()
+    {
+        Assert.Throws<ArgumentException>(() => new StackRequiredInputDescriptor(
+            "api-key",
+            "API key",
+            StackValueSensitivity.Secret,
+            DefaultValue: "must-not-ship"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new StackRequiredInputDescriptor(
+            "input",
+            "Input",
+            (StackValueSensitivity)99));
+    }
+
+    [Fact]
     public void StackSelectionHelpers_DefaultMissingDetailOverrideAndHonorItemSelection()
     {
         var selected = new StackExportRequest(
@@ -50,15 +199,19 @@ public sealed class SdkContractValidationTests
         ]);
 
         Assert.True(selected.IsItemSelected("PROFILE"));
-        Assert.False(selected.IsDetailSelected("profile", "model"));
-        Assert.True(selected.IsDetailSelected("profile", "instructions"));
-        Assert.False(selected.IsDetailSelected("other", "instructions"));
-        Assert.Equal("fallback", selected.GetDetailValue("profile", "model", "fallback"));
-        Assert.Equal(StackValueSensitivity.Public, selected.GetDetailSensitivity("profile", "model", StackValueSensitivity.Public));
-        Assert.Equal("concise", selected.GetDetailValue("profile", "instructions", "fallback"));
-        Assert.Equal(StackValueSensitivity.Secret, selected.GetDetailSensitivity("profile", "instructions", StackValueSensitivity.Public));
-        Assert.Equal("fallback", selected.GetDetailValue("other", "instructions", "fallback"));
-        Assert.Equal(StackValueSensitivity.Public, selected.GetDetailSensitivity("other", "instructions", StackValueSensitivity.Public));
+        Assert.False(selected.IsDetailSelected("profile", "model", defaultSelected: true));
+        Assert.True(selected.IsDetailSelected("profile", "instructions", defaultSelected: false));
+        Assert.False(selected.IsDetailSelected("other", "instructions", defaultSelected: true));
+        Assert.Equal("fallback", selected.GetDetailValue("profile", "model", "fallback", defaultSelected: true));
+        Assert.Equal(StackValueSensitivity.Public, selected.GetDetailSensitivity("profile", "model", StackValueSensitivity.Public, defaultSelected: true));
+        Assert.Equal("concise", selected.GetDetailValue("profile", "instructions", "fallback", defaultSelected: false));
+        Assert.Equal(StackValueSensitivity.Secret, selected.GetDetailSensitivity("profile", "instructions", StackValueSensitivity.Public, defaultSelected: false));
+        Assert.Equal("fallback", selected.GetDetailValue("other", "instructions", "fallback", defaultSelected: true));
+        Assert.Equal(StackValueSensitivity.Public, selected.GetDetailSensitivity("other", "instructions", StackValueSensitivity.Public, defaultSelected: true));
+
+        var defaults = new StackExportRequest([new StackExportItemSelection("profile")]);
+        Assert.False(defaults.IsDetailSelected("profile", "disabled", defaultSelected: false));
+        Assert.True(defaults.IsDetailSelected("profile", "enabled", defaultSelected: true));
     }
 
     [Fact]
@@ -88,7 +241,7 @@ public sealed class SdkContractValidationTests
         AssertFrozen(packageRequirements, contribution.PackageRequirements);
         AssertFrozen(exportWarnings, contribution.Warnings);
 
-        var requiredInputs = new List<StackRequiredInputDescriptor> { new("input", "Input") };
+        var requiredInputs = new List<StackRequiredInputDescriptor> { new("input", "Input", StackValueSensitivity.Secret) };
         var exportFiles = new List<StackExportPayloadHandle>
         {
             new("value.bin", _ => ValueTask.FromResult<Stream>(new MemoryStream())),
@@ -128,7 +281,7 @@ public sealed class SdkContractValidationTests
         AssertFrozen(previewRemaps, previewRequest.IdRemaps);
 
         var actions = new List<StackImportAction> { new("action", "Action", StackImportActionKind.Create) };
-        var previewRequiredInputs = new List<StackRequiredInputDescriptor> { new("input", "Input") };
+        var previewRequiredInputs = new List<StackRequiredInputDescriptor> { new("input", "Input", StackValueSensitivity.Secret) };
         var conflicts = new List<StackImportConflict> { new("conflict", "Conflict", StackImportConflictSeverity.Warning) };
         var previewWarnings = new List<string> { "warning" };
         var preview = new StackImportPreview(actions, previewRequiredInputs, conflicts, previewWarnings);

@@ -16,7 +16,8 @@ test("npm create entrypoint scaffolds a usable token-free Node Runtime package",
     assert.equal(config.name, "Sample Node");
     const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
     assert.match(worker, /providerId: "sample\.node\.provider"/u);
-    assert.match(worker, /contractSha256: "[0-9a-f]{64}"/u);
+    assert.match(worker, /contractIdentity\("contracts\/example\.rpc\.json"\)/u);
+    assert.doesNotMatch(worker, /contractSha256: "[0-9a-f]{64}"/u);
     for (const file of await files(output)) {
       if (file.includes("node_modules")) continue;
       assert.doesNotMatch(await readFile(file, "utf8"), /SUNDER_(?:PACKAGE|NPM|CONTRACT)/u);
@@ -48,14 +49,48 @@ test("react-node template scaffolds a namespaced web view with the browser-only 
     };
     assert.equal(config.app.views[0]?.viewId, "sample.react.main");
     assert.equal(config.app.views[0]?.route, "/");
+    assert.equal("icon" in config.app.views[0]!, false);
     assert.match(
       await readFile(resolve(output, "app", "src", "App.tsx"), "utf8"),
       /from "@sunder\/sdk\/browser"/u,
     );
     assert.equal(await exists(resolve(output, "app", "vite.config.ts")), true);
+    assert.equal(await exists(resolve(output, "app", "public", "icon.svg")), false);
+    assert.equal(await exists(resolve(output, "tsconfig.worker.json")), true);
+    assert.equal(await exists(resolve(output, "tsconfig.browser.json")), true);
+    assert.equal(await exists(resolve(output, "tsconfig.json")), false);
+    assert.match(await readFile(resolve(output, "app", "vite.config.ts"), "utf8"), /sourcemap: false/u);
     for (const file of await files(output)) {
       assert.doesNotMatch(await readFile(file, "utf8"), /SUNDER_(?:PACKAGE|NPM|CONTRACT)/u);
     }
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
+});
+
+test("scaffold substitutions preserve adversarial display names in JSON, TypeScript, HTML, and Markdown contexts", async () => {
+  const output = resolve(tmpdir(), "create-sunder-package-tests", randomUUID());
+  const packageName = "Name </title><script>alert(1)</script> `${value}` __SUNDER_PACKAGE_ID_JSON__";
+  try {
+    const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
+    await run(process.execPath, [
+      cli,
+      output,
+      "--preset",
+      "react-node",
+      "--package-id",
+      "sample.adversarial",
+      "--package-name",
+      packageName,
+      "--yes",
+    ], process.cwd());
+    const config = JSON.parse(await readFile(resolve(output, "sunder.package.json"), "utf8")) as { readonly name: string };
+    assert.equal(config.name, packageName);
+    const worker = await readFile(resolve(output, "src", "worker.ts"), "utf8");
+    assert.ok(worker.includes(JSON.stringify(packageName)));
+    const html = await readFile(resolve(output, "app", "index.html"), "utf8");
+    assert.doesNotMatch(html, /<script>/u);
+    assert.match(html, /&lt;\/title&gt;&lt;script&gt;/u);
   } finally {
     await rm(output, { recursive: true, force: true });
   }

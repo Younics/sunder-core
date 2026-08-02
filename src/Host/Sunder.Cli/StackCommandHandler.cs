@@ -1,22 +1,25 @@
 using Sunder.Package.Format;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Cli;
 
 internal sealed class StackCommandHandler(
-    ICliRuntimePublishClient runtimePublisher,
-    ICliRuntimeManagementClient runtimeManager,
-    IRegistryClient registry,
+    ICliRuntimePublishClient? runtimePublisher,
+    ICliRuntimeManagementClient? runtimeManager,
+    IRegistryClient? registry,
     ArchiveValidationService archives,
     CliOutput output,
     ICliProgress progress,
-    CliOptions options)
+    IBrowserLauncher browser,
+    CliOptions options,
+    IRegistryPublishCredentialReader credentials)
 {
     public async Task<int> ExecuteAsync(SearchStacksCommand command, CancellationToken token)
     {
-        var stacks = (await registry.SearchStacksAsync(command.Query, command.Skip, command.Take, token).ConfigureAwait(false))
+        var stacks = (await RequireRegistry().SearchStacksAsync(command.Query, command.Skip, command.Take, token).ConfigureAwait(false))
             .ToArray();
-        output.Data(stacks);
+        output.Data(CliJsonData.StackSummaries(stacks));
         if (stacks.Length == 0)
         {
             output.Info("No Stacks found.");
@@ -30,21 +33,29 @@ internal sealed class StackCommandHandler(
     {
         var stack = await FindAsync(command.StackId, token).ConfigureAwait(false);
         if (stack is null) return CliExitCodes.NotFound;
-        output.Data(stack);
+        output.Data(CliJsonData.StackDetails(stack));
         CliRenderers.StackDetails(output, stack);
         return CliExitCodes.Success;
     }
 
-    public async Task<int> ExecuteAsync(UseStackCommand command, CancellationToken token)
+    public async Task<int> ExecuteAsync(OpenStackCommand command, CancellationToken token)
     {
         var stack = await FindAsync(command.StackId, token).ConfigureAwait(false);
         if (stack is null) return CliExitCodes.NotFound;
         var link = BuildShowLink(stack.StackId);
-        output.Data(new { stack, showLink = link });
+        var opened = browser.TryOpen(new Uri(link));
+        output.Data(new { stack = CliJsonData.StackDetails(stack), url = link, opened });
         CliRenderers.StackDetails(output, stack);
         output.Line();
-        output.Info("Open this link in Sunder App to review and use the Stack:");
-        output.Line(link);
+        if (opened)
+        {
+            output.Success($"Opened Stack '{stack.StackId}' in Sunder App.");
+        }
+        else
+        {
+            output.Warning("Sunder App could not be opened automatically. Open this link manually:");
+            output.Line(link);
+        }
         return CliExitCodes.Success;
     }
 
@@ -54,8 +65,14 @@ internal sealed class StackCommandHandler(
         if (stack is null) return CliExitCodes.NotFound;
         var destination = ResolveOutput(command.Output, stack.StackId);
         progress.Report($"Downloading Stack '{stack.StackId}'...");
-        await registry.DownloadStackAsync(stack.Artifact, stack.StackId, destination, command.Force, token).ConfigureAwait(false);
-        output.Data(new { stackId = stack.StackId, output = destination, stack.Artifact.Sha256, stack.Artifact.Size });
+        await RequireRegistry().DownloadStackAsync(stack.Artifact, stack.StackId, destination, command.Force, token).ConfigureAwait(false);
+        output.Data(new
+        {
+            stackId = stack.StackId,
+            output = destination,
+            sha256 = stack.Artifact.Sha256,
+            size = stack.Artifact.Size,
+        });
         output.Success($"Downloaded Stack '{stack.StackId}' to {destination}.");
         return CliExitCodes.Success;
     }
@@ -68,33 +85,31 @@ internal sealed class StackCommandHandler(
             return CliRenderers.StackValidation(output, validation);
         progress.Report(command.DevLocal
             ? $"Publishing Stack '{validation.Manifest.StackId}' to the development Registry..."
-            : $"Publishing Stack '{validation.Manifest.StackId}' through the Runtime...");
-        var result = command.DevLocal
-            ? await registry.PublishLocalStackAsync(fullPath, token).ConfigureAwait(false)
-            : await runtimePublisher.PublishRegistryStackAsync(options.RegistryApiUrl.AbsoluteUri, fullPath, token).ConfigureAwait(false);
-        return CliRenderers.StackPublish(output, result);
-    }
-
-    public async Task<int> ExecuteAsync(UpdateStackCommand command, CancellationToken token)
-    {
-        var fullPath = Path.GetFullPath(command.File);
-        var validation = await archives.ValidateStackAsync(fullPath, token).ConfigureAwait(false);
-        if (!validation.Success || validation.Manifest?.StackId is null)
-            return CliRenderers.StackValidation(output, validation);
-        if (!string.Equals(validation.Manifest.StackId, command.StackId, StringComparison.OrdinalIgnoreCase))
+            : command.CredentialSource == RegistryCredentialSource.Runtime
+                ? $"Publishing Stack '{validation.Manifest.StackId}' through the Runtime..."
+                : $"Publishing Stack '{validation.Manifest.StackId}' with a scoped automation credential...");
+        RegistryPublishStackResponse result;
+        if (command.DevLocal)
         {
-            output.Error($"Stack archive id '{validation.Manifest.StackId}' does not match requested Stack id '{command.StackId}'.");
-            return CliExitCodes.Usage;
+            result = await RequireRegistry().PublishLocalStackAsync(fullPath, token).ConfigureAwait(false);
         }
-        progress.Report($"Updating Stack '{validation.Manifest.StackId}' through the Runtime...");
-        var result = await runtimePublisher.PublishRegistryStackAsync(options.RegistryApiUrl.AbsoluteUri, fullPath, token).ConfigureAwait(false);
+        else if (command.CredentialSource == RegistryCredentialSource.Runtime)
+        {
+            result = await RequirePublisher().PublishRegistryStackAsync(
+                options.RequireRegistryApiUrl().AbsoluteUri, fullPath, token).ConfigureAwait(false);
+        }
+        else
+        {
+            using var credential = await credentials.ReadAsync(command.CredentialSource, token).ConfigureAwait(false);
+            result = await RequireRegistry().PublishStackAsync(fullPath, credential, token).ConfigureAwait(false);
+        }
         return CliRenderers.StackPublish(output, result);
     }
 
     public async Task<int> ExecuteAsync(DeleteStackCommand command, CancellationToken token)
     {
-        var result = await runtimeManager.DeleteRegistryStackAsync(
-            new RuntimeRegistryDeleteStackRequest(options.RegistryApiUrl.AbsoluteUri, command.StackId), token).ConfigureAwait(false);
+        var result = await RequireManager().DeleteRegistryStackAsync(
+            new RuntimeRegistryDeleteStackRequest(options.RequireRegistryApiUrl().AbsoluteUri, command.StackId), token).ConfigureAwait(false);
         return CliRenderers.StackManagement(output, result);
     }
 
@@ -106,8 +121,8 @@ internal sealed class StackCommandHandler(
 
     private async Task<Sunder.Registry.Contracts.RegistryStackDetails?> FindAsync(string stackId, CancellationToken token)
     {
-        var stack = await registry.GetStackAsync(stackId, token).ConfigureAwait(false);
-        if (stack is null) output.Error($"Stack '{stackId}' was not found.");
+        var stack = await RequireRegistry().GetStackAsync(stackId, token).ConfigureAwait(false);
+        if (stack is null) output.Error($"Stack '{stackId}' was not found.", "cli.resource.not_found");
         return stack;
     }
 
@@ -123,4 +138,13 @@ internal sealed class StackCommandHandler(
     }
 
     private static string BuildShowLink(string stackId) => $"sunder://stacks/{Uri.EscapeDataString(stackId)}";
+
+    private ICliRuntimePublishClient RequirePublisher()
+        => runtimePublisher ?? throw new InvalidOperationException("Registry Stack publication requires a Runtime client.");
+
+    private ICliRuntimeManagementClient RequireManager()
+        => runtimeManager ?? throw new InvalidOperationException("Registry Stack management requires a Runtime client.");
+
+    private IRegistryClient RequireRegistry()
+        => registry ?? throw new InvalidOperationException("The Stack command requires a Registry client.");
 }

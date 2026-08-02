@@ -84,14 +84,27 @@ public sealed class RegistryPackageInstallService
     }
 
     public async Task<RegistryPackageInstallExecutionResult> UpdateAllAsync(
-        IRegistryClient registryClient,
         IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         progress?.Invoke(new("Runtime is resolving and applying updates...", 10));
         var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
-            new RuntimeRegistryUpdateRequest(registryClient.RegistryUrl.AbsoluteUri),
+            new RuntimeRegistryUpdateRequest(),
+            cancellationToken);
+        progress?.Invoke(new(result.Message, 100));
+        return ToAppResult(result);
+    }
+
+    public async Task<RegistryPackageInstallExecutionResult> UpdatePackageAsync(
+        string packageId,
+        IRuntimeRegistryPackageClient runtimeApiClient,
+        Action<RegistryPackageInstallProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        progress?.Invoke(new($"Runtime is resolving and applying the recorded update policy for {packageId}...", 10));
+        var result = await runtimeApiClient.UpdateRegistryPackagesAsync(
+            new RuntimeRegistryUpdateRequest(PackageId: packageId),
             cancellationToken);
         progress?.Invoke(new(result.Message, 100));
         return ToAppResult(result);

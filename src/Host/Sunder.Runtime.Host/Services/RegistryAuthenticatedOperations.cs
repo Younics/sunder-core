@@ -43,6 +43,7 @@ internal sealed class RegistryAuthenticatedOperations
             null,
             response => ReadAsync(response, error => new RegistryPackageStarResponse(false, null, null, [error]), cancellationToken),
             () => new RegistryPackageStarResponse(false, null, null, ["Registry sign-in is required."]) { Forbidden = true },
+            () => new RegistryPackageStarResponse(false, null, null, ["Registry authorization was denied."]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryStackStarResponse> SetStackStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken)
@@ -53,6 +54,7 @@ internal sealed class RegistryAuthenticatedOperations
             null,
             response => ReadAsync(response, error => new RegistryStackStarResponse(false, null, null, [error]), cancellationToken),
             () => new RegistryStackStarResponse(false, null, null, ["Registry sign-in is required."]) { Forbidden = true },
+            () => new RegistryStackStarResponse(false, null, null, ["Registry authorization was denied."]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryStackManagementOperationResponse> DeleteStackAsync(RuntimeRegistryDeleteStackRequest request, CancellationToken cancellationToken)
@@ -63,6 +65,7 @@ internal sealed class RegistryAuthenticatedOperations
             null,
             response => ReadAsync(response, error => new RegistryStackManagementOperationResponse(false, null, [error]), cancellationToken),
             () => new RegistryStackManagementOperationResponse(false, null, ["Registry sign-in is required."]) { Forbidden = true },
+            () => new RegistryStackManagementOperationResponse(false, null, ["Registry authorization was denied."]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryPackageManagementOperationResponse> SetYankAsync(RuntimeRegistryYankRequest request, CancellationToken cancellationToken)
@@ -73,6 +76,7 @@ internal sealed class RegistryAuthenticatedOperations
             JsonContent.Create(new RegistrySetPackageVersionYankRequest(request.IsYanked)),
             response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
+            ForbiddenPackageManagement,
             cancellationToken);
 
     public Task<RegistryPackageManagementOperationResponse> SetDeprecationAsync(RuntimeRegistryDeprecateRequest request, CancellationToken cancellationToken)
@@ -83,6 +87,7 @@ internal sealed class RegistryAuthenticatedOperations
             JsonContent.Create(new RegistryDeprecatePackageVersionRequest(request.Message)),
             response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
+            ForbiddenPackageManagement,
             cancellationToken);
 
     public Task<RegistryPackageManagementOperationResponse> SetDistTagAsync(RuntimeRegistryDistTagRequest request, CancellationToken cancellationToken)
@@ -93,6 +98,7 @@ internal sealed class RegistryAuthenticatedOperations
             request.Version is null ? null : JsonContent.Create(new RegistrySetPackageDistTagRequest(request.Version)),
             response => ReadAsync(response, error => new RegistryPackageManagementOperationResponse(false, null, [error]), cancellationToken),
             AuthenticationRequiredPackageManagement,
+            ForbiddenPackageManagement,
             cancellationToken);
 
     public Task<RegistryPublishPackageResponse> PublishPackageAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken)
@@ -103,6 +109,7 @@ internal sealed class RegistryAuthenticatedOperations
             "package",
             (response, token) => ReadAsync(response, error => new RegistryPublishPackageResponse(false, null, null, null, [], [error]), token),
             () => new RegistryPublishPackageResponse(false, null, null, null, [], ["Registry sign-in is required."]) { Forbidden = true },
+            () => new RegistryPublishPackageResponse(false, null, null, null, [], ["Registry authorization was denied."]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryPublishStackResponse> PublishStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken)
@@ -113,6 +120,7 @@ internal sealed class RegistryAuthenticatedOperations
             "stack",
             (response, token) => ReadAsync(response, error => new RegistryPublishStackResponse(false, null, null, [], [error]), token),
             () => new RegistryPublishStackResponse(false, null, null, [], ["Registry sign-in is required."]) { Forbidden = true },
+            () => new RegistryPublishStackResponse(false, null, null, [], ["Registry authorization was denied."]) { Forbidden = true },
             cancellationToken);
 
     private async Task<T> PublishAsync<T>(
@@ -122,6 +130,7 @@ internal sealed class RegistryAuthenticatedOperations
         string formName,
         Func<HttpResponseMessage, CancellationToken, Task<T>> read,
         Func<T> authenticationRequired,
+        Func<T> forbidden,
         CancellationToken cancellationToken)
     {
         var transferStore = _transferStore ?? throw new InvalidOperationException("Runtime transfer storage is unavailable.");
@@ -145,7 +154,15 @@ internal sealed class RegistryAuthenticatedOperations
                 form.Add(new StringContent(request.SetLatest ? "true" : "false"), "setLatest");
             }
 
-            return await SendAsync(request.RegistryOrigin, HttpMethod.Post, path, form, response => read(response, cancellationToken), authenticationRequired, cancellationToken);
+            return await SendAsync(
+                request.RegistryOrigin,
+                HttpMethod.Post,
+                path,
+                form,
+                response => read(response, cancellationToken),
+                authenticationRequired,
+                forbidden,
+                cancellationToken);
         }
         finally
         {
@@ -160,27 +177,33 @@ internal sealed class RegistryAuthenticatedOperations
         HttpContent? content,
         Func<HttpResponseMessage, Task<T>> read,
         Func<T> authenticationRequired,
+        Func<T> forbidden,
         CancellationToken cancellationToken)
     {
         var origin = RegistryOrigin.Normalize(registryOriginValue);
-        var credential = await _credentialStore.GetAsync(origin, cancellationToken);
-        if (credential is null || credential.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        var snapshot = await _credentialStore.GetSnapshotAsync(origin, cancellationToken);
+        if (snapshot is null || snapshot.Credential.ExpiresAtUtc <= DateTimeOffset.UtcNow)
         {
-            if (credential is not null)
+            if (snapshot is not null)
             {
-                await _credentialStore.DeleteAsync(origin, cancellationToken);
+                await _credentialStore.TryDeleteAsync(origin, snapshot, cancellationToken);
             }
             content?.Dispose();
             return authenticationRequired();
         }
 
+        var credential = snapshot.Credential;
         using var request = new HttpRequestMessage(method, new Uri(origin, path)) { Content = content };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
         using var response = await _registryClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            await _credentialStore.DeleteAsync(origin, cancellationToken);
+            await _credentialStore.TryDeleteAsync(origin, snapshot, cancellationToken);
             return authenticationRequired();
+        }
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            return forbidden();
         }
 
         return await read(response);
@@ -203,5 +226,8 @@ internal sealed class RegistryAuthenticatedOperations
 
     private static RegistryPackageManagementOperationResponse AuthenticationRequiredPackageManagement()
         => new(false, null, ["Registry sign-in is required."]) { Forbidden = true };
+
+    private static RegistryPackageManagementOperationResponse ForbiddenPackageManagement()
+        => new(false, null, ["Registry authorization was denied."]) { Forbidden = true };
 
 }

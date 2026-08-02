@@ -9,16 +9,19 @@ internal static class PackageOperationResults
         bool runtimeSessionApplied = false,
         bool requiresAppRestart = false,
         IReadOnlyList<string>? warnings = null,
-        IReadOnlyList<string>? impactedPackageIds = null)
+        IReadOnlyList<string>? impactedPackageIds = null,
+        IReadOnlyList<string>? removedPackageIds = null)
         => new(true, message, runtimeSessionApplied, requiresAppRestart, warnings ?? [], [])
         {
             ImpactedPackageIds = impactedPackageIds ?? [],
-            ChangeSet = CreateChangeSet(impactedPackageIds ?? []),
+            ChangeSet = CreateChangeSet(impactedPackageIds ?? [], removedPackageIds ?? []),
         };
 
     public static PackageOperationResult Failure(string message, IReadOnlyList<string>? errors = null, IReadOnlyList<string>? warnings = null)
         => new(false, message, RuntimeSessionApplied: false, RequiresAppRestart: false, warnings ?? [], errors ?? [message]);
 
-    public static PackageLifecycleChangeSet CreateChangeSet(IReadOnlyList<string> packageIds)
-        => new(packageIds, packageIds, packageIds, [], SharedAssemblyResetRequired: false);
+    public static PackageLifecycleChangeSet CreateChangeSet(
+        IReadOnlyList<string> packageIds,
+        IReadOnlyList<string>? removedPackageIds = null)
+        => new(packageIds, packageIds, packageIds, removedPackageIds ?? [], SharedAssemblyResetRequired: false);
 }

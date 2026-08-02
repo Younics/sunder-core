@@ -35,12 +35,14 @@ internal static class RuntimeStackContributorCatalog
         CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, StackContributorRegistration>(StringComparer.OrdinalIgnoreCase);
-        var catalog = await client.DiscoverAsync(
+        await using var callScope = await client.CreateCallScopeAsync(
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var catalog = await callScope.DiscoverAsync(
             SunderStackContributorRpc.ContractId,
             cancellationToken).ConfigureAwait(false);
         foreach (var provider in catalog.Providers)
         {
-            var rpc = SunderStackContributorRpc.CreateClient(client, provider.Endpoint);
+            var rpc = SunderStackContributorRpc.CreateClient(callScope, provider.Endpoint);
             try
             {
                 var metadata = await rpc.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
@@ -53,7 +55,7 @@ internal static class RuntimeStackContributorCatalog
                 }
 
                 var key = Key(provider.PackageId, metadata.ContributorId);
-                if (!result.TryAdd(key, new StackContributorRegistration(provider, metadata, rpc)))
+                if (!result.TryAdd(key, new StackContributorRegistration(provider, metadata)))
                 {
                     errors.Add(
                         $"Package '{provider.PackageId}' registered duplicate Stack {kind} id '{metadata.ContributorId}'.");
@@ -143,8 +145,7 @@ internal static class RuntimeStackContributorCatalog
 
 internal sealed record StackContributorRegistration(
     SunderRpcProviderSnapshot Provider,
-    StackContributorMetadata Metadata,
-    StackContributorRpcClient Client)
+    StackContributorMetadata Metadata)
 {
     public string PackageId => Provider.PackageId;
     public string ContributorId => Metadata.ContributorId;

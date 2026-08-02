@@ -1,5 +1,7 @@
 # Sunder.Sdk
 
+> **Release/source channel:** The NuGet README describes that published SDK version. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+
 `Sunder.Sdk` contains package-author contracts only. Runtime Host owns package state persistence,
 settings, encrypted secrets, storage allocation, platform credential integration, and persistent
 package logs. App activation receives Runtime-backed package capabilities and never creates those
@@ -49,6 +51,17 @@ For a new package project, the quickest path is the template package:
 dotnet new install Sunder.Package.Templates
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
 ```
+
+Decision summary:
+
+| Need | Package/tool |
+| --- | --- |
+| Any managed Runtime/App leaf | `Sunder.Sdk` |
+| Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to that App leaf |
+| Stack contributor | Add `Sunder.Sdk.Stacks` to the implementing leaf |
+| Canonical managed build/archive | `Sunder.Package.Build` with `PrivateAssets="all"` |
+| New managed aggregate | Install `Sunder.Package.Templates` as a scaffold tool |
+| Node process or web App | Use the coordinated npm packages; `@sunder/sdk` is an RPC/process/browser subset, not this managed API surface |
 
 ## Package Shape
 
@@ -311,15 +324,21 @@ queue.Enqueue(new BackgroundProcessRequest(
 
 `BackgroundProcessIndicator.Hidden` keeps the process out of all footer indicators. `Main`, `Packages`, and `Settings` show it in exactly one host indicator surface. `GroupKey` is for concurrency and package-side listing; it is not used for UI placement.
 
+Request metadata and returned metadata are immutable snapshots. `ReportProgress` clamps finite values to 0 through 100 and rejects `NaN` and infinities. Terminal snapshots never advertise cancellation.
+
 ## Package-Local Protocol
 
 Sunder does not share package-authored CLR assemblies or expose package objects across activation boundaries. Define cross-package Runtime behavior with a schema-first RPC descriptor, bundle it in each package manifest, and use generated or hand-written package-local adapters over `ISunderRpcClient`.
 
 Discovery and watch results carry Host-stamped owner and activation identities. Endpoint references bind to one exact activation, so callers must rediscover after provider replacement. Keep CLR interfaces and implementations package-local; adapters such as `Sunder.Sdk.Stacks` translate those local calls to the public RPC ABI.
 
+Create an `ISunderRpcCallScope` when a call sends or receives content. Register request content against its exact endpoint, construct generated clients with the scope, and dispose the scope after all calls and response streams finish. Disposal cancels active scope work and revokes every remaining content reference.
+
+Providers receive a Host-created `SunderRpcInvocationContext`. Use its content methods to open caller content or register provider output; do not retain the context or streams beyond the handler or subscription. Invocation authority ends when that handler or stream ends. Providers may return `Domain` errors for contract-defined failures, but infrastructure error kinds are Host-authenticated and cannot be forged by package code.
+
 ## Callback Sessions
 
-`IPackageCallbackHandler` is the generic Runtime callback contract for browser or local callback flows. Register it under a stable `CallbackHandlerId`. App code uses `IPackageContext.Callbacks.StartAsync` with a bounded string dictionary, opens the returned URI with `OpenLaunchUriAsync`, and polls `GetStatusAsync` until terminal. Runtime and preflight contexts explicitly report this App capability as unavailable.
+`IPackageCallbackHandler` is the generic Runtime callback contract for browser or local callback flows. Register it under a stable `CallbackHandlerId`. App code uses `IPackageContext.Callbacks.StartAsync` with a bounded string dictionary, opens the returned URI with `OpenLaunchUriAsync`, and calls `WaitForCompletionAsync` with an explicit timeout. Use `CancelAsync` to cancel a pending session. Runtime and preflight contexts explicitly report this App capability as unavailable.
 
 The host owns the callback listener, redirect path, leases, expiry, duplicate completion, and unload/shutdown cancellation. Package callback handlers must not create listeners. Implement `CancelCallbackAsync` when a provider task or delegate can remain in flight after `StartCallbackAsync` returns. `IPackageAuthHandler` remains the auth-specific status/disconnect surface projected over generic sessions.
 
@@ -375,16 +394,18 @@ The generated `sunder-dev` folder can be loaded into Sunder App for local develo
 & "C:\Path\To\Sunder.App.exe" --dev-package ".\MyPackage\bin\Debug\net10.0\sunder-dev"
 ```
 
-Publishing produces a distributable `.sunderpkg` archive:
+The canonical explicit pack target produces a distributable `.sunderpkg` archive:
 
 ```powershell
-dotnet publish .\MyPackage\MyPackage.csproj -c Release
+dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
+
+Generated aggregates read the package version once from `Sunder.Package.props`. `dotnet publish` remains available when a pipeline also needs normal publish output.
 
 Validate before publishing to a registry:
 
 ```powershell
-sunder package validate .\MyPackage\bin\Release\net10.0\publish\MyPackage.1.0.0.sunderpkg
+sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
 ## More Documentation

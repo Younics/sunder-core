@@ -13,7 +13,7 @@ internal static class Program
         Console.CancelKeyPress += handler;
         try
         {
-            return await CliApplication.CreateDefault(Console.Out, Console.Error)
+            return await CliApplication.CreateDefault(Console.In, Console.Out, Console.Error)
                 .RunAsync(args, cancellation.Token)
                 .ConfigureAwait(false);
         }

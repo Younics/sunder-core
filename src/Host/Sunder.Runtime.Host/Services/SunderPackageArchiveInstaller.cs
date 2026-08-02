@@ -11,7 +11,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
     public async Task<PackageArchiveMutationPreparationResult> PrepareAsync(
         string packagePath,
         bool isEnabled,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        InstalledPackageProvenanceRecord? provenance = null)
     {
         if (string.IsNullOrWhiteSpace(packagePath))
         {
@@ -28,6 +29,9 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
         {
             return PreparationFailure($"Package file '{packagePath}' must use the .sunderpkg extension.");
         }
+
+        provenance ??= InstalledPackageProvenanceRecord.LocalArchive(
+            await ComputeFileHashAsync(packagePath, cancellationToken));
 
         Directory.CreateDirectory(paths.StagingRootPath);
         var stagingPath = paths.CreateStagingPath();
@@ -58,7 +62,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 validation.ContentIndex,
                 stagingPath,
                 installedPath,
-                isEnabled);
+                isEnabled,
+                provenance);
             return new PackageArchiveMutationPreparationResult(
                 new PreparedPackageArchiveMutation(
                     stagingPath,
@@ -83,7 +88,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
         SunderPackageContentIndex contentIndex,
         string sourcePath,
         string installedPath,
-        bool isEnabled)
+        bool isEnabled,
+        InstalledPackageProvenanceRecord provenance)
         => new(
             manifest.Id!,
             manifest.Name!,
@@ -101,7 +107,20 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 .Select(dependency => new InstalledPackageDependencyRecord(dependency.PackageId!, dependency.VersionRange!))
                 .ToArray(),
             isEnabled,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            provenance);
+
+    private static async Task<string> ComputeFileHashAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            128 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)).ToLowerInvariant();
+    }
 
     private static string ComputeContentIdentity(string sourcePath)
     {

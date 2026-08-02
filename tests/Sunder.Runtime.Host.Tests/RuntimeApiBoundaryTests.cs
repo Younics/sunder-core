@@ -79,7 +79,15 @@ public sealed class RuntimeApiBoundaryTests
             "opaque-plan",
             new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),
             [new RuntimeStackImportActionDescriptor("action-key", "test.package", "profiles", "profile.create", "Create profile", "Create", true)],
-            [],
+            [new RuntimeStackRequiredInputDescriptor(
+                "input-key",
+                "test.package",
+                "profiles",
+                "api-key",
+                "API key",
+                RuntimeStackInputSensitivity.Secret,
+                true,
+                "Provider credential.")],
             [],
             [],
             []);

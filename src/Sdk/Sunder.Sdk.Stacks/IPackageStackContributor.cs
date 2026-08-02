@@ -2,17 +2,23 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Stacks;
 
-/// <summary>Discovers and exports Stack content owned by one package feature.</summary>
+/// <summary>Identifies one package-scoped Stack contributor.</summary>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 [SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
-public interface IPackageStackExporter
+public interface IPackageStackContributor
 {
     /// <summary>Gets the stable package-scoped contributor id.</summary>
     string ContributorId { get; }
 
     /// <summary>Gets the user-facing contributor name.</summary>
     string DisplayName { get; }
+}
 
+/// <summary>Discovers and exports Stack content owned by one package feature.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
+[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
+public interface IPackageStackExporter : IPackageStackContributor
+{
     /// <summary>Discovers an immutable snapshot of exportable items without mutating package state.</summary>
     ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
         StackExportDiscoveryContext context,
@@ -28,11 +34,8 @@ public interface IPackageStackExporter
 /// <remarks>Contributor instances are activation-scoped and may be called concurrently. Preview must be side-effect free. The host binds a preview to an expiring, single-use import plan. Imports are atomic only within the guarantees made by each contributor; the host cannot roll back another contributor.</remarks>
 [SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
 [SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
-public interface IPackageStackImporter
+public interface IPackageStackImporter : IPackageStackContributor
 {
-    /// <summary>Gets the stable package-scoped contributor id.</summary>
-    string ContributorId { get; }
-
     /// <summary>Builds a side-effect-free import plan and reports required inputs and conflicts.</summary>
     ValueTask<StackImportPreview> PreviewImportAsync(
         StackImportPreviewRequest request,
