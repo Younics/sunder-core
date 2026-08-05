@@ -2,7 +2,7 @@
 
 This document is the normative V1 package-format contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
 
-The contract is independent of authoring language and UI framework. Current tooling emits managed .NET Runtime (`dotnet`), Avalonia App (`avalonia`), Node Runtime (`process`), and static web App (`web`) targets. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other process toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target kinds, protocols, or required capabilities they do not support.
+The contract is independent of authoring language and UI framework. Current tooling emits managed in-process .NET Runtime (`dotnet`), isolated .NET and Node Runtime (`worker`), Avalonia App (`avalonia`), and static web App (`web`) targets. `process` remains a legacy compatibility alias accepted by package readers and the Runtime and preserved when aggregate tooling combines existing validated leaves; fresh C# target authoring rejects it in favor of `worker`. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target kinds, protocols, or required capabilities they do not support.
 
 ## Universal Package
 
@@ -128,7 +128,7 @@ Each target is keyed by exact `(role, rid)` and contains its own activation and 
 
 - `role`: `app` or `runtime`;
 - `rid`: `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, or `osx-arm64`;
-- `kind`: `avalonia` or `web` for App, `dotnet` or `process` for Runtime;
+- `kind`: `avalonia` or `web` for App, `dotnet` or canonical `worker` for Runtime; readers and aggregate compatibility paths also preserve legacy Runtime `process`, but fresh target generation does not author it;
 - `entryPoint`: a logical path resolved from that target's payload union;
 - `targetFramework`: optional portable target metadata;
 - `sdkVersion`: optional strict SemVer for SDK-backed targets;
@@ -208,7 +208,7 @@ MSBuild authoring uses `SunderContractBundle`, `SunderUsesContract`, and `Sunder
 
 ## Modules And Activation
 
-Managed Runtime targets expose at most one public, top-level, non-abstract, non-generic `ISunderRuntimePackageModule` with a public parameterless constructor. Managed App targets follow the same rule for `ISunderAppPackageModule`. One class may implement both interfaces, but each Host creates a separate instance, load context, service provider, and activation lifetime.
+Managed `dotnet` Runtime targets expose at most one public, top-level, non-abstract, non-generic `ISunderRuntimePackageModule` with a public parameterless constructor. Managed App targets follow the same rule for `ISunderAppPackageModule`. One class may implement both interfaces, but each Host creates a separate instance, load context, service provider, and activation lifetime. A `worker` Runtime target is an independently executable exact-RID process; it uses `sunder.worker.v1` unless the exact target requires `worker-protocol.v2`. Worker targets do not expose an `ISunderRuntimePackageModule`.
 
 Runtime modules register background services, settings schemas, package-scoped App operations, callbacks/auth handlers, and RPC providers. App modules register shell-facing contributions such as Avalonia views. App and Runtime do not exchange object instances or filesystem paths.
 
@@ -232,7 +232,7 @@ Each projection contains `manifest/sunder-projection.json`, the canonical packag
 
 The generated dotnet template uses an aggregate project with Runtime and optional App leaves. It always creates a non-packable package-local `*.Protocol` project containing a bundled descriptor and generated bindings. Role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata.
 
-TypeScript process packages use `npm create sunder-package@latest`; `--template react-node` adds a Vite/React web App target. Production Runtime targets are pinned Node SEA executables built and smoked natively for each exact RID.
+TypeScript worker packages use `npm create sunder-package@latest`; `--template react-node` adds a Vite/React web App target. Production Runtime targets are pinned Node SEA executables built and smoked natively for each exact RID.
 
 ## Archive Safety
 

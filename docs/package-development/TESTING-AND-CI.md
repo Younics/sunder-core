@@ -1,6 +1,6 @@
 # Testing And CI
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
 
 Package tests should cover package-owned behavior at the narrowest boundary, then prove that Release output can be activated and packaged. Do not reference App or Runtime implementation projects just to make a unit test easier.
 
@@ -15,7 +15,7 @@ Package tests should cover package-owned behavior at the narrowest boundary, the
 | Artifact | `PackSunderPackage` emits one `.sunderpkg` and the exact archive passes `sunder dev package validate`. |
 | Host smoke | The package activates as a development package; primary App-to-Runtime behavior and unload/reload work. |
 
-The repository's [quickstart project](../samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds it in normal CI. Generated-template CI separately builds and publishes headless, Avalonia, Stack, and combined variants so the template and `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
+The repository's [quickstart project](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds it in normal CI. Generated-template CI separately builds and publishes headless, Avalonia, Stack, and combined variants so the template and `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
 
 ## Unit-Test Package Code
 
@@ -113,9 +113,9 @@ Use maintained major-version Action refs so CI receives compatible upstream fixe
 Changes to public package contracts must also run:
 
 ```powershell
-dotnet test tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj -c Release
-dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -c Release
-dotnet test tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj -c Release
+dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj -c Release
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -c Release
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj -c Release
 ```
 
 Public API baselines are an intentional compatibility gate, not snapshots to regenerate automatically after a failure. Review every API difference against [Sunder SDK Compatibility](../SUNDER-SDK-COMPATIBILITY.md).

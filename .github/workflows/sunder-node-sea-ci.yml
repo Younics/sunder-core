@@ -20,17 +20,30 @@ jobs:
   typescript:
     name: TypeScript SDK, tooling, and template
     runs-on: ubuntu-24.04
+    outputs:
+      npm_version: ${{ steps.sdk-metadata.outputs.npm_version }}
+      npm_version_range: ${{ steps.sdk-metadata.outputs.npm_version_range }}
     defaults:
       run:
-        working-directory: js
+        working-directory: languages/typescript/node
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: js/package-lock.json
+          cache-dependency-path: languages/typescript/node/package-lock.json
+      - name: Verify coordinated SDK and Node metadata
+        id: sdk-metadata
+        run: node ../../../scripts/release/check-sdk-version.mjs
+      - name: Install exact packageManager npm
+        env:
+          NPM_VERSION: ${{ steps.sdk-metadata.outputs.npm_version }}
+        run: |
+          npm install --global "npm@${{ steps.sdk-metadata.outputs.npm_version }}"
+          node -e "const actual = require('node:child_process').execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(); if (actual !== process.env.NPM_VERSION) throw new Error('Expected npm ' + process.env.NPM_VERSION + ', found ' + actual);"
       - run: npm ci
+      - run: npm ls --all
       - run: npm test
       - run: npm run build
       - run: npm pack --workspace @sunder/sdk --workspace @sunder/package-tool --workspace create-sunder-package
@@ -58,15 +71,22 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        working-directory: js
+        working-directory: languages/typescript/node
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: js/package-lock.json
+          cache-dependency-path: languages/typescript/node/package-lock.json
+      - name: Install exact packageManager npm
+        env:
+          NPM_VERSION: ${{ needs.typescript.outputs.npm_version }}
+        run: |
+          npm install --global "npm@${{ needs.typescript.outputs.npm_version }}"
+          node -e "const actual = require('node:child_process').execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(); if (actual !== process.env.NPM_VERSION) throw new Error('Expected npm ' + process.env.NPM_VERSION + ', found ' + actual);"
       - run: npm ci
+      - run: npm ls --all
       - run: npm run build
       - name: Build pinned exact-RID SEA leaf
         run: npm run sea:build -- --rid ${{ matrix.rid }} --allow-unsigned-windows
@@ -75,32 +95,41 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sunder-sea-leaf-${{ matrix.rid }}
-          path: js/fixtures/sea-smoke/dist/targets/${{ matrix.rid }}
+          path: languages/typescript/node/fixtures/sea-smoke/dist/targets/${{ matrix.rid }}
           if-no-files-found: error
 
   universal-package:
     name: Six-RID universal package fan-in
-    needs: native-sea
+    needs:
+      - typescript
+      - native-sea
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: js
+        working-directory: languages/typescript/node
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: js/package-lock.json
+          cache-dependency-path: languages/typescript/node/package-lock.json
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Install exact packageManager npm
+        env:
+          NPM_VERSION: ${{ needs.typescript.outputs.npm_version }}
+        run: |
+          npm install --global "npm@${{ needs.typescript.outputs.npm_version }}"
+          node -e "const actual = require('node:child_process').execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(); if (actual !== process.env.NPM_VERSION) throw new Error('Expected npm ' + process.env.NPM_VERSION + ', found ' + actual);"
       - run: npm ci
+      - run: npm ls --all
       - run: npm run build
       - uses: actions/download-artifact@v4
         with:
           pattern: sunder-sea-leaf-*
-          path: js/artifacts/sea-leaves
+          path: languages/typescript/node/artifacts/sea-leaves
       - name: Aggregate exact-RID leaves
         shell: bash
         run: |
@@ -113,11 +142,11 @@ jobs:
           unzip -t fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
       - name: Validate universal package with .NET inspector
         env:
-          SUNDER_NODE_SEA_PACKAGE_PATH: ${{ github.workspace }}/js/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
+          SUNDER_NODE_SEA_PACKAGE_PATH: ${{ github.workspace }}/languages/typescript/node/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
           SUNDER_NODE_SEA_EXPECTED_RIDS: win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64
-        run: dotnet test ../tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --configuration Release --filter FullyQualifiedName~NodePackageArchiveCompatibilityTests --disable-build-servers
+        run: dotnet test ../../csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --configuration Release --filter FullyQualifiedName~NodePackageArchiveCompatibilityTests --disable-build-servers
       - uses: actions/upload-artifact@v4
         with:
           name: sunder-sea-smoke-universal-package
-          path: js/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
+          path: languages/typescript/node/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
           if-no-files-found: error

@@ -45,15 +45,13 @@ if ($null -eq $vpk) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$projectPath = Join-Path $repoRoot "src\Host\Sunder.App\Sunder.App.csproj"
-$runtimeHostProjectPath = Join-Path $repoRoot "src\Host\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj"
-$cliProjectPath = Join-Path $repoRoot "src\Host\Sunder.Cli\Sunder.Cli.csproj"
+$projectPath = Join-Path $repoRoot "languages\csharp\dotnet\host\Sunder.App\Sunder.App.csproj"
 $artifactRoot = if ([System.IO.Path]::IsPathRooted($OutputRoot)) { $OutputRoot } else { Join-Path $repoRoot $OutputRoot }
 $publishDir = Join-Path $artifactRoot "publish\sunder\$Runtime"
 $velopackChannel = "app-$Runtime-$Channel"
 $releaseDir = Join-Path $artifactRoot "velopack\$Channel\$Runtime"
 $mainExe = "Sunder.App.exe"
-$imageDir = Join-Path $repoRoot "src\Host\Sunder.App\Assets\Images"
+$imageDir = Join-Path $repoRoot "languages\csharp\dotnet\host\Sunder.App\Assets\Images"
 $iconPath = Join-Path $imageDir "app.ico"
 if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
     throw "Windows packaging icon is missing: $iconPath"
@@ -177,11 +175,9 @@ function Import-VelopackHistory {
     }
 }
 
-foreach ($restoreProject in @($projectPath, $runtimeHostProjectPath, $cliProjectPath)) {
-    & dotnet restore $restoreProject -r $Runtime -p:Configuration=$Configuration
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet restore failed for '$restoreProject' and runtime $Runtime."
-    }
+& dotnet restore $projectPath -r $Runtime -p:Configuration=$Configuration
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet restore failed for '$projectPath' and runtime $Runtime."
 }
 
 if (Test-Path -LiteralPath $publishDir) {

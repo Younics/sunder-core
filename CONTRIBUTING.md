@@ -20,12 +20,12 @@ dotnet build Sunder.Core.slnx --no-restore
 Useful targeted tests:
 
 ```powershell
-dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
-dotnet test tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --no-restore
-dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
-dotnet test tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj --no-restore
-dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
-dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
 ```
 
 ## Project Boundaries
@@ -39,10 +39,11 @@ dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj -
 | `Sunder.Sdk` | Public package author contracts only |
 | `Sunder.Sdk.Avalonia` | Optional Avalonia view/settings, workspace, and theme contracts |
 | `Sunder.Sdk.Stacks` | Optional public Stack package-author contracts; references only `Sunder.Sdk` |
+| `Sunder.Sdk.Worker` | Standalone .NET worker process protocol and authoring runtime |
 | `Sunder.Package.Build` | Generated manifest, dev output, and `.sunderpkg` archive behavior |
 | `Sunder.Package.Format` | Archive inspection and validation |
 
-The public package-author NuGet surface is `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`, `Sunder.Package.Build`, and `Sunder.Package.Templates`.
+The public package-author NuGet surface is `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`, `Sunder.Sdk.Worker`, `Sunder.Package.Build`, and `Sunder.Package.Templates`.
 
 [`docs/SUNDER.md`](docs/SUNDER.md) is the canonical current project map and architecture reference.
 

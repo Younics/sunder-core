@@ -1,6 +1,6 @@
 # Sunder Package Development
 
-> **Source channel:** This manual tracks unreleased Sunder V1 source, coordinated SDK `1.1.x` (`[1.1.0,1.2.0)`), .NET 10, and Runtime protocol revision 3. Read it from the matching `sdk/v*` tag for released SDK behavior.
+> **Source channel:** This manual tracks unreleased Sunder V1 source, coordinated SDK `1.1.x` (`[1.1.0,1.2.0)`), .NET 10, and Runtime protocol revision 5. Read it from the matching `sdk/v*` tag for released SDK behavior.
 
 This is the canonical landing page for public Sunder package development. The focused guides describe the current universal-package implementation in this repository.
 
@@ -21,41 +21,63 @@ This is the canonical landing page for public Sunder package development. The fo
 
 ## Authoring Model
 
-The package standard is language-, framework-, and build-tool neutral. Sunder currently ships four authoring presets:
+The package standard is language-, framework-, and build-tool neutral. Sunder currently supports these authoring routes:
 
 | Preset | Canonical target |
 | --- | --- |
-| Managed .NET Runtime | `runtime` / `dotnet` |
+| Managed in-process .NET Runtime | `runtime` / `dotnet` |
+| Isolated .NET worker Runtime | `runtime` / `worker` using `Sunder.Sdk.Worker` and `sunder.worker.v1` |
 | Avalonia App | `app` / `avalonia` |
-| Node process Runtime | `runtime` / `process` using `sunder.worker.v1` |
+| Node worker Runtime | `runtime` / `worker` using `sunder.worker.v1` |
 | Static web App | `app` / `web`; framework-agnostic, with React/Vite as one template |
 
-Those are current supported presets, not a closed capability list. Future Python, Rust, Go, and other process toolchains, other .NET UI approaches, and Vue, Svelte, Solid, or other web frameworks can emit the same canonical manifest, content index, payload layers, and exact targets. The Host must still explicitly support the declared target kind, protocol, and required capabilities; format conformance alone does not make an unknown target executable.
+Those are current supported routes, not a closed capability list. Future Python, Rust, Go, and other worker toolchains, other .NET UI approaches, and Vue, Svelte, Solid, or other web frameworks can emit the same canonical manifest, content index, payload layers, and exact targets. The Host must still explicitly support the declared target kind, protocol, and required capabilities; format conformance alone does not make an unknown target executable.
 
 ## SDK Decision Matrix
 
 | Authoring need | Add/use |
 | --- | --- |
-| Any managed .NET target | `Sunder.Sdk` plus `Sunder.Package.Build` with `PrivateAssets="all"` |
+| Managed in-process .NET target | `Sunder.Sdk` plus `Sunder.Package.Build` with `PrivateAssets="all"` |
+| Isolated .NET worker Runtime | Exact coordinated versions of `Sunder.Sdk.Worker` and `Sunder.Package.Build` |
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` only to the App leaf that uses Avalonia |
 | Stack contribution | Add `Sunder.Sdk.Stacks` to the managed leaf that implements the contributor |
 | New managed aggregate | Install `Sunder.Package.Templates`; it is a scaffold tool, not a runtime dependency |
-| Node process Runtime RPC | `@sunder/sdk` plus `@sunder/package-tool` |
+| Node worker Runtime RPC | `@sunder/sdk` plus `@sunder/package-tool` |
 | Browser code in a web App | Import only `@sunder/sdk/browser`; choose any web framework |
 | Node/React starter | `npm create sunder-package@latest`; React is one template, not a web requirement |
 | Shared descriptor-only package | Bundle at least one RPC descriptor and emit no executable target |
-| Custom Python/Rust/Go/process or UI toolchain | Emit the canonical format and a Host-supported target kind/protocol; no managed SDK dependency is inherently required |
+| Custom Python/Rust/Go worker or UI toolchain | Emit the canonical format and a Host-supported target kind/protocol; no managed SDK dependency is inherently required |
 
 `Sunder.Runtime.Contracts`, `Sunder.Package.Format`, and `Sunder.Registry.Contracts` are not package-author NuGet dependencies. Package projects must not reference `Sunder.App` or `Sunder.Runtime.Host`.
 
-The TypeScript SDK is intentionally narrower than `Sunder.Sdk`: it covers descriptor parsing/validation/generation, process-worker RPC/client/content handling, and the browser RPC/navigation bridge. It does not expose managed DI/modules, package storage/settings/secrets/logging, callbacks, background services, managed Stack adapters, Avalonia, Registry management, or install/update APIs.
+### Isolated .NET Worker Protocol
+
+The default isolated .NET entry point runs Worker V1 and does not opt the target into Worker V2:
+
+```csharp
+await SunderWorker.RunAsync(new SunderWorkerOptions(providers));
+```
+
+Worker V2 is an exact API opt-in, not an overload or an in-band negotiation:
+
+```csharp
+await SunderWorkerV2.RunAsync(
+    context => new SunderWorkerV2Options(providers));
+```
+
+Using `SunderWorkerV2.RunAsync` causes `Sunder.Package.Build` to infer the exact `worker-protocol.v2` target
+capability; the Host then selects `sunder.worker.v2` before launch. Use only the V2 surfaces documented in
+[Sunder Worker Protocol V2](SUNDER-WORKER-PROTOCOL-V2.md). Fresh C# authoring must declare target kind `worker`;
+`process` is retained only for existing legacy package inputs.
+
+The TypeScript SDK is intentionally narrower than `Sunder.Sdk`: it covers descriptor parsing/validation/generation, worker RPC/client/content handling, and the browser RPC/navigation bridge. It does not expose managed DI/modules, package storage/settings/secrets/logging, callbacks, background services, managed Stack adapters, Avalonia, Registry management, or install/update APIs.
 
 ## Architecture In One Minute
 
 - One universal archive carries package-wide metadata, shared content, and exact App/Runtime RID targets.
-- Runtime target code runs in `Sunder.Runtime.Host` and owns persistent package data, headless work, settings schemas, auth handlers, typed operations, and RPC providers.
+- Runtime target code either loads as a `dotnet` module in `Sunder.Runtime.Host` or runs as an isolated `worker` child process. Runtime roles own persistent package data, headless work, settings schemas, auth handlers, typed operations, and RPC providers according to the target protocol's capabilities.
 - App target code runs separately in `Sunder.App` and owns Avalonia or web views and shell-facing behavior.
-- Each selected target receives a separate module/process activation, service provider where applicable, and lifetime.
+- Each selected target receives a separate module or worker-process activation, service provider where applicable, and lifetime.
 - App talks to its own Runtime role through authenticated package-scoped APIs; objects and local paths never cross the process boundary.
 - Runtime activates dependencies before dependents and publishes package graphs as atomic generations.
 - Generation retirement cancels leased work and waits for it to drain before providers or load contexts are disposed.
@@ -69,4 +91,4 @@ The TypeScript SDK is intentionally narrower than `Sunder.Sdk`: it covers descri
 
 ## Drift Protection
 
-The repository's [compiled quickstart package](samples/Sunder.Package.Quickstart/) exercises the module, DI, settings, typed Runtime operation, Avalonia view, navigation, warmup, and theme APIs used by these guides. It is part of `Sunder.Core.slnx`, so the normal CI build compiles it. Template CI separately generates and packs Runtime, Avalonia, Stack, and combined managed variants; Node CI covers process/web leaves and six-RID SEA aggregation.
+The repository's [compiled quickstart package](../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) exercises the module, DI, settings, typed Runtime operation, Avalonia view, navigation, warmup, and theme APIs used by these guides. It is part of `Sunder.Core.slnx`, so the normal CI build compiles it. Template CI separately generates and packs Runtime, Avalonia, Stack, and combined managed variants; Worker CI launches self-contained .NET apphosts on all six RIDs; Node CI covers worker/web leaves and six-RID SEA aggregation.

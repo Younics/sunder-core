@@ -1,12 +1,12 @@
 # Activation, DI, And Disposal
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
 
 Activation is generation-based. Sunder prepares a complete candidate package graph, publishes it atomically, and retires the previous generation only after in-flight leased work drains.
 
 ## Runtime Activation
 
-Runtime performs these steps:
+For a managed `dotnet` Runtime target, Runtime performs these steps:
 
 1. Validate package content, manifest, SDK compatibility, exact host roles, dependencies, and host-shared assembly identities before reflection-loading package code.
 2. Resolve dependencies in topological order. A missing, incompatible, cyclic, or failed dependency prevents its dependents from loading.
@@ -18,6 +18,12 @@ Runtime performs these steps:
 8. Publish the candidate as non-leasable, call `CommitGenerationAsync` on `IPackageRuntimeGenerationParticipant` services with the exact committed activation and session generation, then admit external leases only after every participant succeeds.
 
 The module is constructed directly and is **not** resolved from the package provider. Keep no disposable resource on the module itself; place owned resources in DI services so provider disposal can release them.
+
+### Worker V2 Activation
+
+For an exact `worker` target requiring `worker-protocol.v2`, the Host selects `sunder.worker.v2` before launch and starts the declared exact-RID executable as a supervised child process. The entry point calls `SunderWorkerV2.RunAsync`; its configuration callback runs once and returns `SunderWorkerV2Options`, whose provider registrations and optional settings schema form the immutable contribution catalog advertised during composition. Runtime does not load an `ISunderRuntimePackageModule`, create a package load context, or build the worker's process-local objects through the managed package DI provider.
+
+The Host invokes `OnCandidateStarted` for non-destructive candidate preparation, `OnGenerationCommitted` with the exact Host-assigned committed generation, `OnActivated` before the worker acknowledges activation and provider dispatch begins, and `OnShutdown` before shutdown acknowledgement. Worker V2 never falls back to Worker V1 after launch.
 
 ## App Activation
 
@@ -34,7 +40,7 @@ Views are registered during activation but constructed lazily from the package p
 
 ## DI Rules
 
-Use normal `Microsoft.Extensions.DependencyInjection` lifetimes inside one role:
+Managed Runtime and App modules use normal `Microsoft.Extensions.DependencyInjection` lifetimes inside one role:
 
 ```csharp
 public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
@@ -55,13 +61,15 @@ public void RegisterRuntimeContributions(
 
 Do not build a nested provider in `Configure*Services`. Resolve contribution instances from the provider supplied to `Register*Contributions`.
 
+Worker V2 owns its process-local object composition. It receives Host-mediated services through `SunderWorkerContext` and supplies handlers through immutable `SunderWorkerProviderRegistration` entries rather than a managed contribution registry.
+
 Packages cannot replace reserved host capabilities. These include `IPackageContext`, logging, Runtime/callback/RPC clients, shell/settings/notification services, and role-specific capabilities such as Runtime content transfer and App background processes. Registering a reserved service fails activation.
 
 Host services intentionally vary by role. Runtime supplies unavailable/no-op shell, settings-navigation, notification, Runtime-client, and callback-client implementations. App supplies the real shell-facing services after generation publication.
 
 ## Publication Availability
 
-Treat both `Configure*Services` and `Register*Contributions` as side-effect-free composition phases.
+For managed modules, treat both `Configure*Services` and `Register*Contributions` as side-effect-free composition phases. The Worker V2 configuration callback is the equivalent side-effect-free composition boundary; defer work to its staged lifecycle callbacks.
 
 Before an App generation is published:
 
@@ -72,7 +80,7 @@ Before an App generation is published:
 
 Start work from view navigation/warmup, a user action, an App background process, or a Runtime background service instead. Check `IPackageRuntimeClient.IsAvailable` and `IPackageCallbackClient.IsAvailable` where the same service can run in different contexts.
 
-## Runtime Background Services
+## Managed Runtime Background Services
 
 Register a service already present in DI:
 
@@ -86,6 +94,8 @@ Implement `IPackageRuntimeGenerationParticipant` when recovery or dispatch must 
 
 On retirement, services stop in reverse package and registration order. `StopAsync` must cancel and await all owned work promptly. Startup rollback has a 5-second cleanup budget; normal generation retirement shares the 10-second drain budget. Exceptions during cleanup are logged and remaining services still receive a stop attempt. If `StartAsync` or `StopAsync` ignores cancellation and outlives its deadline, the operation returns without publishing or blocking the next generation, but the old provider, load context, and generation files remain quarantined until the actual task completes.
 
+Worker V2 does not register `IPackageBackgroundService` or `IPackageRuntimeGenerationParticipant` instances with the managed Runtime. Use `OnCandidateStarted`, `OnGenerationCommitted`, `OnActivated`, and `OnShutdown` for the corresponding staged process lifecycle.
+
 ## Generation Leases
 
 Runtime operations, streams, callback/auth work, and Stack contributor calls hold a lease on the active package generation. Their cancellation token links:
@@ -96,7 +106,7 @@ Runtime operations, streams, callback/auth work, and Stack contributor calls hol
 
 Once retirement starts, the generation accepts no new leases and returns Runtime unavailability. Runtime cancels existing lease tokens and waits up to 10 seconds. If valid work does not drain, reload is rejected and the old generation remains active and undisposed. Handlers must not suppress cancellation or keep an async iterator alive after cancellation.
 
-After leases drain, Runtime stops background services, disposes the package provider (`IAsyncDisposable` before `IDisposable`), unloads package load contexts, and removes generation files. Cleanup that exceeds the deadline remains quarantined and is observed until every invoked package lifecycle task exits; only then can provider disposal, unload, and file removal continue. Runtime shutdown has an overall 15-second deadline.
+After leases drain, Runtime stops managed background services, disposes the package provider (`IAsyncDisposable` before `IDisposable`), unloads package load contexts, and removes generation files. Cleanup that exceeds the deadline remains quarantined and is observed until every invoked package lifecycle task exits; only then can provider disposal, unload, and file removal continue. For worker targets, Runtime requests protocol shutdown and supervises process exit, killing the process tree if it does not exit within the shared deadline. Runtime shutdown has an overall 15-second deadline.
 
 ## App Retirement
 
@@ -121,7 +131,7 @@ Package services must:
 
 ## Cross-Package Contributions
 
-Sunder does not expose a generic CLR extension catalog or share arbitrary package contract assemblies. App contributions are limited to Host-defined registrations such as views and settings views. Runtime packages expose cross-package behavior through schema-first RPC providers declared in their manifests and registered with `RegisterRpcProvider`.
+Sunder does not expose a generic CLR extension catalog or share arbitrary package contract assemblies. App contributions are limited to Host-defined registrations such as views and settings views. Runtime packages expose cross-package behavior through schema-first RPC providers declared in their manifests. Managed Runtime modules publish handlers with `RegisterRpcProvider`; Worker V2 targets supply immutable `SunderWorkerProviderRegistration` entries in the options returned to `SunderWorkerV2.RunAsync`.
 
 RPC discovery returns Host-stamped owner and activation metadata. Endpoint references bind to one exact provider activation and never retarget a same-id replacement. Invocations and subscriptions hold provider leases, link cancellation to caller and generation retirement, and prevent provider disposal while work remains active.
 

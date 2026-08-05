@@ -1,12 +1,12 @@
 # Package Trust And Security
 
-> **Applies to:** Sunder SDK `1.1.x`, package and Stack format V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package and Stack format V1, .NET 10, and Runtime protocol revision 5.
 
 Installing a Sunder package is a code-trust decision. V1 validates package integrity and structure, but it does not sandbox package code or cryptographically attest a package publisher.
 
 ## Execution Trust
 
-Runtime modules execute inside `Sunder.Runtime.Host`; App modules execute inside `Sunder.App`. Both processes run with the current desktop user's operating-system permissions. Package code can use normal .NET and native APIs to access resources available to that user, including files, network, environment variables, processes, and user credentials outside Sunder.
+Runtime `dotnet` modules execute inside `Sunder.Runtime.Host`; Runtime `worker` targets execute in supervised child processes; App modules execute inside `Sunder.App`. Every process runs with the current desktop user's operating-system permissions. Worker isolation contains lifecycle and failures but is not an operating-system sandbox. Package code can use normal platform APIs to access resources available to that user, including files, network, processes, and user credentials outside Sunder.
 
 Collectible `AssemblyLoadContext`, separate DI providers, role boundaries, constrained host-service registration, path validation, and package-scoped APIs improve lifecycle and integrity. They are **not** a security boundary. Native libraries are supported and execute with the same permissions.
 
@@ -26,7 +26,7 @@ The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative so
 
 ## Dependency And Supply-Chain Practice
 
-- Keep Sunder SDK/build references in the coordinated `[1.1.0,1.2.0)` range.
+- Keep normal Sunder SDK/build references in the coordinated `[1.1.0,1.2.0)` range. `Sunder.Sdk.Worker` intentionally requires the exact matching `Sunder.Sdk` patch version.
 - Bound other NuGet dependencies intentionally and commit `packages.lock.json` for reproducible CI restore.
 - Review transitive and native assets included under package `lib`/`runtimes`.
 - Put language-neutral RPC descriptors and optional typed helpers in a minimal protocol package; never expose implementation or Host types.

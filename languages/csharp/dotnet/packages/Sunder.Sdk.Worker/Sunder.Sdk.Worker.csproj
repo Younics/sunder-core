@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+    <Version>$(SunderDeveloperPackageVersion)</Version>
+    <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
+    <Title>Sunder.Sdk.Worker</Title>
+    <Description>Standalone .NET worker authoring support for the Sunder worker V1 and V2 process protocols.</Description>
+    <PackageTags>sunder;package;plugin;sdk;worker;rpc;process</PackageTags>
+    <Authors>Younics</Authors>
+    <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>
+    <PackageIcon>icon.png</PackageIcon>
+    <RepositoryUrl>https://github.com/Younics/sunder-core</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\Sunder.Sdk\icon.png" Link="icon.png" Pack="true" PackagePath="" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="..\Sunder.Sdk\LICENSE" Link="LICENSE" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <!-- Worker uses a same-release internal transport bridge; do not permit patch-level skew. -->
+  <Target Name="_PinSunderSdkWorkerDependency"
+          AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Condition="'%(_ProjectReferencesWithVersions.Filename)' == 'Sunder.Sdk'">
+        <ProjectVersion>[$(SunderDeveloperPackageVersion)]</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
+
+</Project>

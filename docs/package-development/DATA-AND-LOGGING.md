@@ -1,6 +1,6 @@
 # Data And Logging
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
 
 Sunder separates user settings, opaque state, files, local-path workspaces, secrets, and logs. Choose the narrowest capability that matches the data.
 
@@ -99,7 +99,7 @@ App and Runtime workspace roots are different and never cross host APIs. The roo
 
 ## Settings
 
-Register at most one schema from the Runtime module:
+Managed Runtime modules register at most one schema through their contribution registry:
 
 ```csharp
 registry.RegisterSettingsSchema(new PackageSettingsSchema(
@@ -120,6 +120,8 @@ registry.RegisterSettingsSchema(new PackageSettingsSchema(
             ])
     ]));
 ```
+
+Worker V2 targets instead assign the same `PackageSettingsSchema` to `SunderWorkerV2Options.SettingsSchema` in the configuration callback passed to `SunderWorkerV2.RunAsync`. The schema is advertised with the worker's immutable composition and cannot change after `worker.ready`; no Runtime module or `RegisterSettingsSchema` call is used in the worker process.
 
 Package id and display name come from the activating manifest. A schema must have at least one section; every section must have at least one field. Section ids and field keys use the portable key grammar. Section ids are unique, and field keys are unique across the entire schema, using ordinal case-sensitive comparison.
 
@@ -165,7 +167,7 @@ await context.Logging.Events.InformationAsync(
     cancellationToken);
 ```
 
-Runtime writes separate daily `runtime-YYYY-MM-DD.log` and `events-YYYY-MM-DD.log` files and retains seven days by default. Logging is thread-safe and best effort: an I/O failure disables that writer rather than failing package activation or execution. V1 has no per-file or aggregate package-log quota, so avoid high-volume loops.
+Runtime writes separate daily `runtime-YYYY-MM-DD.log` and `events-YYYY-MM-DD.log` files and retains seven days by default. Logging is thread-safe and best effort: an I/O failure disables that writer rather than failing package activation or execution. Worker V2 routes both logging APIs through a dedicated bounded Host-call lane, drains lifecycle logs before shutdown acknowledgement, and bounds each entry to 64 scalar attributes and five exception entries. Managed modules and Worker V1 have no per-file or aggregate package-log quota, so every package should still avoid high-volume loops.
 
 Runtime structured attribute values are redacted when the attribute key contains a normalized sensitive fragment such as `apikey`, `authorization`, `cookie`, `password`, `refresh`, `secret`, or `token`. This heuristic does not sanitize messages, exception text/stack traces, event names, categories, or unknown sensitive keys. Never rely on it as a secret boundary.
 
@@ -193,7 +195,7 @@ Oversized/truncated entries are marked. Runtime discovers and tails files; App n
 | Null required argument | `ArgumentNullException`. |
 | Invalid key, prefix, path, value, settings value, unreadable write stream, or oversized write | `ArgumentException`. |
 | Existing/returned file exceeds 16 MiB or Runtime returns contract-invalid data | `InvalidDataException`. |
-| Host filesystem failure | `IOException` or `UnauthorizedAccessException` in Runtime code. |
+| Host filesystem failure | `IOException` or `UnauthorizedAccessException` in managed Runtime code; a sanitized `unavailable` RPC error in Worker V2. |
 | Cancellation before commit/read completion | `OperationCanceledException`. |
 | Undeclared/secret setting or required setting deletion | `ArgumentException` with the setting reason. |
 | Runtime-backed App data unavailable | Authenticated Runtime request failure; do not assume an App-local fallback. |

@@ -1,16 +1,16 @@
-# Sunder TypeScript Process Runtime Packages
+# Sunder TypeScript Worker Runtime Packages
 
 > **Source channel:** This page tracks current source and may be ahead of npm. For a release, use the page from the matching `sdk/v*` tag and the README embedded in each npm tarball.
 
 `npm create sunder-package@latest` scaffolds a TypeScript Runtime package that communicates with Sunder through `sunder.worker.v1` and ships as Node Single Executable Application (SEA) binaries. The `react-node` template adds a hosted React/Vite web App target to the same universal package.
 
-These are current authoring presets, not a closed package model. The canonical format permits future Python, Rust, Go, and other `process` toolchains, while `web` App targets are framework-agnostic and may use React, Vue, Svelte, Solid, or another static web build. Other .NET UI approaches may likewise be added as Host-supported App target kinds. Every toolchain must emit the canonical manifest, content index, payload layers, and exact targets, and the Host must support its declared kind/protocol.
+These are current authoring presets, not a closed package model. The canonical format permits future Python, Rust, Go, and other `worker` toolchains, while `web` App targets are framework-agnostic and may use React, Vue, Svelte, Solid, or another static web build. Other .NET UI approaches may likewise be added as Host-supported App target kinds. Every toolchain must emit the canonical manifest, content index, payload layers, and exact targets, and the Host must support its declared kind/protocol.
 
 ## npm Package Boundaries
 
 | Package | Included subset |
 | --- | --- |
-| `@sunder/sdk` | RPC descriptor parse/validation/generation, `sunder.worker.v1` process worker/client/content APIs, and browser bridge types. |
+| `@sunder/sdk` | RPC descriptor parse/validation/generation, `sunder.worker.v1` worker/client/content APIs, and browser bridge types. |
 | `@sunder/package-tool` | Canonical Node development output, pinned native SEA leaves, optional static web leaves, smoke, and package aggregation. |
 | `create-sunder-package` | `node` and `react-node` scaffolds. |
 
@@ -18,9 +18,9 @@ The TypeScript SDK is not feature-parity with managed `Sunder.Sdk`. It does not 
 
 ## Trust boundary
 
-A `process` Runtime target is a supervised full-trust child process. It is not a sandbox. It runs with the current user's operating-system permissions and can access anything that user can access.
+A `worker` Runtime target is a supervised full-trust child process. It is not a sandbox. It runs with the current user's operating-system permissions and can access anything that user can access. `process` is accepted only as a legacy manifest alias.
 
-The Runtime Host starts only the declared entry point from the selected exact-RID projection. Projection files are hash validated, executable bits are stripped from every projected file, and Unix owner-execute is granted only to the selected declared process entry point. Archive mode bits are never trusted.
+The Runtime Host starts only the declared entry point from the selected exact-RID projection. Projection files are hash validated, executable bits are stripped from every projected file, and Unix owner-execute is granted only to the selected declared worker entry point. Archive mode bits are never trusted.
 
 The child receives an explicit environment containing package identity/version, activation and session IDs, canonical content/data/state paths, a projection working directory, and package-local temporary paths. The Host does not inherit arbitrary environment variables, does not pass `NODE_OPTIONS`, and does not expose Runtime bearer/auth tokens.
 
@@ -28,7 +28,7 @@ The child receives an explicit environment containing package identity/version, 
 
 Worker stdin/stdout use strict UTF-8 JSON with Content-Length framing. Stdout is protocol-only; stderr is bounded diagnostic logging. Protocol limits cover headers, frames, JSON depth, outstanding calls, remembered IDs, write queues, stream queues, startup, activation acknowledgement, cancellation drain, and shutdown.
 
-The Host challenges the worker with the exact package, activation, session, and protocol version. The ready response must bind that challenge and advertise exactly the providers declared in the package manifest. Host-to-worker unary and server-stream calls use the same validated Sunder RPC descriptors as managed providers. Worker-to-Host calls are stamped by the Host with the process activation's caller identity; caller identity supplied by a worker is rejected.
+The Host challenges the worker with the exact package, activation, session, and protocol version. The ready response must bind that challenge and advertise exactly the providers declared in the package manifest. Host-to-worker unary and server-stream calls use the same validated Sunder RPC descriptors as managed providers. Worker-to-Host calls are stamped by the Host with the worker activation's caller identity; caller identity supplied by a worker is rejected.
 
 Large RPC payloads remain off the framed JSON control plane. Provider handlers use the invocation-bound `context.content` client to register files from package content or private data, open caller content as private temporary files, and discard those files early. The Host fences every operation to the active invocation, provider activation, caller audience, Runtime generation, expiry, hash, and use count, and removes remaining materialized files when the invocation ends.
 
@@ -66,7 +66,7 @@ npm run sunder:dev
 The template contains two target implementations:
 
 - a Vite/React `web` App target whose static entry point and assets are projected into the selected exact RID App layer;
-- a TypeScript `process` Runtime target compiled into the pinned Node SEA for the same exact RID.
+- a TypeScript `worker` Runtime target compiled into the pinned Node SEA for the same exact RID.
 
 `npm run sunder:dev` watches both source trees and emits one canonical current-RID development package. `npm run build` emits the current RID's App and Runtime leaves. `npm run smoke` performs the native worker handshake. `npm run package` aggregates all available exact-RID leaves into one deterministic universal archive.
 

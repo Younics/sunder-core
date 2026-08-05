@@ -121,8 +121,8 @@ When `--dev-package` is used:
 1. The app normalizes each dev package folder path.
 2. Runtime boots its installed package set independently of App startup arguments.
 3. After connecting to the warm Runtime, the App acquires an invocation-owned dev lease and atomically replaces that owner's complete folder/watch set before fetching its initial package snapshot.
-4. The runtime host shadow-materializes and validates runtime package content.
-5. The runtime host activates runtime package modules and reports active descriptors.
+4. The runtime host shadow-materializes and validates the selected Runtime package content.
+5. The runtime host activates each selected Runtime target by loading a managed module or starting a supervised worker process, including exact Worker V2 targets, and reports active descriptors.
 6. The app downloads generation-scoped package UI snapshots without inspecting the dev directories.
 7. The app activates app-side package modules and registers package UI contributions.
 
@@ -226,5 +226,5 @@ If `Sunder.App`, `Sunder.Runtime.Host`, or `Sunder.Registry.Server` is running, 
 Use alternate output and intermediate paths for validation builds when needed:
 
 ```powershell
-dotnet build .\src\Host\Sunder.App\Sunder.App.csproj --no-restore -p:OutputPath=.\artifacts\tmp\sunder-app\bin\ -p:IntermediateOutputPath=.\artifacts\tmp\sunder-app\obj\
+dotnet build .\languages\csharp\dotnet\host\Sunder.App\Sunder.App.csproj --no-restore -p:OutputPath=.\artifacts\tmp\sunder-app\bin\ -p:IntermediateOutputPath=.\artifacts\tmp\sunder-app\obj\
 ```

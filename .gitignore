@@ -19,10 +19,10 @@ x64/
 [Oo]bj/
 artifacts/
 node_modules/
-js/packages/*/dist/
-js/packages/*/dist-test/
-js/fixtures/*/dist/
-js/.cache/
+languages/typescript/node/packages/*/dist/
+languages/typescript/node/packages/*/dist-test/
+languages/typescript/node/fixtures/*/dist/
+languages/typescript/node/.cache/
 
 # MSTest test Results
 [Tt]est[Rr]esult*/
@@ -50,7 +50,6 @@ js/.cache/
 *.vssscc
 .builds
 *.pidb
-*.log
 *.svclog
 *.scc
 

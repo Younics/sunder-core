@@ -1,0 +1,133 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Images\app.ico</ApplicationIcon>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.AvaloniaEdit" />
+    <PackageReference Include="Avalonia.Controls.WebView" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
+    <PackageReference Include="AsyncImageLoader.Avalonia" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="LiveMarkdown.Avalonia" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
+    <ProjectReference Include="..\Sunder.Host.Client\Sunder.Host.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj" ReferenceOutputAssembly="false" OutputItemType="_BundledRuntimeHostTargetPath" PrivateAssets="all" Private="false" GlobalPropertiesToRemove="BaseOutputPath;OutputPath;OutDir" />
+    <ProjectReference Include="..\Sunder.Cli\Sunder.Cli.csproj" ReferenceOutputAssembly="false" OutputItemType="_BundledCliTargetPath" PrivateAssets="all" Private="false" GlobalPropertiesToRemove="BaseOutputPath;OutputPath;OutDir" />
+    <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="BundleRuntimeHostForBuild"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'@(_BundledRuntimeHostTargetPath->Count())' != '1'"
+           Text="Sunder.Host.Supervisor did not provide exactly one build output for the App bundle." />
+    <PropertyGroup>
+      <BundledRuntimeHostSourceDir>@(_BundledRuntimeHostTargetPath->'%(RootDir)%(Directory)')</BundledRuntimeHostSourceDir>
+      <BundledRuntimeHostOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'RuntimeHost'))\</BundledRuntimeHostOutputDir>
+      <_BundledRuntimeHostExecutable>$([System.IO.Path]::Combine('$(BundledRuntimeHostSourceDir)', 'Sunder.Host.Supervisor$(_NativeExecutableExtension)'))</_BundledRuntimeHostExecutable>
+      <_BundledRuntimeWorkerExecutable>$([System.IO.Path]::Combine('$(BundledRuntimeHostSourceDir)', 'RuntimeHost', 'Sunder.Runtime.Host$(_NativeExecutableExtension)'))</_BundledRuntimeWorkerExecutable>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('@(_BundledRuntimeHostTargetPath)')"
+           Text="The referenced Sunder.Host.Supervisor build output '@(_BundledRuntimeHostTargetPath)' does not exist." />
+    <Error Condition="!Exists('$(_BundledRuntimeHostExecutable)')"
+           Text="The required bundled Host executable '$(_BundledRuntimeHostExecutable)' was not produced." />
+    <Error Condition="!Exists('$(_BundledRuntimeWorkerExecutable)')"
+           Text="The required nested Runtime worker executable '$(_BundledRuntimeWorkerExecutable)' was not produced." />
+
+    <ItemGroup>
+      <_BundledRuntimeHostFiles Include="$(BundledRuntimeHostSourceDir)**\*" />
+    </ItemGroup>
+
+    <RemoveDir Directories="$(BundledRuntimeHostOutputDir)" />
+    <MakeDir Directories="$(BundledRuntimeHostOutputDir)" />
+
+    <Copy SourceFiles="@(_BundledRuntimeHostFiles)"
+          DestinationFiles="@(_BundledRuntimeHostFiles->'$(BundledRuntimeHostOutputDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_BundledRuntimeHostFiles)' != ''" />
+  </Target>
+
+  <Target Name="BundleCliForBuild"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'@(_BundledCliTargetPath->Count())' != '1'"
+           Text="Sunder.Cli did not provide exactly one build output for the App bundle." />
+    <PropertyGroup>
+      <BundledCliSourceDir>@(_BundledCliTargetPath->'%(RootDir)%(Directory)')</BundledCliSourceDir>
+      <BundledCliOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'Cli'))\</BundledCliOutputDir>
+      <_BundledCliExecutable>$([System.IO.Path]::Combine('$(BundledCliSourceDir)', 'sunder$(_NativeExecutableExtension)'))</_BundledCliExecutable>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('@(_BundledCliTargetPath)')"
+           Text="The referenced Sunder.Cli build output '@(_BundledCliTargetPath)' does not exist." />
+    <Error Condition="!Exists('$(_BundledCliExecutable)')"
+           Text="The required bundled CLI executable '$(_BundledCliExecutable)' was not produced." />
+
+    <ItemGroup>
+      <_BundledCliFiles Include="$(BundledCliSourceDir)**\*" />
+    </ItemGroup>
+
+    <RemoveDir Directories="$(BundledCliOutputDir)" />
+    <MakeDir Directories="$(BundledCliOutputDir)" />
+
+    <Copy SourceFiles="@(_BundledCliFiles)"
+          DestinationFiles="@(_BundledCliFiles->'$(BundledCliOutputDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_BundledCliFiles)' != ''" />
+  </Target>
+
+  <Target Name="BundleRuntimeHostForPublish"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <MSBuild Projects="..\Sunder.Host.Supervisor\Sunder.Host.Supervisor.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishDir=$(PublishDir)RuntimeHost\"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
+  </Target>
+
+  <Target Name="BundleCliForPublish"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <BundledCliPublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</BundledCliPublishSingleFile>
+      <BundledCliPublishSingleFile Condition="'$(BundledCliPublishSingleFile)' == ''">false</BundledCliPublishSingleFile>
+    </PropertyGroup>
+
+    <MSBuild Projects="..\Sunder.Cli\Sunder.Cli.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishSingleFile=$(BundledCliPublishSingleFile);PublishTrimmed=false;PublishDir=$(PublishDir)Cli\"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
+  </Target>
+</Project>

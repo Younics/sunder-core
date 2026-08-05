@@ -1,0 +1,58 @@
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+type sealed class Sunder.Sdk.Worker.SunderWorker
+  method static System.Threading.Tasks.Task RunAsync(Sunder.Sdk.Worker.SunderWorkerOptions options, System.Threading.CancellationToken cancellationToken = null)
+  method static System.Void WriteDiagnostic(System.String message, System.Exception? exception = null)
+type sealed class Sunder.Sdk.Worker.SunderWorkerCapabilities
+  field static System.String ProtocolV2 = "worker-protocol.v2"
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
+type sealed class Sunder.Sdk.Worker.SunderWorkerContext
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+  property Sunder.Sdk.Abstractions.IPackageFileStore Files { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("logging.v1")
+  property Sunder.Sdk.Logging.IPackageLogging Logging { get; }
+  property Sunder.Sdk.Rpc.ISunderRpcClient Rpc { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("secrets.v1")
+  property Sunder.Sdk.Abstractions.IPackageSecrets Secrets { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings.v1")
+  property Sunder.Sdk.Abstractions.IPackageSettings Settings { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+  property Sunder.Sdk.Abstractions.IPackageKeyValueStore State { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
+type sealed class Sunder.Sdk.Worker.SunderWorkerGenerationContext
+  property System.Guid ActivationId { get; }
+  property System.Int64 SessionGeneration { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+type sealed class Sunder.Sdk.Worker.SunderWorkerOptions
+  method .ctor(System.Collections.Generic.IEnumerable<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> providers)
+  property System.Func<Sunder.Sdk.Rpc.ISunderRpcClient, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnActivated { get; init; }
+  property System.Func<Sunder.Sdk.Worker.SunderWorkerShutdownContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnShutdown { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> Providers { get; }
+type sealed class Sunder.Sdk.Worker.SunderWorkerProtocolException : System.Exception, System.Runtime.Serialization.ISerializable
+  method .ctor(System.String message)
+  method .ctor(System.String message, System.Exception innerException)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+type sealed class Sunder.Sdk.Worker.SunderWorkerProviderRegistration
+  method .ctor(System.String providerId, System.String contractId, System.String contractVersion, System.String contractSha256, Sunder.Sdk.Rpc.ISunderRpcServiceHandler handler)
+  property System.String ContractId { get; }
+  property System.String ContractSha256 { get; }
+  property System.String ContractVersion { get; }
+  property Sunder.Sdk.Rpc.ISunderRpcServiceHandler Handler { get; }
+  property System.String ProviderId { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+type sealed class Sunder.Sdk.Worker.SunderWorkerShutdownContext
+  property System.String Reason { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
+type sealed class Sunder.Sdk.Worker.SunderWorkerV2
+  method static System.Threading.Tasks.Task RunAsync(System.Func<Sunder.Sdk.Worker.SunderWorkerContext, Sunder.Sdk.Worker.SunderWorkerV2Options> configure, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
+type sealed class Sunder.Sdk.Worker.SunderWorkerV2Options
+  method .ctor(System.Collections.Generic.IEnumerable<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> providers)
+  property System.Func<Sunder.Sdk.Worker.SunderWorkerContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnActivated { get; init; }
+  property System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnCandidateStarted { get; init; }
+  property System.Func<Sunder.Sdk.Worker.SunderWorkerGenerationContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnGenerationCommitted { get; init; }
+  property System.Func<Sunder.Sdk.Worker.SunderWorkerShutdownContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnShutdown { get; init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> Providers { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings.schema.v1")
+  property Sunder.Sdk.Settings.PackageSettingsSchema? SettingsSchema { get; init; }

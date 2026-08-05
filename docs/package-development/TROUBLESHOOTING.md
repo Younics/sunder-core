@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
 
 Start with the first failing boundary: build, archive validation, Runtime activation, App activation, or a leased call. Keep the correlation id from CLI/App errors and inspect Runtime package logs or the App session log without copying secrets into diagnostics.
 
@@ -126,4 +126,4 @@ Resolve required inputs, missing/incompatible package requirements, unsupported 
 
 ## Still Unresolved
 
-Capture the command, package version/id, App/Runtime versions, first error, correlation id, and a minimal reproduction. Redact credentials and private data. Re-run local archive validation and compare the behavior with the [compiled quickstart](../samples/Sunder.Package.Quickstart/) before reporting a host issue.
+Capture the command, package version/id, App/Runtime versions, first error, correlation id, and a minimal reproduction. Redact credentials and private data. Re-run local archive validation and compare the behavior with the [compiled quickstart](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) before reporting a host issue.

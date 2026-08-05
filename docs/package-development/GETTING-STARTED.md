@@ -1,8 +1,8 @@
 # Getting Started
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 3. Use the matching `sdk/v*` tag for released template behavior.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 5. Use the matching `sdk/v*` tag for released template behavior.
 
-This guide creates a package, runs it as a development package, and produces a validated distributable artifact. The repository also contains a [compiled quickstart package](../samples/Sunder.Package.Quickstart/) used by the Sunder Core build.
+This guide creates a package, runs it as a development package, and produces a validated distributable artifact. The repository also contains a [compiled quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) used by the Sunder Core build.
 
 ## Prerequisites
 

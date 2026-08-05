@@ -1,6 +1,6 @@
 # Runtime Operations
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
 
 Typed Runtime operations are the package-scoped App-to-Runtime boundary. Use an operation for one request/response and a stream for ordered events over time.
 
@@ -19,7 +19,7 @@ public static class QuickstartOperations
 }
 ```
 
-The [compiled operation contract](../samples/Sunder.Package.Quickstart/QuickstartOperations.cs), [handler](../samples/Sunder.Package.Quickstart/GreetHandler.cs), and [App caller](../samples/Sunder.Package.Quickstart/QuickstartView.axaml.cs) are built with `Sunder.Core.slnx`.
+The [compiled operation contract](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/QuickstartOperations.cs), [handler](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/GreetHandler.cs), and [App caller](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/QuickstartView.axaml.cs) are built with `Sunder.Core.slnx`.
 
 Operation and stream ids are package-scoped lowercase ASCII tokens of at most 128 characters. They may contain letters, digits, `.`, `-`, and `_`. Invalid ids throw `ArgumentException` at contract construction; duplicate registration fails Runtime activation.
 

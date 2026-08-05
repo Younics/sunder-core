@@ -53,6 +53,6 @@ await writeFile(
 );
 await writeFile(
   resolve(outputDirectory, "node-dependency-notices.json"),
-  `${JSON.stringify({ schemaVersion: 1, source: "js/package-lock.json", dependencies }, null, 2)}\n`,
+  `${JSON.stringify({ schemaVersion: 1, source: "languages/typescript/node/package-lock.json", dependencies }, null, 2)}\n`,
   "utf8",
 );

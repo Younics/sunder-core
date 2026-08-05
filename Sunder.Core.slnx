@@ -1,42 +1,56 @@
 <Solution>
   <Folder Name="/Host/">
-    <Project Path="src/Host/Sunder.Host.Contracts/Sunder.Host.Contracts.csproj" />
-    <Project Path="src/Host/Sunder.Host.Client/Sunder.Host.Client.csproj" />
-    <Project Path="src/Host/Sunder.Host.Supervisor/Sunder.Host.Supervisor.csproj" />
-    <Project Path="src/Host/Sunder.Package.Hosting/Sunder.Package.Hosting.csproj" />
-    <Project Path="src/Host/Sunder.App/Sunder.App.csproj" />
-    <Project Path="src/Host/Sunder.Cli/Sunder.Cli.csproj" />
-    <Project Path="src/Host/Sunder.Runtime.Client/Sunder.Runtime.Client.csproj" />
-    <Project Path="src/Host/Sunder.Runtime.Contracts/Sunder.Runtime.Contracts.csproj" />
-    <Project Path="src/Host/Sunder.Runtime.LocalState/Sunder.Runtime.LocalState.csproj" />
-    <Project Path="src/Host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj" />
-    <Project Path="src/Sunder.Package.Format/Sunder.Package.Format.csproj" />
-    <Project Path="tests/Sunder.App.Tests/Sunder.App.Tests.csproj" />
-    <Project Path="tests/Sunder.Host.Client.Tests/Sunder.Host.Client.Tests.csproj" />
-    <Project Path="tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj" />
-    <Project Path="tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj" />
-    <Project Path="tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" />
-    <Project Path="tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
-    <Project Path="tests/Sunder.Runtime.Host.TestWorker/Sunder.Runtime.Host.TestWorker.csproj" />
-    <Project Path="tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Host.Contracts/Sunder.Host.Contracts.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Host.Client/Sunder.Host.Client.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Host.Supervisor/Sunder.Host.Supervisor.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Package.Hosting/Sunder.Package.Hosting.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.App/Sunder.App.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Cli/Sunder.Cli.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Runtime.Client/Sunder.Runtime.Client.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Runtime.Contracts/Sunder.Runtime.Contracts.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Runtime.LocalState/Sunder.Runtime.LocalState.csproj" />
+    <Project Path="languages/csharp/dotnet/host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj" />
+    <Project Path="languages/csharp/dotnet/libraries/Sunder.Package.Format/Sunder.Package.Format.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Host.Client.Tests/Sunder.Host.Client.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.TestWorker/Sunder.Runtime.Host.TestWorker.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
   </Folder>
   <Folder Name="/Sdk/">
-    <Project Path="src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj" />
-    <Project Path="src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj" />
-    <Project Path="src/Sdk/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj" />
-    <Project Path="src/Sdk/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj" />
-    <Project Path="tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj" />
-    <Project Path="tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj" />
+    <Project Path="languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj" />
+    <Project Path="languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj" />
+    <Project Path="languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj" />
+    <Project Path="languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Sdk.Worker.Tests/Sunder.Sdk.Worker.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Sdk/Test Fixtures/">
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/AuthoredDynamicReflection/AuthoredDynamicReflection.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/AuthoredReflection/AuthoredReflection.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ExternalDependency/ExternalDependency.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/GeneratedAvalonia/GeneratedAvalonia.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/MissingExternal/MissingExternal.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/MissingSdkDependency/MissingSdkDependency.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/SourceReferencePackage/SourceReferencePackage.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/SourceReferenceSdk/SourceReferenceSdk.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerExecutable/WorkerExecutable.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV2Executable/WorkerV2Executable.csproj" />
   </Folder>
   <Folder Name="/Templates/">
-    <Project Path="src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />
-    <Project Path="tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj" />
   </Folder>
   <Folder Name="/Documentation Samples/">
-    <Project Path="docs/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.csproj" />
+    <Project Path="languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.csproj" />
   </Folder>
   <Folder Name="/Registry Contracts/">
-    <Project Path="src/Sunder.Registry.Contracts/Sunder.Registry.Contracts.csproj" />
-    <Project Path="tests/Sunder.Registry.Contracts.Tests/Sunder.Registry.Contracts.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/libraries/Sunder.Registry.Contracts/Sunder.Registry.Contracts.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Registry.Contracts.Tests/Sunder.Registry.Contracts.Tests.csproj" />
   </Folder>
 </Solution>

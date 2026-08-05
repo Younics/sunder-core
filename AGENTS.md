@@ -4,16 +4,18 @@ This repository contains the public Sunder core projects: the desktop app, local
 
 ## Project Map
 
-- `src/Host/Sunder.App` -- Avalonia desktop shell, package UI activation, marketplace/install UX.
-- `src/Host/Sunder.Runtime.Host` -- local installed package state, package validation/install/update/uninstall, runtime activation, local HTTP API.
-- `src/Host/Sunder.Cli` -- thin command-line client over Registry and runtime APIs.
-- `src/Host/Sunder.Runtime.Contracts` -- host-neutral DTOs for app/CLI/runtime communication.
-- `src/Sdk/Sunder.Sdk` -- public package author contracts and abstractions.
-- `src/Sdk/Sunder.Sdk.Avalonia` -- optional Avalonia package UI contracts and Sunder theme resources.
-- `src/Sdk/Sunder.Package.Build` -- MSBuild targets/tasks for generated manifests, `sunder-dev`, and `.sunderpkg` archives.
-- `src/Sdk/Sunder.Package.Templates` -- `dotnet new sunder-package` template.
-- `src/Sunder.Package.Format` -- shared package archive inspection and validation used by core and private Registry code.
-- `src/Sunder.Registry.Contracts` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
+- `languages/csharp/dotnet/host/Sunder.App` -- Avalonia desktop shell, package UI activation, marketplace/install UX.
+- `languages/csharp/dotnet/host/Sunder.Runtime.Host` -- local installed package state, package validation/install/update/uninstall, runtime activation, local HTTP API.
+- `languages/csharp/dotnet/host/Sunder.Cli` -- thin command-line client over Registry and runtime APIs.
+- `languages/csharp/dotnet/host/Sunder.Runtime.Contracts` -- host-neutral DTOs for app/CLI/runtime communication.
+- `languages/csharp/dotnet/packages/Sunder.Sdk` -- public package author contracts and abstractions.
+- `languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia` -- optional Avalonia package UI contracts and Sunder theme resources.
+- `languages/csharp/dotnet/packages/Sunder.Sdk.Worker` -- standalone .NET worker process protocol and authoring runtime.
+- `languages/csharp/dotnet/packages/Sunder.Package.Build` -- MSBuild targets/tasks for generated manifests, `sunder-dev`, and `.sunderpkg` archives.
+- `languages/csharp/dotnet/packages/Sunder.Package.Templates` -- `dotnet new sunder-package` template.
+- `languages/csharp/dotnet/libraries/Sunder.Package.Format` -- shared package archive inspection and validation used by core and private Registry code.
+- `languages/csharp/dotnet/libraries/Sunder.Registry.Contracts` -- public Registry API DTO contracts used by app, CLI, Registry web, and Registry server.
+- `languages/typescript/node` -- TypeScript SDK, Node package tooling, templates, and SEA fixtures.
 
 ## Boundaries
 
@@ -32,6 +34,7 @@ The public developer packages are:
 - `Sunder.Sdk`
 - `Sunder.Sdk.Avalonia`
 - `Sunder.Sdk.Stacks`
+- `Sunder.Sdk.Worker`
 - `Sunder.Package.Build`
 - `Sunder.Package.Templates`
 
@@ -56,8 +59,8 @@ dotnet build Sunder.Core.slnx --no-restore
 
 Useful targeted tests:
 
-- `dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore`
-- `dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore`
-- `dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore`
+- `dotnet test languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore`
+- `dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore`
+- `dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore`
 
 If a running app/runtime locks normal build outputs on Windows, build the affected project to alternate output and intermediate paths.

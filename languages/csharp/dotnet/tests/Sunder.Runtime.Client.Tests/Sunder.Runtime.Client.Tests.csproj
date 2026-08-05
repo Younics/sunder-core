@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\..\host\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -32,7 +32,7 @@ Use `sunder --help` or help on any group/leaf for the exact arguments. There are
 
 ## Configuration
 
-Default production settings come from `src/Host/Sunder.Cli/appsettings.json`:
+Default production settings come from `languages/csharp/dotnet/host/Sunder.Cli/appsettings.json`:
 
 | Setting | Default |
 | --- | --- |

@@ -1,6 +1,6 @@
 # Build, Validate, Publish, And Version
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 3. Use the matching `sdk/v*` tag for released build behavior.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 5. Use the matching `sdk/v*` tag for released build behavior.
 
 `Sunder.Package.Build` turns compiled package metadata into generated development output and immutable distributable archives. Package authors own C# metadata and normal MSBuild version properties; they do not maintain `sunder-package.json`.
 

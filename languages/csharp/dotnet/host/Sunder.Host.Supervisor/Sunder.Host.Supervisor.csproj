@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Host.Contracts\Sunder.Host.Contracts.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" ReferenceOutputAssembly="false" OutputItemType="_BundledRuntimeWorkerTargetPath" PrivateAssets="all" Private="false" GlobalPropertiesToRemove="BaseOutputPath;OutputPath;OutDir" />
+  </ItemGroup>
+
+  <Target Name="BundleRuntimeWorkerForBuild"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'@(_BundledRuntimeWorkerTargetPath->Count())' != '1'"
+           Text="Sunder.Runtime.Host did not provide exactly one build output for the Host bundle." />
+    <PropertyGroup>
+      <BundledRuntimeWorkerSourceDir>@(_BundledRuntimeWorkerTargetPath->'%(RootDir)%(Directory)')</BundledRuntimeWorkerSourceDir>
+      <BundledRuntimeWorkerOutputDir>$([System.IO.Path]::Combine('$(OutDir)', 'RuntimeHost'))\</BundledRuntimeWorkerOutputDir>
+      <_BundledRuntimeWorkerExecutable>$([System.IO.Path]::Combine('$(BundledRuntimeWorkerSourceDir)', 'Sunder.Runtime.Host$(_NativeExecutableExtension)'))</_BundledRuntimeWorkerExecutable>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('@(_BundledRuntimeWorkerTargetPath)')"
+           Text="The referenced Sunder.Runtime.Host build output '@(_BundledRuntimeWorkerTargetPath)' does not exist." />
+    <Error Condition="!Exists('$(_BundledRuntimeWorkerExecutable)')"
+           Text="The required bundled Runtime worker executable '$(_BundledRuntimeWorkerExecutable)' was not produced." />
+
+    <ItemGroup>
+      <_BundledRuntimeWorkerFiles Include="$(BundledRuntimeWorkerSourceDir)**\*" />
+    </ItemGroup>
+
+    <RemoveDir Directories="$(BundledRuntimeWorkerOutputDir)" />
+    <MakeDir Directories="$(BundledRuntimeWorkerOutputDir)" />
+
+    <Copy SourceFiles="@(_BundledRuntimeWorkerFiles)"
+          DestinationFiles="@(_BundledRuntimeWorkerFiles->'$(BundledRuntimeWorkerOutputDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_BundledRuntimeWorkerFiles)' != ''" />
+  </Target>
+
+  <Target Name="BundleRuntimeWorkerForPublish"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <MSBuild Projects="..\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);Version=$(Version);InformationalVersion=$(InformationalVersion);IncludeSourceRevisionInInformationalVersion=false;ContinuousIntegrationBuild=$(ContinuousIntegrationBuild);PublishDir=$(PublishDir)RuntimeHost\"
+             RemoveProperties="OutputPath;OutDir;IntermediateOutputPath;BaseIntermediateOutputPath" />
+  </Target>
+</Project>

@@ -15,16 +15,27 @@ concurrency:
 
 env:
   DOTNET_VERSION: "10.0.100"
-  SDK_VERSION: "1.1.0"
-  SDK_VERSION_RANGE: "[1.1.0,1.2.0)"
 
 jobs:
   build-test-pack:
     name: Build, test, and inspect V1 packages
     runs-on: ubuntu-latest
+    outputs:
+      npm_version: ${{ steps.sdk-metadata.outputs.npm_version }}
+      npm_version_range: ${{ steps.sdk-metadata.outputs.npm_version_range }}
+      sdk_version: ${{ steps.sdk-metadata.outputs.version }}
+      sdk_version_range: ${{ steps.sdk-metadata.outputs.version_range }}
+      vite_version: ${{ steps.sdk-metadata.outputs.vite_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Read and verify coordinated package metadata
+        id: sdk-metadata
+        run: node scripts/release/check-sdk-version.mjs
+
+      - name: Check Markdown links and anchors
+        run: python3 scripts/release/check-markdown-links.py .
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -44,21 +55,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dotnet src/Host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help >/dev/null
-          dotnet src/Host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help --json | grep -q '"exitCode":0'
+          dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help >/dev/null
+          dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll --help --json | grep -q '"exitCode":0'
 
       - name: Pack coordinated V1 packages
         shell: bash
+        env:
+          SDK_VERSION: ${{ steps.sdk-metadata.outputs.version }}
+          SDK_VERSION_RANGE: ${{ steps.sdk-metadata.outputs.version_range }}
         run: |
           set -euo pipefail
           output="$PWD/artifacts/sdk"
           mkdir -p "$output"
           projects=(
-            src/Sdk/Sunder.Sdk/Sunder.Sdk.csproj
-            src/Sdk/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj
-            src/Sdk/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj
-            src/Sdk/Sunder.Package.Build/Sunder.Package.Build.csproj
-            src/Sdk/Sunder.Package.Templates/Sunder.Package.Templates.csproj
+            languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj
+            languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj
+            languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj
+            languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj
+            languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj
+            languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj
           )
           for project in "${projects[@]}"; do
             dotnet pack "$project" -c Release --no-restore --no-build -o "$output" -p:GeneratePackageOnBuild=false
@@ -68,21 +83,30 @@ jobs:
             "Sunder.Sdk.$SDK_VERSION.nupkg"
             "Sunder.Sdk.Avalonia.$SDK_VERSION.nupkg"
             "Sunder.Sdk.Stacks.$SDK_VERSION.nupkg"
+            "Sunder.Sdk.Worker.$SDK_VERSION.nupkg"
             "Sunder.Package.Build.$SDK_VERSION.nupkg"
             "Sunder.Package.Templates.$SDK_VERSION.nupkg"
           )
-          test "$(find "$output" -maxdepth 1 -name '*.nupkg' -type f | wc -l)" -eq 5
+          test "$(find "$output" -maxdepth 1 -name '*.nupkg' -type f | wc -l)" -eq 6
           for package in "${expected[@]}"; do
             test -f "$output/$package"
           done
 
           for package in Sunder.Sdk.Avalonia Sunder.Sdk.Stacks; do
             nuspec="$(unzip -p "$output/$package.$SDK_VERSION.nupkg" '*.nuspec')"
-            if ! grep -Eq 'id="Sunder\.Sdk" version="\[1\.1\.0, ?1\.2\.0\)"' <<< "$nuspec"; then
-              echo "$package does not bound its Sunder.Sdk dependency to the 1.1 minor line." >&2
+            sdk_version_range_with_space="${SDK_VERSION_RANGE/,/, }"
+            if [[ "$nuspec" != *"id=\"Sunder.Sdk\" version=\"$SDK_VERSION_RANGE\""* \
+                && "$nuspec" != *"id=\"Sunder.Sdk\" version=\"$sdk_version_range_with_space\""* ]]; then
+              echo "$package does not bound its Sunder.Sdk dependency to '$SDK_VERSION_RANGE'." >&2
               exit 1
             fi
           done
+
+          worker_nuspec="$(unzip -p "$output/Sunder.Sdk.Worker.$SDK_VERSION.nupkg" '*.nuspec')"
+          if [[ "$worker_nuspec" != *"id=\"Sunder.Sdk\" version=\"[$SDK_VERSION]\""* ]]; then
+            echo "Sunder.Sdk.Worker must depend on the exact coordinated Sunder.Sdk version '[$SDK_VERSION]'." >&2
+            exit 1
+          fi
 
           build_entries="$(unzip -Z1 "$output/Sunder.Package.Build.$SDK_VERSION.nupkg")"
           test "$(printf '%s\n' "$build_entries" | grep -c '^buildTransitive/Sunder.Package.Build.targets$')" -eq 1
@@ -114,7 +138,7 @@ jobs:
           - variant: stacks
             arguments: "--withStacks"
           - variant: all
-            arguments: "--withAvalonia --withStacks --withContracts"
+            arguments: "--withAvalonia --withStacks"
     steps:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -127,8 +151,11 @@ jobs:
           name: sunder-sdk-v1-feed
           path: local-feed
 
-      - name: Generate, restore, build, and publish
+      - name: Generate, restore, build, and pack
         shell: bash
+        env:
+          SDK_VERSION: ${{ needs.build-test-pack.outputs.sdk_version }}
+          SDK_VERSION_RANGE: ${{ needs.build-test-pack.outputs.sdk_version_range }}
         run: |
           set -euo pipefail
           dotnet new install "$PWD/local-feed/Sunder.Package.Templates.$SDK_VERSION.nupkg"
@@ -137,11 +164,14 @@ jobs:
             --name "Smoke.${{ matrix.variant }}" \
             --packageId "smoke.${{ matrix.variant }}" \
             --packageName "Smoke ${{ matrix.variant }}" \
-            --createInPlace \
             --output "$sample" \
             ${{ matrix.arguments }}
 
-          project="$sample/Smoke.${{ matrix.variant }}.csproj"
+          project="$(find "$sample" -name "Smoke.${{ matrix.variant }}.csproj" -print -quit)"
+          if [[ -z "$project" ]]; then
+            echo "Generated template project was not found under '$sample'." >&2
+            exit 1
+          fi
           sunder_references="$(find "$sample" -type f \( -name '*.csproj' -o -name '*.props' \) -exec grep -Eh 'PackageReference Include="(Sunder\.Sdk(\.Avalonia|\.Stacks)?|Sunder\.Package\.Build)"' {} + || true)"
           if [[ -z "$sunder_references" ]]; then
             echo "Generated template did not contain Sunder package references." >&2
@@ -158,7 +188,7 @@ jobs:
             --source "$PWD/local-feed" \
             --source https://api.nuget.org/v3/index.json
           dotnet build "$project" -c Release --no-restore --no-incremental
-          dotnet publish "$project" -c Release --no-restore --no-build
+          dotnet msbuild "$project" -t:PackSunderPackage -p:Configuration=Release
 
           mapfile -t archives < <(find "$sample/bin/Release" -name '*.sunderpkg' -type f)
           if [[ ${#archives[@]} -ne 1 ]]; then

@@ -10,7 +10,7 @@ This folder contains current Sunder documentation for the implementation in this
 - [Package development](SUNDER-PACKAGE-DEVELOPMENT.md)
 - [Package standard](SUNDER-PACKAGE-STANDARD.md): normative package and Stack format rules
 - [SDK compatibility](SUNDER-SDK-COMPATIBILITY.md)
-- [TypeScript process Runtime and web App packages](SUNDER-NODE-PROCESS-PACKAGES.md)
+- [TypeScript worker Runtime and web App packages](SUNDER-NODE-PROCESS-PACKAGES.md)
 - [Sunder V1 baseline](SUNDER-V1-BASELINE.md)
 - [CLI reference](SUNDER-CLI.md)
 - [Desktop app and development arguments](SUNDER-APP.md)
@@ -31,7 +31,7 @@ This folder contains current Sunder documentation for the implementation in this
 - [Testing And CI](package-development/TESTING-AND-CI.md)
 - [Build, Validate, Publish, And Version](package-development/BUILD-PUBLISH-VERSIONING.md)
 - [Troubleshooting](package-development/TROUBLESHOOTING.md)
-- [Compiled quickstart sample](samples/Sunder.Package.Quickstart/README.md)
+- [Compiled quickstart sample](../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/README.md)
 
 ## Future Designs
 

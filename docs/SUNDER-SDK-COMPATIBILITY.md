@@ -8,13 +8,15 @@ The compatibility boundary is each exact target's generated manifest metadata, t
 
 The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, an overlapping supported revision range, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
 
-The V1 App and Runtime use protocol revision `3`. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent.
+The V1 App and Runtime use protocol revision `5`. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent.
 
 ## Target Compatibility Fields
 
 - `archiveFormatVersion` and `manifestVersion`: package archive and manifest schema versions.
 - `sdkVersion`: optional strict SemVer identifying the SDK used to build one SDK-backed target.
 - `requiredHostCapabilities`: granular Host requirements for one exact target, inferred from authored SDK usage or declared by non-.NET tooling.
+
+An isolated Runtime target requiring `worker-protocol.v2` selects exact wire identity `sunder.worker.v2` before process launch. Worker targets without that requirement remain on `sunder.worker.v1`; there is no handshake fallback.
 
 V1 targets contain distinct V1-form capability ids. SDK-backed targets built on the coordinated 1.1 line require `sdkVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing, malformed, or unsupported target metadata is rejected before target code runs.
 
@@ -71,6 +73,7 @@ Current SDK capabilities are:
 | `callbacks.v1` | generic callback sessions |
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |
+| `worker-protocol.v2` | exact opt-in to the native isolated Runtime worker V2 lifecycle |
 
 `Sunder.Package.Build` infers target requirements from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the target assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Stack provider registration and client-only use of `StackContributorRpcClient` both infer `stacks.rpc.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
 

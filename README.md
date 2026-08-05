@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/Host/Sunder.App/Assets/Images/logo.png" alt="Sunder logo" width="128" />
+  <img src="languages/csharp/dotnet/host/Sunder.App/Assets/Images/logo.png" alt="Sunder logo" width="128" />
   <h1>Sunder Core</h1>
   <p><strong>Local-first desktop package platform with an open, canonical package format.</strong></p>
   <p>Build installable packages that contribute UI, services, settings, background work, and runtime capabilities from managed or process toolchains.</p>
@@ -14,6 +14,7 @@
     <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4.svg">
     <a href="https://www.nuget.org/packages/Sunder.Sdk"><img alt="Sunder.Sdk NuGet" src="https://img.shields.io/nuget/v/Sunder.Sdk?label=Sunder.Sdk"></a>
     <a href="https://www.nuget.org/packages/Sunder.Sdk.Stacks"><img alt="Sunder.Sdk.Stacks NuGet" src="https://img.shields.io/nuget/v/Sunder.Sdk.Stacks?label=Stacks"></a>
+    <a href="https://www.nuget.org/packages/Sunder.Sdk.Worker"><img alt="Sunder.Sdk.Worker NuGet" src="https://img.shields.io/nuget/v/Sunder.Sdk.Worker?label=Worker"></a>
     <a href="https://www.nuget.org/packages/Sunder.Package.Build"><img alt="Sunder.Package.Build NuGet" src="https://img.shields.io/nuget/v/Sunder.Package.Build?label=Sunder.Package.Build"></a>
     <a href="https://www.nuget.org/packages/Sunder.Package.Templates"><img alt="Sunder.Package.Templates NuGet" src="https://img.shields.io/nuget/v/Sunder.Package.Templates?label=Templates"></a>
   </p>
@@ -68,7 +69,7 @@ dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuratio
 sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```
 
-Current authoring presets are managed .NET Runtime, Avalonia App, Node process Runtime, and framework-agnostic web App with React/Vite as one template. The package format is not tied to those presets. Future Python, Rust, Go, or other process toolchains, other .NET UI approaches, and other web frameworks can participate when their tooling emits the canonical archive and uses a target kind/protocol supported by the Host.
+Current authoring presets are managed in-process .NET Runtime, isolated .NET or Node worker Runtime, Avalonia App, and framework-agnostic web App with React/Vite as one template. The package format is not tied to those presets. Future Python, Rust, Go, or other worker toolchains, other .NET UI approaches, and other web frameworks can participate when their tooling emits the canonical archive and uses a target kind/protocol supported by the Host.
 
 ## Architecture
 
@@ -102,12 +103,13 @@ These are the public NuGet packages intended for package authors:
 | [`Sunder.Sdk`](https://www.nuget.org/packages/Sunder.Sdk) | Host-neutral Runtime/App roles, package services, configuration, background work, operations, callbacks, and extension APIs. |
 | [`Sunder.Sdk.Avalonia`](https://www.nuget.org/packages/Sunder.Sdk.Avalonia) | Avalonia views/settings and Sunder theme resources for App roles. |
 | [`Sunder.Sdk.Stacks`](https://www.nuget.org/packages/Sunder.Sdk.Stacks) | Optional Stack import/export models and Stack contributor contracts. |
+| [`Sunder.Sdk.Worker`](https://www.nuget.org/packages/Sunder.Sdk.Worker) | Standalone .NET worker protocol host for isolated Runtime targets. |
 | [`Sunder.Package.Build`](https://www.nuget.org/packages/Sunder.Package.Build) | Build-time targets and tasks for Sunder manifests, dev output, and archives. |
 | [`Sunder.Package.Templates`](https://www.nuget.org/packages/Sunder.Package.Templates) | `dotnet new sunder-package` project template. |
 
 `Sunder.Runtime.Contracts`, `Sunder.Package.Format`, and `Sunder.Registry.Contracts` are source projects used by Sunder, but they are not the public package-author SDK surface.
 
-For Node process Runtime and web App authoring, use [`@sunder/sdk`](https://www.npmjs.com/package/@sunder/sdk), [`@sunder/package-tool`](https://www.npmjs.com/package/@sunder/package-tool), and [`create-sunder-package`](https://www.npmjs.com/package/create-sunder-package). The TypeScript SDK is a deliberate RPC/process/browser subset, not a port of every managed `Sunder.Sdk` capability.
+For Node worker Runtime and web App authoring, use [`@sunder/sdk`](https://www.npmjs.com/package/@sunder/sdk), [`@sunder/package-tool`](https://www.npmjs.com/package/@sunder/package-tool), and [`create-sunder-package`](https://www.npmjs.com/package/create-sunder-package). The TypeScript SDK is a deliberate RPC/worker/browser subset, not a port of every managed `Sunder.Sdk` capability.
 
 ## Build From Source
 
@@ -121,11 +123,11 @@ Most projects target `.NET 10`.
 ## Tests
 
 ```powershell
-dotnet test tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
-dotnet test tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --no-restore
-dotnet test tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
-dotnet test tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
-dotnet test tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore
+dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore
 ```
 
 ## Documentation
@@ -150,7 +152,7 @@ Release automation is tag-driven:
 | `app/v*` | Sunder desktop app |
 | `host/v*` | Standalone current-user Host archive (Supervisor gateway with nested Runtime worker) |
 | `cli/v*` | Sunder CLI |
-| `sdk/v*` | Five coordinated NuGet packages and three coordinated npm packages for SDKs, build tooling, and templates |
+| `sdk/v*` | Six coordinated NuGet packages, including `Sunder.Sdk.Worker`, and three coordinated npm packages for SDKs, build tooling, and templates |
 
 See [`docs/SUNDER-CORE-RELEASES.md`](docs/SUNDER-CORE-RELEASES.md) for workflow checks, draft publishing, and signing status.
 

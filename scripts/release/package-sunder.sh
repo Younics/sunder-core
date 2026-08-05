@@ -291,9 +291,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-project_path="$repo_root/src/Host/Sunder.App/Sunder.App.csproj"
-runtime_host_project_path="$repo_root/src/Host/Sunder.Host.Supervisor/Sunder.Host.Supervisor.csproj"
-cli_project_path="$repo_root/src/Host/Sunder.Cli/Sunder.Cli.csproj"
+project_path="$repo_root/languages/csharp/dotnet/host/Sunder.App/Sunder.App.csproj"
 if [[ "$output_root" = /* ]]; then
   artifact_root="$output_root"
 else
@@ -301,7 +299,7 @@ else
 fi
 
 create_macos_icon() {
-  local source_png="$repo_root/src/Host/Sunder.App/Assets/Images/logo.png"
+  local source_png="$repo_root/languages/csharp/dotnet/host/Sunder.App/Assets/Images/logo.png"
   local icon_root="$artifact_root/icons"
   local iconset="$icon_root/Sunder.iconset"
   local icns="$icon_root/Sunder.icns"
@@ -442,9 +440,7 @@ release_dir="$artifact_root/velopack/$channel/$runtime"
 velopack_channel="app-$runtime-$channel"
 main_exe="Sunder.App"
 
-for restore_project in "$project_path" "$runtime_host_project_path" "$cli_project_path"; do
-  dotnet restore "$restore_project" -r "$runtime" -p:Configuration="$configuration"
-done
+dotnet restore "$project_path" -r "$runtime" -p:Configuration="$configuration"
 
 rm -rf "$publish_dir" "$release_dir"
 mkdir -p "$publish_dir" "$release_dir"
@@ -507,7 +503,7 @@ pack_args=(pack \
 
 case "$runtime" in
   linux-*)
-    pack_args+=(--icon "$repo_root/src/Host/Sunder.App/Assets/Images/logo.png" --categories Utility)
+    pack_args+=(--icon "$repo_root/languages/csharp/dotnet/host/Sunder.App/Assets/Images/logo.png" --categories Utility)
     ;;
   osx-*)
     macos_icon="$(create_macos_icon)"

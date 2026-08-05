@@ -1,0 +1,41 @@
+{
+  "name": "create-sunder-package",
+  "version": "1.1.0",
+  "description": "Scaffold Sunder Node SEA Runtime packages and combined React App packages.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Younics/sunder-core.git",
+    "directory": "languages/typescript/node/packages/create-sunder-package"
+  },
+  "homepage": "https://github.com/Younics/sunder-core/tree/main/languages/typescript/node/packages/create-sunder-package#readme",
+  "bugs": "https://github.com/Younics/sunder-core/issues",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "type": "commonjs",
+  "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "template",
+    "template-react-node",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "bin": {
+    "create-sunder-package": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run typecheck && npm run build && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
+  },
+  "dependencies": {
+    "@sunder/sdk": ">=1.1.0 <1.2.0"
+  }
+}

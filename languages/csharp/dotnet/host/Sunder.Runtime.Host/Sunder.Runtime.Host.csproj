@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Registry.Contracts\Sunder.Registry.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

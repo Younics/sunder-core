@@ -1,6 +1,6 @@
 # Stacks
 
-> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Stacks` `1.1.x`, Stack format V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Stacks` `1.1.x`, Stack format V1, .NET 10, and Runtime protocol revision 5.
 
 Stacks export selected setup from active packages into a portable archive and import it through a reviewable, contributor-owned plan. `Sunder.Sdk.Stacks` contains package-author contracts; Sunder Runtime owns archive validation, plan identity, and orchestration.
 
@@ -38,7 +38,7 @@ registry.RegisterStackContributor("my.company.package.stack", contributor, servi
 
 A single class may implement multiple local contracts, which all derive from `IPackageStackContributor`. Registration accepts that common interface rather than `object`, so unrelated services cannot be registered accidentally. The adapter publishes capability metadata over `sunder.stack.contributor` v1.0.0, and Runtime discovers only exact descriptor-compatible RPC endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
 
-The generated template's [compiled Stack stub](../../src/Sdk/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Runtime/StackSupport.cs) is exercised by template tests and CI.
+The generated template's [compiled Stack stub](../../languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.Runtime/StackSupport.cs) is exercised by template tests and CI.
 
 ## Export Lifecycle
 

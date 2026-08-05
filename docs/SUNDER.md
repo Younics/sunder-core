@@ -2,7 +2,7 @@
 
 Sunder Core is the public core of the Sunder local-first package platform. It contains the Avalonia desktop shell, current-user Host gateway (`Sunder.Host.Supervisor`), nested Runtime worker (`Sunder.Runtime.Host`), CLI, package SDK/build pipeline, package template, package archive validation, and public Registry DTO contracts.
 
-The canonical package model is authoring-tool neutral. Current presets cover managed .NET Runtime targets, Avalonia App targets, Node process Runtime targets, and framework-agnostic web App targets with React/Vite as one template. Python, Rust, Go, other process toolchains, other .NET UI approaches, and other web frameworks are valid future authoring routes when they emit the canonical package format and target a kind/protocol the Host supports; a new toolchain does not create a new runtime package type.
+The canonical package model is authoring-tool neutral. Current presets cover managed in-process .NET Runtime targets, isolated .NET and Node worker Runtime targets, Avalonia App targets, and framework-agnostic web App targets with React/Vite as one template. Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks are valid future authoring routes when they emit the canonical package format and target a kind/protocol the Host supports; a new toolchain does not create a new runtime package type.
 
 This document is the canonical current-state project map and architecture overview. In current documentation, **Host** or **Supervisor** means the public current-user gateway, **Runtime worker** means the nested `Sunder.Runtime.Host` process, and **standalone Runtime** means the direct-loopback development fallback. Package authoring, CLI commands, app development arguments, and Registry behavior are documented in the sibling Sunder docs.
 
@@ -12,18 +12,19 @@ Primary Sunder Core projects:
 
 | Area | Project | Responsibility |
 | --- | --- | --- |
-| Desktop app | `src/Host/Sunder.App` | Avalonia shell, package UI activation, package marketplace/install UX |
-| Current-user Host (Supervisor) | `src/Host/Sunder.Host.Supervisor` | Stable authenticated loopback API, durable Runtime worker lifecycle, private worker gateway |
-| Host client/contracts | `src/Host/Sunder.Host.Client`, `src/Host/Sunder.Host.Contracts` | Host discovery, credentials, protocol, and lifecycle DTOs |
-| Runtime worker | `src/Host/Sunder.Runtime.Host` | Nested local package state, package install/update/uninstall, runtime activation, and private worker API; direct loopback only as a standalone development fallback |
-| CLI | `src/Host/Sunder.Cli` | Registry browse/install/publish commands and current-user Host-gatewayed Runtime worker commands |
-| SDK | `src/Sdk/Sunder.Sdk` | Public package contracts, package module API, package context, theme keys |
-| Stack SDK | `src/Sdk/Sunder.Sdk.Stacks` | Optional public Stack import/export and contributor contracts |
-| Avalonia SDK | `src/Sdk/Sunder.Sdk.Avalonia` | Optional App role, Avalonia contribution contracts, and themes |
-| Build tooling | `src/Sdk/Sunder.Package.Build` | MSBuild targets/tasks for manifests, dev output, and `.sunderpkg` archives |
-| Templates | `src/Sdk/Sunder.Package.Templates` | `dotnet new sunder-package` template |
-| Package format | `src/Sunder.Package.Format` | Shared `.sunderpkg` archive inspection and validation |
-| Registry contracts | `src/Sunder.Registry.Contracts` | Public DTOs and API contracts used by CLI/app/web/server |
+| Desktop app | `languages/csharp/dotnet/host/Sunder.App` | Avalonia shell, package UI activation, package marketplace/install UX |
+| Current-user Host (Supervisor) | `languages/csharp/dotnet/host/Sunder.Host.Supervisor` | Stable authenticated loopback API, durable Runtime worker lifecycle, private worker gateway |
+| Host client/contracts | `languages/csharp/dotnet/host/Sunder.Host.Client`, `languages/csharp/dotnet/host/Sunder.Host.Contracts` | Host discovery, credentials, protocol, and lifecycle DTOs |
+| Runtime worker | `languages/csharp/dotnet/host/Sunder.Runtime.Host` | Nested local package state, package install/update/uninstall, runtime activation, and private worker API; direct loopback only as a standalone development fallback |
+| CLI | `languages/csharp/dotnet/host/Sunder.Cli` | Registry browse/install/publish commands and current-user Host-gatewayed Runtime worker commands |
+| SDK | `languages/csharp/dotnet/packages/Sunder.Sdk` | Public package contracts, package module API, package context, theme keys |
+| Stack SDK | `languages/csharp/dotnet/packages/Sunder.Sdk.Stacks` | Optional public Stack import/export and contributor contracts |
+| Worker SDK | `languages/csharp/dotnet/packages/Sunder.Sdk.Worker` | Standalone .NET worker protocol and isolated Runtime authoring support |
+| Avalonia SDK | `languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia` | Optional App role, Avalonia contribution contracts, and themes |
+| Build tooling | `languages/csharp/dotnet/packages/Sunder.Package.Build` | MSBuild targets/tasks for manifests, dev output, and `.sunderpkg` archives |
+| Templates | `languages/csharp/dotnet/packages/Sunder.Package.Templates` | `dotnet new sunder-package` template |
+| Package format | `languages/csharp/dotnet/libraries/Sunder.Package.Format` | Shared `.sunderpkg` archive inspection and validation |
+| Registry contracts | `languages/csharp/dotnet/libraries/Sunder.Registry.Contracts` | Public DTOs and API contracts used by CLI/app/web/server |
 
 First-party Agent packages live in the separate public `Younics/sunder-agent-package` repository. Registry implementation projects live in the separate private `Younics/sunder-registry` repository.
 
@@ -104,7 +105,7 @@ Most Sunder projects target `.NET 10`.
 If an app or runtime process locks normal build outputs, build affected projects to alternate output and intermediate paths:
 
 ```powershell
-dotnet build .\src\Host\Sunder.App\Sunder.App.csproj --no-restore -p:OutputPath=.\artifacts\tmp\sunder-app\bin\ -p:IntermediateOutputPath=.\artifacts\tmp\sunder-app\obj\
+dotnet build .\languages\csharp\dotnet\host\Sunder.App\Sunder.App.csproj --no-restore -p:OutputPath=.\artifacts\tmp\sunder-app\bin\ -p:IntermediateOutputPath=.\artifacts\tmp\sunder-app\obj\
 ```
 
 For managed package development, `dotnet build` emits `sunder-dev`; the canonical `PackSunderPackage` target emits `.sunderpkg` beside the target output, and `dotnet publish` also emits an archive when normal publish output is required.

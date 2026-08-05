@@ -1,6 +1,6 @@
 # Package Anatomy
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 3.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
 
 A Sunder package is one installed and versioned universal unit containing shared content and zero or more exact App/Runtime RID targets. App and Runtime run in separate processes and never share package object instances.
 
@@ -65,7 +65,7 @@ MyPackage/
 
 The generated `*.Protocol` project is non-packable and package-local. It contains bundled descriptors plus generated DTO, client, and provider adapters; Runtime and App consume it through private project references. Keep Avalonia types out of Runtime-only code. The aggregate project combines validated leaves into one universal package.
 
-The compiled [quickstart package](../samples/Sunder.Package.Quickstart/) demonstrates one assembly with separate Runtime and App registrations.
+The compiled [quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) demonstrates one assembly with separate Runtime and App registrations.
 
 ## Package Dependencies Versus Protocol Helpers
 
