@@ -122,6 +122,7 @@ while (true)
     {
         if (mode == "crash") return 42;
         if (mode == "activation-hang") continue;
+        if (mode == "activation-delay") await Task.Delay(250);
         if (mode == "malformed-frame")
         {
             await output.WriteAsync("Content-Length: nope\r\n\r\n"u8.ToArray());

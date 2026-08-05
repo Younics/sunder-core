@@ -69,7 +69,9 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
             var forwardDelegate = _interop.AcquireForwardDelegate(proxy);
             try
             {
-                canDestroy = _interop.TrySetWindowDelegate(_windowHandle, forwardDelegate);
+                canDestroy = _interop.TrySetWindowDelegate(
+                    _windowHandle,
+                    forwardDelegate == proxy ? IntPtr.Zero : forwardDelegate);
             }
             finally
             {
@@ -110,7 +112,9 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
             var originalDelegate = _interop.AcquireForwardDelegate(proxy);
             try
             {
-                canDestroy = _interop.TrySetWindowDelegate(_windowHandle, originalDelegate);
+                canDestroy = _interop.TrySetWindowDelegate(
+                    _windowHandle,
+                    originalDelegate == proxy ? IntPtr.Zero : originalDelegate);
             }
             finally
             {
@@ -158,7 +162,7 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
             if (
                 originalDelegate != IntPtr.Zero
                 && originalDelegate != proxy
-                && _interop.RespondsToSelector(originalDelegate, selector)
+                && _interop.ImplementsSelector(originalDelegate, selector)
             )
             {
                 _interop.SendWindowDelegateCallback(originalDelegate, selector, windowHandle);
@@ -186,7 +190,8 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
         try
         {
             return forwardDelegate != IntPtr.Zero
-                && _interop.RespondsToSelector(forwardDelegate, selector);
+                && forwardDelegate != _proxy
+                && _interop.ImplementsSelector(forwardDelegate, selector);
         }
         finally
         {
@@ -206,7 +211,8 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
         {
             if (
                 forwardDelegate != IntPtr.Zero
-                && _interop.RespondsToSelector(forwardDelegate, selector)
+                && forwardDelegate != _proxy
+                && _interop.ImplementsSelector(forwardDelegate, selector)
             )
             {
                 return forwardDelegate;
@@ -246,7 +252,7 @@ internal interface IMacOsWindowDelegateInterop
 
     IntPtr AcquireForwardDelegate(IntPtr proxy);
 
-    bool RespondsToSelector(IntPtr target, IntPtr selector);
+    bool ImplementsSelector(IntPtr target, IntPtr selector);
 
     void SendWindowDelegateCallback(IntPtr target, IntPtr selector, IntPtr windowHandle);
 

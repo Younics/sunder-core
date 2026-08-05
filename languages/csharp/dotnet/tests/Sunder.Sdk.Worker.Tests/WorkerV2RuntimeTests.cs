@@ -288,6 +288,54 @@ public sealed class WorkerV2RuntimeTests
         await worker.ShutdownAsync();
     }
 
+    [Fact]
+    public async Task WorkerV2_ProviderSynchronousPrefixCannotBlockNestedHostResponse()
+    {
+        SunderWorkerContext? context = null;
+        var handler = new TestRpcHandler
+        {
+            Unary = (_, _, _, request, cancellationToken) =>
+            {
+                _ = context!.Rpc.DiscoverAsync(WorkerHarness.ContractId, cancellationToken)
+                    .AsTask()
+                    .GetAwaiter()
+                    .GetResult();
+                return ValueTask.FromResult(request.Clone());
+            },
+        };
+        await using var worker = new WorkerHarness(workerContext =>
+        {
+            context = workerContext;
+            return new SunderWorkerV2Options([WorkerHarness.Registration(handler)]);
+        });
+        await worker.HandshakeAndActivateAsync();
+
+        await worker.SendInvocationAsync("nested1", "unary", "nested");
+        using (var request = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.discover", request.RootElement.GetProperty("type").GetString());
+            await worker.SendAsync(new
+            {
+                type = "host.result",
+                id = request.RootElement.GetProperty("id").GetString(),
+                value = new
+                {
+                    revision = 1,
+                    sequence = 1,
+                    providers = Array.Empty<object>(),
+                    resetRequired = false,
+                },
+            });
+        }
+        using (var result = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.result", result.RootElement.GetProperty("type").GetString());
+            Assert.Equal("hello", result.RootElement.GetProperty("value").GetProperty("message").GetString());
+        }
+
+        await worker.ShutdownAsync();
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

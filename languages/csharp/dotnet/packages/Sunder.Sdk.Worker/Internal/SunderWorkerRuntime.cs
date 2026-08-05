@@ -722,6 +722,9 @@ internal sealed class SunderWorkerRuntime
         string methodId,
         JsonElement request)
     {
+        // Provider code may issue a nested Host RPC before its first asynchronous yield. Keep that
+        // synchronous prefix off the protocol reader so it can consume the nested response.
+        await Task.Yield();
         try
         {
             if (invocation.Kind == InboundInvocationKind.Unary)

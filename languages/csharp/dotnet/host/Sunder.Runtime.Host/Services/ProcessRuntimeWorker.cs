@@ -44,6 +44,7 @@ internal sealed partial class ProcessRuntimeWorker :
     private readonly object _stateGate = new();
     private readonly object _callGate = new();
     private readonly Dictionary<string, HostCall> _hostCalls = new(StringComparer.Ordinal);
+    private int _pendingHostCalls;
     private readonly Dictionary<string, WorkerCall> _workerCalls = new(StringComparer.Ordinal);
     private readonly HashSet<Task> _workerCallCleanup = [];
     private readonly Dictionary<string, WorkerCallScope> _workerCallScopes = new(StringComparer.Ordinal);
@@ -491,21 +492,41 @@ internal sealed partial class ProcessRuntimeWorker :
         RuntimeCancellation.DisposeAfterCallbacks(_forceStop, SignalForceStop());
     }
 
-    public ValueTask<JsonElement> InvokeUnaryAsync(
+    public async ValueTask<JsonElement> InvokeUnaryAsync(
         string providerId,
         SunderRpcInvocationContext context,
         string serviceId,
         string methodId,
         JsonElement request,
         CancellationToken cancellationToken)
-        => InvokeUnaryCoreAsync(
-            AddHostCall(HostCallKind.Unary, context, providerId, serviceId, methodId),
-            providerId,
-            context,
-            serviceId,
-            methodId,
-            request,
-            cancellationToken);
+    {
+        ReservePendingHostCall();
+        var reservationHeld = true;
+        try
+        {
+            await WaitForInvocationReadinessAsync(cancellationToken).ConfigureAwait(false);
+            var call = AddHostCall(
+                HostCallKind.Unary,
+                context,
+                providerId,
+                serviceId,
+                methodId,
+                consumePendingReservation: true);
+            reservationHeld = false;
+            return await InvokeUnaryCoreAsync(
+                call,
+                providerId,
+                context,
+                serviceId,
+                methodId,
+                request,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (reservationHeld) ReleasePendingHostCall();
+        }
+    }
 
     public IAsyncEnumerable<JsonElement> InvokeServerStreamAsync(
         string providerId,
@@ -514,14 +535,89 @@ internal sealed partial class ProcessRuntimeWorker :
         string methodId,
         JsonElement request,
         CancellationToken cancellationToken)
-        => InvokeServerStreamCoreAsync(
-            AddHostCall(HostCallKind.ServerStream, context, providerId, serviceId, methodId),
+        => InvokeServerStreamWhenReadyAsync(
             providerId,
             context,
             serviceId,
             methodId,
             request,
             cancellationToken);
+
+    private async IAsyncEnumerable<JsonElement> InvokeServerStreamWhenReadyAsync(
+        string providerId,
+        SunderRpcInvocationContext context,
+        string serviceId,
+        string methodId,
+        JsonElement request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ReservePendingHostCall();
+        var reservationHeld = true;
+        try
+        {
+            await WaitForInvocationReadinessAsync(cancellationToken).ConfigureAwait(false);
+            var call = AddHostCall(
+                HostCallKind.ServerStream,
+                context,
+                providerId,
+                serviceId,
+                methodId,
+                consumePendingReservation: true);
+            reservationHeld = false;
+            await foreach (var item in InvokeServerStreamCoreAsync(
+                call,
+                providerId,
+                context,
+                serviceId,
+                methodId,
+                request,
+                cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+        }
+        finally
+        {
+            if (reservationHeld) ReleasePendingHostCall();
+        }
+    }
+
+    private async ValueTask WaitForInvocationReadinessAsync(CancellationToken cancellationToken)
+    {
+        Task? activation = null;
+        lock (_stateGate)
+        {
+            ThrowIfFaulted();
+            if (_state == WorkerState.Active)
+            {
+                return;
+            }
+            if (_protocol.UsesV2Lifecycle && _state == WorkerState.Activating)
+            {
+                activation = _activated.Task;
+            }
+            else
+            {
+                throw WorkerActivating();
+            }
+        }
+
+        await activation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        lock (_stateGate)
+        {
+            ThrowIfFaulted();
+            if (_state != WorkerState.Active)
+            {
+                throw WorkerActivating();
+            }
+        }
+    }
+
+    private static SunderRpcException WorkerActivating()
+        => new(new SunderRpcError(
+            SunderRpcErrorKind.Unavailable,
+            "rpc.worker.activating",
+            "The process Runtime provider is still activating."));
 
     private async ValueTask<JsonElement> InvokeUnaryCoreAsync(
         HostCall call,
@@ -663,17 +759,15 @@ internal sealed partial class ProcessRuntimeWorker :
         SunderRpcInvocationContext context,
         string providerId,
         string serviceId,
-        string methodId)
+        string methodId,
+        bool consumePendingReservation = false)
     {
         lock (_stateGate)
         {
             ThrowIfFaulted();
             if (_state != WorkerState.Active)
             {
-                throw new SunderRpcException(new SunderRpcError(
-                    SunderRpcErrorKind.Unavailable,
-                    "rpc.worker.activating",
-                    "The process Runtime provider is still activating."));
+                throw WorkerActivating();
             }
         }
         var call = new HostCall(
@@ -685,7 +779,8 @@ internal sealed partial class ProcessRuntimeWorker :
             methodId);
         lock (_callGate)
         {
-            if (_hostCalls.Count >= _policy.MaxOutstandingHostCalls)
+            if (!consumePendingReservation
+                && _hostCalls.Count + _pendingHostCalls >= _policy.MaxOutstandingHostCalls)
             {
                 throw new SunderRpcException(new SunderRpcError(
                     SunderRpcErrorKind.ResourceExhausted,
@@ -693,8 +788,49 @@ internal sealed partial class ProcessRuntimeWorker :
                     "The process worker outstanding call limit was reached."));
             }
             _hostCalls.Add(call.Id, call);
+            if (consumePendingReservation)
+            {
+                if (_pendingHostCalls <= 0)
+                {
+                    _hostCalls.Remove(call.Id);
+                    throw new InvalidOperationException("A process worker Host call reservation was not held.");
+                }
+                _pendingHostCalls--;
+            }
         }
         return call;
+    }
+
+    private void ReservePendingHostCall()
+    {
+        lock (_stateGate)
+        {
+            ThrowIfFaulted();
+            if (_state != WorkerState.Active
+                && (!_protocol.UsesV2Lifecycle || _state != WorkerState.Activating))
+            {
+                throw WorkerActivating();
+            }
+            lock (_callGate)
+            {
+                if (_hostCalls.Count + _pendingHostCalls >= _policy.MaxOutstandingHostCalls)
+                {
+                    throw new SunderRpcException(new SunderRpcError(
+                        SunderRpcErrorKind.ResourceExhausted,
+                        "rpc.worker.host-call-limit",
+                        "The process worker outstanding call limit was reached."));
+                }
+                _pendingHostCalls++;
+            }
+        }
+    }
+
+    private void ReleasePendingHostCall()
+    {
+        lock (_callGate)
+        {
+            if (_pendingHostCalls > 0) _pendingHostCalls--;
+        }
     }
 
     private void CancelHostCall(HostCall call, CancellationToken cancellationToken)
@@ -2631,6 +2767,7 @@ internal sealed partial class ProcessRuntimeWorker :
             _candidateStarted.TrySetResult();
             _generationCommitted.TrySetResult();
         }
+        _activated.TrySetException(exception);
         _generationCompletion.TrySetException(exception);
         _shutdownAcknowledged.TrySetException(exception);
         FailOutstandingCalls(exception);

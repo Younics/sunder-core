@@ -88,6 +88,52 @@ public sealed class MacOsWindowDelegateProxyTests
     }
 
     [Fact]
+    public void OptionalDelegateSelectors_DoNotForwardToTheProxyItself()
+    {
+        var interop = new FakeDelegateInterop(Window, OriginalDelegate)
+        {
+            CreateSelfForwardingProxy = true,
+        };
+        var proxy = new MacOsWindowDelegateProxy(Window, interop, (_, _) => { });
+        Assert.True(proxy.Install());
+        var proxyHandle = proxy.ProxyHandle;
+        interop.AddSelector(proxy.ProxyHandle, OtherSelector);
+
+        Assert.False(
+            MacOsWindowDelegateProxy.ForwardDelegateRespondsToSelector(
+                proxy.ProxyHandle,
+                OtherSelector));
+        Assert.Equal(
+            IntPtr.Zero,
+            MacOsWindowDelegateProxy.AcquireForwardingTarget(proxy.ProxyHandle, OtherSelector));
+        Assert.Equal(interop.AcquireCount, interop.ReleaseCount);
+
+        proxy.Dispose();
+
+        Assert.Equal(IntPtr.Zero, interop.GetWindowDelegate(Window));
+        Assert.Contains(proxyHandle, interop.DestroyedProxies);
+    }
+
+    [Fact]
+    public void OptionalDelegateSelectors_DoNotFollowAForwardingCycleBackThroughTheWindow()
+    {
+        var interop = new FakeDelegateInterop(Window, OriginalDelegate);
+        interop.AddForwardedSelector(OriginalDelegate, OtherSelector);
+        using var proxy = new MacOsWindowDelegateProxy(Window, interop, (_, _) => { });
+        Assert.True(proxy.Install());
+        Assert.True(interop.WouldRespondToSelector(OriginalDelegate, OtherSelector));
+
+        Assert.False(
+            MacOsWindowDelegateProxy.ForwardDelegateRespondsToSelector(
+                proxy.ProxyHandle,
+                OtherSelector));
+        Assert.Equal(
+            IntPtr.Zero,
+            MacOsWindowDelegateProxy.AcquireForwardingTarget(proxy.ProxyHandle, OtherSelector));
+        Assert.Equal(interop.AcquireCount, interop.ReleaseCount);
+    }
+
+    [Fact]
     public void Dispose_RestoresExistingDelegateAndDestroysProxy()
     {
         var interop = new FakeDelegateInterop(Window, OriginalDelegate);
@@ -171,6 +217,7 @@ public sealed class MacOsWindowDelegateProxyTests
         private readonly Dictionary<IntPtr, IntPtr> _windowDelegates = [];
         private readonly Dictionary<IntPtr, IntPtr> _forwardDelegates = [];
         private readonly HashSet<(IntPtr Target, IntPtr Selector)> _selectors = [];
+        private readonly HashSet<(IntPtr Target, IntPtr Selector)> _forwardedSelectors = [];
         private readonly HashSet<IntPtr> _alive = [];
         private readonly List<string>? _calls;
         private long _nextProxy = 100;
@@ -193,8 +240,18 @@ public sealed class MacOsWindowDelegateProxyTests
 
         public bool AllowDelegateChanges { get; set; } = true;
 
+        public bool CreateSelfForwardingProxy { get; set; }
+
         public void AddSelector(IntPtr target, IntPtr selector) =>
             _selectors.Add((target, selector));
+
+        public void AddForwardedSelector(IntPtr target, IntPtr selector) =>
+            _forwardedSelectors.Add((target, selector));
+
+        public bool WouldRespondToSelector(IntPtr target, IntPtr selector) =>
+            _alive.Contains(target)
+            && (_selectors.Contains((target, selector))
+                || _forwardedSelectors.Contains((target, selector)));
 
         public void Deallocate(IntPtr target) => _alive.Remove(target);
 
@@ -215,7 +272,7 @@ public sealed class MacOsWindowDelegateProxyTests
         public IntPtr CreateProxy(IntPtr forwardDelegate)
         {
             var proxy = new IntPtr(_nextProxy++);
-            _forwardDelegates[proxy] = forwardDelegate;
+            _forwardDelegates[proxy] = CreateSelfForwardingProxy ? proxy : forwardDelegate;
             _alive.Add(proxy);
             return proxy;
         }
@@ -242,7 +299,7 @@ public sealed class MacOsWindowDelegateProxyTests
             return target;
         }
 
-        public bool RespondsToSelector(IntPtr target, IntPtr selector) =>
+        public bool ImplementsSelector(IntPtr target, IntPtr selector) =>
             _alive.Contains(target) && _selectors.Contains((target, selector));
 
         public void SendWindowDelegateCallback(

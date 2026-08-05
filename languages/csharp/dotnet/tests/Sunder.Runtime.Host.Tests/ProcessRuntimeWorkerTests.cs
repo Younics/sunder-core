@@ -160,7 +160,6 @@ public sealed class ProcessRuntimeWorkerTests
     {
         await using var fixture = await WorkerFixture.CreateAsync("normal", useV2: true);
         await fixture.StartAndActivateAsync();
-        await fixture.WaitForActivationAsync();
 
         var result = await fixture.Worker.InvokeUnaryAsync(
             "example.provider",
@@ -568,26 +567,90 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV2_ProviderDispatchStaysUnavailableUntilActivationAcknowledgement()
+    public async Task WorkerV2_ProviderDispatchWaitsForActivationAcknowledgement()
     {
         await using var fixture = await WorkerFixture.CreateAsync("activation-hang", useV2: true);
         await fixture.Worker.StartAsync();
         await fixture.Worker.CommitGenerationAsync(
             new Sunder.Sdk.Abstractions.PackageRuntimeGeneration(fixture.ActivationId, 1));
         fixture.Worker.ActivateGeneration();
+        using var cancellation = new CancellationTokenSource();
 
-        var unavailable = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+        var invocation = fixture.Worker.InvokeUnaryAsync(
+            "example.provider",
+            fixture.InvocationContext(),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "early" }),
+            cancellation.Token).AsTask();
+        await Task.Delay(100);
+
+        Assert.False(invocation.IsCompleted);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invocation);
+        await fixture.Worker.StopAsync();
+    }
+
+    [Fact]
+    public async Task WorkerV2_ActivationWaitersRespectOutstandingHostCallLimit()
+    {
+        var policy = new RuntimeProcessPolicyOptions { MaxOutstandingHostCalls = 1 };
+        await using var fixture = await WorkerFixture.CreateAsync(
+            "activation-hang",
+            policy,
+            useV2: true);
+        await fixture.Worker.StartAsync();
+        await fixture.Worker.CommitGenerationAsync(
+            new Sunder.Sdk.Abstractions.PackageRuntimeGeneration(fixture.ActivationId, 1));
+        fixture.Worker.ActivateGeneration();
+        using var cancellation = new CancellationTokenSource();
+        var first = fixture.Worker.InvokeUnaryAsync(
+            "example.provider",
+            fixture.InvocationContext(),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "first" }),
+            cancellation.Token).AsTask();
+        await Task.Delay(100);
+
+        var exhausted = await Assert.ThrowsAsync<SunderRpcException>(async () =>
             await fixture.Worker.InvokeUnaryAsync(
                 "example.provider",
                 fixture.InvocationContext(),
                 "messages",
                 "send",
-                JsonSerializer.SerializeToElement(new { message = "early" }),
+                JsonSerializer.SerializeToElement(new { message = "second" }),
                 CancellationToken.None));
 
-        Assert.Equal(SunderRpcErrorKind.Unavailable, unavailable.Error.Kind);
-        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+        Assert.Equal(SunderRpcErrorKind.ResourceExhausted, exhausted.Error.Kind);
+        Assert.Equal("rpc.worker.host-call-limit", exhausted.Error.Code);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
         await fixture.Worker.StopAsync();
+    }
+
+    [Fact]
+    public async Task WorkerV2_PendingProviderDispatchContinuesAfterActivationAcknowledgement()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("activation-delay", useV2: true);
+        await fixture.Worker.StartAsync();
+        await fixture.Worker.CommitGenerationAsync(
+            new Sunder.Sdk.Abstractions.PackageRuntimeGeneration(fixture.ActivationId, 1));
+        fixture.Worker.ActivateGeneration();
+
+        var invocation = fixture.Worker.InvokeUnaryAsync(
+            "example.provider",
+            fixture.InvocationContext(),
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "pending" }),
+            CancellationToken.None).AsTask();
+        await Task.Delay(50);
+
+        Assert.False(invocation.IsCompleted);
+        var result = await invocation.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(result.GetProperty("accepted").GetBoolean());
     }
 
     [Fact]

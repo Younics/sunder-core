@@ -412,8 +412,8 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
         public IntPtr AcquireForwardDelegate(IntPtr proxy) =>
             ObjectiveC.LoadWeakRetained(proxy, Metadata.Value.ForwardDelegateOffset);
 
-        public bool RespondsToSelector(IntPtr target, IntPtr selector) =>
-            ObjectiveC.RespondsToSelector(target, selector);
+        public bool ImplementsSelector(IntPtr target, IntPtr selector) =>
+            ObjectiveC.ImplementsSelector(target, selector);
 
         public void SendWindowDelegateCallback(
             IntPtr target,
@@ -444,7 +444,8 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
                     {
                         if (
                             forwardDelegate != IntPtr.Zero
-                            && Instance.RespondsToSelector(forwardDelegate, selector)
+                            && forwardDelegate != proxy
+                            && Instance.ImplementsSelector(forwardDelegate, selector)
                         )
                         {
                             Instance.SendWindowDelegateCallback(
@@ -490,7 +491,8 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
                 try
                 {
                     return forwardDelegate != IntPtr.Zero
-                        && Instance.RespondsToSelector(forwardDelegate, selector);
+                        && forwardDelegate != proxy
+                        && Instance.ImplementsSelector(forwardDelegate, selector);
                 }
                 finally
                 {
@@ -522,7 +524,8 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
                 {
                     if (
                         forwardDelegate != IntPtr.Zero
-                        && Instance.RespondsToSelector(forwardDelegate, selector)
+                        && forwardDelegate != proxy
+                        && Instance.ImplementsSelector(forwardDelegate, selector)
                     )
                     {
                         return ObjectiveC.Autorelease(forwardDelegate);
@@ -758,12 +761,9 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
         public static void SendObject(IntPtr receiver, IntPtr selector, IntPtr value) =>
             SendObjectMessage(receiver, selector, value);
 
-        public static bool RespondsToSelector(IntPtr target, IntPtr selector) =>
+        public static bool ImplementsSelector(IntPtr target, IntPtr selector) =>
             target != IntPtr.Zero
-            && SendBooleanWithSelector(
-                target,
-                sel_registerName("respondsToSelector:"),
-                selector);
+            && ClassHasInstanceMethod(object_getClass(target), selector);
 
         public static bool ClassHasInstanceMethod(IntPtr targetClass, IntPtr selector) =>
             class_getInstanceMethod(targetClass, selector) != IntPtr.Zero;
@@ -842,6 +842,9 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
         private static extern IntPtr objc_retain(IntPtr instance);
 
         [DllImport(Library)]
+        private static extern IntPtr object_getClass(IntPtr instance);
+
+        [DllImport(Library)]
         private static extern void objc_registerClassPair(IntPtr targetClass);
 
         [DllImport(Library, EntryPoint = "sel_registerName")]
@@ -858,13 +861,6 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
 
         [DllImport(Library, EntryPoint = "objc_msgSend")]
         private static extern void SendObjectMessage(
-            IntPtr receiver,
-            IntPtr selector,
-            IntPtr value);
-
-        [DllImport(Library, EntryPoint = "objc_msgSend")]
-        [return: MarshalAs(UnmanagedType.I1)]
-        private static extern bool SendBooleanWithSelector(
             IntPtr receiver,
             IntPtr selector,
             IntPtr value);
