@@ -115,6 +115,7 @@ public sealed class RuntimeHealthProbeTests
                             HostProtocolFeatures.RuntimeGatewayV1,
                             HostProtocolFeatures.RuntimeLifecycleV1,
                             HostProtocolFeatures.DurableOperationsV1,
+                            HostProtocolFeatures.RuntimeStartupDiagnosticsV1,
                         ],
                         new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "test"))),
                 };
@@ -219,6 +220,7 @@ public sealed class RuntimeHealthProbeTests
                             HostProtocolFeatures.RuntimeGatewayV1,
                             HostProtocolFeatures.RuntimeLifecycleV1,
                             HostProtocolFeatures.DurableOperationsV1,
+                            HostProtocolFeatures.RuntimeStartupDiagnosticsV1,
                         ],
                         new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "test"))),
                 };

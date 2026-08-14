@@ -108,6 +108,45 @@ internal static class PackageTargetBuilder
             return (ITaskItem)item;
         }).ToArray();
 
+    public static IReadOnlyList<SunderPackageTargetManifest>? StampRpcV2Capabilities(
+        IReadOnlyList<SunderPackageTargetManifest> targets,
+        IReadOnlySet<string> roles,
+        TaskLoggingHelper log)
+    {
+        var result = new List<SunderPackageTargetManifest>(targets.Count);
+        foreach (var target in targets)
+        {
+            var capabilities = (target.RequiredHostCapabilities ?? [])
+                .Where(static value => value is not null)
+                .Select(static value => value!)
+                .ToHashSet(StringComparer.Ordinal);
+            if (roles.Contains(target.Role!)
+                || string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal))
+            {
+                capabilities.Add(SunderPackageFormat.RpcV2Capability);
+            }
+            if (capabilities.Count > SunderPackageFormat.MaxHostCapabilities)
+            {
+                log.LogError(
+                    $"Sunder package target '{target.Role}/{target.Rid}' exceeds the requiredHostCapabilities limit after RPC V2 capability stamping.");
+                continue;
+            }
+
+            result.Add(new SunderPackageTargetManifest
+            {
+                Role = target.Role,
+                Rid = target.Rid,
+                Kind = target.Kind,
+                EntryPoint = target.EntryPoint,
+                TargetFramework = target.TargetFramework,
+                SdkVersion = target.SdkVersion,
+                RequiredHostCapabilities = capabilities.Order(StringComparer.Ordinal).Cast<string?>().ToArray(),
+                Views = target.Views,
+            });
+        }
+        return log.HasLoggedErrors ? null : result;
+    }
+
     private static IReadOnlyList<SunderPackageTargetManifest>? BuildInferred(
         IReadOnlyList<ITaskItem> configuredRuntimeIdentifiers,
         IReadOnlyList<ITaskItem> configuredViews,
@@ -142,7 +181,8 @@ internal static class PackageTargetBuilder
             return null;
         }
 
-        return roles.SelectMany(role => rids.Select(rid => Create(
+        return roles.Where(static role => role == SunderPackageFormat.AppHostRole)
+            .SelectMany(role => rids.Select(rid => Create(
                 role,
                 rid,
                 DefaultKind(role),
@@ -181,10 +221,11 @@ internal static class PackageTargetBuilder
                 rid ??= itemRid;
             }
             var kind = role is null ? null : Metadata(item, "Kind") ?? DefaultKind(role);
-            if (string.Equals(kind, SunderPackageFormat.ProcessTargetKind, StringComparison.Ordinal))
+            if (string.Equals(role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
+                && !string.Equals(kind, SunderPackageFormat.WorkerTargetKind, StringComparison.Ordinal))
             {
                 log.LogError(
-                    $"SunderPackageTarget '{item.ItemSpec}' uses legacy target kind '{SunderPackageFormat.ProcessTargetKind}'. Fresh C# package targets must use '{SunderPackageFormat.WorkerTargetKind}'; '{SunderPackageFormat.ProcessTargetKind}' remains supported only for existing legacy package inputs.");
+                    $"SunderPackageTarget '{item.ItemSpec}' uses unsupported Runtime target kind '{kind}'. Manifest V{SunderPackageFormat.CurrentManifestVersion} C# Runtime targets must use '{SunderPackageFormat.WorkerTargetKind}'.");
                 continue;
             }
             var isWorker = role == SunderPackageFormat.RuntimeHostRole
@@ -213,6 +254,7 @@ internal static class PackageTargetBuilder
         }
         ValidateWorkerConfiguration(
             targets,
+            defaultEntryPoint,
             runtimeIdentifier,
             outputType,
             selfContained,
@@ -224,6 +266,7 @@ internal static class PackageTargetBuilder
 
     private static void ValidateWorkerConfiguration(
         IReadOnlyList<SunderPackageTargetManifest> targets,
+        string defaultEntryPoint,
         string? runtimeIdentifier,
         string? outputType,
         bool selfContained,
@@ -242,6 +285,15 @@ internal static class PackageTargetBuilder
         }
 
         var worker = workers[0];
+        var expectedEntryPoint = DefaultEntryPoint(
+            SunderPackageFormat.WorkerTargetKind,
+            worker.Rid,
+            defaultEntryPoint);
+        if (!string.Equals(worker.EntryPoint, expectedEntryPoint, StringComparison.Ordinal))
+        {
+            log.LogError(
+                $"A C# worker target entry point must be the official self-contained apphost '{expectedEntryPoint}'; custom worker entry-point names or extensions are not supported.");
+        }
         if (!SunderPackageFormat.IsRuntimeIdentifier(runtimeIdentifier)
             || !string.Equals(worker.Rid, runtimeIdentifier, StringComparison.Ordinal))
         {
@@ -263,6 +315,21 @@ internal static class PackageTargetBuilder
         if (publishSingleFile)
         {
             log.LogError("A C# worker target does not support PublishSingleFile; package the complete self-contained publish closure.");
+        }
+        if (worker.RequiredHostCapabilities?.Contains(
+                SunderPackageFormat.WorkerProtocolV3Capability,
+                StringComparer.Ordinal) != true)
+        {
+            log.LogError(
+                $"A C# worker target must use the Worker V3 API and infer Host capability '{SunderPackageFormat.WorkerProtocolV3Capability}'.");
+        }
+        foreach (var capability in (worker.RequiredHostCapabilities ?? [])
+                     .Where(static capability => capability is not null
+                                                  && capability.StartsWith("worker-protocol.", StringComparison.Ordinal)
+                                                  && capability != SunderPackageFormat.WorkerProtocolV3Capability))
+        {
+            log.LogError(
+                $"A C# worker target cannot use unsupported worker protocol capability '{capability}'.");
         }
     }
 
@@ -306,7 +373,7 @@ internal static class PackageTargetBuilder
     private static string DefaultKind(string role)
         => role == SunderPackageFormat.AppHostRole
             ? SunderPackageFormat.AvaloniaTargetKind
-            : SunderPackageFormat.DotnetTargetKind;
+            : SunderPackageFormat.WorkerTargetKind;
 
     private static int RoleOrder(string? role)
         => role == SunderPackageFormat.AppHostRole ? 0 : 1;

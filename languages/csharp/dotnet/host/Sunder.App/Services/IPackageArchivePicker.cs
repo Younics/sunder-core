@@ -8,4 +8,5 @@ public interface IPackageArchivePicker
 public sealed record PackageArchiveSelection(
     string PackagePath,
     string Sha256,
-    bool DeleteAfterUse);
+    bool DeleteAfterUse,
+    Sunder.Runtime.Contracts.PackageCapabilityConsent? CapabilityConsent = null);

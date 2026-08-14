@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\Sunder.Package.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackageRuntimeIdentifiers>$(NETCoreSdkRuntimeIdentifier)</SunderPackageRuntimeIdentifiers>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="..\Sunder.Package.Quickstart.Protocol\Sunder.Package.Quickstart.Protocol.csproj"
+                      PrivateAssets="all" />
+    <Compile Include="..\PackageMetadata.cs" Link="PackageMetadata.cs" />
+    <SunderContractBundle Include="..\Sunder.Package.Quickstart.Protocol\Contracts\greeting.rpc.json"
+                          ContractId="docs.sunder.quickstart.greeting"
+                          Version="2.0.0"
+                          DescriptorPath="contracts/greeting.rpc.json"
+                          Exposure="package" />
+    <SunderUsesContract Include="docs.sunder.quickstart.greeting"
+                        Role="app"
+                        ContractVersion="2.0.0"
+                        Required="true"
+                        Actions="discover;invoke" />
+  </ItemGroup>
+
+  <Import Project="..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
+</Project>

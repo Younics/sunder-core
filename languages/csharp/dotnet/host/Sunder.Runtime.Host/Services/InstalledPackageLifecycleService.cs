@@ -64,8 +64,8 @@ internal sealed partial class InstalledPackageLifecycleService
             .ToArray();
 
     internal async Task<PackageOperationResult> InstallFromRuntimePathAsync(string path, CancellationToken cancellationToken = default)
-        => await ExecutePreparedMutationAsync(
-            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: path),
+        => await ExecutePreparedMutationsAsync(
+            [new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: path)],
             cancellationToken);
 
     internal async Task<PackageOperationResult> UpgradeFromRuntimePathAsync(
@@ -74,8 +74,8 @@ internal sealed partial class InstalledPackageLifecycleService
         bool allowDowngrade = false,
         bool reinstall = false,
         CancellationToken cancellationToken = default)
-        => await ExecutePreparedMutationAsync(
-            new PackageStoreMutation(PackageStoreMutationKind.Upgrade, packageId, path, allowDowngrade, reinstall),
+        => await ExecutePreparedMutationsAsync(
+            [new PackageStoreMutation(PackageStoreMutationKind.Upgrade, packageId, path, allowDowngrade, reinstall)],
             cancellationToken);
 
     public async Task<PackageLifecycleOperationResult> LoadInstalledPackagesAsync(CancellationToken cancellationToken = default)
@@ -157,20 +157,20 @@ internal sealed partial class InstalledPackageLifecycleService
     }
 
     public Task<PackageOperationResult> SetEnabledAsync(string packageId, bool enabled, CancellationToken cancellationToken = default)
-        => ExecutePreparedMutationAsync(
-            new PackageStoreMutation(enabled ? PackageStoreMutationKind.Enable : PackageStoreMutationKind.Disable, packageId),
+        => ExecutePreparedMutationsAsync(
+            [new PackageStoreMutation(enabled ? PackageStoreMutationKind.Enable : PackageStoreMutationKind.Disable, packageId)],
             cancellationToken);
 
     public Task<PackageOperationResult> UninstallAsync(
         string packageId,
         PackageUninstallRequest request,
         CancellationToken cancellationToken = default)
-        => ExecutePreparedMutationAsync(
-            new PackageStoreMutation(
+        => ExecutePreparedMutationsAsync(
+            [new PackageStoreMutation(
                 PackageStoreMutationKind.Uninstall,
                 packageId,
                 AllowCascade: request.AllowCascade,
-                ConfirmationToken: request.ConfirmationToken),
+                ConfirmationToken: request.ConfirmationToken)],
             cancellationToken);
 
     public async Task<PackageUninstallPlan?> GetUninstallPlanAsync(
@@ -188,24 +188,24 @@ internal sealed partial class InstalledPackageLifecycleService
         CancellationToken cancellationToken = default)
         => StageCoreAsync(
             request,
-            registryProvenanceByUploadId: null,
+            registryUploadMetadataById: null,
             registryStateExpectations: null,
             cancellationToken);
 
     internal Task<PackageStoreStageResult> StageRegistryAsync(
         PackageStoreStageRequest request,
-        IReadOnlyDictionary<string, InstalledPackageProvenanceRecord> registryProvenanceByUploadId,
+        IReadOnlyDictionary<string, RegistryPackageUploadMetadata> registryUploadMetadataById,
         IReadOnlyList<RegistryPackageStateExpectation> registryStateExpectations,
         CancellationToken cancellationToken = default)
         => StageCoreAsync(
             request,
-            registryProvenanceByUploadId,
+            registryUploadMetadataById,
             registryStateExpectations,
             cancellationToken);
 
     private async Task<PackageStoreStageResult> StageCoreAsync(
         PackageStoreStageRequest request,
-        IReadOnlyDictionary<string, InstalledPackageProvenanceRecord>? registryProvenanceByUploadId,
+        IReadOnlyDictionary<string, RegistryPackageUploadMetadata>? registryUploadMetadataById,
         IReadOnlyList<RegistryPackageStateExpectation>? registryStateExpectations,
         CancellationToken cancellationToken)
     {
@@ -232,7 +232,7 @@ internal sealed partial class InstalledPackageLifecycleService
                     operationToken);
             }
             preparation = await _storeCoordinator.PrepareStageAsync(
-                ResolveMutations(request.Mutations, leases, registryProvenanceByUploadId, operationToken),
+                ResolveMutations(request.Mutations, leases, registryUploadMetadataById, operationToken),
                 operationToken);
         }
         catch (InvalidDataException exception)
@@ -285,8 +285,8 @@ internal sealed partial class InstalledPackageLifecycleService
             if (!current.TryGetValue(expectation.PackageId, out var package)
                 || !string.Equals(package.Version, expectation.Version, StringComparison.Ordinal)
                 || !Equals(
-                    package.Provenance ?? InstalledPackageProvenanceRecord.Unknown,
-                    expectation.Provenance ?? InstalledPackageProvenanceRecord.Unknown))
+                    package.Provenance,
+                    expectation.Provenance))
             {
                 throw StaleRegistryPlan(expectation.PackageId);
             }
@@ -642,17 +642,18 @@ internal sealed partial class InstalledPackageLifecycleService
         return discarded;
     }
 
-    private async Task<PackageOperationResult> ExecutePreparedMutationAsync(
-        PackageStoreMutation mutation,
+    internal async Task<PackageOperationResult> ExecutePreparedMutationsAsync(
+        IReadOnlyList<PackageStoreMutation> mutations,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(mutations);
         await using (var operation = await _gate.EnterAsync(cancellationToken))
         {
             var operationToken = operation.CancellationToken;
             var baseSessionGeneration = _sessions.Generation;
             var currentPackages = _sessions.State.GetActivePackages();
             var sources = _sessions.Sources.Snapshot();
-            var preparation = await _storeCoordinator.PrepareStageAsync([mutation], operationToken);
+            var preparation = await _storeCoordinator.PrepareStageAsync(mutations, operationToken);
             var stage = await PrepareCandidateAsync(
                 preparation,
                 baseSessionGeneration,
@@ -668,7 +669,7 @@ internal sealed partial class InstalledPackageLifecycleService
     private IReadOnlyList<PackageStoreMutation> ResolveMutations(
         IReadOnlyList<PackageStoreMutationRequest> requests,
         ICollection<RuntimeUploadLease> leases,
-        IReadOnlyDictionary<string, InstalledPackageProvenanceRecord>? registryProvenanceByUploadId,
+        IReadOnlyDictionary<string, RegistryPackageUploadMetadata>? registryUploadMetadataById,
         CancellationToken cancellationToken)
     {
         var mutations = new List<PackageStoreMutation>(requests.Count);
@@ -683,12 +684,14 @@ internal sealed partial class InstalledPackageLifecycleService
                     ?? throw new InvalidDataException("The package upload was not found or belongs to a stale Runtime generation.");
                 leases.Add(lease);
                 archivePath = lease.FilePath;
-                var provenance = registryProvenanceByUploadId is null
-                    ? InstalledPackageProvenanceRecord.LocalArchive(lease.ContentHash)
-                    : registryProvenanceByUploadId.TryGetValue(request.UploadId, out var registryProvenance)
-                        ? registryProvenance
+                var registryMetadata = registryUploadMetadataById is null
+                    ? null
+                    : registryUploadMetadataById.TryGetValue(request.UploadId, out var metadata)
+                        ? metadata
                         : throw new InvalidDataException(
-                            $"Registry provenance is missing for package upload '{request.UploadId}'.");
+                            $"Registry metadata is missing for package upload '{request.UploadId}'.");
+                var provenance = registryMetadata?.Provenance
+                    ?? InstalledPackageProvenanceRecord.LocalArchive(lease.ContentHash);
                 mutations.Add(new PackageStoreMutation(
                     request.Kind,
                     request.PackageId,
@@ -697,7 +700,9 @@ internal sealed partial class InstalledPackageLifecycleService
                     request.Reinstall,
                     provenance,
                     request.AllowCascade,
-                    request.ConfirmationToken));
+                    request.ConfirmationToken,
+                    request.CapabilityConsent,
+                    registryMetadata?.ConsentManifestSha256));
                 continue;
             }
             mutations.Add(new PackageStoreMutation(
@@ -707,7 +712,8 @@ internal sealed partial class InstalledPackageLifecycleService
                 request.AllowDowngrade,
                 request.Reinstall,
                 AllowCascade: request.AllowCascade,
-                ConfirmationToken: request.ConfirmationToken));
+                ConfirmationToken: request.ConfirmationToken,
+                CapabilityConsent: request.CapabilityConsent));
         }
         return mutations;
     }

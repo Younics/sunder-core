@@ -65,11 +65,15 @@ internal static class CliRenderers
         if (version.DependsOn.Count == 0) output.Line("  none");
         output.Line("Contracts:");
         foreach (var contract in version.ContractBundles.OrderBy(item => item.ContractId, StringComparer.Ordinal))
-            output.Line($"  bundle {contract.ContractId} {contract.Version}");
-        foreach (var contract in version.UsesContracts.OrderBy(item => item.ContractId, StringComparer.Ordinal))
-            output.Line($"  uses {contract.ContractId} {contract.VersionRange} ({(contract.Required ? "required" : "optional")})");
-        foreach (var provider in version.Providers.OrderBy(item => item.ProviderId, StringComparer.Ordinal))
-            output.Line($"  provides {provider.ProviderId} -> {provider.ContractId} {provider.ContractVersion} ({provider.Role})");
+            output.Line($"  bundle {contract.ContractId} {contract.Version} ({contract.Exposure})");
+        foreach (var contract in version.UsesContracts
+                     .OrderBy(item => item.Role, StringComparer.Ordinal)
+                     .ThenBy(item => item.ContractId, StringComparer.Ordinal))
+            output.Line($"  uses {contract.Role} {contract.ContractId} {contract.ContractVersion} ({(contract.Required ? "required" : "optional")}; {string.Join(',', contract.Actions)})");
+        foreach (var provider in version.Providers
+                     .OrderBy(item => item.Role, StringComparer.Ordinal)
+                     .ThenBy(item => item.ProviderId, StringComparer.Ordinal))
+            output.Line($"  provides {provider.Role} {provider.ProviderId} -> {provider.ContractId} {provider.ContractVersion} ({provider.Audience})");
         if (version.ContractBundles.Count == 0 && version.UsesContracts.Count == 0 && version.Providers.Count == 0) output.Line("  none");
         output.Line($"Canonical SHA-256: {version.CanonicalArtifact.Sha256}");
         output.Line($"Canonical Size: {version.CanonicalArtifact.Size} bytes");
@@ -120,6 +124,7 @@ internal static class CliRenderers
                 output.Line($"  {item.PackageId} {action}");
             }
         }
+        CapabilityConsents(output, result.RequiredCapabilityConsents, approved: false);
         foreach (var warning in result.Warnings) output.Warning(warning);
         if (!result.Success)
         {
@@ -129,6 +134,30 @@ internal static class CliRenderers
         }
         output.Success(result.Message);
         return CliExitCodes.Success;
+    }
+
+    public static void CapabilityConsents(
+        CliOutput output,
+        IReadOnlyList<PackageCapabilityConsent> consents,
+        bool approved)
+    {
+        if (consents.Count == 0)
+        {
+            return;
+        }
+        output.Info(approved
+            ? "Approved sensitive capability fences:"
+            : "Required sensitive capability consent:");
+        foreach (var consent in consents.OrderBy(item => item.PackageId, StringComparer.Ordinal))
+        {
+            output.Line($"  {consent.PackageId} {consent.PackageVersion}");
+            output.Line($"    manifest {consent.ManifestSha256}");
+            output.Line($"    capabilities {string.Join(", ", consent.Capabilities)}");
+        }
+        if (!approved)
+        {
+            output.Info("Rerun the command with '--approve-sensitive-capabilities' after reviewing these exact fences.");
+        }
     }
 
     public static int PackageOperation(CliOutput output, PackageOperationResult result)

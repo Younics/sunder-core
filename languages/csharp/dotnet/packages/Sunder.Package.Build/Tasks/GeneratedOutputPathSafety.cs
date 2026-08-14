@@ -4,6 +4,70 @@ namespace Sunder.Package.Build.Tasks;
 
 internal static class GeneratedOutputPathSafety
 {
+    public static void EnsureSafeAncestors(string path, bool includeLeaf, string label)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            throw new IOException($"The {label} '{path}' has no filesystem root.");
+        }
+
+        EnsureExistingDirectory(root, label);
+        var relative = fullPath[root.Length..];
+        var segments = relative.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var current = root;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            current = Path.Combine(current, segments[index]);
+            var isLeaf = index == segments.Length - 1;
+            if (isLeaf && !includeLeaf) break;
+
+            if (!TryGetAttributes(current, out var attributes))
+            {
+                if (HasLinkTarget(current))
+                {
+                    throw new IOException($"The {label} '{path}' passes through symbolic link or reparse point '{current}'.");
+                }
+                break;
+            }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException($"The {label} '{path}' passes through symbolic link or reparse point '{current}'.");
+            }
+            if (!isLeaf && (attributes & FileAttributes.Directory) == 0)
+            {
+                throw new IOException($"The {label} '{path}' has non-directory ancestor '{current}'.");
+            }
+        }
+    }
+
+    public static void EnsureRegularDirectory(string path, string label)
+    {
+        EnsureSafeAncestors(path, includeLeaf: true, label);
+        if (!TryGetAttributes(path, out var attributes)
+            || (attributes & FileAttributes.Directory) == 0
+            || (attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException($"The {label} '{path}' must be a regular directory.");
+        }
+    }
+
+    public static void EnsureRegularFile(string path, string label)
+    {
+        EnsureSafeAncestors(path, includeLeaf: true, label);
+        if (!TryGetAttributes(path, out var attributes)
+            || (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+        {
+            throw new IOException($"The {label} '{path}' must be a regular non-reparse file.");
+        }
+    }
+
+    public static bool PathExists(string path)
+        => TryGetAttributes(path, out _) || HasLinkTarget(path);
+
     public static bool TryValidateDirectory(
         string outputPath,
         string projectDirectory,
@@ -92,10 +156,12 @@ internal static class GeneratedOutputPathSafety
     private static bool PathsEqual(string left, string right)
         => string.Equals(left, right, PathComparison);
 
-    private static bool IsDescendantOf(string path, string parent)
+    public static bool IsDescendantOf(string path, string parent)
     {
-        var prefix = parent + Path.DirectorySeparatorChar;
-        return path.StartsWith(prefix, PathComparison);
+        var normalizedPath = NormalizeDirectory(path);
+        var normalizedParent = NormalizeDirectory(parent);
+        var prefix = normalizedParent + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(prefix, PathComparison);
     }
 
     private static bool IsSourceDirectory(string candidate, string project)
@@ -107,4 +173,46 @@ internal static class GeneratedOutputPathSafety
 
     private static StringComparison PathComparison
         => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static void EnsureExistingDirectory(string path, string label)
+    {
+        if (!TryGetAttributes(path, out var attributes)
+            || (attributes & FileAttributes.Directory) == 0
+            || (attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException($"The {label} '{path}' has unsafe filesystem root '{path}'.");
+        }
+    }
+
+    private static bool TryGetAttributes(string path, out FileAttributes attributes)
+    {
+        try
+        {
+            attributes = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            attributes = default;
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            attributes = default;
+            return false;
+        }
+    }
+
+    private static bool HasLinkTarget(string path)
+    {
+        try
+        {
+            return new FileInfo(path).LinkTarget is not null
+                   || new DirectoryInfo(path).LinkTarget is not null;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException or IOException)
+        {
+            return false;
+        }
+    }
 }

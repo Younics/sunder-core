@@ -1,8 +1,8 @@
 # Sunder Package Standard
 
-This document is the normative V1 package-format contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
+This document is the normative archive format V1 and package manifest V3 contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
 
-The contract is independent of authoring language and UI framework. Current tooling emits managed in-process .NET Runtime (`dotnet`), isolated .NET and Node Runtime (`worker`), Avalonia App (`avalonia`), and static web App (`web`) targets. `process` remains a legacy compatibility alias accepted by package readers and the Runtime and preserved when aggregate tooling combines existing validated leaves; fresh C# target authoring rejects it in favor of `worker`. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target kinds, protocols, or required capabilities they do not support.
+The contract is independent of authoring language and UI framework. Manifest V3 permits only exact-RID `worker` Runtime targets; current tooling emits self-contained .NET workers and pinned Node SEA workers. App targets remain `avalonia` or `web`. Runtime `dotnet`, `process`, generic-RID targets, and Worker V1 are invalid. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target protocols or required capabilities they do not support.
 
 ## Universal Package
 
@@ -21,7 +21,7 @@ A package normally declares at least one exact target. A shared-only package may
 
 Package, contract, and provider ids use lowercase dot-separated ASCII identifiers. Published package ids are stable. Package and contract versions are strict SemVer 2.0.
 
-V1 dependency ranges support:
+Package dependency ranges support:
 
 - an exact version, such as `1.2.3`;
 - one comparison using `<`, `<=`, `>`, `>=`, or `=`;
@@ -52,7 +52,7 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
 ```json
 {
   "archiveFormatVersion": 1,
-  "manifestVersion": 1,
+  "manifestVersion": 3,
   "id": "example.notes",
   "name": "Example Notes",
   "summary": "Adds a notes workspace.",
@@ -82,30 +82,35 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
     {
       "role": "runtime",
       "rid": "win-x64",
-      "kind": "dotnet",
-      "entryPoint": "lib/Example.Notes.Runtime.dll",
+      "kind": "worker",
+      "entryPoint": "lib/Example.Notes.Worker.exe",
       "targetFramework": "net10.0",
       "sdkVersion": "1.1.0",
       "requiredHostCapabilities": [
         "sdk-baseline-1-1.v1",
         "core.v1",
         "contributions.v1",
-        "rpc.v1"
+        "rpc.v2",
+        "worker-protocol.v3"
       ]
     }
   ],
   "contractBundles": [
     {
       "contractId": "example.notes.search",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "descriptorPath": "contracts/search.rpc.json",
-      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "descriptorSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "abiSha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "exposure": "public"
     }
   ],
   "usesContracts": [
     {
+      "role": "runtime",
       "contractId": "example.notes.search",
-      "versionRange": ">=1.0.0 <2.0.0",
+      "contractVersion": "2.0.0",
+      "abiSha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
       "required": false,
       "actions": ["discover", "invoke"]
     }
@@ -113,29 +118,33 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
   "provides": [
     {
       "providerId": "example.notes.search.default",
+      "role": "runtime",
       "contractId": "example.notes.search",
-      "contractVersion": "1.0.0",
-      "contractSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "role": "runtime"
+      "contractVersion": "2.0.0",
+      "descriptorSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "abiSha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "audience": "public"
     }
   ]
 }
 ```
 
-Package-wide fields are `archiveFormatVersion`, `manifestVersion`, `id`, `name`, `summary`, `version`, `icon`, `dependsOn`, `contractBundles`, `usesContracts`, and `provides`.
+Package-wide fields are `archiveFormatVersion`, `manifestVersion`, `id`, `name`, `summary`, `version`, `icon`, `dependsOn`, `targets`, `contractBundles`, `usesContracts`, and `provides`.
 
 Each target is keyed by exact `(role, rid)` and contains its own activation and compatibility metadata:
 
 - `role`: `app` or `runtime`;
 - `rid`: `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, or `osx-arm64`;
-- `kind`: `avalonia` or `web` for App, `dotnet` or canonical `worker` for Runtime; readers and aggregate compatibility paths also preserve legacy Runtime `process`, but fresh target generation does not author it;
+- `kind`: `avalonia` or `web` for App and exactly `worker` for Runtime;
 - `entryPoint`: a logical path resolved from that target's payload union;
 - `targetFramework`: optional portable target metadata;
-- `sdkVersion`: optional strict SemVer for SDK-backed targets;
+- `sdkVersion`: strict SemVer for every Runtime target and optional strict SemVer for other SDK-backed targets;
 - `requiredHostCapabilities`: distinct capabilities validated before target loading;
 - `views`: optional declarations for web App targets.
 
 An exact target key may appear only once. Payload layers without a matching declared role or target are invalid.
+
+Every Runtime target must require `rpc.v2`, `worker-protocol.v3`, and exactly the `sdk-baseline-<major>-<minor>.v1` capability matching its `sdkVersion`. Its entry point is an independently executable exact-RID worker. A C# worker entry point is the official self-contained apphost directly under `lib/`, uses `.exe` only for a Windows RID, is extensionless on Linux/macOS, and physically belongs to that exact Runtime/RID layer. `rpc.v1`, `worker-protocol.v1`, `dotnet`, and `process` are rejected rather than upgraded or interpreted as aliases.
 
 ## Layered Payload
 
@@ -193,24 +202,24 @@ Cross-package behavior uses strict language-neutral RPC descriptors. CLR interfa
 Every contract used or provided by a package must have a matching local `contractBundles` entry. Its descriptor:
 
 - is physically stored at `payload/shared/<descriptorPath>`;
-- uses strict UTF-8 JSON and descriptor version `1`;
+- uses strict UTF-8 JSON and descriptor version `2`;
 - has identity and version matching the manifest entry;
-- has a canonical SHA-256 matching `sha256`;
-- uses the closed supported JSON Schema profile and local `#/$defs/...` references.
+- has a canonical descriptor SHA-256 matching `descriptorSha256` and a domain-separated structural ABI SHA-256 matching `abiSha256`;
+- uses the closed RPC V2 JSON Schema profile, keyed service/method/error maps, and local `#/$defs/...` references.
 
-`usesContracts` declares the maximum requested `discover`, `invoke`, and `subscribe` actions. Installing or updating a package consents to all actions declared by that exact manifest; Runtime records version- and manifest-fenced grants automatically. Development packages receive equivalent activation-scoped access without durable grants. Undeclared actions remain default-deny. `required` controls dependency readiness, not consent.
+Each `usesContracts` entry binds one exact caller `role`, `contractVersion`, and `abiSha256`, then declares the maximum requested `discover`, `invoke`, and `subscribe` actions. Installing or updating a package consents to all actions declared by that exact manifest; Runtime records version- and manifest-fenced grants automatically. Development packages receive equivalent activation-scoped access without durable grants. Undeclared actions remain default-deny. `required` controls dependency readiness, not consent; Runtime does not resolve contract version ranges from an immutable package.
 
-`provides` binds a stable provider id to one exact contract identity, descriptor hash, and target role. Target code registers the same provider id with `RegisterRpcProvider`. Runtime stamps discovery results and exact activation endpoint references; an old endpoint never retargets a replacement activation.
+`provides` binds a stable provider id and target role to one exact contract version, `descriptorSha256`, `abiSha256`, and `owner` or `public` audience. A public provider requires a public contract bundle; package exposure permits only owner audience. Target code registers the same canonical identity with `RegisterRpcProvider`. Runtime stamps discovery results and exact activation endpoint references; an old endpoint never retargets a replacement activation.
 
 Large content stays off the JSON control plane and uses Host-mediated content references. Requests, responses, and stream events are validated against the bundled descriptor before dispatch or delivery.
 
 MSBuild authoring uses `SunderContractBundle`, `SunderUsesContract`, and `SunderRpcProvider`. `SunderRpcCSharpGenerator` can produce deterministic package-local DTO, client, and provider scaffolding.
 
-## Modules And Activation
+## App And Worker Activation
 
-Managed `dotnet` Runtime targets expose at most one public, top-level, non-abstract, non-generic `ISunderRuntimePackageModule` with a public parameterless constructor. Managed App targets follow the same rule for `ISunderAppPackageModule`. One class may implement both interfaces, but each Host creates a separate instance, load context, service provider, and activation lifetime. A `worker` Runtime target is an independently executable exact-RID process; it uses `sunder.worker.v1` unless the exact target requires `worker-protocol.v2`. Worker targets do not expose an `ISunderRuntimePackageModule`.
+Managed App targets expose at most one public, top-level, non-abstract, non-generic `ISunderAppPackageModule` with a public parameterless constructor. The App creates its own load context, service provider, and activation lifetime. A Runtime target is an independently executable exact-RID process that speaks `sunder.worker.v3`; Runtime never loads an `ISunderRuntimePackageModule` or builds package-owned Runtime DI in the Host process.
 
-Runtime modules register background services, settings schemas, package-scoped App operations, callbacks/auth handlers, and RPC providers. App modules register shell-facing contributions such as Avalonia views. App and Runtime do not exchange object instances or filesystem paths.
+Workers advertise an immutable contribution catalog containing RPC providers, an optional settings schema, callbacks/auth, and migration plans. Package-local composition and lifecycle are owned inside the worker. App modules register shell-facing contributions such as Avalonia views. App-to-Runtime behavior uses owner RPC with generated package-local bindings; App and Runtime do not exchange object instances or local filesystem paths.
 
 A shared-only package has no module activation. Its descriptors remain available to package validation and Registry contract discovery.
 
@@ -226,11 +235,13 @@ A `.sunderprojection` is an immutable derivative for one of:
 
 Each projection contains `manifest/sunder-projection.json`, the canonical package manifest, a projection-specific content index, and only the selected physical payload layer. Its descriptor binds package id/version, source archive SHA-256, projection kind/RID, manifest SHA-256, and projection SHA-256. Projections cannot be published as source packages and are always reproducible from the canonical archive.
 
+Registry installation accepts exactly the shared projection plus the selected role projections for the requesting Host's current RID. Missing, extra, duplicate, foreign-RID, or plan/manifest-mismatched projections fail before install. Runtime composes those inputs into an installed package manifest/index containing only selected targets and role-scoped declarations. Local sideload performs the equivalent current-RID projection from the validated universal archive before storage or activation; package-wide identity, dependencies, contract bundles, shared payload, and canonical source provenance remain available.
+
 ## Build Outputs
 
 `dotnet build` emits a validated unpacked tree at `bin/<Configuration>/<TFM>/sunder-dev`. The canonical explicit archive target is `PackSunderPackage`, which emits a deterministic `.sunderpkg` beside that target output; `dotnet publish` also invokes the pack task and places its archive in the publish directory.
 
-The generated dotnet template uses an aggregate project with Runtime and optional App leaves. It always creates a non-packable package-local `*.Protocol` project containing a bundled descriptor and generated bindings. Role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata.
+The generated .NET template uses Worker, optional App, Protocol, and Aggregate projects. Each Worker build emits one self-contained exact-RID leaf, and the Aggregate combines all six native leaves into the universal package without factoring worker entry points into shared layers. The non-packable package-local Protocol project contains bundled RPC V2 descriptors and generated bindings; role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata. C# projects may register `SunderPackageWorkerSigningTargets`; those targets mutate a private copy of the computed publish closure before content indexing. Pack validates that established index unchanged, so later tampering fails.
 
 TypeScript worker packages use `npm create sunder-package@latest`; `--template react-node` adds a Vite/React web App target. Production Runtime targets are pinned Node SEA executables built and smoked natively for each exact RID.
 

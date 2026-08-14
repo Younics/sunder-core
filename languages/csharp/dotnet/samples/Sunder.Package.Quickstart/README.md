@@ -1,6 +1,6 @@
 # Compiled Quickstart
 
-This project is a source-tree compilation fixture for the public package-development guides. It exercises separate App/Runtime modules, DI, settings, logging, a typed Runtime operation, an Avalonia view, navigation, warmup, and semantic Sunder theme resources.
+This package family is a source-tree compilation fixture for the public package-development guides. It exercises an exact-RID Worker V3 executable, a package-local RPC V2 protocol, an owner-only Runtime provider, typed App-side RPC discovery and invocation, settings, persistent state, logging, an Avalonia view, navigation, warmup, and semantic Sunder theme resources.
 
 Build it from the Sunder Core repository:
 
@@ -8,4 +8,6 @@ Build it from the Sunder Core repository:
 dotnet build languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.csproj
 ```
 
-The project uses source `ProjectReference` items so `Sunder.Core.slnx` compiles it against the exact SDK surface being documented. It intentionally tests authored code only and does not produce package output. For a runnable universal package, start with `dotnet new sunder-package --withAvalonia`; the generated aggregate adds the non-packable package-local Protocol project, exact RID leaves, layered payload, canonical manifest, and content index. Template CI builds and packs the default, Avalonia, Stack, and package-dependency shapes against packed Sunder NuGet packages.
+The aggregate uses source `ProjectReference` items so `Sunder.Core.slnx` compiles it against the exact SDK and build-tooling surface being documented. A normal build emits a current-platform package tree at `bin/Debug/net10.0/sunder-dev` containing one App target and one self-contained Runtime worker target. Use `dotnet msbuild languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.csproj -t:PackSunderPackage -p:Configuration=Release` to create a current-platform `.sunderpkg`.
+
+For a universal six-RID package, start with `dotnet new sunder-package --withAvalonia`; the generated aggregate builds all native worker leaves while retaining the same Worker, optional App, Protocol, and Aggregate topology.

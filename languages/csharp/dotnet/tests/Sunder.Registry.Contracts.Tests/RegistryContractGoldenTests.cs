@@ -26,7 +26,14 @@ public sealed class RegistryContractGoldenTests
                 [new RegistryPackageDependency("sunder.package.base", ">=1.0.0")],
                 new RegistryPackageCanonicalArtifact("canonical-sha", 420, "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/canonical"),
                 [
-                    new RegistryPackageTarget("runtime", "win-x64", "dotnet", "lib/Sample.dll", "net10.0", "0.8.0", ["core.v1"]),
+                    new RegistryPackageTarget(
+                        "runtime",
+                        "win-x64",
+                        "worker",
+                        "bin/sample-worker.exe",
+                        "net10.0",
+                        "1.1.0",
+                        ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"]),
                     new RegistryPackageTarget(
                         "app",
                         "win-x64",
@@ -34,7 +41,7 @@ public sealed class RegistryContractGoldenTests
                         "web/index.html",
                         null,
                         "1.1.0",
-                        ["core.v1"],
+                        ["core.v1", "sdk-baseline-1-1.v1", "views.v1"],
                         [new RegistryPackageWebView(
                             "sunder.package.sample.workspace",
                             "Workspace",
@@ -44,10 +51,29 @@ public sealed class RegistryContractGoldenTests
                             true)]),
                 ],
                 [Projection("shared", null, "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download")],
-                [new RegistryPackageContractBundle("sample.contract", "1.0.0", "contracts/sample.json", "contract-sha")],
-                [new RegistryPackageContractUse("base.contract", ">=1.0.0", true, ["discover", "invoke"])],
-                [new RegistryPackageProvider("sample.provider", "sample.contract", "1.0.0", "contract-sha", "runtime")],
-                1,
+                [new RegistryPackageContractBundle(
+                    "sample.contract",
+                    "1.0.0",
+                    "contracts/sample.json",
+                    "descriptor-sha",
+                    "abi-sha",
+                    "public")],
+                [new RegistryPackageContractUse(
+                    "runtime",
+                    "base.contract",
+                    "1.4.2",
+                    "base-abi-sha",
+                    true,
+                    ["discover", "invoke"])],
+                [new RegistryPackageProvider(
+                    "sample.provider",
+                    "runtime",
+                    "sample.contract",
+                    "1.0.0",
+                    "descriptor-sha",
+                    "abi-sha",
+                    "public")],
+                3,
                 1,
                 DateTimeOffset.Parse("2026-07-11T10:00:00Z"),
                 ["https://artifacts.example"]),
@@ -76,7 +102,9 @@ public sealed class RegistryContractGoldenTests
             new RegistryContractDescriptorMetadata(
                 "sample.contract",
                 "1.2.3",
-                "contract-sha",
+                "descriptor-sha",
+                "abi-sha",
+                "public",
                 420,
                 "https://registry.example/api/v1/contracts/sample.contract/versions/1.2.3/descriptor",
                 "sunder.package.sample",
@@ -95,8 +123,18 @@ public sealed class RegistryContractGoldenTests
                     false,
                     null,
                     [],
-                    [new RegistryPackageTarget("runtime", "win-x64", "dotnet", "lib/Sample.dll", "net10.0", "0.8.0", ["core.v1"])],
-                    [Projection("shared", null, "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download")])],
+                    [new RegistryPackageTarget(
+                        "runtime",
+                        "win-x64",
+                        "worker",
+                        "bin/sample-worker.exe",
+                        "net10.0",
+                        "1.1.0",
+                        ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"])],
+                    [
+                        Projection("shared", null, "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download"),
+                        Projection("runtime", "win-x64", "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/runtime/win-x64/download"),
+                    ])],
                 [],
                 [],
                 [],
@@ -118,6 +156,7 @@ public sealed class RegistryContractGoldenTests
                     "1.5.0",
                     [new RegistryPackageDependency("sunder.package.shared", ">=1.0.0")],
                     [new RegistryPackageProjectionKey("shared", null), new RegistryPackageProjectionKey("runtime", "win-x64")])],
+                Compatibility(),
                 IncludePrerelease: true),
             typeof(RegistryResolvePackageChangesRequest)
         },
@@ -195,6 +234,132 @@ public sealed class RegistryContractGoldenTests
         Assert.NotNull(JsonSerializer.Deserialize(expected, payloadType, JsonOptions));
     }
 
+    [Fact]
+    public void PackageRpcMetadata_UsesManifestV3Properties()
+    {
+        using var document = ReadFixture("package.json");
+        var root = document.RootElement;
+
+        Assert.Equal(3, root.GetProperty("manifestFormatVersion").GetInt32());
+        Assert.Equal(">=1.0.0", root.GetProperty("dependsOn")[0].GetProperty("versionRange").GetString());
+        AssertPropertyNames(
+            root.GetProperty("contractBundles")[0],
+            "contractId",
+            "version",
+            "descriptorPath",
+            "descriptorSha256",
+            "abiSha256",
+            "exposure");
+        AssertPropertyNames(
+            root.GetProperty("usesContracts")[0],
+            "role",
+            "contractId",
+            "contractVersion",
+            "abiSha256",
+            "required",
+            "actions");
+        Assert.Equal("1.4.2", root.GetProperty("usesContracts")[0].GetProperty("contractVersion").GetString());
+        AssertPropertyNames(
+            root.GetProperty("providers")[0],
+            "providerId",
+            "role",
+            "contractId",
+            "contractVersion",
+            "descriptorSha256",
+            "abiSha256",
+            "audience");
+    }
+
+    [Fact]
+    public void ContractMetadata_UsesDescriptorV2HashesAndExposure()
+    {
+        using var document = ReadFixture("contract.json");
+
+        AssertPropertyNames(
+            document.RootElement,
+            "contractId",
+            "version",
+            "descriptorSha256",
+            "abiSha256",
+            "exposure",
+            "size",
+            "descriptorDownloadUrl",
+            "firstPublisherPackageId",
+            "firstPublisherPackageVersion",
+            "publishedAtUtc");
+    }
+
+    [Theory]
+    [InlineData(typeof(RegistryResolveUpdatesRequest))]
+    [InlineData(typeof(RegistryResolveInstallPlanRequest))]
+    [InlineData(typeof(RegistryResolvePackageChangesRequest))]
+    public void ResolutionRequests_RequireOneCompatibilityProfile(Type requestType)
+    {
+        var parameter = Assert.Single(
+            Assert.Single(requestType.GetConstructors()).GetParameters(),
+            candidate => candidate.Name == "Compatibility");
+
+        Assert.Equal(typeof(RegistryClientCompatibilityProfile), parameter.ParameterType);
+        Assert.False(parameter.HasDefaultValue);
+    }
+
+    [Fact]
+    public void CompatibilityProfile_IsImmutableAndPublishesBounds()
+    {
+        var capabilities = new List<string> { "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3" };
+        var profile = new RegistryClientCompatibilityProfile(
+            [3],
+            ["worker"],
+            "worker-protocol.v3",
+            capabilities,
+            "sdk-baseline-1-1.v1",
+            "win-x64");
+        capabilities.Clear();
+
+        Assert.Equal(["rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"], profile.WorkerCapabilities);
+        Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumManifestVersions);
+        Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumRuntimeTargetKinds);
+        Assert.Equal(64, RegistryClientCompatibilityProfile.MaximumWorkerCapabilities);
+        Assert.Equal(128, RegistryClientCompatibilityProfile.MaximumIdentifierLength);
+    }
+
+    [Fact]
+    public void CompatibilityQueryParameters_MatchTheJsonProfile()
+    {
+        Assert.Equal("manifestVersions", RegistryClientCompatibilityProfile.ManifestVersionsQueryParameter);
+        Assert.Equal("runtimeTargetKinds", RegistryClientCompatibilityProfile.RuntimeTargetKindsQueryParameter);
+        Assert.Equal("workerProtocol", RegistryClientCompatibilityProfile.WorkerProtocolQueryParameter);
+        Assert.Equal("workerCapabilities", RegistryClientCompatibilityProfile.WorkerCapabilitiesQueryParameter);
+        Assert.Equal("sdkBaseline", RegistryClientCompatibilityProfile.SdkBaselineQueryParameter);
+        Assert.Equal("rid", RegistryClientCompatibilityProfile.RidQueryParameter);
+    }
+
+    [Fact]
+    public void ResolutionRequests_RejectMissingCompatibilityDuringDeserialization()
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<RegistryResolveUpdatesRequest>(
+            """
+            {"installedPackages":[],"desiredTargets":[]}
+            """,
+            JsonOptions));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<RegistryResolveInstallPlanRequest>(
+            """
+            {"packageId":"test.package","version":null,"tag":"latest","desiredTargets":[],"installedPackages":[]}
+            """,
+            JsonOptions));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<RegistryResolvePackageChangesRequest>(
+            """
+            {"packages":[],"installedPackages":[]}
+            """,
+            JsonOptions));
+    }
+
+    private static JsonDocument ReadFixture(string fixtureName)
+        => JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", fixtureName)));
+
+    private static void AssertPropertyNames(JsonElement element, params string[] expected)
+        => Assert.Equal(expected, element.EnumerateObject().Select(property => property.Name));
+
     private static RegistryPackageProjectionArtifact Projection(string kind, string? rid, string downloadUrl)
         => new(
             kind,
@@ -206,4 +371,13 @@ public sealed class RegistryContractGoldenTests
             "manifest-sha",
             "projection-content-id",
             1);
+
+    private static RegistryClientCompatibilityProfile Compatibility()
+        => new(
+            [3],
+            ["worker"],
+            "worker-protocol.v3",
+            ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"],
+            "sdk-baseline-1-1.v1",
+            "win-x64");
 }

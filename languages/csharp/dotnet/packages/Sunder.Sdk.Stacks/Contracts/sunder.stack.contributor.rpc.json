@@ -1,51 +1,61 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "descriptorVersion": 1,
+  "descriptorVersion": 2,
   "contractId": "sunder.stack.contributor",
-  "version": "1.0.0",
-  "services": [
-    {
-      "serviceId": "stack-contributor",
-      "methods": [
-        {
-          "methodId": "metadata",
+  "version": "2.0.0",
+  "errors": {
+    "stack.method.unsupported": {
+      "description": "The contributor does not implement the requested optional Stack operation."
+    }
+  },
+  "services": {
+    "stack-contributor": {
+      "methods": {
+        "metadata": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
           "requestSchema": { "$ref": "#/$defs/StackRpcEmpty" },
           "responseSchema": { "$ref": "#/$defs/StackContributorMetadata" }
         },
-        {
-          "methodId": "list-export-items",
+        "list-export-items": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": ["stack.method.unsupported"],
           "requestSchema": { "$ref": "#/$defs/StackExportDiscoveryContext" },
           "responseSchema": { "$ref": "#/$defs/StackExportItemList" }
         },
-        {
-          "methodId": "export",
+        "export": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": ["stack.method.unsupported"],
           "requestSchema": { "$ref": "#/$defs/StackExportRequest" },
           "responseSchema": { "$ref": "#/$defs/StackRpcExportContribution" }
         },
-        {
-          "methodId": "preview-import",
+        "preview-import": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": ["stack.method.unsupported"],
           "requestSchema": { "$ref": "#/$defs/StackRpcImportPreviewRequest" },
           "responseSchema": { "$ref": "#/$defs/StackImportPreview" }
         },
-        {
-          "methodId": "import",
+        "import": {
           "kind": "unary",
+          "idempotency": "none",
+          "errors": ["stack.method.unsupported"],
           "requestSchema": { "$ref": "#/$defs/StackRpcImportRequest" },
           "responseSchema": { "$ref": "#/$defs/StackImportResult" }
         },
-        {
-          "methodId": "import-applied",
+        "import-applied": {
           "kind": "unary",
+          "idempotency": "none",
+          "errors": ["stack.method.unsupported"],
           "requestSchema": { "$ref": "#/$defs/StackImportAppliedContext" },
           "responseSchema": { "$ref": "#/$defs/StackRpcEmpty" }
         }
-      ]
+      }
     }
-  ],
+  },
   "$defs": {
     "StackRpcEmpty": {
       "type": "object",
@@ -73,25 +83,10 @@
       "minLength": 2,
       "maxLength": 1000000
     },
-    "Timestamp": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128
-    },
-    "Sha256": {
-      "type": "string",
-      "minLength": 64,
-      "maxLength": 64
-    },
     "SchemaVersion": {
       "type": "integer",
       "minimum": 1,
       "maximum": 2147483647
-    },
-    "ContentLength": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 67108864
     },
     "StackValueSensitivity": {
       "type": "integer",
@@ -117,25 +112,9 @@
       "maximum": 2,
       "enum": [0, 1, 2]
     },
-    "SunderRpcContentRepeatability": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 1,
-      "enum": [0, 1]
-    },
     "SunderRpcContentReference": {
       "type": "object",
-      "properties": {
-        "id": { "$ref": "#/$defs/Id" },
-        "length": { "$ref": "#/$defs/ContentLength" },
-        "sha256": { "$ref": "#/$defs/Sha256" },
-        "mediaType": { "$ref": "#/$defs/ShortText" },
-        "fileName": { "$ref": "#/$defs/ShortText" },
-        "expiresAtUtc": { "$ref": "#/$defs/Timestamp" },
-        "repeatability": { "$ref": "#/$defs/SunderRpcContentRepeatability" }
-      },
-      "required": ["id", "length", "sha256", "mediaType", "fileName", "expiresAtUtc", "repeatability"],
-      "additionalProperties": false
+      "logicalType": "content-reference"
     },
     "StackRpcPayloadFile": {
       "type": "object",

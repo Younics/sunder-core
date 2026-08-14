@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
 using Sunder.Package.Format;
+using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Compatibility;
 
 namespace Sunder.App.Services;
 
@@ -51,7 +53,11 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
             }
 
             retainSnapshot = true;
-            return new PackageArchiveSelection(snapshotPath, review.Sha256, DeleteAfterUse: true);
+            return new PackageArchiveSelection(
+                snapshotPath,
+                review.Sha256,
+                DeleteAfterUse: true,
+                review.CapabilityConsent);
         }
         finally
         {
@@ -82,14 +88,17 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
                     LocalPackageInstallConsentViewModel.Invalid(
                         displayFileName,
                         ["The package archive changed while it was being validated."]),
+                    null,
                     null);
             }
             return validation.Success
                 ? new PackageArchiveReview(
                     LocalPackageInstallConsentViewModel.Valid(displayFileName, validation),
-                    validatedHash)
+                    validatedHash,
+                    CreateCapabilityConsent(validation))
                 : new PackageArchiveReview(
                     LocalPackageInstallConsentViewModel.Invalid(displayFileName, validation.Errors),
+                    null,
                     null);
         }
         catch (OperationCanceledException)
@@ -99,10 +108,11 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
         catch (Exception exception)
         {
             return new PackageArchiveReview(
-                LocalPackageInstallConsentViewModel.Invalid(
+                    LocalPackageInstallConsentViewModel.Invalid(
                     displayFileName,
                     [exception.Message]),
-                null);
+                    null,
+                    null);
         }
         finally
         {
@@ -192,7 +202,40 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
             .ToLowerInvariant();
     }
 
+    private static PackageCapabilityConsent? CreateCapabilityConsent(
+        SunderPackageArchiveValidationResult validation)
+    {
+        var manifest = validation.Manifest!;
+        var capabilities = (manifest.Targets ?? [])
+            .Where(static target => target is not null
+                                    && string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
+                                    && string.Equals(target.Kind, SunderPackageFormat.WorkerTargetKind, StringComparison.Ordinal))
+            .SelectMany(static target => target!.RequiredHostCapabilities ?? [])
+            .Where(static capability => string.Equals(
+                capability,
+                SunderSdkCapabilities.DockerEnvironmentV1,
+                StringComparison.Ordinal))
+            .Select(static capability => capability!)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (capabilities.Length == 0)
+        {
+            return null;
+        }
+        var manifestSha256 = validation.ContentIndex!.Files!.Single(entry => string.Equals(
+            entry?.Path,
+            SunderPackageFormat.ManifestPath,
+            StringComparison.Ordinal)).Sha256!;
+        return new PackageCapabilityConsent(
+            manifest.Id!,
+            manifest.Version!,
+            manifestSha256,
+            capabilities);
+    }
+
     private sealed record PackageArchiveReview(
         LocalPackageInstallConsentViewModel ViewModel,
-        string? Sha256);
+        string? Sha256,
+        PackageCapabilityConsent? CapabilityConsent);
 }

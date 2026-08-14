@@ -11,6 +11,7 @@ using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Compatibility;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -925,6 +926,12 @@ public sealed class RegistryRuntimeArchitectureTests
                 var body = request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
                     .GetAwaiter()
                     .GetResult()!;
+                Assert.Equal([3], body.Compatibility.ManifestVersions);
+                Assert.Equal(["worker"], body.Compatibility.RuntimeTargetKinds);
+                Assert.Equal("worker-protocol.v3", body.Compatibility.WorkerProtocol);
+                Assert.Contains("rpc.v2", body.Compatibility.WorkerCapabilities);
+                Assert.Equal("sdk-baseline-1-1.v1", body.Compatibility.SdkBaseline);
+                Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), body.Compatibility.Rid);
                 var package = Assert.Single(body.Packages);
                 requests.Add((
                     request.RequestUri!.GetLeftPart(UriPartial.Authority) + "/",
@@ -1216,6 +1223,78 @@ public sealed class RegistryRuntimeArchitectureTests
             Assert.Equal(InstalledPackageVersionPolicy.FollowTag, installed.Provenance?.VersionPolicy);
             Assert.Equal("beta", installed.Provenance?.RequestedTag);
             Assert.True(installed.Provenance?.IncludePrerelease);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RegistryInstall_SensitiveCapabilityConsentUsesVerifiedUniversalSourceManifestFence()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            const string origin = "https://registry.example/";
+            const string packageId = "test.install.sensitive";
+            var paths = new RuntimePackagePaths(root);
+            var artifact = await CreateRegistryArtifactAsync(
+                root,
+                "sensitive-install",
+                origin,
+                packageId,
+                currentVersion: null,
+                version: "1.0.0",
+                runtimeIdentifiers: SunderPackageFormat.SupportedRuntimeIdentifiers,
+                runtimeRequiredHostCapabilities:
+                [
+                    SunderSdkCapabilities.Baseline11V1,
+                    SunderSdkCapabilities.CoreV1,
+                    SunderSdkCapabilities.DockerEnvironmentV1,
+                    SunderSdkCapabilities.RpcV2,
+                    SunderWorkerProtocol.V3Capability,
+                ]);
+            var handler = new DelegateHandler(request => request.Method == HttpMethod.Get
+                ? artifact.CreateResponse(request.RequestUri!)
+                : PlanResponse(artifact.PlanItem));
+            var services = new ServiceCollection();
+            services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
+            services.AddHttpClient("registry").ConfigurePrimaryHttpMessageHandler(() => handler);
+
+            await using var provider = services.BuildServiceProvider();
+            await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
+            var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
+            var plan = await orchestrator.ResolveAsync(
+                new RuntimeRegistryPackageBatchRequest(
+                    origin,
+                    [new RuntimeRegistryPackageChangeRequest(packageId, "1.0.0", [])]),
+                CancellationToken.None);
+            var consent = Assert.Single(plan.RequiredCapabilityConsents);
+
+            Assert.Equal(artifact.PlanItem.Artifacts[0].ManifestSha256, consent.ManifestSha256);
+            Assert.Equal([SunderSdkCapabilities.DockerEnvironmentV1], consent.Capabilities);
+
+            var denied = await orchestrator.InstallAsync(
+                new RuntimeRegistryPackageRequest(origin, packageId, Version: "1.0.0", Tag: null),
+                CancellationToken.None);
+            Assert.Equal(RuntimeRegistryErrorCode.ConsentRequired, denied.ErrorCode);
+
+            var result = await orchestrator.InstallAsync(
+                new RuntimeRegistryPackageRequest(
+                    origin,
+                    packageId,
+                    Version: "1.0.0",
+                    Tag: null,
+                    CapabilityConsents: [consent]),
+                CancellationToken.None);
+
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+            var installed = Assert.Single(await new InstalledPackageStore(paths).ListAsync());
+            var grant = Assert.Single(installed.CapabilityGrants!);
+            Assert.Equal(SunderSdkCapabilities.DockerEnvironmentV1, grant.Capability);
+            Assert.Equal(PackageSensitiveCapabilityPolicy.GetManifestSha256(installed), grant.ManifestSha256);
+            Assert.NotEqual(consent.ManifestSha256, grant.ManifestSha256);
         }
         finally
         {
@@ -1691,7 +1770,9 @@ public sealed class RegistryRuntimeArchitectureTests
         string origin,
         string packageId,
         string? currentVersion,
-        string version)
+        string version,
+        IReadOnlyList<string>? runtimeIdentifiers = null,
+        IReadOnlyList<string>? runtimeRequiredHostCapabilities = null)
     {
         var artifactRoot = Path.Combine(root, "registry-artifacts", name);
         var sourceRoot = Path.Combine(artifactRoot, "source");
@@ -1699,7 +1780,9 @@ public sealed class RegistryRuntimeArchitectureTests
             sourceRoot,
             packageId,
             version,
-            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            runtimeIdentifiers: runtimeIdentifiers,
+            runtimeRequiredHostCapabilities: runtimeRequiredHostCapabilities);
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(sourceRoot);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
         var sourceArchiveSha256 = Convert.ToHexString(SHA256.HashData(
@@ -1750,7 +1833,24 @@ public sealed class RegistryRuntimeArchitectureTests
                 currentVersion is not null,
                 null,
                 [],
-                [],
+                validation.Manifest!.Targets!
+                    .Where(static target => target is not null)
+                    .Select(static target => new RegistryPackageTarget(
+                        target!.Role!,
+                        target.Rid!,
+                        target.Kind!,
+                        target.EntryPoint!,
+                        target.TargetFramework,
+                        target.SdkVersion,
+                        (target.RequiredHostCapabilities ?? []).Select(static capability => capability!).ToArray(),
+                        (target.Views ?? []).Where(static view => view is not null).Select(static view => new RegistryPackageWebView(
+                            view!.ViewId!,
+                            view.DisplayName!,
+                            view.Route!,
+                            view.Icon,
+                            view.DefaultPlacement!,
+                            view.ShowInHotbar!.Value)).ToArray()))
+                    .ToArray(),
                 artifacts),
             contentByUrl);
     }

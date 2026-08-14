@@ -30,9 +30,6 @@ internal static class AppLocalState
     internal static string GetPath(params string[] segments)
         => Path.Combine([RootPath, .. segments]);
 
-    internal static void EnsureInitializedForStartup()
-        => TemporaryV1TesterBootstrapCleanup.EnsureInitialized(RootPath, EnsureInitialized);
-
     internal static void EnsureInitialized(string? rootPath = null)
     {
         var root = Path.GetFullPath(rootPath ?? RootPath);

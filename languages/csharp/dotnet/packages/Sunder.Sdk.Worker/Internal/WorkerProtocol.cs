@@ -7,14 +7,11 @@ namespace Sunder.Sdk.Worker.Internal;
 
 internal static class WorkerProtocol
 {
-    public const string Name = "sunder.worker.v1";
-    public const int Version = 1;
+    public const string Name = "sunder.worker.v3";
+    public const int Version = 3;
+    public const long MaximumSafeInteger = 9_007_199_254_740_991;
 
-    public static WorkerProtocolIdentity V1 { get; } = new(Name, Version, UsesV2Lifecycle: false);
-    public static WorkerProtocolIdentity V2 { get; } = new("sunder.worker.v2", 2, UsesV2Lifecycle: true);
 }
-
-internal sealed record WorkerProtocolIdentity(string Name, int Version, bool UsesV2Lifecycle);
 
 internal sealed class WorkerProtocolException : Exception
 {
@@ -27,6 +24,32 @@ internal sealed class WorkerProtocolException : Exception
         : base(message, innerException)
     {
     }
+}
+
+internal sealed class WorkerAsciiCaseInsensitiveComparer : IEqualityComparer<string>
+{
+    public static WorkerAsciiCaseInsensitiveComparer Instance { get; } = new();
+
+    public bool Equals(string? left, string? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is null || right is null || left.Length != right.Length) return false;
+        for (var index = 0; index < left.Length; index++)
+        {
+            if (Fold(left[index]) != Fold(right[index])) return false;
+        }
+        return true;
+    }
+
+    public int GetHashCode(string value)
+    {
+        var hash = new HashCode();
+        foreach (var character in value) hash.Add(Fold(character));
+        return hash.ToHashCode();
+    }
+
+    private static char Fold(char value)
+        => value is >= 'A' and <= 'Z' ? (char)(value + ('a' - 'A')) : value;
 }
 
 internal sealed class WorkerFrameReader
@@ -170,7 +193,7 @@ internal sealed class WorkerFrameReader
     private sealed class JsonObjectNames
     {
         public HashSet<string> Exact { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> IgnoreCase { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> IgnoreCase { get; } = new(WorkerAsciiCaseInsensitiveComparer.Instance);
     }
 }
 
@@ -349,10 +372,10 @@ internal static class WorkerJson
         if (!root.TryGetProperty(propertyName, out var value)
             || value.ValueKind != JsonValueKind.Number
             || !value.TryGetInt64(out var result)
-            || result < 0)
+            || result is < 0 or > WorkerProtocol.MaximumSafeInteger)
         {
             throw new WorkerProtocolException(
-                $"Host envelope property '{propertyName}' must be a non-negative integer.");
+                $"Host envelope property '{propertyName}' must be an integer from 0 through {WorkerProtocol.MaximumSafeInteger}.");
         }
         return result;
     }
@@ -398,7 +421,7 @@ internal static class WorkerJson
                 {
                     writer.WriteStartObject();
                     var exact = new HashSet<string>(StringComparer.Ordinal);
-                    var ignoreCase = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var ignoreCase = new HashSet<string>(WorkerAsciiCaseInsensitiveComparer.Instance);
                     foreach (var property in value.EnumerateObject())
                     {
                         if (!exact.Add(property.Name) || !ignoreCase.Add(property.Name))

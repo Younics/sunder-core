@@ -17,24 +17,14 @@ using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal interface IProcessRuntimeGenerationParticipant
-{
-    void ActivateGeneration();
-}
-
-internal sealed partial class ProcessRuntimeWorker :
-    IPackageBackgroundService,
-    IPackageRuntimeGenerationParticipant,
-    IProcessRuntimeGenerationParticipant,
-    IAsyncDisposable
+internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 {
     private const int StreamBufferCapacity = 32;
     private readonly ILogger _logger;
     private readonly PreparedRuntimePackage _package;
-    private readonly RuntimePackageContext _packageContext;
+    private readonly RuntimePackageDataResources _packageData;
     private readonly Guid _activationId;
     private readonly RuntimeRpcBroker _broker;
-    private readonly SunderWorkerProtocolIdentity _protocol;
     private readonly RuntimeRpcCallerStamp _callerStamp;
     private readonly PackageSessionState? _packageSessionState;
     private readonly RuntimeProcessPolicyOptions _policy;
@@ -58,6 +48,8 @@ internal sealed partial class ProcessRuntimeWorker :
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _candidateStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _generationCommitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _storageMigrationsPrepared = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _activationDispatched = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _activated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _shutdownAcknowledged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _generationCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,7 +62,6 @@ internal sealed partial class ProcessRuntimeWorker :
     private Task _writerTask = Task.CompletedTask;
     private Task _stderrTask = Task.CompletedTask;
     private Task _exitTask = Task.CompletedTask;
-    private Task _activationTask = Task.CompletedTask;
     private Task? _forceStopCallbacks;
     private CancellationTokenRegistration _hostStopRegistration;
     private WorkerState _state;
@@ -78,26 +69,25 @@ internal sealed partial class ProcessRuntimeWorker :
     private string? _shutdownId;
     private Exception? _fault;
     private bool _activationAcknowledged;
+    private byte[]? _activationFrameBody;
     private bool _shutdownAcknowledgementReceived;
     private bool _stopStarted;
 
     public ProcessRuntimeWorker(
         ILogger logger,
         PreparedRuntimePackage package,
-        RuntimePackageContext packageContext,
+        RuntimePackageDataResources packageData,
         Guid activationId,
         RuntimeRpcBroker broker,
         RuntimeProcessPolicyOptions? policy = null,
         CancellationToken hostStopping = default,
-        SunderWorkerProtocolIdentity? protocol = null,
         PackageSessionState? packageSessionState = null)
     {
         _logger = logger;
         _package = package;
-        _packageContext = packageContext;
+        _packageData = packageData;
         _activationId = activationId;
         _broker = broker;
-        _protocol = protocol ?? SunderWorkerProtocol.V1;
         _callerStamp = new RuntimeRpcCallerStamp(package.PackageId, activationId);
         _packageSessionState = packageSessionState;
         _policy = ValidatePolicy(policy ?? new RuntimeProcessPolicyOptions());
@@ -112,36 +102,53 @@ internal sealed partial class ProcessRuntimeWorker :
                                           provider.Role,
                                           SunderPackageFormat.RuntimeHostRole,
                                           StringComparison.Ordinal))
-            .Select(static provider => new ProviderIdentity(
+            .Select(provider => new ProviderIdentity(
                 provider!.ProviderId!,
                 provider.ContractId!,
                 provider.ContractVersion!,
-                provider.ContractSha256!))
+                provider.DescriptorSha256!,
+                provider.AbiSha256!))
             .OrderBy(static provider => provider.ProviderId, StringComparer.Ordinal)
             .ToArray();
     }
 
     public Task GenerationCompletion => _generationCompletion.Task;
 
+    public IReadOnlyList<PackageStorageMigrationPlanIdentity> StorageMigrationPlans
+    {
+        get
+        {
+            lock (_stateGate) return _storageMigrationPlans;
+        }
+    }
+
+    public PackageStorageMigrationJournal StorageMigrationJournal => _packageData.MigrationJournal;
+
     internal Task ActivationCompletion => _activated.Task;
 
-    internal Sunder.Sdk.Settings.PackageSettingsSchema? SettingsSchema { get; private set; }
+    public Sunder.Sdk.Settings.PackageSettingsSchema? SettingsSchema { get; private set; }
+
+    public string WorkspaceRootPath => _packageData.Storage.RoleLocalWorkspace.WorkspaceRootPath;
 
     internal string WorkerTemporaryPath => _workerTemporaryPath;
 
     public Task ComposeAsync(CancellationToken cancellationToken = default)
-    {
-        if (!_protocol.UsesV2Lifecycle)
-        {
-            throw new InvalidOperationException("Only sunder.worker.v2 has a separate composition phase.");
-        }
-        return StartProcessAsync(cancellationToken);
-    }
+        => StartProcessAsync(cancellationToken);
 
-    public Task StartAsync(CancellationToken cancellationToken = default)
-        => _protocol.UsesV2Lifecycle
-            ? StartCandidateAsync(cancellationToken)
-            : StartProcessAsync(cancellationToken);
+    public async Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        WorkerState state;
+        lock (_stateGate) state = _state;
+        if (state == WorkerState.Created)
+        {
+            await ComposeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else if (state == WorkerState.Starting)
+        {
+            await _ready.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await StartCandidateAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     private async Task StartProcessAsync(CancellationToken cancellationToken)
     {
@@ -184,8 +191,8 @@ internal sealed partial class ProcessRuntimeWorker :
             QueueEnvelope(new
             {
                 type = "host.hello",
-                protocol = _protocol.Name,
-                protocolVersion = _protocol.Version,
+                protocol = SunderWorkerProtocol.Name,
+                protocolVersion = SunderWorkerProtocol.Version,
                 challenge = _challenge,
                 packageId = _package.PackageId,
                 packageVersion = _package.Version,
@@ -236,7 +243,7 @@ internal sealed partial class ProcessRuntimeWorker :
             ThrowIfFaulted();
             if (_state != WorkerState.Ready)
             {
-                throw new InvalidOperationException("The V2 process Runtime worker candidate can only be started once after composition.");
+                throw new InvalidOperationException("The V3 process Runtime worker candidate can only be started once after composition.");
             }
             _state = WorkerState.CandidateStarting;
         }
@@ -248,49 +255,22 @@ internal sealed partial class ProcessRuntimeWorker :
             ThrowIfFaulted();
             if (_state != WorkerState.CandidateStarted)
             {
-                throw new InvalidOperationException("The V2 process worker did not enter the candidate-started state.");
+                throw new InvalidOperationException("The V3 process worker did not enter the candidate-started state.");
             }
         }
     }
 
     public Task CommitGenerationAsync(
-        PackageRuntimeGeneration generation,
+        RuntimePackageGeneration generation,
         CancellationToken cancellationToken = default)
-        => _protocol.UsesV2Lifecycle
-            ? CommitV2GenerationAsync(generation, cancellationToken)
-            : CommitV1GenerationAsync(generation, cancellationToken);
+        => CommitGenerationCoreAsync(generation, cancellationToken);
 
-    private Task CommitV1GenerationAsync(
-        PackageRuntimeGeneration generation,
+    private async Task CommitGenerationCoreAsync(
+        RuntimePackageGeneration generation,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (generation.ActivationId != _activationId)
-        {
-            throw new InvalidOperationException("The process worker activation does not match the committed Runtime generation.");
-        }
-        lock (_stateGate)
-        {
-            ThrowIfFaulted();
-            if (_state is not (WorkerState.Ready or WorkerState.Committed))
-            {
-                throw new InvalidOperationException("The process worker is not ready to commit a Runtime generation.");
-            }
-            if (_sessionGeneration is { } existing && existing != generation.SessionGeneration)
-            {
-                throw new InvalidOperationException("The process worker is already committed to another Runtime generation.");
-            }
-            _sessionGeneration = generation.SessionGeneration;
-            _state = WorkerState.Committed;
-        }
-        return Task.CompletedTask;
-    }
-
-    private async Task CommitV2GenerationAsync(
-        PackageRuntimeGeneration generation,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
+        EnsureSafeGeneration(generation.SessionGeneration);
         if (generation.ActivationId != _activationId)
         {
             throw new InvalidOperationException("The process worker activation does not match the committed Runtime generation.");
@@ -316,7 +296,7 @@ internal sealed partial class ProcessRuntimeWorker :
             }
             else
             {
-                throw new InvalidOperationException("The V2 process worker is not ready to commit this Runtime generation.");
+                throw new InvalidOperationException("The V3 process worker is not ready to commit this Runtime generation.");
             }
         }
 
@@ -335,43 +315,118 @@ internal sealed partial class ProcessRuntimeWorker :
             ThrowIfFaulted();
             if (_state != WorkerState.Committed || _sessionGeneration != generation.SessionGeneration)
             {
-                throw new InvalidOperationException("The V2 process worker did not commit the requested Runtime generation.");
+                throw new InvalidOperationException("The V3 process worker did not commit the requested Runtime generation.");
             }
         }
     }
 
-    public void ActivateGeneration()
+    public async Task PrepareStorageMigrationsAsync(
+        RuntimePackageGeneration generation,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureSafeGeneration(generation.SessionGeneration);
+        if (generation.ActivationId != _activationId)
+        {
+            throw new InvalidOperationException(
+                "The process worker activation does not match the storage-migration preparation generation.");
+        }
+
+        var queuePreparation = false;
+        lock (_stateGate)
+        {
+            ThrowIfFaulted();
+            if (_state == WorkerState.StorageMigrationsPrepared
+                && _sessionGeneration == generation.SessionGeneration)
+            {
+                return;
+            }
+            if (_state == WorkerState.PreparingStorageMigrations
+                && _sessionGeneration == generation.SessionGeneration)
+            {
+                // Concurrent callers await the original exact preparation acknowledgement.
+            }
+            else if (_state == WorkerState.Committed
+                     && _sessionGeneration == generation.SessionGeneration)
+            {
+                _state = WorkerState.PreparingStorageMigrations;
+                queuePreparation = true;
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "The V3 process worker is not ready to prepare storage migrations for this generation.");
+            }
+        }
+
+        if (queuePreparation)
+        {
+            QueueEnvelope(new
+            {
+                type = "host.prepare-storage-migrations",
+                activationId = _activationId.ToString("N"),
+                sessionGeneration = generation.SessionGeneration,
+            });
+        }
+        await _storageMigrationsPrepared.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        lock (_stateGate)
+        {
+            ThrowIfFaulted();
+            if (_state != WorkerState.StorageMigrationsPrepared
+                || _sessionGeneration != generation.SessionGeneration)
+            {
+                throw new InvalidOperationException(
+                    "The V3 process worker did not prepare storage migrations for the requested Runtime generation.");
+            }
+        }
+    }
+
+    public async Task ActivateGenerationAsync(CancellationToken cancellationToken = default)
     {
         long generation;
+        var queueActivation = false;
         Exception? queueFailure = null;
         lock (_stateGate)
         {
             ThrowIfFaulted();
-            if (_state != WorkerState.Committed || _sessionGeneration is null)
+            if (_state == WorkerState.Active)
             {
-                throw new InvalidOperationException("The process worker generation has not been committed.");
+                return;
             }
-            generation = _sessionGeneration.Value;
-            var body = SunderWorkerProtocol.SerializeFrameBody(new
+            if (_state == WorkerState.Activating && _sessionGeneration is not null)
             {
-                type = "host.activate",
-                sessionGeneration = generation,
-            }, _policy);
-            if (_writes is null)
-            {
-                queueFailure = new InvalidOperationException("Process worker protocol writer is unavailable.");
+                generation = _sessionGeneration.Value;
             }
-            else if (!_writes.Writer.TryWrite(body))
+            else if (_state == WorkerState.StorageMigrationsPrepared
+                     && _sessionGeneration is not null)
             {
-                queueFailure = new SunderWorkerProtocolException(
-                    "Process worker protocol write queue exceeded its bound.");
+                generation = _sessionGeneration.Value;
+                var body = SunderWorkerProtocol.SerializeFrameBody(new
+                {
+                    type = "host.activate",
+                    sessionGeneration = generation,
+                }, _policy);
+                if (_writes is null)
+                {
+                    queueFailure = new InvalidOperationException("Process worker protocol writer is unavailable.");
+                }
+                else if (!_writes.Writer.TryWrite(body))
+                {
+                    queueFailure = new SunderWorkerProtocolException(
+                        "Process worker protocol write queue exceeded its bound.");
+                }
+                else
+                {
+                    // Calls can observe Active only after host.activate is ordered ahead of them.
+                    Volatile.Write(ref _activationFrameBody, body);
+                    _state = WorkerState.Activating;
+                    queueActivation = true;
+                }
             }
             else
             {
-                // Calls can observe Active only after host.activate is ordered ahead of them.
-                _state = _protocol.UsesV2Lifecycle
-                    ? WorkerState.Activating
-                    : WorkerState.Active;
+                throw new InvalidOperationException(
+                    "The process worker has not completed storage-migration preparation.");
             }
         }
         if (queueFailure is not null)
@@ -379,7 +434,31 @@ internal sealed partial class ProcessRuntimeWorker :
             Fault(queueFailure);
             throw queueFailure;
         }
-        _activationTask = EnforceActivationAcknowledgementAsync(generation);
+        if (queueActivation)
+        {
+            await _activationDispatched.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await _activated.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        lock (_stateGate)
+        {
+            ThrowIfFaulted();
+            if (_state != WorkerState.Active || _sessionGeneration != generation)
+            {
+                throw new InvalidOperationException(
+                    "The process worker did not activate the committed Runtime generation.");
+            }
+        }
+    }
+
+    private static void EnsureSafeGeneration(long generation)
+    {
+        if (generation is < 0 or > SunderWorkerProtocol.MaximumSafeInteger)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(generation),
+                generation,
+                $"Runtime generations must be JavaScript-safe integers through {SunderWorkerProtocol.MaximumSafeInteger}.");
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -454,8 +533,12 @@ internal sealed partial class ProcessRuntimeWorker :
             }
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
             {
+                bool shutdownAcknowledged;
+                lock (_stateGate) shutdownAcknowledged = _shutdownAcknowledgementReceived;
                 _logger.LogWarning(
-                    "Process Runtime target for package {PackageId} did not shut down within its deadline; killing its process tree",
+                    shutdownAcknowledged
+                        ? "Process Runtime target for package {PackageId} acknowledged shutdown but did not exit within its deadline; killing its process tree"
+                        : "Process Runtime target for package {PackageId} did not acknowledge shutdown within its deadline; killing its process tree",
                     _package.PackageId);
                 KillProcessTree(process);
             }
@@ -469,7 +552,6 @@ internal sealed partial class ProcessRuntimeWorker :
             await ObserveAsync(_readerTask).ConfigureAwait(false);
             await ObserveAsync(_stderrTask).ConfigureAwait(false);
             await ObserveAsync(_exitTask).ConfigureAwait(false);
-            await ObserveAsync(_activationTask).ConfigureAwait(false);
             if (scopeCleanup.IsCompleted)
             {
                 await scopeCleanup.ConfigureAwait(false);
@@ -490,6 +572,7 @@ internal sealed partial class ProcessRuntimeWorker :
         _hostStopRegistration.Dispose();
         _process?.Dispose();
         RuntimeCancellation.DisposeAfterCallbacks(_forceStop, SignalForceStop());
+        _packageData.Dispose();
     }
 
     public async ValueTask<JsonElement> InvokeUnaryAsync(
@@ -592,7 +675,7 @@ internal sealed partial class ProcessRuntimeWorker :
             {
                 return;
             }
-            if (_protocol.UsesV2Lifecycle && _state == WorkerState.Activating)
+            if (_state == WorkerState.Activating)
             {
                 activation = _activated.Task;
             }
@@ -684,35 +767,25 @@ internal sealed partial class ProcessRuntimeWorker :
         var temporaryPath = _workerTemporaryPath;
         Directory.CreateDirectory(temporaryPath);
         RestrictWorkerDirectory(temporaryPath);
-        startInfo.Environment["SUNDER_WORKER_PROTOCOL"] = _protocol.Name;
+        foreach (var variable in WorkerProcessEnvironment.CreateBaseline(
+                     Environment.GetEnvironmentVariable,
+                     temporaryPath,
+                     OperatingSystem.IsWindows(),
+                     WorkerProcessEnvironment.AllowsDockerEnvironment(
+                         _package.SelectedTarget,
+                         _package.ApprovedSensitiveCapabilities)))
+        {
+            startInfo.Environment[variable.Key] = variable.Value;
+        }
+        startInfo.Environment["SUNDER_WORKER_PROTOCOL"] = SunderWorkerProtocol.Name;
         startInfo.Environment["SUNDER_PACKAGE_ID"] = _package.PackageId;
         startInfo.Environment["SUNDER_PACKAGE_VERSION"] = _package.Version;
         startInfo.Environment["SUNDER_ACTIVATION_ID"] = _activationId.ToString("N");
         startInfo.Environment["SUNDER_SESSION_ID"] = _package.SessionId;
-        startInfo.Environment["SUNDER_PACKAGE_CONTENT_PATH"] = Path.GetFullPath(_package.ShadowFolder);
-        startInfo.Environment["SUNDER_PACKAGE_DATA_PATH"] = _protocol.UsesV2Lifecycle
-            ? Path.GetFullPath(temporaryPath)
-            : Path.GetFullPath(_packageContext.LocalStorage.DataRootPath);
-        if (!_protocol.UsesV2Lifecycle)
-        {
-            startInfo.Environment["SUNDER_PACKAGE_STATE_PATH"] = Path.Combine(
-                Path.GetFullPath(_packageContext.LocalStorage.DataRootPath),
-                "state.json");
-        }
-        startInfo.Environment["SUNDER_PACKAGE_WORKING_PATH"] = Path.GetFullPath(_package.ShadowFolder);
-        startInfo.Environment["TMPDIR"] = temporaryPath;
-        startInfo.Environment["TMP"] = temporaryPath;
-        startInfo.Environment["TEMP"] = temporaryPath;
-        if (OperatingSystem.IsWindows())
-        {
-            startInfo.Environment["SystemRoot"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-        }
-        else
-        {
-            startInfo.Environment["LANG"] = "C.UTF-8";
-            startInfo.Environment["LC_ALL"] = "C.UTF-8";
-        }
-        startInfo.Environment.Remove("NODE_OPTIONS");
+        startInfo.Environment["SUNDER_PACKAGE_CONTENT_ROOT"] = Path.GetFullPath(_package.ShadowFolder);
+        startInfo.Environment["SUNDER_WORKER_TEMP_ROOT"] = Path.GetFullPath(temporaryPath);
+        startInfo.Environment["SUNDER_PACKAGE_WORKSPACE_ROOT"] = Path.GetFullPath(
+            _packageData.Storage.RoleLocalWorkspace.WorkspaceRootPath);
         return startInfo;
     }
 
@@ -780,7 +853,8 @@ internal sealed partial class ProcessRuntimeWorker :
         lock (_callGate)
         {
             if (!consumePendingReservation
-                && _hostCalls.Count + _pendingHostCalls >= _policy.MaxOutstandingHostCalls)
+                && _hostCalls.Count + _pendingHostCalls + _contributionCalls.Count
+                >= _policy.MaxOutstandingHostCalls)
             {
                 throw new SunderRpcException(new SunderRpcError(
                     SunderRpcErrorKind.ResourceExhausted,
@@ -806,14 +880,14 @@ internal sealed partial class ProcessRuntimeWorker :
         lock (_stateGate)
         {
             ThrowIfFaulted();
-            if (_state != WorkerState.Active
-                && (!_protocol.UsesV2Lifecycle || _state != WorkerState.Activating))
+            if (_state is not (WorkerState.Active or WorkerState.Activating))
             {
                 throw WorkerActivating();
             }
             lock (_callGate)
             {
-                if (_hostCalls.Count + _pendingHostCalls >= _policy.MaxOutstandingHostCalls)
+                if (_hostCalls.Count + _pendingHostCalls + _contributionCalls.Count
+                    >= _policy.MaxOutstandingHostCalls)
                 {
                     throw new SunderRpcException(new SunderRpcError(
                         SunderRpcErrorKind.ResourceExhausted,
@@ -926,7 +1000,6 @@ internal sealed partial class ProcessRuntimeWorker :
             case "worker.scope-close":
             case "worker.content-register":
             case "worker.content-open":
-            case "worker.content-discard":
             case "worker.content-release":
             case "worker.payload-allocate":
             case "worker.payload-release":
@@ -937,6 +1010,8 @@ internal sealed partial class ProcessRuntimeWorker :
             case "worker.state-set":
             case "worker.state-delete":
             case "worker.state-list":
+            case "worker.migration-keys":
+            case "worker.migration-apply":
             case "worker.secrets-get":
             case "worker.secrets-set":
             case "worker.secrets-delete":
@@ -959,6 +1034,22 @@ internal sealed partial class ProcessRuntimeWorker :
             case "worker.generation-committed":
                 HandleGenerationCommitted(root);
                 break;
+            case "worker.storage-migrations-prepared":
+                HandleStorageMigrationsPrepared(root);
+                break;
+            case "worker.generation-fault":
+                HandleGenerationFault(root);
+                break;
+            case "worker.callback-started":
+            case "worker.callback-completed":
+            case "worker.callback-cancelled":
+            case "worker.auth-status":
+            case "worker.auth-connected":
+            case "worker.auth-completed":
+            case "worker.auth-disconnected":
+            case "worker.contribution-error":
+                HandleContributionResponse(type, root);
+                break;
             case "worker.shutdown-ack":
                 HandleShutdownAcknowledgement(root);
                 break;
@@ -971,36 +1062,20 @@ internal sealed partial class ProcessRuntimeWorker :
     {
         SunderWorkerProtocol.RequireOnlyProperties(
             root,
-            _protocol.UsesV2Lifecycle
-                ?
-                [
-                    "type",
-                    "protocol",
-                    "protocolVersion",
-                    "challenge",
-                    "packageId",
-                    "packageVersion",
-                    "activationId",
-                    "sessionId",
-                    "contributions",
-                ]
-                :
-                [
-                    "type",
-                    "protocol",
-                    "protocolVersion",
-                    "challenge",
-                    "packageId",
-                    "packageVersion",
-                    "activationId",
-                    "sessionId",
-                    "providers",
-                ]);
+            "type",
+            "protocol",
+            "protocolVersion",
+            "challenge",
+            "packageId",
+            "packageVersion",
+            "activationId",
+            "sessionId",
+            "contributions");
         if (!string.Equals(
                 SunderWorkerProtocol.RequiredString(root, "protocol", 64),
-                _protocol.Name,
+                SunderWorkerProtocol.Name,
                 StringComparison.Ordinal)
-            || SunderWorkerProtocol.RequiredNonNegativeInt64(root, "protocolVersion") != _protocol.Version
+            || SunderWorkerProtocol.RequiredNonNegativeInt64(root, "protocolVersion") != SunderWorkerProtocol.Version
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "challenge", 128), _challenge, StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "packageId", 256), _package.PackageId, StringComparison.Ordinal)
             || !string.Equals(SunderWorkerProtocol.RequiredString(root, "packageVersion", 128), _package.Version, StringComparison.Ordinal)
@@ -1010,18 +1085,14 @@ internal sealed partial class ProcessRuntimeWorker :
             throw new SunderWorkerProtocolException(
                 "Process worker ready envelope did not bind the exact protocol, challenge, package, activation, and session.");
         }
-        JsonElement providersElement;
-        if (_protocol.UsesV2Lifecycle)
-        {
-            var contributions = ReadV2Contributions(
-                SunderWorkerProtocol.RequiredValue(root, "contributions"));
-            SettingsSchema = contributions.SettingsSchema;
-            providersElement = contributions.RpcProviders;
-        }
-        else
-        {
-            providersElement = SunderWorkerProtocol.RequiredValue(root, "providers");
-        }
+        var contributions = ReadContributions(
+            SunderWorkerProtocol.RequiredValue(root, "contributions"));
+        SettingsSchema = contributions.SettingsSchema;
+        ConfigureStorageMigrationPlans(contributions.StorageMigrations);
+        ConfigureContributionHandlers(
+            contributions.CallbackHandlerIds,
+            contributions.HasAuthHandler);
+        var providersElement = contributions.RpcProviders;
         if (providersElement.ValueKind != JsonValueKind.Array)
         {
             throw new SunderWorkerProtocolException("Process worker ready providers must be an array.");
@@ -1034,7 +1105,7 @@ internal sealed partial class ProcessRuntimeWorker :
             throw new SunderWorkerProtocolException(
                 "Process worker advertised providers do not exactly match the package's declared Runtime providers.");
         }
-        _packageContext.PackageSettings.Schema = SettingsSchema;
+        _packageData.Settings.Schema = SettingsSchema;
         lock (_stateGate)
         {
             if (_state != WorkerState.Starting)
@@ -1044,16 +1115,6 @@ internal sealed partial class ProcessRuntimeWorker :
             }
             _state = WorkerState.Ready;
             _ready.TrySetResult();
-        }
-    }
-
-    private static void RequireEmptyV2ContributionArray(JsonElement contributions, string propertyName)
-    {
-        var value = SunderWorkerProtocol.RequiredValue(contributions, propertyName);
-        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 0)
-        {
-            throw new SunderWorkerProtocolException(
-                $"This Host slice does not yet support V2 worker '{propertyName}' contributions.");
         }
     }
 
@@ -1074,12 +1135,31 @@ internal sealed partial class ProcessRuntimeWorker :
             "providerId",
             "contractId",
             "contractVersion",
-            "contractSha256");
+            "descriptorSha256",
+            "abiSha256");
         return new ProviderIdentity(
             SunderWorkerProtocol.RequiredString(value, "providerId", 256),
             SunderWorkerProtocol.RequiredString(value, "contractId", 256),
             SunderWorkerProtocol.RequiredString(value, "contractVersion", 128),
-            SunderWorkerProtocol.RequiredString(value, "contractSha256", 64));
+            ReadWorkerSha256(value, "descriptorSha256", requireLowercase: true),
+            ReadWorkerSha256(value, "abiSha256", requireLowercase: true));
+    }
+
+    private static string ReadWorkerSha256(
+        JsonElement value,
+        string propertyName,
+        bool requireLowercase)
+    {
+        var sha256 = SunderWorkerProtocol.RequiredString(value, propertyName, 64);
+        if (sha256.Length != 64
+            || sha256.Any(character => requireLowercase
+                ? character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')
+                : !char.IsAsciiHexDigit(character)))
+        {
+            throw new SunderWorkerProtocolException(
+                $"Worker envelope property '{propertyName}' is not a canonical SHA-256 value.");
+        }
+        return sha256;
     }
 
     private void HandleCandidateStarted(JsonElement root)
@@ -1087,8 +1167,7 @@ internal sealed partial class ProcessRuntimeWorker :
         SunderWorkerProtocol.RequireOnlyProperties(root, "type");
         lock (_stateGate)
         {
-            if (!_protocol.UsesV2Lifecycle
-                || _state is not (WorkerState.CandidateStarting or WorkerState.Stopping)
+            if (_state is not (WorkerState.CandidateStarting or WorkerState.Stopping)
                 || _candidateStarted.Task.IsCompleted)
             {
                 throw new SunderWorkerProtocolException(
@@ -1109,8 +1188,7 @@ internal sealed partial class ProcessRuntimeWorker :
         var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
         lock (_stateGate)
         {
-            if (!_protocol.UsesV2Lifecycle
-                || _state is not (WorkerState.Committing or WorkerState.Stopping)
+            if (_state is not (WorkerState.Committing or WorkerState.Stopping)
                 || !string.Equals(activationId, _activationId.ToString("N"), StringComparison.Ordinal)
                 || generation != _sessionGeneration
                 || _generationCommitted.Task.IsCompleted)
@@ -1126,20 +1204,50 @@ internal sealed partial class ProcessRuntimeWorker :
         _generationCommitted.TrySetResult();
     }
 
+    private void HandleStorageMigrationsPrepared(JsonElement root)
+    {
+        SunderWorkerProtocol.RequireOnlyProperties(
+            root,
+            "type",
+            "activationId",
+            "sessionGeneration");
+        var activationId = SunderWorkerProtocol.RequiredString(root, "activationId", 64);
+        var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
+        lock (_stateGate)
+        {
+            if (_state is not (WorkerState.PreparingStorageMigrations or WorkerState.Stopping)
+                || !string.Equals(activationId, _activationId.ToString("N"), StringComparison.Ordinal)
+                || generation != _sessionGeneration
+                || _storageMigrationsPrepared.Task.IsCompleted)
+            {
+                throw new SunderWorkerProtocolException(
+                    "Process worker acknowledged invalid or duplicate storage-migration preparation.");
+            }
+            if (_state == WorkerState.PreparingStorageMigrations)
+            {
+                _state = WorkerState.StorageMigrationsPrepared;
+            }
+        }
+        _storageMigrationsPrepared.TrySetResult();
+    }
+
     private void HandleActivated(JsonElement root)
     {
         SunderWorkerProtocol.RequireOnlyProperties(root, "type", "sessionGeneration");
         var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
         lock (_stateGate)
         {
-            var validState = _protocol.UsesV2Lifecycle
-                ? _state is WorkerState.Activating or WorkerState.Stopping
-                : _state is WorkerState.Active or WorkerState.Stopping;
+            var validState = _state is WorkerState.Activating or WorkerState.Stopping;
             if (!validState
                 || generation != _sessionGeneration
                 || _activationAcknowledged)
             {
                 throw new SunderWorkerProtocolException("Process worker acknowledged an invalid Runtime generation.");
+            }
+            if (_state == WorkerState.Activating && !AreStorageMigrationsAppliedUnderStateGate())
+            {
+                throw new SunderWorkerProtocolException(
+                    "Process worker acknowledged activation before completing its declared storage migrations.");
             }
             _activationAcknowledged = true;
             if (_state == WorkerState.Activating)
@@ -1148,24 +1256,43 @@ internal sealed partial class ProcessRuntimeWorker :
             }
         }
         _activated.TrySetResult();
+        _logger.LogInformation(
+            "Worker V3 activation acknowledged for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
+            _package.PackageId,
+            _activationId,
+            generation);
     }
 
-    private async Task EnforceActivationAcknowledgementAsync(long generation)
+    private void HandleGenerationFault(JsonElement root)
     {
-        using var timeout = new CancellationTokenSource(_policy.ActivationTimeout);
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, _forceStop.Token);
-        try
+        SunderWorkerProtocol.RequireOnlyProperties(
+            root,
+            "type",
+            "activationId",
+            "sessionGeneration",
+            "code",
+            "message");
+        var activationId = SunderWorkerProtocol.RequiredString(root, "activationId", 64);
+        var generation = SunderWorkerProtocol.RequiredNonNegativeInt64(root, "sessionGeneration");
+        var code = SunderWorkerProtocol.RequiredString(root, "code", 128);
+        var message = SunderWorkerProtocol.RequiredString(root, "message", 512);
+        if (!code.All(static character =>
+                char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_'))
         {
-            await _activated.Task.WaitAsync(cancellation.Token).ConfigureAwait(false);
+            throw new SunderWorkerProtocolException(
+                "Process worker generation-fault code contains unsupported characters.");
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !_forceStop.IsCancellationRequested)
+        lock (_stateGate)
         {
-            Fault(new TimeoutException(
-                $"Process Runtime target for package '{_package.PackageId}' did not acknowledge generation {generation} within {_policy.ActivationTimeout.TotalSeconds:0.###} seconds."));
+            if (_state != WorkerState.Active
+                || !string.Equals(activationId, _activationId.ToString("N"), StringComparison.Ordinal)
+                || generation != _sessionGeneration)
+            {
+                throw new SunderWorkerProtocolException(
+                    "Process worker generation fault does not identify its exact active generation.");
+            }
         }
-        catch (OperationCanceledException) when (_forceStop.IsCancellationRequested)
-        {
-        }
+        Fault(new ProcessRuntimeGenerationFaultException(code, message));
     }
 
     private void HandleShutdownAcknowledgement(JsonElement root)
@@ -1185,11 +1312,17 @@ internal sealed partial class ProcessRuntimeWorker :
             _shutdownAcknowledgementReceived = true;
             lock (_callGate)
             {
+                if (_hostCalls.Count != 0 || _contributionCalls.Count != 0)
+                {
+                    throw new SunderWorkerProtocolException(
+                        "Process worker acknowledged shutdown before draining Host-owned calls.");
+                }
                 workerCallCompletions = _workerCallCleanup.ToArray();
             }
         }
         _candidateStarted.TrySetResult();
         _generationCommitted.TrySetResult();
+        _storageMigrationsPrepared.TrySetResult();
         _activated.TrySetResult();
         _ = CompleteShutdownAcknowledgementAsync(workerCallCompletions);
     }
@@ -1326,22 +1459,28 @@ internal sealed partial class ProcessRuntimeWorker :
         WorkerCall call;
         lock (_stateGate)
         {
-            var admitsOrdinary = _state == WorkerState.Active
-                                 || _protocol.UsesV2Lifecycle && _state == WorkerState.Activating;
+            var admitsOrdinary = _state is WorkerState.Active or WorkerState.Activating;
+            var admitsMigrationPreparationRead = _state == WorkerState.PreparingStorageMigrations
+                                                  && IsWorkerMigrationPreparationStateRead(type);
+            var admitsMigrationPreparationControl = _state == WorkerState.PreparingStorageMigrations
+                                                     && type == "worker.payload-release";
             var admitsLogging = logging
-                                && _protocol.UsesV2Lifecycle
                                 && !_shutdownAcknowledgementReceived
                                 && _state is WorkerState.Ready
                                     or WorkerState.CandidateStarting
                                     or WorkerState.CandidateStarted
                                     or WorkerState.Committing
                                     or WorkerState.Committed
+                                    or WorkerState.PreparingStorageMigrations
+                                    or WorkerState.StorageMigrationsPrepared
                                     or WorkerState.Activating
                                     or WorkerState.Active
                                     or WorkerState.Stopping;
             if (!(logging
                     ? admitsLogging
                     : admitsOrdinary
+                      || admitsMigrationPreparationRead
+                      || admitsMigrationPreparationControl
                       || _state == WorkerState.Stopping && control && !_shutdownAcknowledgementReceived))
             {
                 throw new SunderWorkerProtocolException(
@@ -1397,9 +1536,12 @@ internal sealed partial class ProcessRuntimeWorker :
                 type = "host.error",
                 id = call.Id,
                 error = WorkerWire.Error(
-                    SunderRpcErrorKind.Cancelled,
-                    "rpc.call.cancelled",
-                    "The RPC call was cancelled."),
+                    new SunderRpcError(
+                        SunderRpcErrorKind.Cancelled,
+                        "rpc.call.cancelled",
+                        "The RPC call was cancelled.",
+                        SunderRpcDispatchState.PossiblyDispatched,
+                        SunderRpcRetrySafety.Unsafe)),
             });
         }
         catch (SunderRpcException exception)
@@ -1408,7 +1550,22 @@ internal sealed partial class ProcessRuntimeWorker :
             {
                 type = "host.error",
                 id = call.Id,
-                error = WorkerWire.Error(exception.Error.Kind, exception.Error.Code, exception.Error.Message),
+                error = WorkerWire.Error(exception.Error),
+            });
+        }
+        catch (RuntimeUnavailableException)
+        {
+            TryQueueEnvelope(new
+            {
+                type = "host.error",
+                id = call.Id,
+                error = WorkerWire.Error(
+                    new SunderRpcError(
+                        SunderRpcErrorKind.StaleEndpoint,
+                        "rpc.caller.generation-stale",
+                        "The package Runtime generation is no longer active.",
+                        SunderRpcDispatchState.NotDispatched,
+                        SunderRpcRetrySafety.Safe)),
             });
         }
         catch (ArgumentException) when (IsPackageDataCall(type))
@@ -1418,9 +1575,10 @@ internal sealed partial class ProcessRuntimeWorker :
                 type = "host.error",
                 id = call.Id,
                 error = WorkerWire.Error(
-                    SunderRpcErrorKind.Validation,
-                    PackageDataValidationCode(type),
-                    "The package data request violates its declared storage contract."),
+                    new SunderRpcError(
+                        SunderRpcErrorKind.Validation,
+                        PackageDataValidationCode(type),
+                        "The package data request violates its declared storage contract.")),
             });
         }
         catch (SunderWorkerProtocolException exception)
@@ -1434,9 +1592,12 @@ internal sealed partial class ProcessRuntimeWorker :
                 type = "host.error",
                 id = call.Id,
                 error = WorkerWire.Error(
-                    SunderRpcErrorKind.Unavailable,
-                    "rpc.host.adapter-fault",
-                    "The Runtime RPC adapter could not complete the request."),
+                    new SunderRpcError(
+                        SunderRpcErrorKind.Unavailable,
+                        "rpc.host.adapter-fault",
+                        "The Runtime RPC adapter could not complete the request.",
+                        SunderRpcDispatchState.PossiblyDispatched,
+                        SunderRpcRetrySafety.Unsafe)),
             });
             _logger.LogWarning(
                 exception,
@@ -1485,12 +1646,16 @@ internal sealed partial class ProcessRuntimeWorker :
                     : await scope.Scope.GetProviderAsync(
                         endpoint,
                         call.Cancellation.Token).ConfigureAwait(false);
-                QueueEnvelope(new { type = "host.result", id = call.Id, value = provider is null ? null : WorkerWire.ToWire(provider) });
+                QueueEnvelope(new
+                {
+                    type = "host.result",
+                    id = call.Id,
+                    value = provider is null ? null : WorkerWire.ToWire(provider),
+                });
                 return;
             }
             case "worker.report-invariant-violation":
             {
-                RequireV2WorkerCall(type);
                 var scope = ReadOptionalWorkerCallScope(
                     root,
                     "type",
@@ -1526,7 +1691,12 @@ internal sealed partial class ProcessRuntimeWorker :
                     : await scope.Scope.DiscoverAsync(
                         contractId,
                         call.Cancellation.Token).ConfigureAwait(false);
-                QueueEnvelope(new { type = "host.result", id = call.Id, value = WorkerWire.ToWire(snapshot) });
+                QueueEnvelope(new
+                {
+                    type = "host.result",
+                    id = call.Id,
+                    value = WorkerWire.ToWire(snapshot),
+                });
                 return;
             }
             case "worker.watch":
@@ -1551,7 +1721,12 @@ internal sealed partial class ProcessRuntimeWorker :
                         call.Cancellation.Token);
                 await foreach (var item in events.ConfigureAwait(false))
                 {
-                    QueueEnvelope(new { type = "host.event", id = call.Id, value = WorkerWire.ToWire(item) });
+                    QueueEnvelope(new
+                    {
+                        type = "host.event",
+                        id = call.Id,
+                        value = WorkerWire.ToWire(item),
+                    });
                 }
                 QueueEnvelope(new { type = "host.complete", id = call.Id });
                 return;
@@ -1634,7 +1809,6 @@ internal sealed partial class ProcessRuntimeWorker :
             }
             case "worker.scope-open":
             {
-                RequireV2WorkerCall(type);
                 SunderWorkerProtocol.RequireOnlyProperties(root, "type", "id", "deadlineUtc");
                 ISunderRpcCallScope? rpcScope = null;
                 WorkerCallScope? workerScope = null;
@@ -1674,7 +1848,6 @@ internal sealed partial class ProcessRuntimeWorker :
             }
             case "worker.scope-close":
             {
-                RequireV2WorkerCall(type);
                 SunderWorkerProtocol.RequireOnlyProperties(root, "type", "id", "scopeId");
                 WorkerCallScope scope;
                 try
@@ -1696,7 +1869,6 @@ internal sealed partial class ProcessRuntimeWorker :
                 var scoped = root.TryGetProperty("scopeId", out _);
                 if (scoped)
                 {
-                    RequireV2WorkerCall(type);
                     SunderWorkerProtocol.RequireOnlyProperties(
                         root,
                         "type",
@@ -1747,7 +1919,6 @@ internal sealed partial class ProcessRuntimeWorker :
                 var reference = ReadContentReference(SunderWorkerProtocol.RequiredValue(root, "reference"));
                 if (root.TryGetProperty("scopeId", out _))
                 {
-                    RequireV2WorkerCall(type);
                     SunderWorkerProtocol.RequireOnlyProperties(
                         root,
                         "type",
@@ -1832,47 +2003,8 @@ internal sealed partial class ProcessRuntimeWorker :
                 }
                 return;
             }
-            case "worker.content-discard":
-            {
-                if (_protocol.UsesV2Lifecycle)
-                {
-                    throw new SunderWorkerProtocolException(
-                        "worker.content-discard is not valid in sunder.worker.v2.");
-                }
-                SunderWorkerProtocol.RequireOnlyProperties(
-                    root,
-                    "type",
-                    "id",
-                    "invocationId",
-                    "handleId");
-                var handleId = ReadSafeId(root, "handleId");
-                string filePath;
-                try
-                {
-                    var hostCall = GetContentHostCall(root);
-                    lock (_callGate)
-                    {
-                        if (!hostCall.ContentFiles.Remove(handleId, out filePath!))
-                        {
-                            throw new SunderWorkerProtocolException(
-                                $"Process worker discarded unknown content handle '{handleId}'.");
-                        }
-                        _releasingMaterializedWorkerContentHandles++;
-                        call.ReleasesContentHandle = true;
-                    }
-                }
-                catch (SunderWorkerProtocolException) when (IsStopping())
-                {
-                    QueueEnvelope(new { type = "host.result", id = call.Id, value = (object?)null });
-                    return;
-                }
-                TryDeleteFile(filePath);
-                QueueEnvelope(new { type = "host.result", id = call.Id, value = (object?)null });
-                return;
-            }
             case "worker.content-release":
             {
-                RequireV2WorkerCall(type);
                 var handleId = ReadSafeId(root, "handleId");
                 string filePath;
                 if (root.TryGetProperty("scopeId", out _))
@@ -1961,21 +2093,11 @@ internal sealed partial class ProcessRuntimeWorker :
             return null;
         }
 
-        RequireV2WorkerCall(SunderWorkerProtocol.ReadEnvelopeType(root));
         var scopedProperties = new string[unscopedProperties.Length + 1];
         unscopedProperties.CopyTo(scopedProperties, 0);
         scopedProperties[^1] = "scopeId";
         SunderWorkerProtocol.RequireOnlyProperties(root, scopedProperties);
         return GetWorkerCallScope(ReadSafeId(root, "scopeId"));
-    }
-
-    private void RequireV2WorkerCall(string type)
-    {
-        if (!_protocol.UsesV2Lifecycle)
-        {
-            throw new SunderWorkerProtocolException(
-                $"{type} is not valid in sunder.worker.v1.");
-        }
     }
 
     private WorkerCallScope AddWorkerCallScope(ISunderRpcCallScope scope)
@@ -2296,9 +2418,6 @@ internal sealed partial class ProcessRuntimeWorker :
             ? _package.ShadowFolder
             : IsWithinDirectory(fullPath, _workerTemporaryPath)
                 ? _workerTemporaryPath
-                : !_protocol.UsesV2Lifecycle
-                  && IsWithinDirectory(fullPath, _packageContext.LocalStorage.DataRootPath)
-                    ? _packageContext.LocalStorage.DataRootPath
                 : null;
         if (rootPath is null)
         {
@@ -2564,14 +2683,18 @@ internal sealed partial class ProcessRuntimeWorker :
     private static bool IsWorkerCleanupControl(string type)
         => type is "worker.scope-close"
             or "worker.content-release"
-            or "worker.content-discard"
             or "worker.payload-release";
 
     private static bool IsWorkerLogging(string type)
         => type is "worker.logging-write" or "worker.provider-fault-diagnostic";
 
+    private static bool IsWorkerMigrationPreparationStateRead(string type)
+        => type is "worker.state-get" or "worker.state-list";
+
     private static string PackageDataValidationCode(string type)
-        => type.StartsWith("worker.settings-", StringComparison.Ordinal)
+        => type.StartsWith("worker.migration-", StringComparison.Ordinal)
+            ? "worker.migration.validation"
+            : type.StartsWith("worker.settings-", StringComparison.Ordinal)
             ? "worker.settings.validation"
             : type.StartsWith("worker.secrets-", StringComparison.Ordinal)
                 ? "worker.secrets.validation"
@@ -2596,6 +2719,15 @@ internal sealed partial class ProcessRuntimeWorker :
             await foreach (var body in _writes!.Reader.ReadAllAsync(_forceStop.Token).ConfigureAwait(false))
             {
                 await SunderWorkerProtocol.WriteFrameBodyAsync(stdin, body, _forceStop.Token).ConfigureAwait(false);
+                if (ReferenceEquals(body, Volatile.Read(ref _activationFrameBody)))
+                {
+                    _activationDispatched.TrySetResult();
+                    _logger.LogInformation(
+                        "Worker V3 activation dispatched for package {PackageId}, activation {ActivationId}, generation {SessionGeneration}",
+                        _package.PackageId,
+                        _activationId,
+                        _sessionGeneration);
+                }
             }
         }
         catch (OperationCanceledException) when (_forceStop.IsCancellationRequested)
@@ -2610,12 +2742,8 @@ internal sealed partial class ProcessRuntimeWorker :
     private async Task DrainStderrAsync(Stream stderr)
     {
         var buffer = new byte[4096];
-        var line = new byte[Math.Max(1, _policy.MaxStderrLineCharacters * 4)];
-        var lineLength = 0;
-        var lineTruncated = false;
-        var loggedBytes = 0;
         long receivedBytes = 0;
-        var outputTruncated = false;
+        var limitReported = false;
         try
         {
             while (true)
@@ -2623,41 +2751,14 @@ internal sealed partial class ProcessRuntimeWorker :
                 var read = await stderr.ReadAsync(buffer, _forceStop.Token).ConfigureAwait(false);
                 if (read == 0) break;
                 receivedBytes += read;
-                if (receivedBytes > _policy.MaxStderrBytes && !outputTruncated)
+                if (receivedBytes > _policy.MaxStderrBytes && !limitReported)
                 {
-                    outputTruncated = true;
+                    limitReported = true;
                     _logger.LogWarning(
-                        "Process Runtime stderr for package {PackageId} exceeded {MaximumBytes} bytes; additional stderr is being drained but not logged",
+                        "Process Runtime stderr for package {PackageId} exceeded {MaximumBytes} bytes; raw stderr is discarded",
                         _package.PackageId,
                         _policy.MaxStderrBytes);
                 }
-                if (_protocol.UsesV2Lifecycle)
-                {
-                    // V2 diagnostics are Host-mediated; raw worker stderr is never persisted.
-                    continue;
-                }
-                for (var index = 0; index < read; index++)
-                {
-                    var value = buffer[index];
-                    if (value == (byte)'\n')
-                    {
-                        LogStderrLine(line.AsSpan(0, lineLength), lineTruncated, ref loggedBytes, ref outputTruncated);
-                        lineLength = 0;
-                        lineTruncated = false;
-                    }
-                    else if (lineLength < line.Length)
-                    {
-                        line[lineLength++] = value;
-                    }
-                    else
-                    {
-                        lineTruncated = true;
-                    }
-                }
-            }
-            if (lineLength > 0 || lineTruncated)
-            {
-                LogStderrLine(line.AsSpan(0, lineLength), lineTruncated, ref loggedBytes, ref outputTruncated);
             }
         }
         catch (OperationCanceledException) when (_forceStop.IsCancellationRequested)
@@ -2666,40 +2767,6 @@ internal sealed partial class ProcessRuntimeWorker :
         catch (Exception exception)
         {
             _logger.LogDebug(exception, "Failed to drain stderr for process package {PackageId}", _package.PackageId);
-        }
-    }
-
-    private void LogStderrLine(
-        ReadOnlySpan<byte> bytes,
-        bool lineTruncated,
-        ref int loggedBytes,
-        ref bool outputTruncated)
-    {
-        if (loggedBytes >= _policy.MaxStderrBytes)
-        {
-            if (!outputTruncated)
-            {
-                outputTruncated = true;
-                _logger.LogWarning(
-                    "Process Runtime stderr for package {PackageId} exceeded {MaximumBytes} bytes; additional stderr is being drained but not logged",
-                    _package.PackageId,
-                    _policy.MaxStderrBytes);
-            }
-            return;
-        }
-        var remaining = _policy.MaxStderrBytes - loggedBytes;
-        var selected = bytes[..Math.Min(bytes.Length, remaining)];
-        loggedBytes += selected.Length;
-        var text = Encoding.UTF8.GetString(selected).TrimEnd('\r');
-        text = new string(text.Select(static character => char.IsControl(character) && character != '\t' ? ' ' : character).ToArray());
-        if (lineTruncated || selected.Length < bytes.Length) text += " [truncated]";
-        if (text.Length > _policy.MaxStderrLineCharacters)
-        {
-            text = text[.._policy.MaxStderrLineCharacters] + " [truncated]";
-        }
-        if (text.Length > 0)
-        {
-            _logger.LogInformation("Process package {PackageId}: {WorkerStderr}", _package.PackageId, text);
         }
     }
 
@@ -2762,15 +2829,18 @@ internal sealed partial class ProcessRuntimeWorker :
             process = _process;
         }
         _ready.TrySetException(exception);
-        if (_protocol.UsesV2Lifecycle)
+        _candidateStarted.TrySetResult();
+        _generationCommitted.TrySetResult();
+        _storageMigrationsPrepared.TrySetResult();
+        if (Volatile.Read(ref _activationFrameBody) is not null)
         {
-            _candidateStarted.TrySetResult();
-            _generationCommitted.TrySetResult();
+            _activationDispatched.TrySetException(exception);
         }
         _activated.TrySetException(exception);
         _generationCompletion.TrySetException(exception);
         _shutdownAcknowledged.TrySetException(exception);
         FailOutstandingCalls(exception);
+        FailOutstandingContributionCalls(exception);
         _ = ObserveAsync(CloseAllWorkerCallScopesAsync());
         _writes?.Writer.TryComplete(exception);
         _ = SignalForceStop();
@@ -2838,6 +2908,8 @@ internal sealed partial class ProcessRuntimeWorker :
 
     private void CompleteExpectedStop()
     {
+        FailOutstandingContributionCalls(new OperationCanceledException(
+            "The process worker activation stopped."));
         lock (_stateGate)
         {
             _state = WorkerState.Stopped;
@@ -2942,7 +3014,6 @@ internal sealed partial class ProcessRuntimeWorker :
             || policy.MaxStderrBytes <= 0
             || policy.MaxStderrLineCharacters <= 0
             || policy.StartupTimeout <= TimeSpan.Zero
-            || policy.ActivationTimeout <= TimeSpan.Zero
             || policy.ShutdownTimeout <= TimeSpan.Zero
             || policy.CancellationDrainTimeout <= TimeSpan.Zero)
         {
@@ -2960,6 +3031,8 @@ internal sealed partial class ProcessRuntimeWorker :
         CandidateStarted,
         Committing,
         Committed,
+        PreparingStorageMigrations,
+        StorageMigrationsPrepared,
         Activating,
         Active,
         Stopping,
@@ -3080,9 +3153,18 @@ internal sealed partial class ProcessRuntimeWorker :
         string ProviderId,
         string ContractId,
         string ContractVersion,
-        string ContractSha256)
+        string DescriptorSha256,
+        string AbiSha256)
     {
-        public object ToWire() => new { providerId = ProviderId, contractId = ContractId, contractVersion = ContractVersion, contractSha256 = ContractSha256 };
+        public object ToWire()
+            => new
+            {
+                providerId = ProviderId,
+                contractId = ContractId,
+                contractVersion = ContractVersion,
+                descriptorSha256 = DescriptorSha256,
+                abiSha256 = AbiSha256,
+            };
     }
 }
 
@@ -3101,6 +3183,15 @@ internal sealed class ProcessRpcProviderFaultException : Exception
     public string? ProviderExceptionType { get; }
 
     public string? ProviderExceptionFingerprint { get; }
+}
+
+internal sealed class ProcessRuntimeGenerationFaultException : ProcessRuntimeWorkerException
+{
+    public ProcessRuntimeGenerationFaultException(string code, string message)
+        : base($"Worker reported generation fault '{code}': {message}")
+        => Code = code;
+
+    public string Code { get; }
 }
 
 internal sealed class ProcessRpcProviderHandler(
@@ -3127,27 +3218,33 @@ internal sealed class ProcessRpcProviderHandler(
 internal static class WorkerWire
 {
     public static object ToWire(SunderRpcProviderSnapshot provider)
-        => new
+    {
+        var state = provider.State switch
+        {
+            SunderRpcProviderState.Active => "active",
+            SunderRpcProviderState.Inactive => "inactive",
+            _ => "faulted",
+        };
+        return new
         {
             packageId = provider.PackageId,
             packageVersion = provider.PackageVersion,
             providerId = provider.ProviderId,
             contractId = provider.ContractId,
             contractVersion = provider.ContractVersion,
-            contractSha256 = provider.ContractSha256,
+            descriptorSha256 = provider.DescriptorSha256,
+            abiSha256 = provider.AbiSha256
+                        ?? throw new SunderWorkerProtocolException(
+                            "Runtime provider snapshot is missing its V2 ABI identity."),
             activationId = provider.ActivationId.ToString("N"),
             activationEpoch = provider.ActivationEpoch,
             sessionGeneration = provider.SessionGeneration,
             endpointReference = provider.Endpoint.Value,
             catalogRevision = provider.CatalogRevision,
-            state = provider.State switch
-            {
-                SunderRpcProviderState.Active => "active",
-                SunderRpcProviderState.Inactive => "inactive",
-                _ => "faulted",
-            },
+            state,
             faultCode = provider.FaultCode,
         };
+    }
 
     public static object ToWire(SunderRpcCatalogSnapshot snapshot)
         => new
@@ -3189,24 +3286,31 @@ internal static class WorkerWire
                 : "repeatable",
         };
 
-    public static object Error(SunderRpcErrorKind kind, string code, string message)
-        => new
+    public static object Error(SunderRpcError error)
+    {
+        var kind = error.Kind switch
         {
-            kind = kind switch
-            {
-                SunderRpcErrorKind.Domain => "domain",
-                SunderRpcErrorKind.PermissionDenied => "permission-denied",
-                SunderRpcErrorKind.NotFound => "not-found",
-                SunderRpcErrorKind.StaleEndpoint => "stale-endpoint",
-                SunderRpcErrorKind.Validation => "validation",
-                SunderRpcErrorKind.DeadlineExceeded => "deadline-exceeded",
-                SunderRpcErrorKind.Cancelled => "cancelled",
-                SunderRpcErrorKind.ResourceExhausted => "resource-exhausted",
-                SunderRpcErrorKind.Unavailable => "unavailable",
-                SunderRpcErrorKind.ProviderFaulted => "provider-faulted",
-                _ => "protocol",
-            },
-            code,
-            message,
+            SunderRpcErrorKind.Domain => "domain",
+            SunderRpcErrorKind.PermissionDenied => "permission-denied",
+            SunderRpcErrorKind.NotFound => "not-found",
+            SunderRpcErrorKind.StaleEndpoint => "stale-endpoint",
+            SunderRpcErrorKind.Validation => "validation",
+            SunderRpcErrorKind.DeadlineExceeded => "deadline-exceeded",
+            SunderRpcErrorKind.Cancelled => "cancelled",
+            SunderRpcErrorKind.ResourceExhausted => "resource-exhausted",
+            SunderRpcErrorKind.Unavailable => "unavailable",
+            SunderRpcErrorKind.ProviderFaulted => "provider-faulted",
+            _ => "protocol",
         };
+        return new
+        {
+            kind,
+            error.Code,
+            error.Message,
+            dispatchState = error.DispatchState == SunderRpcDispatchState.NotDispatched
+                ? "not-dispatched"
+                : "possibly-dispatched",
+            retrySafety = error.RetrySafety == SunderRpcRetrySafety.Safe ? "safe" : "unsafe",
+        };
+    }
 }

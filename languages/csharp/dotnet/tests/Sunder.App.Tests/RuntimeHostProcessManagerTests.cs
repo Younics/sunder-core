@@ -15,7 +15,10 @@ public sealed class RuntimeHostProcessManagerTests
     [InlineData("dev.sunder.runtime", 1, 1, 1, false)]
     [InlineData("dev.sunder.runtime", 2, 1, 2, false)]
     [InlineData("dev.sunder.runtime", 4, 4, 4, false)]
-    [InlineData("dev.sunder.runtime", 5, 5, 5, true)]
+    [InlineData("dev.sunder.runtime", 5, 5, 5, false)]
+    [InlineData("dev.sunder.runtime", 6, 6, 6, false)]
+    [InlineData("dev.sunder.runtime", 7, 7, 7, false)]
+    [InlineData("dev.sunder.runtime", 8, 8, 8, true)]
     [InlineData("dev.sunder.runtime", 0, 0, 0, false)]
     [InlineData("other.runtime", 1, 1, 1, false)]
     public void CanReuseRunningRuntime_UsesProtocolIdentityAndRange(
@@ -47,16 +50,6 @@ public sealed class RuntimeHostProcessManagerTests
                 versionedApiOnly,
                 RuntimeProtocolFeatures.AtomicPackageSnapshotV1),
             StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ShouldReplaceRunningRuntime_ReplacesOnlyKnownIncompatibleProtocol()
-    {
-        Assert.True(RuntimeHostProcessManager.ShouldReplaceRunningRuntime(
-            CreateHandshake(revision: 1, minimum: 1, maximum: 1)));
-        Assert.False(RuntimeHostProcessManager.ShouldReplaceRunningRuntime(
-            CreateHandshake(identity: "other.runtime")));
-        Assert.False(RuntimeHostProcessManager.ShouldReplaceRunningRuntime(null));
     }
 
     [Fact]
@@ -140,6 +133,50 @@ public sealed class RuntimeHostProcessManagerTests
             Assert.Contains("Exit code: 17", exception.Message, StringComparison.Ordinal);
             Assert.Contains("password=[redacted]", exception.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("do-not-expose", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, delayCount);
+        }
+        finally
+        {
+            Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureStartedAsync_WhenHostReportsRuntimeFailure_StopsPollingWithDiagnostic()
+    {
+        var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
+        var receipt = new HostServiceLaunchReceipt("test-backend", "sunder-host", 42004);
+        var delayCount = 0;
+        var hostServiceManager = new TestHostServiceManager(
+            receipt,
+            static (_, _) => Task.FromResult(new HostServiceObservation(HostServiceState.Running, 42004)));
+
+        try
+        {
+            using var manager = CreateObservedLaunchManager(
+                runtimeHostPath,
+                Path.Combine(rootPath, "connection.json"),
+                hostServiceManager,
+                static (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(null),
+                delayAsync: (_, _) =>
+                {
+                    delayCount++;
+                    return Task.CompletedTask;
+                },
+                tryGetHostStatusAsync: static (_, _) => Task.FromResult<HostRuntimeStatus?>(new(
+                    HostRuntimeDesiredState.Running,
+                    HostRuntimeState.Failed,
+                    1,
+                    null,
+                    "runtime.v1.package-validation",
+                    "Installed package catalog schema is unsupported.",
+                    null)));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
+
+            Assert.Contains("runtime.v1.package-validation", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("catalog schema is unsupported", exception.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(0, delayCount);
         }
         finally
@@ -269,7 +306,7 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public async Task EnsureStartedAsync_WhenReplacingRuntime_WaitsForStateLeaseRelease()
+    public async Task EnsureStartedAsync_WhenIncompatibleDirectRuntimeIsRunning_RejectsAutomaticTakeover()
     {
         var (rootPath, runtimeHostPath) = await CreateRuntimeHostFileAsync();
         var runtimeUrl = new Uri("http://localhost:54321/");
@@ -314,10 +351,11 @@ public sealed class RuntimeHostProcessManagerTests
 
         try
         {
-            await manager.EnsureStartedAsync(runtimeUrl);
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureStartedAsync(runtimeUrl));
 
-            Assert.True(replacementStarted);
-            Assert.Equal(2, delayCount);
+            Assert.Contains("already occupied", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(replacementStarted);
+            Assert.Equal(0, delayCount);
         }
         finally
         {
@@ -714,11 +752,11 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Theory]
-    [InlineData((int)HostServiceState.Failed, true)]
-    [InlineData((int)HostServiceState.Absent, false)]
-    public async Task EnsureStartedAsync_WhenReplacementIsTerminal_RestoresOnlyAfterExactTermination(
+    [InlineData((int)HostServiceState.Failed, 0)]
+    [InlineData((int)HostServiceState.Absent, 1)]
+    public async Task EnsureStartedAsync_WhenReplacementIsTerminal_PreservesCandidateWithoutRestoringPrevious(
         int observedState,
-        bool expectRestore)
+        int expectedStopCount)
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -775,13 +813,11 @@ public sealed class RuntimeHostProcessManagerTests
                 manager.EnsureStartedAsync(new Uri("http://127.0.0.1:54321/")));
 
             Assert.Equal(HostServiceStartupFailure.TerminalState, exception.Failure);
-            Assert.Equal(expectRestore ? 2 : 1, serviceManager.LaunchCount);
-            Assert.Equal(
-                expectRestore ? [second.ExecutablePath, first.ExecutablePath] : [second.ExecutablePath],
-                serviceManager.StartInfos.Select(info => info.FileName));
-            Assert.Equal(expectRestore ? 0 : 1, serviceManager.StopCount);
+            Assert.Equal(1, serviceManager.LaunchCount);
+            Assert.Equal([second.ExecutablePath], serviceManager.StartInfos.Select(info => info.FileName));
+            Assert.Equal(expectedStopCount, serviceManager.StopCount);
             Assert.True(Directory.Exists(first.DirectoryPath));
-            Assert.Equal(!expectRestore, Directory.Exists(second.DirectoryPath));
+            Assert.True(Directory.Exists(second.DirectoryPath));
         }
         finally
         {
@@ -863,7 +899,7 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public async Task EnsureStartedAsync_WhenReplacementReportsWrongIdentity_StopsExactReceiptAndRestoresPreviousPayload()
+    public async Task EnsureStartedAsync_WhenReplacementReportsWrongIdentity_StopsExactReceiptWithoutRestoringPreviousPayload()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -922,10 +958,10 @@ public sealed class RuntimeHostProcessManagerTests
 
             Assert.Contains(secondIdentity, exception.Message, StringComparison.Ordinal);
             Assert.Equal(1, serviceManager.StopCount);
-            Assert.Equal(2, serviceManager.LaunchCount);
-            Assert.Equal([second.ExecutablePath, first.ExecutablePath], serviceManager.StartInfos.Select(info => info.FileName));
+            Assert.Equal(1, serviceManager.LaunchCount);
+            Assert.Equal([second.ExecutablePath], serviceManager.StartInfos.Select(info => info.FileName));
             Assert.True(Directory.Exists(first.DirectoryPath));
-            Assert.False(Directory.Exists(second.DirectoryPath));
+            Assert.True(Directory.Exists(second.DirectoryPath));
         }
         finally
         {
@@ -1415,7 +1451,7 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public async Task EnsureStartedAsync_WhenLegacyDirectRuntimeIsCompatible_ReplacesItWithSupervisor()
+    public async Task EnsureStartedAsync_WhenStandaloneRuntimeIsCompatible_RejectsAutomaticTakeover()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -1458,12 +1494,13 @@ public sealed class RuntimeHostProcessManagerTests
                     runtimeState == 2 ? CreateHostHandshake("1.0.0", candidateIdentity) : null),
                 userHostPayloadStore: store);
 
-            await manager.EnsureStartedAsync(runtimeUrl);
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureStartedAsync(runtimeUrl));
 
-            Assert.Equal(1, shutdownCount);
-            Assert.Equal(1, startCount);
-            Assert.Contains("host-", launchedPath, StringComparison.Ordinal);
-            Assert.Contains("1.0.0", File.ReadAllText(Path.Combine(payloadRoot, "current.json")), StringComparison.Ordinal);
+            Assert.Contains("standalone Sunder Runtime", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, shutdownCount);
+            Assert.Equal(0, startCount);
+            Assert.Null(launchedPath);
+            Assert.False(File.Exists(Path.Combine(payloadRoot, "current.json")));
         }
         finally
         {
@@ -1547,7 +1584,7 @@ public sealed class RuntimeHostProcessManagerTests
     }
 
     [Fact]
-    public async Task EnsureStartedAsync_WhenReplacementValidationFails_RestoresPreviousPayload()
+    public async Task EnsureStartedAsync_WhenReplacementValidationFails_PreservesCandidateWithoutRestoringPreviousPayload()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -1856,7 +1893,7 @@ public sealed class RuntimeHostProcessManagerTests
 
             Assert.Contains(HostProtocolFeatures.RuntimeLifecycleV1, exception.Message, StringComparison.Ordinal);
             Assert.False(File.Exists(Path.Combine(payloadRoot, "current.json")));
-            Assert.Empty(Directory.EnumerateDirectories(payloadRoot));
+            Assert.NotEmpty(Directory.EnumerateDirectories(payloadRoot));
         }
         finally
         {
@@ -2007,7 +2044,8 @@ public sealed class RuntimeHostProcessManagerTests
         Func<Uri, CancellationToken, Task<RuntimeHandshakeResponse?>> tryGetRuntimeHandshakeAsync,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         TimeProvider? timeProvider = null,
-        TimeSpan? startupTimeout = null)
+        TimeSpan? startupTimeout = null,
+        Func<Uri, CancellationToken, Task<HostRuntimeStatus?>>? tryGetHostStatusAsync = null)
         => new(
             new AppStartupOptions(),
             resolveRuntimeHostPath: () => runtimeHostPath,
@@ -2019,7 +2057,8 @@ public sealed class RuntimeHostProcessManagerTests
             timeProvider: timeProvider,
             startupTimeout: startupTimeout ?? TimeSpan.FromSeconds(2),
             isRuntimeLeaseAvailable: static () => true,
-            hostServiceManager: hostServiceManager);
+            hostServiceManager: hostServiceManager,
+            tryGetHostStatusAsync: tryGetHostStatusAsync);
 
     private static HostHandshakeResponse CreateHostHandshake(
         string version,
@@ -2035,6 +2074,7 @@ public sealed class RuntimeHostProcessManagerTests
                 HostProtocolFeatures.RuntimeGatewayV1,
                 HostProtocolFeatures.RuntimeLifecycleV1,
                 HostProtocolFeatures.DurableOperationsV1,
+                HostProtocolFeatures.RuntimeStartupDiagnosticsV1,
             ],
             new HostProductVersionDiagnostics("Sunder.Host.Supervisor", version, version))
         {

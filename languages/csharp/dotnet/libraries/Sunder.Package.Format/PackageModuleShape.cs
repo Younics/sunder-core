@@ -30,13 +30,24 @@ internal sealed class PackageModuleShape
     {
         var errors = new List<string>(_metadataErrors);
         AddRoleErrors(PackageHostRoleMetadataValue.App, errors);
-        AddRoleErrors(PackageHostRoleMetadataValue.Runtime, errors);
+        return errors.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    public IReadOnlyList<string> Validate(PackageHostRoleMetadataValue role)
+    {
+        if (role is not PackageHostRoleMetadataValue.App)
+        {
+            throw new ArgumentOutOfRangeException(nameof(role));
+        }
+
+        var errors = new List<string>(_metadataErrors);
+        AddRoleErrors(role, errors);
         return errors.Distinct(StringComparer.Ordinal).ToArray();
     }
 
     public PackageModuleResolution Resolve(PackageHostRoleMetadataValue role)
     {
-        if (role is not PackageHostRoleMetadataValue.App and not PackageHostRoleMetadataValue.Runtime)
+        if (role is not PackageHostRoleMetadataValue.App)
         {
             throw new ArgumentOutOfRangeException(nameof(role));
         }
@@ -54,9 +65,7 @@ internal sealed class PackageModuleShape
 
     private void AddRoleErrors(PackageHostRoleMetadataValue role, ICollection<string> errors)
     {
-        var roleName = role == PackageHostRoleMetadataValue.App
-            ? nameof(ISunderAppPackageModule)
-            : nameof(ISunderRuntimePackageModule);
+        const string roleName = nameof(ISunderAppPackageModule);
         var implementations = _implementations
             .Where(candidate => (candidate.Roles & role) != 0)
             .ToArray();
@@ -90,8 +99,7 @@ internal static class PackageModuleShapeReader
 {
     private const string ModuleNamespace = "Sunder.Sdk.Abstractions";
     private const string AppModuleName = nameof(ISunderAppPackageModule);
-    private const string RuntimeModuleName = nameof(ISunderRuntimePackageModule);
-    private static readonly AssemblyName SdkAssemblyName = typeof(ISunderRuntimePackageModule).Assembly.GetName();
+    private static readonly AssemblyName SdkAssemblyName = typeof(ISunderAppPackageModule).Assembly.GetName();
 
     public static PackageModuleShape Read(string assemblyPath)
     {
@@ -223,12 +231,9 @@ internal static class PackageModuleShapeReader
             return false;
         }
 
-        role = typeName switch
-        {
-            AppModuleName => PackageHostRoleMetadataValue.App,
-            RuntimeModuleName => PackageHostRoleMetadataValue.Runtime,
-            _ => PackageHostRoleMetadataValue.None,
-        };
+        role = typeName == AppModuleName
+            ? PackageHostRoleMetadataValue.App
+            : PackageHostRoleMetadataValue.None;
         return role != PackageHostRoleMetadataValue.None;
     }
 

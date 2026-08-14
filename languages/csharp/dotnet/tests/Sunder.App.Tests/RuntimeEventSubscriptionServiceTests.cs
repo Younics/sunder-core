@@ -47,6 +47,37 @@ public sealed class RuntimeEventSubscriptionServiceTests
     }
 
     [Fact]
+    public async Task ApplySnapshotAsync_SameGenerationUsesMetadataWriterOnly()
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        await using var service = new RuntimeEventSubscriptionService(
+            new ThrowingRuntimeClientFactory(),
+            new DeveloperLogService());
+        var lifecycleWrites = 0;
+        var metadataWrites = new List<RuntimePackageSnapshot>();
+        service.InitializePresentation(
+            CreateSnapshot(runtimeInstanceId, 1),
+            [],
+            (_, _, _, _) =>
+            {
+                lifecycleWrites++;
+                return Task.CompletedTask;
+            },
+            (snapshot, _) =>
+            {
+                metadataWrites.Add(snapshot);
+                return Task.CompletedTask;
+            });
+        var metadata = CreateSnapshot(runtimeInstanceId, 1) with { EventSequence = 2 };
+
+        await service.ApplySnapshotAsync(metadata, []);
+        await service.ApplySnapshotAsync(metadata, []);
+
+        Assert.Equal(0, lifecycleWrites);
+        Assert.Equal([metadata], metadataWrites);
+    }
+
+    [Fact]
     public async Task ApplySnapshotAsync_SupersedesPreparingGenerationAndCommitsLatestOnce()
     {
         var runtimeInstanceId = Guid.NewGuid();

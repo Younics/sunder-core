@@ -90,6 +90,15 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             if (workerTargets.Length == 1)
             {
                 var target = workerTargets[0];
+                if (target.EntryPoint is null
+                    || !target.EntryPoint.StartsWith("lib/", StringComparison.Ordinal)
+                    || target.EntryPoint.Length == "lib/".Length)
+                {
+                    throw new InvalidDataException(
+                        $"C# worker target '{target.Role}/{target.Rid}' must declare its apphost directly under lib/.");
+                }
+                var expectedEntryPointRelativePath = target.EntryPoint["lib/".Length..];
+                var entryPointMatches = 0;
                 foreach (var item in WorkerFiles)
                 {
                     var configuredRelative = item.GetMetadata("RelativePath");
@@ -99,11 +108,20 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                             PackageAssetDiscovery.NormalizePath(configuredRelative),
                             SunderPackageFormat.MaxLogicalPathLength,
                             SunderPackageFormat.MaxLogicalPathDepth).ToString();
+                    if (string.Equals(relative, expectedEntryPointRelativePath, StringComparison.Ordinal))
+                    {
+                        entryPointMatches++;
+                    }
                     Copy(
                         item.ItemSpec,
                         $"payload/{SunderPackageFormat.RuntimeHostRole}/{target.Rid}/lib/{relative}",
                         destinations,
                         stagingPath);
+                }
+                if (entryPointMatches != 1)
+                {
+                    throw new InvalidDataException(
+                        $"C# worker publish output must contain exactly one official apphost '{expectedEntryPointRelativePath}'.");
                 }
             }
             else

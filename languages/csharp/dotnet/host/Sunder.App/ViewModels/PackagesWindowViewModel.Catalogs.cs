@@ -12,6 +12,33 @@ namespace Sunder.App.ViewModels;
 
 public sealed partial class PackagesWindowViewModel
 {
+    internal async Task ApplyPackageSnapshotAsync(
+        RuntimePackageSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        await _installedPackageGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_disposed
+                || _latestPackageSnapshot is { } latest
+                && latest.RuntimeInstanceId == snapshot.RuntimeInstanceId
+                && latest.EventSequence >= snapshot.EventSequence)
+            {
+                return;
+            }
+            _latestPackageSnapshot = snapshot;
+            ApplyLatestSessionPackages();
+            RebuildInstalledPackageList(
+                Installed.SelectedPackage?.PackageId,
+                updateSelection: IsInstalledMode);
+            RefreshMarketplaceInstalledBadges();
+        }
+        finally
+        {
+            _installedPackageGate.Release();
+        }
+    }
+
     private async Task RefreshInstalledAsync(
         string? preferredPackageId = null,
         PackageOperationResult? operationResult = null,
@@ -31,42 +58,51 @@ public sealed partial class PackagesWindowViewModel
         bool updateSelection,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_disposed)
-        {
-            return;
-        }
-
-        using var busy = Operations.EnterBusy();
+        await _installedPackageGate.WaitAsync(cancellationToken);
         try
         {
-            await _installedPackages.RefreshAsync(AddWarningLine, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (_disposed)
             {
                 return;
             }
 
-            NotifyUpdateStateChanged();
-            Operations.StatusText = PackageOperationMessageFormatter.BuildInstalledStatusText(
-                operationResult,
-                InstalledPackageCount,
-                ActivePackageCount,
-                DisabledPackageCount,
-                FailedPackageCount,
-                AvailableUpdateCount);
-            RebuildInstalledPackageList(preferredPackageId, updateSelection);
-            RefreshMarketplaceInstalledBadges();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            if (!_disposed)
+            using var busy = Operations.EnterBusy();
+            try
             {
-                Operations.StatusText = ex.Message;
+                await _installedPackages.RefreshAsync(AddWarningLine, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_disposed)
+                {
+                    return;
+                }
+
+                ApplyLatestSessionPackages();
+                NotifyUpdateStateChanged();
+                Operations.StatusText = PackageOperationMessageFormatter.BuildInstalledStatusText(
+                    operationResult,
+                    InstalledPackageCount,
+                    ActivePackageCount,
+                    DisabledPackageCount,
+                    FailedPackageCount,
+                    AvailableUpdateCount);
+                RebuildInstalledPackageList(preferredPackageId, updateSelection);
+                RefreshMarketplaceInstalledBadges();
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (!_disposed)
+                {
+                    Operations.StatusText = ex.Message;
+                }
+            }
+        }
+        finally
+        {
+            _installedPackageGate.Release();
         }
     }
 
@@ -136,8 +172,28 @@ public sealed partial class PackagesWindowViewModel
 
     private async Task RefreshInstalledPackageStateOnlyAsync(CancellationToken cancellationToken = default)
     {
-        await _installedPackages.RefreshInstalledPackageStateOnlyAsync(AddWarningLine, cancellationToken);
-        NotifyUpdateStateChanged();
+        await _installedPackageGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            await _installedPackages.RefreshInstalledPackageStateOnlyAsync(AddWarningLine, cancellationToken);
+            NotifyUpdateStateChanged();
+        }
+        finally
+        {
+            _installedPackageGate.Release();
+        }
+    }
+
+    private void ApplyLatestSessionPackages()
+    {
+        if (_latestPackageSnapshot is { } snapshot)
+        {
+            _installedPackages.Catalog.ApplySessionPackages(snapshot.SessionPackages);
+        }
     }
 
     private void RebuildInstalledPackageList(string? preferredPackageId = null, bool updateSelection = true)

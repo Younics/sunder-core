@@ -4,7 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
@@ -110,10 +112,22 @@ internal sealed class RuntimeRpcBroker
     public RuntimeRpcCallerScopeState GetAppCallScope(string appSessionId, string callScopeId)
         => GetScope(GetAppCaller(appSessionId), callScopeId);
 
-    public ValueTask CloseAppCallScopeAsync(
+    public async ValueTask CloseAppCallScopeAsync(
         string appSessionId,
         string callScopeId)
-        => CloseCallScopeAsync(GetScope(GetAppCaller(appSessionId), callScopeId));
+    {
+        var caller = GetAppCaller(appSessionId);
+        if (string.IsNullOrWhiteSpace(callScopeId)
+            || !_callScopes.TryGetValue(callScopeId, out var scope))
+        {
+            return;
+        }
+        if (!ReferenceEquals(scope.Caller, caller))
+        {
+            throw Unavailable("rpc.scope.unavailable", "The RPC call scope is stale or unavailable.");
+        }
+        await CloseCallScopeAsync(scope).ConfigureAwait(false);
+    }
 
     private RuntimeRpcCallerScopeState CreateCallScope(
         IRuntimeRpcCallerActivation caller,
@@ -122,7 +136,7 @@ internal sealed class RuntimeRpcBroker
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(caller);
         EnsureCurrent(caller, sessionLease);
         var now = _timeProvider.GetUtcNow();
         var deadline = GetEffectiveDeadline(options, CurrentCall.Value, now);
@@ -237,12 +251,12 @@ internal sealed class RuntimeRpcBroker
         RuntimeRpcCallerScopeState? scope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(caller);
         EnsureCurrent(caller, sessionLease);
         EnsureScope(scope, caller, sessionLease);
-        if (!_catalog.TryGetActiveEndpoint(endpoint, out var provider, out _)
+        if (!TryGetEndpoint(caller, endpoint, out var provider, out _)
             || provider is null
-            || !CanUseContract(caller, provider.Snapshot, SunderRpcProtocol.DiscoverAction, out _))
+            || !CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _))
         {
             return ValueTask.FromResult<SunderRpcProviderSnapshot?>(null);
         }
@@ -250,7 +264,7 @@ internal sealed class RuntimeRpcBroker
         {
             using var permission = AcquirePermission(
                 caller,
-                provider.Snapshot.ContractId,
+                provider,
                 SunderRpcProtocol.DiscoverAction);
         }
         return ValueTask.FromResult<SunderRpcProviderSnapshot?>(provider.Snapshot);
@@ -319,16 +333,16 @@ internal sealed class RuntimeRpcBroker
             return ValueTask.FromResult(false);
         }
 
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(caller);
         if (!caller.IsCurrent(sessionLease)) return ValueTask.FromResult(false);
         EnsureScope(scope, caller, sessionLease);
-        if (!_catalog.TryGetActiveEndpoint(endpoint, out var provider, out _)
+        if (!TryGetEndpoint(caller, endpoint, out var provider, out _)
             || provider is null
             || provider.Snapshot.State != SunderRpcProviderState.Active
             || provider.Snapshot.SessionGeneration != sessionLease.Generation
             || _sessions.GetLoadedPackage(sessionLease, provider.Snapshot.PackageId) is not { } activePackage
             || activePackage.RuntimeActivationId != provider.Snapshot.ActivationId
-            || !CanUseContract(caller, provider.Snapshot, SunderRpcProtocol.DiscoverAction, out _))
+            || !CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _))
         {
             return ValueTask.FromResult(false);
         }
@@ -337,7 +351,7 @@ internal sealed class RuntimeRpcBroker
         if (requirePermission
             && !TryAcquirePermission(
                 caller,
-                provider.Snapshot.ContractId,
+                provider,
                 SunderRpcProtocol.DiscoverAction,
                 out permission))
         {
@@ -382,19 +396,30 @@ internal sealed class RuntimeRpcBroker
         RuntimeRpcCallerScopeState? scope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(caller);
         EnsureCurrent(caller, sessionLease);
         EnsureScope(scope, caller, sessionLease);
-        var use = FindUse(caller, contractId, SunderRpcProtocol.DiscoverAction)
-                   ?? throw PermissionDenied(contractId, SunderRpcProtocol.DiscoverAction);
-        using var permission = requirePermission
-            ? AcquirePermission(caller, contractId, SunderRpcProtocol.DiscoverAction)
-            : null;
-        var snapshot = _catalog.GetSnapshot(provider =>
-            string.Equals(provider.ContractId, contractId, StringComparison.Ordinal)
-            && CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _)
-            && PackageVersionRange.IsSatisfiedBy(provider.ContractVersion, use.VersionRange!));
-        return ValueTask.FromResult(snapshot);
+        _ = FindUse(caller, contractId, SunderRpcProtocol.DiscoverAction)
+            ?? throw PermissionDenied(contractId, SunderRpcProtocol.DiscoverAction);
+        RuntimeRpcPermissionLease? permission = null;
+        var permissionGranted = !requirePermission
+                                || TryAcquirePermission(
+                                    caller,
+                                    contractId,
+                                    SunderRpcProtocol.DiscoverAction,
+                                    out permission);
+        using (permission)
+        {
+            var snapshot = GetSnapshot(caller, provider =>
+                string.Equals(provider.Snapshot.ContractId, contractId, StringComparison.Ordinal)
+                && CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _)
+                && (permissionGranted || IsOwnerProvider(caller, provider)));
+            if (!permissionGranted && snapshot.Providers.Count == 0)
+            {
+                throw PermissionDenied(contractId, SunderRpcProtocol.DiscoverAction);
+            }
+            return ValueTask.FromResult(snapshot);
+        }
     }
 
     public async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
@@ -442,12 +467,20 @@ internal sealed class RuntimeRpcBroker
                 "rpc.catalog.position",
                 "RPC catalog revisions and sequences cannot be negative.");
         }
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(caller);
         EnsureCurrent(caller, sessionLease);
         EnsureScope(scope, caller, sessionLease);
+        if (caller is RuntimeRpcPackageActivation packageCaller
+            && _catalog.IsCandidateCaller(packageCaller))
+        {
+            throw Unavailable(
+                "rpc.catalog.activating",
+                "RPC catalog watches are unavailable until the candidate Runtime generation is published.");
+        }
         using var callerLease = AcquireCallerLease(caller);
         var discoverUses = caller.RpcContractUses.Where(use =>
-                (use.Actions ?? []).Contains(SunderRpcProtocol.DiscoverAction, StringComparer.Ordinal))
+                string.Equals(use.Role, caller.Role, StringComparison.Ordinal)
+                && (use.Actions ?? []).Contains(SunderRpcProtocol.DiscoverAction, StringComparer.Ordinal))
             .ToArray();
         if (discoverUses.Length == 0)
         {
@@ -455,6 +488,7 @@ internal sealed class RuntimeRpcBroker
         }
         var permissionLeases = new List<RuntimeRpcPermissionLease>();
         var permittedContracts = new HashSet<string>(StringComparer.Ordinal);
+        var ownerOnlyContracts = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             foreach (var use in discoverUses)
@@ -468,8 +502,20 @@ internal sealed class RuntimeRpcBroker
                     permissionLeases.Add(permission!);
                     permittedContracts.Add(use.ContractId!);
                 }
+                else
+                {
+                    var ownerProvider = GetSnapshot(caller, provider =>
+                        string.Equals(provider.Snapshot.ContractId, use.ContractId, StringComparison.Ordinal)
+                        && IsOwnerProvider(caller, provider)
+                        && CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _));
+                    if (ownerProvider.Providers.Count > 0)
+                    {
+                        permittedContracts.Add(use.ContractId!);
+                        ownerOnlyContracts.Add(use.ContractId!);
+                    }
+                }
             }
-            if (permissionLeases.Count == 0)
+            if (permittedContracts.Count == 0)
             {
                 throw PermissionDenied("*", SunderRpcProtocol.DiscoverAction);
             }
@@ -498,9 +544,17 @@ internal sealed class RuntimeRpcBroker
             }
             await foreach (var item in subscription.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
             {
+                RuntimeRpcProviderActivation? provider = null;
+                if (item.Provider is not null)
+                {
+                    _catalog.TryGetActiveEndpoint(item.Provider.Endpoint, out provider, out _);
+                }
                 if (item.Provider is null
+                    || provider is null
                     || !permittedContracts.Contains(item.Provider.ContractId)
-                    || !CanUseContract(caller, item.Provider, SunderRpcProtocol.DiscoverAction, out _))
+                    || (ownerOnlyContracts.Contains(item.Provider.ContractId)
+                        && !IsOwnerProvider(caller, provider))
+                    || !CanUseContract(caller, provider, SunderRpcProtocol.DiscoverAction, out _))
                 {
                     continue;
                 }
@@ -629,32 +683,43 @@ internal sealed class RuntimeRpcBroker
         CancellationToken cancellationToken,
         RuntimeRpcCallerScopeState? scope = null)
     {
-        var call = AcquireCall(
-            caller,
-            endpoint,
-            serviceId,
-            methodId,
-            request,
-            SunderRpcMethodKind.Unary,
-            SunderRpcProtocol.InvokeAction,
-            options,
-            requirePermission,
-            cancellationToken,
-            scope);
+        RuntimeRpcCallLease call;
+        try
+        {
+            call = AcquireCall(
+                caller,
+                endpoint,
+                serviceId,
+                methodId,
+                request,
+                SunderRpcMethodKind.Unary,
+                SunderRpcProtocol.InvokeAction,
+                options,
+                requirePermission,
+                cancellationToken,
+                scope);
+        }
+        catch (SunderRpcException exception)
+        {
+            throw StampNotDispatched(exception);
+        }
         using (call)
         {
             var previous = CurrentCall.Value;
             CurrentCall.Value = call.Frame;
+            var dispatched = false;
             try
             {
                 JsonElement response;
                 try
                 {
+                    var requestClone = request.Clone();
+                    dispatched = true;
                     response = await call.Provider.Registration.Handler.InvokeUnaryAsync(
                         call.Context,
                         serviceId,
                         methodId,
-                        request.Clone(),
+                        requestClone,
                         call.CancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception)
@@ -674,6 +739,10 @@ internal sealed class RuntimeRpcBroker
                 ValidateOutput(call, clone);
                 ThrowIfCallCancelled(call);
                 return clone;
+            }
+            catch (SunderRpcException exception)
+            {
+                throw StampCallFailure(call, exception, dispatched, isStream: false);
             }
             finally
             {
@@ -755,18 +824,26 @@ internal sealed class RuntimeRpcBroker
         [EnumeratorCancellation] CancellationToken cancellationToken,
         RuntimeRpcCallerScopeState? scope = null)
     {
-        var call = AcquireCall(
-            caller,
-            endpoint,
-            serviceId,
-            methodId,
-            request,
-            SunderRpcMethodKind.ServerStream,
-            SunderRpcProtocol.SubscribeAction,
-            options,
-            requirePermission: scope?.RequirePermission ?? true,
-            cancellationToken,
-            scope);
+        RuntimeRpcCallLease call;
+        try
+        {
+            call = AcquireCall(
+                caller,
+                endpoint,
+                serviceId,
+                methodId,
+                request,
+                SunderRpcMethodKind.ServerStream,
+                SunderRpcProtocol.SubscribeAction,
+                options,
+                requirePermission: scope?.RequirePermission ?? true,
+                cancellationToken,
+                scope);
+        }
+        catch (SunderRpcException exception)
+        {
+            throw StampNotDispatched(exception);
+        }
         using (call)
         {
             var previous = CurrentCall.Value;
@@ -774,22 +851,29 @@ internal sealed class RuntimeRpcBroker
             var eventCount = 0;
             var windowStarted = Stopwatch.GetTimestamp();
             var eventsInWindow = 0;
+            var dispatched = false;
             try
             {
                 IAsyncEnumerable<JsonElement> stream;
                 try
                 {
+                    var requestClone = request.Clone();
+                    dispatched = true;
                     stream = call.Provider.Registration.Handler.InvokeServerStreamAsync(
                                  call.Context,
                                  serviceId,
                                  methodId,
-                                 request.Clone(),
+                                 requestClone,
                                  call.CancellationToken)
                              ?? throw new InvalidOperationException("The provider returned a null event stream.");
                 }
                 catch (Exception exception)
                 {
-                    throw HandleProviderException(call, exception);
+                    throw StampCallFailure(
+                        call,
+                        HandleProviderException(call, exception),
+                        dispatched,
+                        isStream: true);
                 }
 
                 IAsyncEnumerator<JsonElement> enumerator;
@@ -799,7 +883,11 @@ internal sealed class RuntimeRpcBroker
                 }
                 catch (Exception exception)
                 {
-                    throw HandleProviderException(call, exception);
+                    throw StampCallFailure(
+                        call,
+                        HandleProviderException(call, exception),
+                        dispatched,
+                        isStream: true);
                 }
                 try
                 {
@@ -812,13 +900,21 @@ internal sealed class RuntimeRpcBroker
                         }
                         catch (Exception exception)
                         {
-                            throw HandleProviderException(call, exception);
+                            throw StampCallFailure(
+                                call,
+                                HandleProviderException(call, exception),
+                                dispatched,
+                                isStream: true);
                         }
                         if (!hasNext) break;
-                        ThrowIfCallCancelled(call);
+                        ThrowIfStreamCallCancelled(call);
                         if (++eventCount > _policy.MaxStreamEvents)
                         {
-                            throw ResourceExhausted("rpc.stream.event-limit", "The RPC stream exceeded its event limit.");
+                            throw StampCallFailure(
+                                call,
+                                ResourceExhausted("rpc.stream.event-limit", "The RPC stream exceeded its event limit."),
+                                dispatched,
+                                isStream: true);
                         }
                         var elapsed = Stopwatch.GetElapsedTime(windowStarted);
                         if (elapsed >= TimeSpan.FromSeconds(1))
@@ -828,7 +924,11 @@ internal sealed class RuntimeRpcBroker
                         }
                         if (++eventsInWindow > _policy.MaxStreamEventsPerSecond)
                         {
-                            throw ResourceExhausted("rpc.stream.rate-limit", "The RPC stream exceeded its event-rate limit.");
+                            throw StampCallFailure(
+                                call,
+                                ResourceExhausted("rpc.stream.rate-limit", "The RPC stream exceeded its event-rate limit."),
+                                dispatched,
+                                isStream: true);
                         }
                         JsonElement item;
                         try
@@ -837,13 +937,20 @@ internal sealed class RuntimeRpcBroker
                         }
                         catch (Exception exception)
                         {
-                            throw FaultProvider(call, "rpc.provider.invalid-event", "The provider returned an invalid JSON event.", exception);
+                            throw StampCallFailure(
+                                call,
+                                FaultProvider(
+                                    call,
+                                    "rpc.provider.invalid-event",
+                                    "The provider returned an invalid JSON event.",
+                                    exception),
+                                dispatched,
+                                isStream: true);
                         }
-                        ValidateOutput(call, item);
-                        ThrowIfCallCancelled(call);
+                        ValidateStreamOutput(call, item);
                         yield return item;
                     }
-                    call.CancellationToken.ThrowIfCancellationRequested();
+                    ThrowIfStreamCallCancelled(call);
                 }
                 finally
                 {
@@ -853,7 +960,11 @@ internal sealed class RuntimeRpcBroker
                     }
                     catch (Exception exception)
                     {
-                        throw HandleProviderException(call, exception);
+                        throw StampCallFailure(
+                            call,
+                            HandleProviderException(call, exception),
+                            dispatched,
+                            isStream: true);
                     }
                 }
             }
@@ -901,7 +1012,7 @@ internal sealed class RuntimeRpcBroker
         RuntimeRpcCallerScopeState? scope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var sessionLease = _sessions.AcquireLease();
+        var sessionLease = AcquireSessionLease(caller);
         RuntimeRpcActivationLease? callerLease = null;
         RuntimeRpcActivationLease? calleeLease = null;
         RuntimeRpcPermissionLease? permission = null;
@@ -915,7 +1026,7 @@ internal sealed class RuntimeRpcBroker
                 throw Unavailable("rpc.caller-retired", "The caller package activation is retired.");
             }
             EnsureScope(scope, caller, sessionLease);
-            if (!_catalog.TryGetActiveEndpoint(endpoint, out var provider, out var stale) || provider is null)
+            if (!TryGetEndpoint(caller, endpoint, out var provider, out var stale) || provider is null)
             {
                 throw stale
                     ? SunderRpcException.Infrastructure(
@@ -930,13 +1041,13 @@ internal sealed class RuntimeRpcBroker
             {
                 throw Unavailable("rpc.provider-retired", "The provider activation is no longer in the active Runtime session.");
             }
-            if (!CanUseContract(caller, provider.Snapshot, action, out var callerContract))
+            if (!CanUseContract(caller, provider, action, out var callerContract))
             {
                 throw PermissionDenied(provider.Snapshot.ContractId, action);
             }
             if (requirePermission)
             {
-                permission = AcquirePermission(caller, provider.Snapshot.ContractId, action);
+                permission = AcquirePermission(caller, provider, action);
             }
             var service = callerContract!.FindService(serviceId)
                           ?? throw NotFound("rpc.service.not-found", "The RPC service was not found in the bundled contract.");
@@ -1006,6 +1117,7 @@ internal sealed class RuntimeRpcBroker
                         "rpc-invocation-" + Guid.NewGuid().ToString("N")),
                     ownsContentAuthority: scope is null,
                     linked.Token,
+                    provider.Owner,
                     _timeProvider);
             }
             return new RuntimeRpcCallLease(
@@ -1056,7 +1168,7 @@ internal sealed class RuntimeRpcBroker
                         "rpc.content.host-unavailable",
                         "Host-mediated RPC content transfer is unavailable.");
         RuntimeRpcInvocationAuthority.ValidateOptions(options);
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(scope.Caller);
         EnsureCurrent(scope.Caller, sessionLease);
         EnsureScope(scope, scope.Caller, sessionLease);
         var provider = GetContentTarget(scope, endpoint, sessionLease);
@@ -1132,7 +1244,7 @@ internal sealed class RuntimeRpcBroker
                     ?? throw Unavailable(
                         "rpc.content.host-unavailable",
                         "Host-mediated RPC content transfer is unavailable.");
-        using var sessionLease = _sessions.AcquireLease();
+        using var sessionLease = AcquireSessionLease(scope.Caller);
         EnsureCurrent(scope.Caller, sessionLease);
         EnsureScope(scope, scope.Caller, sessionLease);
         if (!store.TryGetRpcContentEndpoint(
@@ -1146,7 +1258,7 @@ internal sealed class RuntimeRpcBroker
                 "rpc.content.unavailable",
                 "The RPC content reference is stale, exhausted, or unavailable to this call scope.");
         }
-        var provider = GetActiveContentProvider(providerEndpoint, sessionLease);
+        var provider = GetActiveContentProvider(scope.Caller, providerEndpoint, sessionLease);
         var lease = store.AcquireRpcContentForAudience(
             reference,
             scope.Caller.PackageId,
@@ -1169,7 +1281,7 @@ internal sealed class RuntimeRpcBroker
                     readCancellation.Dispose();
                 },
                 readCancellation.Token,
-                () => ValidateActiveContentProvider(provider, providerEndpoint));
+                () => ValidateActiveContentProvider(scope.Caller, provider, providerEndpoint));
             return ValueTask.FromResult(stream);
         }
         catch
@@ -1185,7 +1297,7 @@ internal sealed class RuntimeRpcBroker
         SunderRpcEndpointReference endpoint,
         PackageSessionLease sessionLease)
     {
-        if (!_catalog.TryGetActiveEndpoint(endpoint, out var provider, out var stale) || provider is null)
+        if (!TryGetEndpoint(scope.Caller, endpoint, out var provider, out var stale) || provider is null)
         {
             throw stale
                 ? SunderRpcException.Infrastructure(
@@ -1205,9 +1317,9 @@ internal sealed class RuntimeRpcBroker
 
         foreach (var action in new[] { SunderRpcProtocol.InvokeAction, SunderRpcProtocol.SubscribeAction })
         {
-            if (!CanUseContract(scope.Caller, provider.Snapshot, action, out _)) continue;
+            if (!CanUseContract(scope.Caller, provider, action, out _)) continue;
             if (!scope.RequirePermission) return provider;
-            if (TryAcquirePermission(scope.Caller, provider.Snapshot.ContractId, action, out var permission))
+            if (TryAcquirePermission(scope.Caller, provider, action, out var permission))
             {
                 permission!.Dispose();
                 return provider;
@@ -1217,10 +1329,12 @@ internal sealed class RuntimeRpcBroker
     }
 
     private RuntimeRpcProviderActivation GetActiveContentProvider(
+        IRuntimeRpcCallerActivation caller,
         RuntimeRpcContentEndpoint endpoint,
         PackageSessionLease sessionLease)
     {
-        if (!_catalog.TryGetActiveEndpoint(
+        if (!TryGetEndpoint(
+                caller,
                 new SunderRpcEndpointReference(endpoint.EndpointReference),
                 out var provider,
                 out _)
@@ -1238,10 +1352,12 @@ internal sealed class RuntimeRpcBroker
     }
 
     private void ValidateActiveContentProvider(
+        IRuntimeRpcCallerActivation caller,
         RuntimeRpcProviderActivation expectedProvider,
         RuntimeRpcContentEndpoint endpoint)
     {
-        if (!_catalog.TryGetActiveEndpoint(
+        if (!TryGetEndpoint(
+                caller,
                 new SunderRpcEndpointReference(endpoint.EndpointReference),
                 out var provider,
                 out _)
@@ -1257,7 +1373,32 @@ internal sealed class RuntimeRpcBroker
     private RuntimeRpcPackageActivation GetCaller(RuntimeRpcCallerStamp stamp)
         => _catalog.TryGetPackage(stamp.PackageId, stamp.ActivationId, out var caller) && caller is not null
             ? caller
-            : throw Unavailable("rpc.caller-retired", "The caller package activation is retired.");
+            : throw StaleEndpoint("rpc.caller-retired", "The caller package activation is retired.");
+
+    private PackageSessionLease AcquireSessionLease(IRuntimeRpcCallerActivation caller)
+        => caller is RuntimeRpcPackageActivation package && package.AllowsPrePublicationLease
+            ? _sessions.AcquirePackageActivationLease(
+                package.PackageId,
+                new RuntimePackageGeneration(
+                    package.Package.RuntimeActivationId,
+                    package.SessionGeneration))
+            : _sessions.AcquireLease();
+
+    private bool TryGetEndpoint(
+        IRuntimeRpcCallerActivation caller,
+        SunderRpcEndpointReference endpoint,
+        out RuntimeRpcProviderActivation? provider,
+        out bool stale)
+        => caller is RuntimeRpcPackageActivation package
+            ? _catalog.TryGetEndpoint(package, endpoint, out provider, out stale)
+            : _catalog.TryGetActiveEndpoint(endpoint, out provider, out stale);
+
+    private SunderRpcCatalogSnapshot GetSnapshot(
+        IRuntimeRpcCallerActivation caller,
+        Func<RuntimeRpcProviderActivation, bool> filter)
+        => caller is RuntimeRpcPackageActivation package
+            ? _catalog.GetSnapshot(package, filter)
+            : _catalog.GetSnapshot(filter);
 
     private RuntimeRpcAppCallerSession GetAppCaller(string sessionId)
         => _appSessions?.GetRequired(sessionId)
@@ -1276,7 +1417,7 @@ internal sealed class RuntimeRpcBroker
     {
         if (!caller.IsCurrent(sessionLease))
         {
-            throw Unavailable("rpc.caller-retired", "The caller package activation is retired.");
+            throw StaleEndpoint("rpc.caller-retired", "The caller package activation is retired.");
         }
     }
 
@@ -1323,6 +1464,28 @@ internal sealed class RuntimeRpcBroker
             ? lease
             : throw PermissionDenied(contractId, action);
 
+    private RuntimeRpcPermissionLease AcquirePermission(
+        IRuntimeRpcCallerActivation caller,
+        RuntimeRpcProviderActivation provider,
+        string action)
+        => TryAcquirePermission(caller, provider, action, out var lease) && lease is not null
+            ? lease
+            : throw PermissionDenied(provider.Snapshot.ContractId, action);
+
+    private bool TryAcquirePermission(
+        IRuntimeRpcCallerActivation caller,
+        RuntimeRpcProviderActivation provider,
+        string action,
+        out RuntimeRpcPermissionLease? lease)
+    {
+        if (IsOwnerProvider(caller, provider))
+        {
+            lease = new RuntimeRpcPermissionLease(caller.RetirementToken);
+            return true;
+        }
+        return TryAcquirePermission(caller, provider.Snapshot.ContractId, action, out lease);
+    }
+
     private bool TryAcquirePermission(
         IRuntimeRpcCallerActivation caller,
         string contractId,
@@ -1334,36 +1497,88 @@ internal sealed class RuntimeRpcBroker
             lease = new RuntimeRpcPermissionLease(caller.RetirementToken);
             return true;
         }
+        var use = FindUse(caller, contractId, action);
+        if (use?.ContractVersion is null || use.AbiSha256 is null)
+        {
+            lease = null;
+            return false;
+        }
         return _permissions.TryAcquire(
-            caller.PackageId,
-            caller.PackageVersion,
-            caller.ManifestSha256,
-            contractId,
-            action,
+            new RuntimeRpcPermissionKey(
+                caller.PackageId,
+                caller.PackageVersion,
+                caller.ManifestSha256,
+                caller.Role,
+                contractId,
+                use.ContractVersion,
+                use.AbiSha256,
+                action),
             out lease);
     }
 
     private static bool CanUseContract(
         IRuntimeRpcCallerActivation caller,
-        SunderRpcProviderSnapshot provider,
+        RuntimeRpcProviderActivation provider,
         string action,
         out SunderRpcContractDescriptor? descriptor)
     {
         descriptor = null;
-        var use = FindUse(caller, provider.ContractId, action);
-        if (use is null || !PackageVersionRange.IsSatisfiedBy(provider.ContractVersion, use.VersionRange!)) return false;
-        return caller.RpcContracts.TryGetValue(
-                   PackageSessionPreparer.ContractKey(provider.ContractId, provider.ContractVersion),
-                   out descriptor)
-               && string.Equals(descriptor.Sha256, provider.ContractSha256, StringComparison.Ordinal);
+        var snapshot = provider.Snapshot;
+        var registration = provider.Registration;
+        var declaration = registration.Manifest;
+        var use = FindUse(caller, snapshot.ContractId, action);
+        if (use?.ContractVersion is null
+            || declaration is null
+            || !string.Equals(declaration.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
+            || !AudienceAllows(caller.PackageId, snapshot.PackageId, declaration.Audience)
+            || !string.Equals(use.ContractVersion, snapshot.ContractVersion, StringComparison.Ordinal)
+            || !string.Equals(declaration.ContractId, snapshot.ContractId, StringComparison.Ordinal)
+            || !string.Equals(declaration.ContractVersion, snapshot.ContractVersion, StringComparison.Ordinal)
+            || !string.Equals(registration.ContractId, snapshot.ContractId, StringComparison.Ordinal)
+            || !string.Equals(registration.ContractVersion, snapshot.ContractVersion, StringComparison.Ordinal)
+            || !string.Equals(registration.Contract.ContractId, snapshot.ContractId, StringComparison.Ordinal)
+            || !string.Equals(registration.Contract.Version, snapshot.ContractVersion, StringComparison.Ordinal)
+            || !string.Equals(registration.DescriptorSha256, declaration.DescriptorSha256, StringComparison.Ordinal)
+            || !string.Equals(registration.Contract.Sha256, declaration.DescriptorSha256, StringComparison.Ordinal)
+            || !string.Equals(snapshot.DescriptorSha256, declaration.DescriptorSha256, StringComparison.Ordinal)
+            || !string.Equals(snapshot.AbiSha256, declaration.AbiSha256, StringComparison.Ordinal)
+            || !caller.RpcContracts.TryGetValue(
+                PackageSessionPreparer.ContractKey(snapshot.ContractId, use.ContractVersion),
+                out descriptor)
+            || !string.Equals(descriptor.ContractId, snapshot.ContractId, StringComparison.Ordinal)
+            || !string.Equals(descriptor.Version, use.ContractVersion, StringComparison.Ordinal))
+        {
+            descriptor = null;
+            return false;
+        }
+
+        return descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2
+               && registration.Contract.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2
+               && use.AbiSha256 is not null
+               && declaration.AbiSha256 is not null
+               && string.Equals(descriptor.AbiSha256, use.AbiSha256, StringComparison.Ordinal)
+               && string.Equals(use.AbiSha256, declaration.AbiSha256, StringComparison.Ordinal)
+               && string.Equals(registration.Contract.AbiSha256, declaration.AbiSha256, StringComparison.Ordinal);
     }
+
+    private static bool AudienceAllows(string callerPackageId, string providerPackageId, string? audience)
+        => audience == SunderPackageFormat.PublicProviderAudience
+           || (audience == SunderPackageFormat.OwnerProviderAudience
+               && string.Equals(callerPackageId, providerPackageId, StringComparison.Ordinal));
+
+    private static bool IsOwnerProvider(
+        IRuntimeRpcCallerActivation caller,
+        RuntimeRpcProviderActivation provider)
+        => provider.Registration.Manifest?.Audience == SunderPackageFormat.OwnerProviderAudience
+           && string.Equals(caller.PackageId, provider.Snapshot.PackageId, StringComparison.Ordinal);
 
     private static Sunder.Package.Format.SunderPackageContractUseManifest? FindUse(
         IRuntimeRpcCallerActivation caller,
         string contractId,
         string action)
         => caller.RpcContractUses.FirstOrDefault(use =>
-            string.Equals(use.ContractId, contractId, StringComparison.Ordinal)
+            string.Equals(use.Role, caller.Role, StringComparison.Ordinal)
+            && string.Equals(use.ContractId, contractId, StringComparison.Ordinal)
             && (use.Actions ?? []).Contains(action, StringComparer.Ordinal));
 
     private void ValidatePayload(
@@ -1405,7 +1620,7 @@ internal sealed class RuntimeRpcBroker
         }
     }
 
-    private Exception HandleProviderException(RuntimeRpcCallLease call, Exception exception)
+    private SunderRpcException HandleProviderException(RuntimeRpcCallLease call, Exception exception)
     {
         if (call.ProviderRetirementRequested)
         {
@@ -1428,6 +1643,14 @@ internal sealed class RuntimeRpcBroker
         {
             if (rpcException.Error.Kind == SunderRpcErrorKind.Domain)
             {
+                if (!call.Method.Errors.Contains(rpcException.Error.Code, StringComparer.Ordinal))
+                {
+                    return FaultProvider(
+                        call,
+                        "rpc.provider.undeclared-domain-error",
+                        "The provider returned a domain error that is not declared by the RPC method.",
+                        rpcException);
+                }
                 return new SunderRpcException(new SunderRpcError(
                     SunderRpcErrorKind.Domain,
                     rpcException.Error.Code,
@@ -1448,6 +1671,57 @@ internal sealed class RuntimeRpcBroker
             "rpc.provider.handler-fault",
             "The provider handler violated the RPC invocation contract.",
             exception);
+    }
+
+    private void ThrowIfStreamCallCancelled(RuntimeRpcCallLease call)
+    {
+        try
+        {
+            ThrowIfCallCancelled(call);
+        }
+        catch (SunderRpcException exception)
+        {
+            throw StampCallFailure(call, exception, dispatched: true, isStream: true);
+        }
+    }
+
+    private void ValidateStreamOutput(RuntimeRpcCallLease call, JsonElement value)
+    {
+        try
+        {
+            ValidateOutput(call, value);
+            ThrowIfCallCancelled(call);
+        }
+        catch (SunderRpcException exception)
+        {
+            throw StampCallFailure(call, exception, dispatched: true, isStream: true);
+        }
+    }
+
+    private static SunderRpcException StampNotDispatched(SunderRpcException exception)
+        => RuntimeRpcFailureContextStore.Copy(
+            exception,
+            exception.WithDispatchMetadata(
+                SunderRpcDispatchState.NotDispatched,
+                SunderRpcRetrySafety.Safe));
+
+    private static SunderRpcException StampCallFailure(
+        RuntimeRpcCallLease call,
+        SunderRpcException exception,
+        bool dispatched,
+        bool isStream)
+    {
+        var dispatchState = dispatched
+            ? SunderRpcDispatchState.PossiblyDispatched
+            : SunderRpcDispatchState.NotDispatched;
+        var retrySafety = !dispatched
+                          || !isStream
+                          && call.Method.Idempotency == SunderRpcMethodIdempotency.Idempotent
+            ? SunderRpcRetrySafety.Safe
+            : SunderRpcRetrySafety.Unsafe;
+        return RuntimeRpcFailureContextStore.Copy(
+            exception,
+            exception.WithDispatchMetadata(dispatchState, retrySafety));
     }
 
     private void ThrowIfCallCancelled(RuntimeRpcCallLease call)
@@ -1536,6 +1810,9 @@ internal sealed class RuntimeRpcBroker
 
     private static SunderRpcException NotFound(string code, string message)
         => SunderRpcException.Infrastructure(SunderRpcErrorKind.NotFound, code, message);
+
+    private static SunderRpcException StaleEndpoint(string code, string message)
+        => SunderRpcException.Infrastructure(SunderRpcErrorKind.StaleEndpoint, code, message);
 
     private static SunderRpcException Unavailable(string code, string message)
         => SunderRpcException.Infrastructure(SunderRpcErrorKind.Unavailable, code, message);

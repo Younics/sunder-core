@@ -15,14 +15,15 @@ public sealed class StacksWindowFactory(
     ShellState shellState)
 {
     internal StacksWindow Create(
-        Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync)
+        Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
+        RegistryPackageInstallService? packageInstallService = null)
     {
         var window = new StacksWindow(shellStateService, shellState, stackWizardWindowFactory);
         window.DataContext = new StacksWindowViewModel(
             localStackLibrary,
             new StackArchivePicker(window),
             runtimeApiClientFactory.CreateClient<IRuntimeStacksClient>(),
-            registryPackageInstallService,
+            packageInstallService ?? registryPackageInstallService,
             waitUntilPresentationAppliedAsync);
         return window;
     }

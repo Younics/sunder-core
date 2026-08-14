@@ -128,6 +128,8 @@ sunder package install sunder.package.agent --tag beta
 sunder package install sunder.package.agent --version 1.0.0
 ```
 
+The CLI sends the user's exact/tag selection to Runtime rather than resolving installable artifacts itself. Runtime adds its bounded Manifest V3 and Worker V3 compatibility profile, including the complete supported Worker capability set and current exact RID, to every Registry plan request. Anonymous CLI search and version-detail commands remain historical browse operations and do not advertise Host compatibility.
+
 Install a local archive, with explicit downgrade/reinstall consent when needed:
 
 ```powershell

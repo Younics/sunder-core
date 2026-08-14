@@ -149,12 +149,10 @@ internal static class PackageStorePolicy
 
     public static bool CatalogsEqual(IReadOnlyList<InstalledPackageRecord> left, IReadOnlyList<InstalledPackageRecord> right)
         => JsonSerializer.Serialize(
-               InstalledPackageStore.NormalizeCatalogForCompatibility(left)
-                   .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
+               left.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
                InstalledPackageStore.JsonOptions)
            == JsonSerializer.Serialize(
-               InstalledPackageStore.NormalizeCatalogForCompatibility(right)
-                   .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
+               right.OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase),
                InstalledPackageStore.JsonOptions);
 
     private static string ComputeUninstallConfirmationToken(

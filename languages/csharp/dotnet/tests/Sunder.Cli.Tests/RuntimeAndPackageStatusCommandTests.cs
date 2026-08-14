@@ -31,6 +31,7 @@ public sealed class RuntimeAndPackageStatusCommandTests
                             HostProtocolFeatures.RuntimeGatewayV1,
                             HostProtocolFeatures.RuntimeLifecycleV1,
                             HostProtocolFeatures.DurableOperationsV1,
+                            HostProtocolFeatures.RuntimeStartupDiagnosticsV1,
                         ],
                         new HostProductVersionDiagnostics("Sunder Host", "1.0.0", "1.0.0"))),
                     "/api/host/v1/status" => Json(new HostRuntimeStatus(

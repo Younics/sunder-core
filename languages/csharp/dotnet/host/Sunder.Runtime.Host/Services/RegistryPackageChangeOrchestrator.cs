@@ -19,7 +19,21 @@ internal sealed class RegistryPackageChangeOrchestrator(
     public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveAsync(
         RuntimeRegistryPackageBatchRequest request,
         CancellationToken cancellationToken)
-        => await planResolver.ResolveAsync(request, cancellationToken);
+    {
+        var plan = await planResolver.ResolveAsync(request, cancellationToken);
+        if (!plan.Success)
+        {
+            return plan;
+        }
+        var installed = (await installedPackageStore.ListAsync(cancellationToken))
+            .ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
+        return plan with
+        {
+            RequiredCapabilityConsents = PackageSensitiveCapabilityPolicy.GetRequiredConsents(
+                plan.Items,
+                installed),
+        };
+    }
 
     public Task<RuntimeRegistryPackageChangeResult> InstallAsync(
         RuntimeRegistryPackageRequest request,
@@ -36,7 +50,8 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     request.Required)],
                 request.IncludePrerelease,
                 request.AllowDowngrade,
-                request.Reinstall),
+                request.Reinstall,
+                request.CapabilityConsents),
             cancellationToken);
 
     public async Task<RuntimeRegistryPackageChangeResult> UpdateAsync(
@@ -78,7 +93,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         var groups = new Dictionary<(string Origin, bool IncludePrerelease), List<PackageUpdateSelection>>();
         foreach (var package in selected)
         {
-            var provenance = package.Provenance ?? InstalledPackageProvenanceRecord.Unknown;
+            var provenance = package.Provenance;
             if (provenance.SourceKind != InstalledPackageSourceKind.Registry
                 || string.IsNullOrWhiteSpace(provenance.RegistryOrigin))
             {
@@ -163,7 +178,11 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     selection => selection.IncludePrereleasePolicy,
                     StringComparer.OrdinalIgnoreCase)))
             .ToArray();
-        var result = await ExecuteAtomicAsync(executions, dryRun: false, cancellationToken);
+        var result = await ExecuteAtomicAsync(
+            executions,
+            request.DryRun,
+            request.CapabilityConsents,
+            cancellationToken);
         return AddContext(result, warnings, skipped);
     }
 
@@ -223,6 +242,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         var result = await ExecuteAtomicAsync(
             [new PackageExecutionRequest(batch, adoptedPackageIds, NoPrereleasePolicyOverrides)],
             request.DryRun,
+            request.CapabilityConsents,
             cancellationToken);
         if (!result.Success)
         {
@@ -242,18 +262,23 @@ internal sealed class RegistryPackageChangeOrchestrator(
         => ExecuteAtomicAsync(
             [new PackageExecutionRequest(request, NoSourceAdoptions, NoPrereleasePolicyOverrides)],
             dryRun: false,
-            cancellationToken);
+            providedCapabilityConsents: request.CapabilityConsents,
+            cancellationToken: cancellationToken);
 
     private async Task<RuntimeRegistryPackageChangeResult> ExecuteAtomicAsync(
         IReadOnlyList<PackageExecutionRequest> executions,
         bool dryRun,
+        IReadOnlyList<PackageCapabilityConsent>? providedCapabilityConsents,
         CancellationToken cancellationToken)
     {
         var resolved = new List<ResolvedPackageExecution>(executions.Count);
         IReadOnlyList<RegistryPackageStateExpectation> stateExpectations = [];
+        IReadOnlyDictionary<string, InstalledPackageRecord> installed =
+            new Dictionary<string, InstalledPackageRecord>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<PackageCapabilityConsent> requiredCapabilityConsents = [];
         try
         {
-            var installed = (await installedPackageStore.ListAsync(cancellationToken))
+            installed = (await installedPackageStore.ListAsync(cancellationToken))
                 .ToDictionary(package => package.PackageId, StringComparer.OrdinalIgnoreCase);
             foreach (var execution in executions)
             {
@@ -292,6 +317,9 @@ internal sealed class RegistryPackageChangeOrchestrator(
             }
             ValidateUniquePlanPackages(resolved);
             stateExpectations = BuildStateExpectations(installed, resolved);
+            requiredCapabilityConsents = PackageSensitiveCapabilityPolicy.GetRequiredConsents(
+                ResolvedPlanItems(resolved),
+                installed);
         }
         catch (OperationCanceledException)
         {
@@ -324,10 +352,23 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 planWarnings,
                 [],
                 [],
-                planItems)
+                planItems,
+                requiredCapabilityConsents)
             {
                 CommittedStamp = installedPackages.Stamp,
             };
+        }
+        var consentError = PackageSensitiveCapabilityPolicy.ValidateProvidedConsents(
+            requiredCapabilityConsents,
+            providedCapabilityConsents);
+        if (consentError is not null)
+        {
+            return Failed(
+                consentError,
+                RuntimeRegistryErrorCode.ConsentRequired,
+                planWarnings,
+                planItems: planItems,
+                requiredCapabilityConsents: requiredCapabilityConsents);
         }
         if (planItems.Count == 0)
         {
@@ -347,7 +388,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         }
 
         var uploadIds = new List<string>();
-        var provenanceByUploadId = new Dictionary<string, InstalledPackageProvenanceRecord>(StringComparer.Ordinal);
+        var uploadMetadataById = new Dictionary<string, RegistryPackageUploadMetadata>(StringComparer.Ordinal);
         string? stageId = null;
         var artifactsPrepared = false;
         try
@@ -355,21 +396,29 @@ internal sealed class RegistryPackageChangeOrchestrator(
             var mutations = new List<PackageStoreMutationRequest>(planItems.Count);
             foreach (var resolution in resolved)
             {
+                var selectedTargets = RuntimeRegistryContractMapper.ToRegistry(
+                        resolution.Execution.Request.Packages)
+                    .SelectMany(static change => change.DesiredTargets)
+                    .Distinct()
+                    .ToArray();
                 foreach (var item in resolution.Plan.Items)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var upload = await artifactDownloader.DownloadAsync(
                         resolution.Origin,
                         item,
+                        selectedTargets,
                         resolution.Plan.TrustedArtifactOrigins,
                         cancellationToken);
                     uploadIds.Add(upload.UploadId);
-                    provenanceByUploadId.Add(
+                    uploadMetadataById.Add(
                         upload.UploadId,
-                        resolution.ProvenanceByPackageId[item.PackageId] with
-                        {
-                            SourceIdentity = upload.ContentHash,
-                        });
+                        new RegistryPackageUploadMetadata(
+                            resolution.ProvenanceByPackageId[item.PackageId] with
+                            {
+                                SourceIdentity = upload.ContentHash,
+                            },
+                            item.Artifacts[0].ManifestSha256));
                     mutations.Add(new PackageStoreMutationRequest(
                         item.CurrentVersion is null ? PackageStoreMutationKind.Install : PackageStoreMutationKind.Upgrade,
                         item.CurrentVersion is null ? null : item.PackageId,
@@ -378,14 +427,16 @@ internal sealed class RegistryPackageChangeOrchestrator(
                         RequiresReinstall(
                             item.CurrentVersion,
                             item.Version,
-                            resolution.Execution.Request.Reinstall)));
+                            resolution.Execution.Request.Reinstall),
+                        CapabilityConsent: providedCapabilityConsents?.FirstOrDefault(consent =>
+                            string.Equals(consent.PackageId, item.PackageId, StringComparison.Ordinal))));
                 }
             }
             artifactsPrepared = true;
 
             var stage = await installedPackages.StageRegistryAsync(
                 new PackageStoreStageRequest(mutations),
-                provenanceByUploadId,
+                uploadMetadataById,
                 stateExpectations,
                 cancellationToken);
             stageId = stage.StageId;
@@ -503,7 +554,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 continue;
             }
 
-            var provenance = package.Provenance ?? InstalledPackageProvenanceRecord.Unknown;
+            var provenance = package.Provenance;
             var includePrereleasePolicy = execution.IncludePrereleasePolicyByPackageId.TryGetValue(
                 package.PackageId,
                 out var persistedIncludePrerelease)
@@ -623,7 +674,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
             package => new RegistryPackageStateExpectation(
                 package.PackageId,
                 package.Version,
-                package.Provenance ?? InstalledPackageProvenanceRecord.Unknown),
+                package.Provenance),
             StringComparer.OrdinalIgnoreCase);
         foreach (var item in resolved.SelectMany(resolution => resolution.Plan.Items))
         {
@@ -745,7 +796,8 @@ internal sealed class RegistryPackageChangeOrchestrator(
             warnings.Concat(result.Warnings).ToArray(),
             result.Errors,
             result.ImpactedPackageIds,
-            result.PlanItems)
+            result.PlanItems,
+            result.RequiredCapabilityConsents)
         {
             CommittedStamp = result.CommittedStamp,
             SkippedPackageIds = skippedPackageIds
@@ -767,7 +819,8 @@ internal sealed class RegistryPackageChangeOrchestrator(
             result.Warnings,
             result.Errors,
             result.ImpactedPackageIds,
-            result.PlanItems)
+            result.PlanItems,
+            result.RequiredCapabilityConsents)
         {
             CommittedStamp = result.CommittedStamp,
             SkippedPackageIds = result.SkippedPackageIds,
@@ -778,7 +831,8 @@ internal sealed class RegistryPackageChangeOrchestrator(
         RuntimeRegistryErrorCode errorCode,
         IReadOnlyList<string>? warnings = null,
         IReadOnlyList<string>? errors = null,
-        IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? planItems = null)
+        IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? planItems = null,
+        IReadOnlyList<PackageCapabilityConsent>? requiredCapabilityConsents = null)
         => new(
             false,
             errorCode,
@@ -788,7 +842,8 @@ internal sealed class RegistryPackageChangeOrchestrator(
             warnings ?? [],
             errors ?? [message],
             [],
-            planItems ?? []);
+            planItems ?? [],
+            requiredCapabilityConsents ?? []);
 
     internal static bool RequiresReinstall(string? currentVersion, string version, bool requested)
         => requested

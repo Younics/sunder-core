@@ -50,7 +50,7 @@ sealed class Program
 
         velopackApp.Run();
         StartupOptions = AppStartupOptionsParser.Parse(args);
-        AppLocalState.EnsureInitializedForStartup();
+        AppLocalState.EnsureInitialized();
         if (await TryForwardLaunchToPrimaryInstanceAsync(args))
         {
             return;

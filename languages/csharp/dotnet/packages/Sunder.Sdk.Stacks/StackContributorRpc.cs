@@ -1,8 +1,10 @@
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Worker;
 
 namespace Sunder.Sdk.Stacks;
 
@@ -11,11 +13,20 @@ namespace Sunder.Sdk.Stacks;
 [SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
 public static class SunderStackContributorRpc
 {
+    /// <summary>The Stack contributor descriptor version.</summary>
+    public const int DescriptorVersion = SunderRpcProtocol.DescriptorVersionV2;
+
     /// <summary>The Stack contributor contract id.</summary>
     public const string ContractId = "sunder.stack.contributor";
 
     /// <summary>The Stack contributor contract version.</summary>
-    public const string ContractVersion = "1.0.0";
+    public const string ContractVersion = "2.0.0";
+
+    /// <summary>The canonical Stack contributor descriptor SHA-256.</summary>
+    public const string DescriptorSha256 = "177323e0de4f5ede5852565defc8ea9f92abf4bf952d61446d139c7a3c1c16a8";
+
+    /// <summary>The domain-separated Stack contributor V2 ABI SHA-256.</summary>
+    public const string AbiSha256 = "2468e4b2dea06c0f2c82ceb6972bbeb775a7b032b05f02aa33cd1b51709ef3e0";
 
     /// <summary>The Stack contributor service id.</summary>
     public const string ServiceId = "stack-contributor";
@@ -38,6 +49,22 @@ public static class SunderStackContributorRpc
         SunderRpcEndpointReference endpoint)
         => new(scope, endpoint);
 
+    /// <summary>Creates a Worker V3 provider registration for a package-local Stack contributor.</summary>
+    public static SunderWorkerProviderRegistration CreateWorkerProviderRegistration(
+        string providerId,
+        IPackageStackContributor contributor)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
+        ArgumentNullException.ThrowIfNull(contributor);
+        return new SunderWorkerProviderRegistration(
+            providerId,
+            ContractId,
+            ContractVersion,
+            DescriptorSha256,
+            AbiSha256,
+            CreateHandler(contributor));
+    }
+
     private static SunderRpcContractDescriptor LoadDescriptor()
     {
         var assembly = typeof(SunderStackContributorRpc).Assembly;
@@ -46,29 +73,17 @@ public static class SunderStackContributorRpc
                 $"Embedded Stack RPC descriptor '{DescriptorResourceName}' was not found.");
         using var memory = new MemoryStream();
         stream.CopyTo(memory);
-        return SunderRpcContractDescriptor.Parse(memory.ToArray());
-    }
-}
-
-/// <summary>Registers a package-local Stack contributor as a manifest-declared RPC provider.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.StacksV1)]
-[SunderSdkCapability(SunderSdkCapabilities.StacksRpcV1)]
-public static class SunderStackContributionRegistryExtensions
-{
-    /// <summary>Registers a typed Stack provider using invocation-bound Host content authority.</summary>
-    public static void RegisterStackContributor(
-        this ISunderRuntimeContributionRegistry registry,
-        string providerId,
-        IPackageStackContributor contributor,
-        IServiceProvider services)
-    {
-        ArgumentNullException.ThrowIfNull(registry);
-        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
-        ArgumentNullException.ThrowIfNull(contributor);
-        ArgumentNullException.ThrowIfNull(services);
-        registry.RegisterRpcProvider(
-            providerId,
-            SunderStackContributorRpc.CreateHandler(contributor));
+        var descriptor = SunderRpcContractDescriptor.Parse(memory.ToArray());
+        if (descriptor.DescriptorVersion != DescriptorVersion
+            || !string.Equals(descriptor.ContractId, ContractId, StringComparison.Ordinal)
+            || !string.Equals(descriptor.Version, ContractVersion, StringComparison.Ordinal)
+            || !string.Equals(descriptor.Sha256, DescriptorSha256, StringComparison.Ordinal)
+            || !string.Equals(descriptor.AbiSha256, AbiSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Embedded Stack RPC descriptor '{DescriptorResourceName}' does not match its V2 contract identity.");
+        }
+        return descriptor;
     }
 }
 
@@ -213,22 +228,28 @@ public sealed class StackContributorRpcClient
             SunderStackContributorRpc.ServiceId,
             methodId,
             request,
+            requestAllowsNull: false,
+            responseAllowsNull: false,
+            useV2WireFormat: true,
             cancellationToken: cancellationToken);
 }
 
-internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
+internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler, ISunderRpcDeclaredErrorMetadata
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        Converters = { new SunderRpcV2JsonConverterFactory() },
     };
 
     private readonly IPackageStackExporter? _exporter;
     private readonly IPackageStackImporter? _importer;
     private readonly IPackageStackImportAppliedHandler? _appliedHandler;
     private readonly StackContributorMetadata _metadata;
+    private static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>>
+        DeclaredErrorCatalog = new(CreateDeclaredErrorCatalog, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public StackContributorRpcHandler(IPackageStackContributor contributor)
     {
@@ -263,6 +284,9 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
             _importer is not null,
             _appliedHandler is not null);
     }
+
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> DeclaredErrors
+        => DeclaredErrorCatalog.Value;
 
     public async ValueTask<JsonElement> InvokeUnaryAsync(
         SunderRpcInvocationContext context,
@@ -427,6 +451,21 @@ internal sealed class StackContributorRpcHandler : ISunderRpcServiceHandler
 
     private static Exception NotFound(string code, string message)
         => new InvalidOperationException($"{code}: {message}");
+
+    private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>
+        CreateDeclaredErrorCatalog()
+    {
+        var services = SunderStackContributorRpc.Descriptor.Services.ToDictionary(
+            static service => service.ServiceId,
+            static service => (IReadOnlyDictionary<string, IReadOnlyList<string>>)
+                new ReadOnlyDictionary<string, IReadOnlyList<string>>(
+                    service.Methods.ToDictionary(
+                        static method => method.MethodId,
+                        static method => (IReadOnlyList<string>)Array.AsReadOnly(method.Errors.ToArray()),
+                        StringComparer.Ordinal)),
+            StringComparer.Ordinal);
+        return new ReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>(services);
+    }
 }
 
 internal sealed class StackRpcEmpty

@@ -9,14 +9,14 @@ public sealed class PackageModuleShapeTests
     [Fact]
     public void Read_EnforcesInheritedRoleCountTopLevelVisibilityAndConstructorPolicy()
     {
-        var shape = PackageModuleShapeReader.Read(typeof(InheritedRuntimeModule).Assembly.Location);
+        var shape = PackageModuleShapeReader.Read(typeof(InheritedAppModule).Assembly.Location);
 
         var errors = shape.Validate();
 
         Assert.Contains(errors, error =>
-            error.Contains("multiple ISunderRuntimePackageModule", StringComparison.Ordinal)
-            && error.Contains(typeof(InheritedRuntimeModule).FullName!, StringComparison.Ordinal)
-            && error.Contains(typeof(SecondRuntimeModule).FullName!, StringComparison.Ordinal));
+            error.Contains("multiple ISunderAppPackageModule", StringComparison.Ordinal)
+            && error.Contains(typeof(InheritedAppModule).FullName!, StringComparison.Ordinal)
+            && error.Contains(typeof(SecondAppModule).FullName!, StringComparison.Ordinal));
         Assert.Contains(errors, error =>
             error.Contains(typeof(AppModuleWithoutDefaultConstructor).FullName!, StringComparison.Ordinal)
             && error.Contains("public parameterless constructor", StringComparison.Ordinal));
@@ -24,56 +24,55 @@ public sealed class PackageModuleShapeTests
             error.Contains(typeof(ModuleContainer.NestedAppModule).FullName!, StringComparison.Ordinal)
             && error.Contains("top-level public class", StringComparison.Ordinal));
         Assert.Contains(errors, error =>
-            error.Contains(typeof(OpenGenericRuntimeModule<>).FullName!, StringComparison.Ordinal)
+            error.Contains(typeof(OpenGenericAppModule<>).FullName!, StringComparison.Ordinal)
             && error.Contains("non-generic", StringComparison.Ordinal));
         Assert.NotNull(shape.Resolve(PackageHostRoleMetadataValue.App).Error);
-        Assert.NotNull(shape.Resolve(PackageHostRoleMetadataValue.Runtime).Error);
     }
 }
 
-public abstract class RuntimeModuleBase : ISunderRuntimePackageModule
+public abstract class AppModuleBase : ISunderAppPackageModule
 {
-    public abstract void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context);
+    public abstract void ConfigureAppServices(IServiceCollection services, IPackageContext context);
 
-    public abstract void RegisterRuntimeContributions(
-        ISunderRuntimeContributionRegistry registry,
+    public abstract void RegisterAppContributions(
+        ISunderAppContributionRegistry registry,
         IServiceProvider services);
 }
 
-public sealed class InheritedRuntimeModule : RuntimeModuleBase
+public sealed class InheritedAppModule : AppModuleBase
 {
-    public override void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public override void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public override void RegisterRuntimeContributions(
-        ISunderRuntimeContributionRegistry registry,
+    public override void RegisterAppContributions(
+        ISunderAppContributionRegistry registry,
         IServiceProvider services)
     {
     }
 }
 
-public sealed class SecondRuntimeModule : ISunderRuntimePackageModule
+public sealed class SecondAppModule : ISunderAppPackageModule
 {
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public void RegisterRuntimeContributions(
-        ISunderRuntimeContributionRegistry registry,
+    public void RegisterAppContributions(
+        ISunderAppContributionRegistry registry,
         IServiceProvider services)
     {
     }
 }
 
-public sealed class OpenGenericRuntimeModule<T> : ISunderRuntimePackageModule
+public sealed class OpenGenericAppModule<T> : ISunderAppPackageModule
 {
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public void RegisterRuntimeContributions(
-        ISunderRuntimeContributionRegistry registry,
+    public void RegisterAppContributions(
+        ISunderAppContributionRegistry registry,
         IServiceProvider services)
     {
     }

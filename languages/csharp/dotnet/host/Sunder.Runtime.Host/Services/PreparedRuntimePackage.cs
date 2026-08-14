@@ -8,7 +8,6 @@ internal sealed record PreparedRuntimePackage(
     string SourceFolder,
     RuntimePackageSource Source,
     string ShadowFolder,
-    string LibraryFolder,
     string PackageId,
     string Version,
     PackageHostRoles HostRoles,
@@ -23,4 +22,6 @@ internal sealed record PreparedRuntimePackage(
     public DevProcessLaunchMetadata? DevProcessLaunch { get; init; }
 
     public string SessionId { get; init; } = Guid.NewGuid().ToString("N");
+
+    public IReadOnlyList<string> ApprovedSensitiveCapabilities { get; init; } = [];
 }

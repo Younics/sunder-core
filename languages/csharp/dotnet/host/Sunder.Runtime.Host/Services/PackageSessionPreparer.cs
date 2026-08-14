@@ -57,6 +57,7 @@ internal sealed class PackageSessionPreparer
                 validation.Manifest,
                 validation.ContentIndex,
                 ComputeContentIdentity(canonicalShadow),
+                approvedSensitiveCapabilities: [],
                 errors,
                 cancellationToken);
         }
@@ -103,6 +104,7 @@ internal sealed class PackageSessionPreparer
             validation.Manifest,
             validation.ContentIndex,
             package.ContentIdentity,
+            package.CapabilityGrants.Select(static grant => grant.Capability).ToArray(),
             errors,
             cancellationToken);
     }
@@ -134,6 +136,7 @@ internal sealed class PackageSessionPreparer
         SunderPackageManifest manifest,
         SunderPackageContentIndex contentIndex,
         string contentIdentity,
+        IReadOnlyList<string> approvedSensitiveCapabilities,
         ICollection<string> errors,
         CancellationToken cancellationToken)
     {
@@ -147,7 +150,6 @@ internal sealed class PackageSessionPreparer
         SunderPackageTargetManifest? selectedTarget = null;
         string? entryAssemblyPath = null;
         DevProcessLaunchMetadata? devProcessLaunch = null;
-        var libraryFolder = Path.Combine(projectionFolder, "lib");
         IReadOnlyDictionary<string, SunderRpcContractDescriptor> rpcContracts =
             new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
 
@@ -164,13 +166,13 @@ internal sealed class PackageSessionPreparer
             }
             var exactRuntimeTarget = runtimeTarget
                 ?? throw new InvalidDataException($"Package target resolver returned no metadata for '{runtimeTargetKey}'.");
-            if (exactRuntimeTarget.Kind is not (
-                    SunderPackageFormat.DotnetTargetKind
-                    or SunderPackageFormat.WorkerTargetKind
-                    or SunderPackageFormat.ProcessTargetKind))
+            if (!string.Equals(
+                    exactRuntimeTarget.Kind,
+                    SunderPackageFormat.WorkerTargetKind,
+                    StringComparison.Ordinal))
             {
                 errors.Add(
-                    $"Package '{manifest.Id}' exact Runtime target '{runtimeTargetKey}' has unsupported target kind '{exactRuntimeTarget.Kind}'. The Runtime Host supports '{SunderPackageFormat.DotnetTargetKind}', '{SunderPackageFormat.WorkerTargetKind}', and legacy '{SunderPackageFormat.ProcessTargetKind}' targets.");
+                    $"Package '{manifest.Id}' exact Runtime target '{runtimeTargetKey}' has unsupported target kind '{exactRuntimeTarget.Kind}'. The Runtime Host requires '{SunderPackageFormat.WorkerTargetKind}'.");
                 return null;
             }
 
@@ -215,21 +217,15 @@ internal sealed class PackageSessionPreparer
                     $"Package '{manifest.Id}' target '{runtimeTargetKey}' declared entry point '{exactRuntimeTarget.EntryPoint}' that was not materialized.");
                 return null;
             }
-            if (exactRuntimeTarget.Kind is SunderPackageFormat.WorkerTargetKind or SunderPackageFormat.ProcessTargetKind
-                && !OperatingSystem.IsWindows())
+            if (!OperatingSystem.IsWindows())
             {
                 var mode = File.GetUnixFileMode(entryAssemblyPath);
                 mode &= ~(UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
                 mode |= UnixFileMode.UserExecute;
                 File.SetUnixFileMode(entryAssemblyPath, mode);
             }
-            if (!Directory.Exists(libraryFolder))
-            {
-                libraryFolder = Path.GetDirectoryName(entryAssemblyPath)!;
-            }
             rpcContracts = await LoadRpcContractsAsync(projectionFolder, manifest, cancellationToken);
-            if (sourceKind == PackageSourceKind.Dev
-                && exactRuntimeTarget.Kind is SunderPackageFormat.WorkerTargetKind or SunderPackageFormat.ProcessTargetKind)
+            if (sourceKind == PackageSourceKind.Dev)
             {
                 devProcessLaunch = DevProcessLaunchMetadata.LoadForDevSource(
                     sourceFolder,
@@ -265,7 +261,6 @@ internal sealed class PackageSessionPreparer
             sourceFolder,
             preparedSource,
             projectionFolder,
-            libraryFolder,
             manifest.Id!,
             manifest.Version!,
             hostRoles,
@@ -280,6 +275,7 @@ internal sealed class PackageSessionPreparer
             DevProcessLaunch = devProcessLaunch,
             SessionId = new DirectoryInfo(projectionFolder).Parent?.Parent?.Name
                         ?? Guid.NewGuid().ToString("N"),
+            ApprovedSensitiveCapabilities = approvedSensitiveCapabilities,
         };
     }
 
@@ -382,7 +378,7 @@ internal sealed class PackageSessionPreparer
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static async Task<IReadOnlyDictionary<string, SunderRpcContractDescriptor>> LoadRpcContractsAsync(
+    internal static async Task<IReadOnlyDictionary<string, SunderRpcContractDescriptor>> LoadRpcContractsAsync(
         string projectionFolder,
         SunderPackageManifest manifest,
         CancellationToken cancellationToken)
@@ -397,6 +393,10 @@ internal sealed class PackageSessionPreparer
                 SunderPackageFormat.MaxLogicalPathDepth).ToPlatformPath(projectionFolder);
             var bytes = await File.ReadAllBytesAsync(descriptorPath, cancellationToken);
             var descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            RuntimeRpcPackageMetadata.ValidateContractDescriptor(
+                bundle,
+                descriptor,
+                bundle.DescriptorPath!);
             contracts.Add(ContractKey(descriptor.ContractId, descriptor.Version), descriptor);
         }
         return contracts;

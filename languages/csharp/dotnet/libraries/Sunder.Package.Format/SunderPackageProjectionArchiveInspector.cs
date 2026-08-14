@@ -274,6 +274,24 @@ public static class SunderPackageProjectionArchiveInspector
         }
         PackageWebViewValidator.ValidateDeclarations(manifest, errors, "Projection package");
 
+        var hasSharedPayload = key is { } projectionKey
+                               && projectionKey.Kind == SunderPackageProjectionFormat.SharedKind;
+        var physicalFiles = hasSharedPayload
+            ? SunderArchive.EnumerateFiles(stagingPath).ToDictionary(
+                static file => file.Path.ToString(),
+                static file => file.FullPath,
+                StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        PackageContractValidator.Validate(
+            manifest,
+            physicalFiles,
+            errors,
+            validateDescriptorPayload: hasSharedPayload);
+        if (hasSharedPayload)
+        {
+            PackageAssetValidator.ValidateIcon(manifest, physicalFiles, errors);
+        }
+
         if (key is not { } validKey)
         {
             return;
@@ -293,15 +311,6 @@ public static class SunderPackageProjectionArchiveInspector
             }
         }
 
-        if (validKey.Kind == SunderPackageProjectionFormat.SharedKind)
-        {
-            var physicalFiles = SunderArchive.EnumerateFiles(stagingPath).ToDictionary(
-                static file => file.Path.ToString(),
-                static file => file.FullPath,
-                StringComparer.Ordinal);
-            PackageAssetValidator.ValidateIcon(manifest, physicalFiles, errors);
-            PackageContractValidator.Validate(manifest, physicalFiles, errors);
-        }
     }
 
     private static void ValidateTargetMetadata(
@@ -309,10 +318,7 @@ public static class SunderPackageProjectionArchiveInspector
         ICollection<string> errors)
     {
         var displayKey = $"{target.Role ?? "unknown"}/{target.Rid ?? "unknown"}";
-        if (!SunderPackageFormat.IsTargetKind(target.Role, target.Kind))
-        {
-            errors.Add($"Projection package target '{displayKey}' has invalid kind '{target.Kind}'.");
-        }
+        PackageTargetValidator.ValidateKind(target, errors, "Projection package");
 
         if (PackageArchivePathValidator.TryParse(
                 target.EntryPoint,
@@ -321,53 +327,11 @@ public static class SunderPackageProjectionArchiveInspector
                 out _,
                 required: true))
         {
-            var expectedExtension = target.Kind switch
-            {
-                SunderPackageFormat.AvaloniaTargetKind or SunderPackageFormat.DotnetTargetKind => ".dll",
-                SunderPackageFormat.WebTargetKind => ".html",
-                _ => null,
-            };
-            if (expectedExtension is not null
-                && !target.EntryPoint!.EndsWith(expectedExtension, StringComparison.Ordinal))
-            {
-                errors.Add($"Projection package target '{displayKey}' entryPoint must end with '{expectedExtension}'.");
-            }
+            PackageTargetValidator.ValidateEntryPointExtension(target, errors, "Projection package");
         }
 
-        if (target.TargetFramework is not null
-            && (target.TargetFramework.Length == 0
-                || target.TargetFramework.Length > 128
-                || target.TargetFramework != target.TargetFramework.Trim()
-                || target.TargetFramework.Any(static character => character is < '!' or > '~')))
-        {
-            errors.Add($"Projection package target '{displayKey}' targetFramework is invalid.");
-        }
-        if (target.SdkVersion is not null && !SemanticVersion.TryParse(target.SdkVersion, out _))
-        {
-            errors.Add($"Projection package target '{displayKey}' sdkVersion must be strict SemVer 2.0.");
-        }
-        if (target.RequiredHostCapabilities is null)
-        {
-            errors.Add($"Projection package target '{displayKey}' is missing requiredHostCapabilities.");
-            return;
-        }
-        if (target.RequiredHostCapabilities.Count > SunderPackageFormat.MaxHostCapabilities)
-        {
-            errors.Add($"Projection package target '{displayKey}' declares too many requiredHostCapabilities.");
-        }
-
-        var capabilities = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var capability in target.RequiredHostCapabilities.Take(SunderPackageFormat.MaxHostCapabilities))
-        {
-            if (!SunderPackageFormat.IsHostCapabilityId(capability))
-            {
-                errors.Add($"Projection package target '{displayKey}' declares invalid host capability '{capability}'.");
-            }
-            else if (!capabilities.Add(capability!))
-            {
-                errors.Add($"Projection package target '{displayKey}' declares host capability '{capability}' more than once.");
-            }
-        }
+        PackageTargetValidator.ValidateOptionalMetadata(target, errors, "Projection package");
+        PackageTargetValidator.ValidateCapabilities(target, errors, "Projection package");
     }
 
     private static void ValidateManifestHash(

@@ -46,6 +46,9 @@ internal sealed class PackagesInstalledCatalog(
         await ResolveAvailableUpdatesAsync(addWarning, cancellationToken).ConfigureAwait(false);
     }
 
+    public void ApplySessionPackages(IReadOnlyList<SessionPackageDescriptor> sessionPackages)
+        => ReplaceItems(_sessionPackages, sessionPackages);
+
     public InstalledPackageDescriptor? GetInstalledPackage(string packageId)
         => _installedPackages.FirstOrDefault(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 

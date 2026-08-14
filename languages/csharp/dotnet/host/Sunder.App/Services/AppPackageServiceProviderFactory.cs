@@ -4,7 +4,6 @@ using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
-using Sunder.Sdk.Runtime;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.App.Services;
@@ -20,7 +19,6 @@ internal sealed class AppPackageServiceProviderFactory(
     private static readonly Type[] ReservedServiceTypes =
     [
         typeof(IPackageContext),
-        typeof(IPackageRuntimeClient),
         typeof(IPackageCallbackClient),
         typeof(ILoggerFactory),
         typeof(ILogger<>),
@@ -45,7 +43,6 @@ internal sealed class AppPackageServiceProviderFactory(
         var services = new ServiceCollection();
         packageServices.CopyTo(services);
         services.AddSingleton<IPackageContext>(_ => packageContext);
-        services.AddSingleton<IPackageRuntimeClient>(packageContext.Runtime);
         services.AddSingleton<IPackageCallbackClient>(packageContext.Callbacks);
         services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));

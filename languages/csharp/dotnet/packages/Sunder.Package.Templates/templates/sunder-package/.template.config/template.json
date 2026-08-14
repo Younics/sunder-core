@@ -12,7 +12,7 @@
       "type": "parameter",
       "datatype": "text",
       "isRequired": true,
-      "description": "The lowercase dot-separated runtime package id written into generated package metadata.",
+      "description": "The lowercase dot-separated package id written into generated package metadata.",
       "replaces": "SUNDER_PACKAGE_ID_TEXT"
     },
     "packageName": {
@@ -67,14 +67,14 @@
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Add the Stack SDK and a runtime Stack contributor example.",
+      "description": "Add the Stack SDK and a Worker V3 Stack contributor example.",
       "replaces": "SUNDER_WITH_STACKS"
     },
     "withHostDependency": {
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
-      "description": "Add runtime package dependency metadata for another Sunder package."
+      "description": "Add package dependency metadata for another Sunder package."
     },
     "hostPackageId": {
       "type": "parameter",
@@ -95,7 +95,7 @@
       "datatype": "text",
       "defaultValue": ">=1.1.0 <1.2.0",
       "isEnabled": "withHostDependency == true",
-      "description": "The runtime SemVer range accepted for the dependency."
+      "description": "The SemVer range accepted for the dependency."
     },
     "hostPackageVersionRangeCSharp": {
       "type": "derived",
@@ -181,8 +181,8 @@
         {
           "condition": "(!withStacks)",
           "exclude": [
-            "Sunder.Package.Template.Runtime/StackSupport.cs",
-            "Sunder.Package.Template.Runtime/Stacks.PackageReferences.props"
+            "Sunder.Package.Template.Worker/StackSupport.cs",
+            "Sunder.Package.Template.Worker/Stacks.PackageReferences.props"
           ]
         },
         {

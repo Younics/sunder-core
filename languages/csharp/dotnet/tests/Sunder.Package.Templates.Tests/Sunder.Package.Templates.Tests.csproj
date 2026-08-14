@@ -10,8 +10,7 @@
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj"
                       ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj"

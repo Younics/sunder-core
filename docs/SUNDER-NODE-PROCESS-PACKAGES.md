@@ -2,7 +2,7 @@
 
 > **Source channel:** This page tracks current source and may be ahead of npm. For a release, use the page from the matching `sdk/v*` tag and the README embedded in each npm tarball.
 
-`npm create sunder-package@latest` scaffolds a TypeScript Runtime package that communicates with Sunder through `sunder.worker.v1` and ships as Node Single Executable Application (SEA) binaries. The `react-node` template adds a hosted React/Vite web App target to the same universal package.
+`npm create sunder-package@latest` scaffolds a TypeScript Runtime package that communicates with Sunder through `sunder.worker.v3` and ships as Node Single Executable Application (SEA) binaries. The `react-node` template adds a hosted React/Vite web App target to the same universal package.
 
 These are current authoring presets, not a closed package model. The canonical format permits future Python, Rust, Go, and other `worker` toolchains, while `web` App targets are framework-agnostic and may use React, Vue, Svelte, Solid, or another static web build. Other .NET UI approaches may likewise be added as Host-supported App target kinds. Every toolchain must emit the canonical manifest, content index, payload layers, and exact targets, and the Host must support its declared kind/protocol.
 
@@ -10,15 +10,15 @@ These are current authoring presets, not a closed package model. The canonical f
 
 | Package | Included subset |
 | --- | --- |
-| `@sunder/sdk` | RPC descriptor parse/validation/generation, `sunder.worker.v1` worker/client/content APIs, and browser bridge types. |
+| `@sunder/sdk` | RPC descriptor parse/validation/generation, `sunder.worker.v3` data/logging/storage-migration/callback/auth/RPC APIs, and browser bridge types. |
 | `@sunder/package-tool` | Canonical Node development output, pinned native SEA leaves, optional static web leaves, smoke, and package aggregation. |
 | `create-sunder-package` | `node` and `react-node` scaffolds. |
 
-The TypeScript SDK is not feature-parity with managed `Sunder.Sdk`. It does not expose managed module/DI contracts, package storage/settings/secrets/logging, callbacks, background services, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code must import only `@sunder/sdk/browser`; the main export is for Node/build contexts.
+The TypeScript SDK is not feature-parity with the coordinated .NET SDK family. Worker code does receive Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, .NET worker composition/lifecycle services, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code must import only `@sunder/sdk/browser`; the main export is for Node/build contexts.
 
 ## Trust boundary
 
-A `worker` Runtime target is a supervised full-trust child process. It is not a sandbox. It runs with the current user's operating-system permissions and can access anything that user can access. `process` is accepted only as a legacy manifest alias.
+A `worker` Runtime target is a supervised full-trust child process. It is not a sandbox. It runs with the current user's operating-system permissions and can access anything that user can access. Manifest V3 rejects the old `process` kind.
 
 The Runtime Host starts only the declared entry point from the selected exact-RID projection. Projection files are hash validated, executable bits are stripped from every projected file, and Unix owner-execute is granted only to the selected declared worker entry point. Archive mode bits are never trusted.
 
@@ -29,6 +29,8 @@ The child receives an explicit environment containing package identity/version, 
 Worker stdin/stdout use strict UTF-8 JSON with Content-Length framing. Stdout is protocol-only; stderr is bounded diagnostic logging. Protocol limits cover headers, frames, JSON depth, outstanding calls, remembered IDs, write queues, stream queues, startup, activation acknowledgement, cancellation drain, and shutdown.
 
 The Host challenges the worker with the exact package, activation, session, and protocol version. The ready response must bind that challenge and advertise exactly the providers declared in the package manifest. Host-to-worker unary and server-stream calls use the same validated Sunder RPC descriptors as managed providers. Worker-to-Host calls are stamped by the Host with the worker activation's caller identity; caller identity supplied by a worker is rejected.
+
+The immutable ready catalog may also advertise settings schemas, state/secret storage migrations, callback handler ids, and an auth handler. Normal Worker APIs expose Host-mediated settings, state, files, secrets, role-local workspace, and structured logs. Migration plans are Host-authoritative and run before activation; dynamic cleanup receives only bounded physical keys. Callback and auth requests carry Host-owned session identity, URI, generation, expiry, and cancellation authority.
 
 Large RPC payloads remain off the framed JSON control plane. Provider handlers use the invocation-bound `context.content` client to register files from package content or private data, open caller content as private temporary files, and discard those files early. The Host fences every operation to the active invocation, provider activation, caller audience, Runtime generation, expiry, hash, and use count, and removes remaining materialized files when the invocation ends.
 
@@ -70,7 +72,7 @@ The template contains two target implementations:
 
 `npm run sunder:dev` watches both source trees and emits one canonical current-RID development package. `npm run build` emits the current RID's App and Runtime leaves. `npm run smoke` performs the native worker handshake. `npm run package` aggregates all available exact-RID leaves into one deterministic universal archive.
 
-Browser code imports only `@sunder/sdk/browser`. The Host injects a narrow bridge carrying opaque RPC provider handles; the web target never receives Runtime credentials, local filesystem paths, or Runtime broker endpoint references. Installing or updating a package consents to its exact manifest-declared RPC actions and Runtime records version/manifest-fenced grants; undeclared actions remain default-deny. This authorization boundary does not make package code or web content trusted.
+Browser code imports only `@sunder/sdk/browser`. The Host injects the exact `sunder.bridge.v2` API carrying opaque RPC provider handles; the web target never receives Runtime credentials, local filesystem paths, or Runtime broker endpoint references. Installing or updating a package consents to its exact manifest-declared RPC actions and Runtime records version/manifest-fenced grants; undeclared actions remain default-deny. This authorization boundary does not make package code or web content trusted.
 
 ## Aggregate packages
 

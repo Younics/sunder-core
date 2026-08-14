@@ -1,6 +1,6 @@
 # Getting Started
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 5. Use the matching `sdk/v*` tag for released template behavior.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V3, .NET 10, and Runtime protocol revision 8. Use the matching `sdk/v*` tag for released template behavior.
 
 This guide creates a package, runs it as a development package, and produces a validated distributable artifact. The repository also contains a [compiled quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) used by the Sunder Core build.
 
@@ -29,7 +29,7 @@ Use `dotnet new uninstall Sunder.Package.Templates` before changing to a differe
 
 ## Create A Package
 
-Create a headless Runtime package:
+Create a headless Worker V3 Runtime package:
 
 ```powershell
 dotnet new sunder-package `
@@ -38,7 +38,7 @@ dotnet new sunder-package `
   --packageName "My Package"
 ```
 
-Create an App and Runtime package with a default Avalonia view:
+Create an App and Worker V3 Runtime package with a default Avalonia view:
 
 ```powershell
 dotnet new sunder-package `
@@ -48,7 +48,7 @@ dotnet new sunder-package `
   --withAvalonia
 ```
 
-Use `--output .\MyPackage` when you need an explicit destination. The generated aggregate contains `Sunder.Package.props` as its single package-version source, package metadata, Runtime code, an always-present non-packable `*.Protocol` project, and optional App/Stack code. The protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical manifest from compiled metadata and MSBuild items.
+Use `--output .\MyPackage` when you need an explicit destination. The generated family contains `Sunder.Package.props` as its single package-version source, an exact-RID Worker project, an always-present non-packable `*.Protocol` project, an Aggregate project, and optional App/Stack code. The Protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. The Aggregate builds all six self-contained Worker leaves into one universal package. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical Manifest V3 document from compiled metadata and MSBuild items.
 
 ### Template Options
 
@@ -84,7 +84,7 @@ Sunder.App.exe `
 
 On macOS or Linux, invoke the corresponding Sunder executable and use `/` path separators.
 
-The App sends its complete development-package set to the already-running Runtime through an invocation-owned lease. Runtime validates and activates the Runtime role, watches the generated folder when `--watch` is present, and publishes an App-safe package snapshot. App does not load files directly from the development output. Rebuilding triggers a generation-fenced reload; closing App releases its lease and restores an installed package with the same id, if one exists.
+The App sends its complete development-package set to the already-running Runtime service through an invocation-owned lease. Runtime validates the current-RID projection, starts the package worker, watches the generated folder when `--watch` is present, and publishes an App-safe package snapshot. App does not load files directly from the development output. Rebuilding triggers a generation-fenced reload; closing App releases its lease and restores an installed package with the same id, if one exists.
 
 Load a dependency and its extension in one invocation so Runtime can validate the complete graph:
 
@@ -97,7 +97,7 @@ Sunder.App.exe `
 
 ## Pack And Validate
 
-Set the strict SemVer package version once in the generated `Sunder.Package.props`. The aggregate, Runtime, App, and Protocol projects all import this file:
+Set the strict SemVer package version once in the generated `Sunder.Package.props`. The Aggregate, Worker, App, and Protocol projects all import this file:
 
 ```xml
 <Project>
@@ -127,5 +127,5 @@ See [Build, Validate, Publish, And Version](BUILD-PUBLISH-VERSIONING.md) before 
 - [Package Anatomy](PACKAGE-ANATOMY.md) explains App and Runtime roles.
 - [Activation, DI, And Disposal](ACTIVATION-AND-DI.md) defines safe lifecycle behavior.
 - [Avalonia Views](AVALONIA.md) adds shell UI.
-- [Runtime Operations](RUNTIME-OPERATIONS.md) connects App UI to Runtime services.
+- [Owner RPC](RUNTIME-OPERATIONS.md) connects App UI to Runtime providers.
 - [Troubleshooting](TROUBLESHOOTING.md) covers common first-run failures.

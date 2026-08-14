@@ -30,7 +30,7 @@ public sealed class RuntimeHostCompositionTests
             Assert.NotNull(provider.GetRequiredService<RuntimeContentTransferService>());
             Assert.NotNull(provider.GetRequiredService<RuntimePackageUiService>());
             Assert.NotNull(provider.GetRequiredService<PackageSessionCommandService>());
-            Assert.NotNull(provider.GetRequiredService<RuntimePackageDataService>());
+            Assert.NotNull(provider.GetRequiredService<PackageDataAccessService>());
             Assert.NotNull(provider.GetRequiredService<PackageSettingsAccessService>());
             Assert.NotNull(provider.GetRequiredService<PackageAuthAccessService>());
             Assert.NotNull(provider.GetRequiredService<RuntimeStackExportService>());

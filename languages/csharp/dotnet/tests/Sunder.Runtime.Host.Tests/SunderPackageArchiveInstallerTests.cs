@@ -1,17 +1,122 @@
 using System.IO.Compression;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Compatibility;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed class SunderPackageArchiveInstallerTests
 {
+    [Fact]
+    public async Task SensitiveCapabilityInstall_RequiresExactSourceManifestConsentAndPersistsActiveFence()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var archivePath = CreatePackageArchive(
+            root,
+            "sensitive.package",
+            "1.0.0",
+            sensitiveDockerEnvironment: true);
+        var consent = await ReadDockerConsentAsync(archivePath);
+
+        var missing = await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archivePath));
+        var stale = await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Install,
+                ArchiveFilePath: archivePath,
+                CapabilityConsent: consent with { ManifestSha256 = new string('0', 64) }));
+        var approved = await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Install,
+                ArchiveFilePath: archivePath,
+                CapabilityConsent: consent));
+
+        Assert.False(missing.Success);
+        Assert.Contains("explicit sensitive capability consent", missing.Errors[0], StringComparison.OrdinalIgnoreCase);
+        Assert.False(stale.Success);
+        Assert.Empty((await store.ListAsync()).Where(package => package.PackageId == "sensitive.package").Skip(1));
+        Assert.True(approved.Success, string.Join(Environment.NewLine, approved.Errors));
+        var installed = Assert.Single(await store.ListAsync());
+        var grant = Assert.Single(installed.CapabilityGrants!);
+        Assert.Equal(SunderSdkCapabilities.DockerEnvironmentV1, grant.Capability);
+        Assert.Equal(installed.Version, grant.PackageVersion);
+        Assert.Equal(PackageSensitiveCapabilityPolicy.GetManifestSha256(installed), grant.ManifestSha256);
+    }
+
+    [Fact]
+    public async Task SensitiveCapabilityUpdate_RequiresEscalationConsentButCarriesExistingGrant()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var installer = new SunderPackageArchiveInstaller(paths);
+        var baseline = CreatePackageArchive(root, "update.package", "1.0.0");
+        var escalation = CreatePackageArchive(
+            root,
+            "update.package",
+            "1.1.0",
+            sensitiveDockerEnvironment: true);
+        var carried = CreatePackageArchive(
+            root,
+            "update.package",
+            "1.2.0",
+            sensitiveDockerEnvironment: true);
+
+        Assert.True((await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: baseline))).Success);
+        var deniedEscalation = await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(PackageStoreMutationKind.Upgrade, "update.package", escalation));
+        Assert.False(deniedEscalation.Success);
+        Assert.Equal("1.0.0", Assert.Single(await store.ListAsync()).Version);
+
+        var escalationConsent = await ReadDockerConsentAsync(escalation);
+        var approvedEscalation = await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(
+                PackageStoreMutationKind.Upgrade,
+                "update.package",
+                escalation,
+                CapabilityConsent: escalationConsent));
+        Assert.True(approvedEscalation.Success, string.Join(Environment.NewLine, approvedEscalation.Errors));
+
+        var inherited = await ExecuteAsync(
+            paths,
+            store,
+            installer,
+            new PackageStoreMutation(PackageStoreMutationKind.Upgrade, "update.package", carried));
+        Assert.True(inherited.Success, string.Join(Environment.NewLine, inherited.Errors));
+        var installed = Assert.Single(await store.ListAsync());
+        Assert.Equal("1.2.0", installed.Version);
+        var grant = Assert.Single(installed.CapabilityGrants!);
+        Assert.Equal("1.2.0", grant.PackageVersion);
+        Assert.Equal(PackageSensitiveCapabilityPolicy.GetManifestSha256(installed), grant.ManifestSha256);
+    }
+
     [Fact]
     public async Task InstallFromPathAsync_WhenArchiveIsValid_InstallsPackageAndRecordsState()
     {
@@ -69,6 +174,40 @@ public sealed class SunderPackageArchiveInstallerTests
         Assert.Equal("https://registry.example/", descriptor.Provenance.RegistryOrigin);
         Assert.Equal("beta", descriptor.Provenance.RequestedTag);
         Assert.True(descriptor.Provenance.IncludePrerelease);
+    }
+
+    [Fact]
+    public async Task InstallFromPathAsync_ProjectsUniversalArchiveToCurrentRidAndRetainsSourceIdentity()
+    {
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var currentRid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
+        var alternateRid = SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid =>
+            !string.Equals(rid, currentRid, StringComparison.Ordinal));
+        var archivePath = CreatePackageArchive(
+            root,
+            "test.universal",
+            "1.0.0",
+            runtimeIdentifiers: [currentRid, alternateRid]);
+
+        var result = await ExecuteAsync(
+            paths,
+            store,
+            new SunderPackageArchiveInstaller(paths),
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archivePath));
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        var installed = Assert.Single(await store.ListAsync());
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(installed.InstallPath);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        Assert.Equal(2, validation.Manifest!.Targets!.Count);
+        Assert.All(validation.Manifest.Targets!, target => Assert.Equal(currentRid, target!.Rid));
+        Assert.DoesNotContain(installed.ContentInventory, entry =>
+            entry.Path.Contains($"/{alternateRid}/", StringComparison.Ordinal));
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(archivePath))).ToLowerInvariant(),
+            installed.Provenance?.SourceIdentity);
     }
 
     [Fact]
@@ -399,41 +538,71 @@ public sealed class SunderPackageArchiveInstallerTests
         Assert.Equal("1.0.0", Assert.Single(await store.ListAsync()).Version);
     }
 
-    private static string CreatePackageArchive(string root, string packageId, string version, bool corruptHash = false)
+    private static string CreatePackageArchive(
+        string root,
+        string packageId,
+        string version,
+        bool corruptHash = false,
+        IReadOnlyList<string>? runtimeIdentifiers = null,
+        bool sensitiveDockerEnvironment = false)
     {
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "lib"));
-
-        var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            sourceRoot,
+            packageId,
+            version,
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            runtimeIdentifiers: runtimeIdentifiers,
+            runtimeRequiredHostCapabilities: sensitiveDockerEnvironment
+                ? [
+                    "sdk-baseline-1-1.v1",
+                    "core.v1",
+                    SunderSdkCapabilities.DockerEnvironmentV1,
+                    "rpc.v2",
+                    "worker-protocol.v3",
+                ]
+                : null);
+        if (corruptHash)
         {
-            ArchiveFormatVersion = 1,
-            ManifestVersion = 1,
-            Id = packageId,
-            Name = "Test Package",
-            Version = version,
-            Targets =
-            [
-                CreateTarget(SunderPackageFormat.AppHostRole, SunderPackageFormat.AvaloniaTargetKind),
-                CreateTarget(SunderPackageFormat.RuntimeHostRole, SunderPackageFormat.DotnetTargetKind),
-            ],
-        }));
-
-        var entryAssemblyPath = Path.Combine(sourceRoot, "payload", "shared", "lib", "Test.Package.dll");
-        File.Copy(typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, entryAssemblyPath);
-
-        var contentIndex = new SunderPackageContentIndex(
-            1,
-            Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories)
-                .Where(path => !path.EndsWith("content-index.json", StringComparison.OrdinalIgnoreCase))
-                .Select(path => CreateIndexEntry(sourceRoot, path, corruptHash && path == entryAssemblyPath))
-                .ToArray());
-        File.WriteAllText(Path.Combine(sourceRoot, "manifest", "content-index.json"), JsonSerializer.Serialize(contentIndex));
+            var indexPath = Path.Combine(sourceRoot, "manifest", "content-index.json");
+            var contentIndex = JsonSerializer.Deserialize<SunderPackageContentIndex>(File.ReadAllText(indexPath))!;
+            var corruptEntry = contentIndex.Files!.First(entry => entry.Path!.StartsWith("payload/", StringComparison.Ordinal));
+            File.WriteAllText(indexPath, JsonSerializer.Serialize(contentIndex with
+            {
+                Files = contentIndex.Files!.Select(entry => entry == corruptEntry
+                    ? entry with { Sha256 = new string('0', 64) }
+                    : entry).ToArray(),
+            }));
+        }
 
         var archivePath = Path.Combine(root, $"{packageId}.{version}.{Guid.NewGuid():N}.sunderpkg");
         ZipFile.CreateFromDirectory(sourceRoot, archivePath);
         return archivePath;
+    }
+
+    private static async Task<PackageCapabilityConsent> ReadDockerConsentAsync(string archivePath)
+    {
+        var extractionPath = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-runtime-host-tests",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+                archivePath,
+                extractionPath,
+                CancellationToken.None);
+            Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+            return new PackageCapabilityConsent(
+                validation.Manifest!.Id!,
+                validation.Manifest.Version!,
+                PackageSensitiveCapabilityPolicy.GetManifestSha256(validation.ContentIndex!),
+                [SunderSdkCapabilities.DockerEnvironmentV1]);
+        }
+        finally
+        {
+            TryDeleteDirectory(extractionPath);
+        }
     }
 
     private static async Task<ContentUploadDescriptor> UploadPackageAsync(RuntimeContentTransferStore transfers, string archivePath)
@@ -461,39 +630,21 @@ public sealed class SunderPackageArchiveInstallerTests
         return await coordinator.ExecuteAsync([mutation]);
     }
 
-    private static SunderPackageContentIndexEntry CreateIndexEntry(string sourceRoot, string path, bool corruptHash)
-    {
-        var relativePath = Path.GetRelativePath(sourceRoot, path).Replace('\\', '/');
-        using var stream = File.OpenRead(path);
-        var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        if (corruptHash)
-        {
-            hash = new string('0', hash.Length);
-        }
-
-        return new SunderPackageContentIndexEntry(
-            relativePath,
-            hash,
-            new FileInfo(path).Length);
-    }
-
-    private static SunderPackageTargetManifest CreateTarget(string role, string kind)
-        => new()
-        {
-            Role = role,
-            Rid = RuntimeInformation.RuntimeIdentifier,
-            Kind = kind,
-            EntryPoint = "lib/Test.Package.dll",
-            TargetFramework = "net10.0",
-            SdkVersion = "1.1.0",
-            RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
-        };
-
     private static string GetEntryAssemblyPath(InstalledPackageRecord package)
-        => Path.Combine(
+    {
+        var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(File.ReadAllText(package.ManifestPath))!;
+        Assert.True(SunderPackageTargetResolver.TryResolveTarget(
+            manifest,
+            new SunderPackageTargetKey(
+                SunderPackageFormat.RuntimeHostRole,
+                PackageTargetSelection.GetCurrentRuntimeIdentifier()),
+            out var target));
+        var suffix = "/" + target!.EntryPoint;
+        return Path.Combine(
             package.InstallPath,
-            package.ContentInventory.Single(entry => entry.Path.EndsWith(".dll", StringComparison.Ordinal)).Path
+            package.ContentInventory.Single(entry => entry.Path.EndsWith(suffix, StringComparison.Ordinal)).Path
                 .Replace('/', Path.DirectorySeparatorChar));
+    }
 
     private static string CreateTempDirectory()
     {

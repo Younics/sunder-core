@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
   </ItemGroup>
 
   <ItemGroup>

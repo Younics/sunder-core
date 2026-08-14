@@ -8,6 +8,7 @@ public enum RuntimeEventKind
     DevReloadCompleted = 3,
     BootstrapStateChanged = 4,
     SnapshotDiagnosticsChanged = 5,
+    SnapshotMetadataChanged = 6,
 }
 
 public enum RuntimeOperationPhase

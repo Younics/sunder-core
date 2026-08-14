@@ -4,6 +4,7 @@ namespace Sunder.Sdk.Worker.Tests.TestSupport;
 
 internal sealed class AsyncByteStream : Stream
 {
+    private readonly bool _ignoreReadCancellation;
     private readonly Channel<byte[]> _chunks = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions
         {
@@ -14,6 +15,11 @@ internal sealed class AsyncByteStream : Stream
     private byte[]? _current;
     private int _offset;
     private bool _disposed;
+
+    public AsyncByteStream(bool ignoreReadCancellation = false)
+    {
+        _ignoreReadCancellation = ignoreReadCancellation;
+    }
 
     public override bool CanRead => !_disposed;
     public override bool CanSeek => false;
@@ -35,7 +41,8 @@ internal sealed class AsyncByteStream : Stream
         {
             _current = null;
             _offset = 0;
-            while (await _chunks.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            var readCancellation = _ignoreReadCancellation ? CancellationToken.None : cancellationToken;
+            while (await _chunks.Reader.WaitToReadAsync(readCancellation).ConfigureAwait(false))
             {
                 if (_chunks.Reader.TryRead(out _current)) break;
             }

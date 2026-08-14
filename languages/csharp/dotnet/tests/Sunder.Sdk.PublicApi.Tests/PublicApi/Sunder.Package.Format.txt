@@ -74,16 +74,20 @@ type sealed class Sunder.Package.Format.SunderPackageContentIndexEntry : System.
   method virtual System.String ToString()
 type sealed class Sunder.Package.Format.SunderPackageContractBundleManifest
   method .ctor()
+  property System.String? AbiSha256 { get; init; }
   property System.String? ContractId { get; init; }
   property System.String? DescriptorPath { get; init; }
-  property System.String? Sha256 { get; init; }
+  property System.String? DescriptorSha256 { get; init; }
+  property System.String? Exposure { get; init; }
   property System.String? Version { get; init; }
 type sealed class Sunder.Package.Format.SunderPackageContractUseManifest
   method .ctor()
+  property System.String? AbiSha256 { get; init; }
   property System.Collections.Generic.IReadOnlyList<System.String?>? Actions { get; init; }
   property System.String? ContractId { get; init; }
+  property System.String? ContractVersion { get; init; }
   property System.Boolean? Required { get; init; }
-  property System.String? VersionRange { get; init; }
+  property System.String? Role { get; init; }
 type sealed class Sunder.Package.Format.SunderPackageDependencyManifest
   method .ctor()
   property System.String? PackageId { get; init; }
@@ -106,9 +110,8 @@ type sealed class Sunder.Package.Format.SunderPackageFormat
   field static System.String ContentIndexPath = "manifest/content-index.json"
   field static System.Int32 CurrentArchiveFormatVersion = 1
   field static System.Int32 CurrentContentIndexVersion = 1
-  field static System.Int32 CurrentManifestVersion = 1
+  field static System.Int32 CurrentManifestVersion = 3
   field static System.String DiscoverContractAction = "discover"
-  field static System.String DotnetTargetKind = "dotnet"
   field static System.String Extension = ".sunderpkg"
   field static System.String InvokeContractAction = "invoke"
   field static System.String ManifestPath = "manifest/sunder-package.json"
@@ -130,7 +133,10 @@ type sealed class Sunder.Package.Format.SunderPackageFormat
   field static System.Int32 MaxWebViewDisplayNameLength = 128
   field static System.Int32 MaxWebViewRouteLength = 200
   field static System.Int32 MaxWebViewsPerTarget = 32
-  field static System.String ProcessTargetKind = "process"
+  field static System.String OwnerProviderAudience = "owner"
+  field static System.String PackageContractExposure = "package"
+  field static System.String PublicContractExposure = "public"
+  field static System.String PublicProviderAudience = "public"
   field static System.String RuntimeHostRole = "runtime"
   field static System.String RuntimePayloadRoot = "payload/runtime/"
   field static System.String SharedPayloadRoot = "payload/shared/"
@@ -141,8 +147,10 @@ type sealed class Sunder.Package.Format.SunderPackageFormat
   method static System.Boolean IsAllowedArchivePath(System.String path)
   method static System.Boolean IsContentIndexPath(System.String path)
   method static System.Boolean IsContractAction(System.String? value)
+  method static System.Boolean IsContractExposure(System.String? value)
   method static System.Boolean IsHostCapabilityId(System.String? value)
   method static System.Boolean IsHostRole(System.String? value)
+  method static System.Boolean IsProviderAudience(System.String? value)
   method static System.Boolean IsRuntimeIdentifier(System.String? value)
   method static System.Boolean IsSdkCapabilityId(System.String? value)
   method static System.Boolean IsTargetKind(System.String? role, System.String? kind)
@@ -255,9 +263,11 @@ type sealed class Sunder.Package.Format.SunderPackageProjectionPlan : System.IEq
   method virtual System.String ToString()
 type sealed class Sunder.Package.Format.SunderPackageProviderManifest
   method .ctor()
+  property System.String? AbiSha256 { get; init; }
+  property System.String? Audience { get; init; }
   property System.String? ContractId { get; init; }
-  property System.String? ContractSha256 { get; init; }
   property System.String? ContractVersion { get; init; }
+  property System.String? DescriptorSha256 { get; init; }
   property System.String? ProviderId { get; init; }
   property System.String? Role { get; init; }
 type struct Sunder.Package.Format.SunderPackageTargetKey : System.IEquatable<Sunder.Package.Format.SunderPackageTargetKey>

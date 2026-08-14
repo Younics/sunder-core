@@ -1,14 +1,12 @@
 using Sunder.Runtime.Client;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Logging;
-using Sunder.Sdk.Runtime;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 {
     private readonly RuntimePackageDataClient? _runtimeClient;
-    private readonly RuntimePackageOperationClient? _runtimeOperationClient;
     private readonly RuntimePackageCallbackClient? _runtimeCallbackClient;
     private readonly RuntimeClientTransport? _ownedTransport;
 
@@ -20,7 +18,6 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
         IPackageSettings settings,
         IPackageSecrets secrets,
         RuntimePackageDataClient? runtimeClient,
-        RuntimePackageOperationClient? runtimeOperationClient,
         RuntimePackageCallbackClient? runtimeCallbackClient,
         RuntimeClientTransport? ownedTransport,
         AppPackageGenerationPublication publication)
@@ -32,12 +29,8 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
         Settings = settings;
         Secrets = secrets;
         _runtimeClient = runtimeClient;
-        _runtimeOperationClient = runtimeOperationClient;
         _runtimeCallbackClient = runtimeCallbackClient;
         _ownedTransport = ownedTransport;
-        Runtime = runtimeOperationClient is null
-            ? NullPackageRuntimeClient.Instance
-            : new AppPackageRuntimeClient(packageId, runtimeOperationClient, publication);
         Callbacks = runtimeCallbackClient is null
             ? NullPackageCallbackClient.Instance
             : new AppPackageCallbackClient(packageId, runtimeCallbackClient, new ExternalBrowserService(), publication);
@@ -58,7 +51,6 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
             : null;
         var transport = sharedTransport ?? ownedTransport!;
         var runtimeClient = new RuntimePackageDataClient(transport);
-        var runtimeOperationClient = new RuntimePackageOperationClient(transport);
         var runtimeCallbackClient = new RuntimePackageCallbackClient(transport);
         try
         {
@@ -72,7 +64,6 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
                 new AppRuntimePackageSettings(packageId, runtimeClient, publication),
                 new AppRuntimePackageSecrets(packageId, runtimeClient, publication),
                 runtimeClient,
-                runtimeOperationClient,
                 runtimeCallbackClient,
                 ownedTransport,
                 publication));
@@ -80,7 +71,6 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
         catch
         {
             runtimeClient.Dispose();
-            runtimeOperationClient.Dispose();
             runtimeCallbackClient.Dispose();
             ownedTransport?.Dispose();
             throw;
@@ -101,14 +91,11 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 
     public IPackageCallbackClient Callbacks { get; }
 
-    internal IPackageRuntimeClient Runtime { get; }
-
     public IPackageLogging Logging { get; }
 
     public ValueTask DisposeAsync()
     {
         _runtimeClient?.Dispose();
-        _runtimeOperationClient?.Dispose();
         _runtimeCallbackClient?.Dispose();
         _ownedTransport?.Dispose();
         if (Logging is IDisposable disposableLogging)

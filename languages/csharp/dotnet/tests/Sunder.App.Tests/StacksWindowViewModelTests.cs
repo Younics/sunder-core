@@ -1634,6 +1634,9 @@ public sealed class StacksWindowViewModelTests
         public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Updated packages.", true, false, [], [], [], []));
 
+        public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Adopted package source.", true, false, [], [], [request.PackageId], []));
+
         public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RegistryPackageStarResponse(true, "Updated package star.", null, []));
 

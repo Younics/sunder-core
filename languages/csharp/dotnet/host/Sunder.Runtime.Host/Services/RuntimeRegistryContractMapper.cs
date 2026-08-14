@@ -1,10 +1,24 @@
+using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Runtime.Host.Services;
 
 internal static class RuntimeRegistryContractMapper
 {
+    public static RegistryClientCompatibilityProfile CompatibilityProfile { get; } = new(
+        [SunderPackageFormat.CurrentManifestVersion],
+        [SunderPackageFormat.WorkerTargetKind],
+        SunderWorkerProtocol.V3Capability,
+        SunderSdkCompatibilityProfile.WorkerV3CapabilityClassification
+            .Where(static capability => capability.Value)
+            .Select(static capability => capability.Key)
+            .Order(StringComparer.Ordinal)
+            .ToArray(),
+        SunderSdkCapabilities.Baseline11V1,
+        PackageTargetSelection.GetCurrentRuntimeIdentifier());
+
     public static IReadOnlyList<RegistryPackageChangeRequest> ToRegistry(
         IReadOnlyList<RuntimeRegistryPackageChangeRequest> requests)
         => requests.Select(request => new RegistryPackageChangeRequest(

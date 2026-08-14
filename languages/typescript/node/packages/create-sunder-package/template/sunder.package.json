@@ -1,20 +1,30 @@
 {
-  "schemaVersion": 1,
-  "id": "__SUNDER_PACKAGE_ID_JSON__",
+  "schemaVersion": 2,
+  "id": "sunderpackageidscaffoldtoken",
   "name": "__SUNDER_PACKAGE_NAME_JSON__",
-  "summary": "A TypeScript process Runtime package for Sunder.",
+  "summary": "A TypeScript Worker V3 Runtime package for Sunder.",
   "version": "1.0.0",
   "entry": "src/worker.ts",
+  "workerCapabilities": [],
   "contracts": [
     {
-      "path": "contracts/example.rpc.json"
+      "path": "contracts/example.rpc.json",
+      "exposure": "package"
+    }
+  ],
+  "rpcBindings": [
+    {
+      "path": "contracts/example.rpc.json",
+      "outputFile": "example-messages.g.ts"
     }
   ],
   "providers": [
     {
-      "providerId": "__SUNDER_PROVIDER_ID_JSON__",
+      "providerId": "sunderpackageidscaffoldtoken.provider",
+      "role": "runtime",
       "contractId": "example.messages",
-      "contractVersion": "1.0.0"
+      "contractVersion": "2.0.0",
+      "audience": "owner"
     }
   ],
   "usesContracts": [],

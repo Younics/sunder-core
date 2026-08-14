@@ -9,7 +9,11 @@ public sealed record SystemStatusResponse(
     public RuntimeBootstrapState State { get; init; } = IsReady
         ? RuntimeBootstrapState.Ready
         : RuntimeBootstrapState.Starting;
+
+    public RuntimeStartupDiagnostic? StartupFailure { get; init; }
 }
+
+public sealed record RuntimeStartupDiagnostic(string Code, string Message);
 
 public sealed record RuntimeResetChallengeResponse(string Challenge, DateTimeOffset ExpiresAtUtc);
 

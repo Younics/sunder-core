@@ -4,7 +4,7 @@
 
 `Sunder.Package.Build` contains the MSBuild targets and tasks that turn a Sunder package project into local development output and distributable `.sunderpkg` archives.
 
-Reference this package from Sunder package projects together with `Sunder.Sdk`.
+Reference this package from App projects with `Sunder.Sdk`, or from Runtime worker projects with `Sunder.Sdk.Worker`.
 
 ## Install
 
@@ -16,7 +16,7 @@ Typical package project reference:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk" Version="[1.1.0,1.2.0)" />
+  <PackageReference Include="Sunder.Sdk.Worker" Version="[1.1.0,1.2.0)" />
   <PackageReference Include="Sunder.Package.Build" Version="[1.1.0,1.2.0)" PrivateAssets="all" />
 </ItemGroup>
 ```
@@ -28,12 +28,13 @@ The NuGet package exposes no compile or runtime assembly asset; its task assembl
 
 `Sunder.Package.Build` adds build targets that:
 
-- Generate a universal V1 manifest with exact role/RID targets from `Sunder.Sdk` metadata, MSBuild declarations, and build output.
+- Generate an archive-format V1, Manifest V3 package with exact role/RID targets from SDK metadata, MSBuild declarations, and build output.
 - Emit an unpacked, content-indexed, consumer-valid `sunder-dev` archive tree after `dotnet build`.
 - Create a `.sunderpkg` archive after `dotnet publish`.
 - Provide an explicit `PackSunderPackage` MSBuild target.
-- Copy common managed output into `payload/shared/lib` and source assets into `payload/shared/assets`.
-- Validate, canonicalize, hash, and copy schema-first RPC descriptors into `payload/shared/contracts`.
+- Copy App managed output or a Runtime worker's complete self-contained publish closure into canonical payload layers, with source assets under `payload/shared/assets`.
+- Expose a post-publish-file-computation, pre-index signing extension over a private copy of C# worker binaries.
+- Validate descriptorVersion 2 RPC contracts, generate C# bindings and immutable canonical snapshots, derive descriptor and ABI hashes, and copy descriptors into `payload/shared/contracts`.
 - Project only matching `runtimes/<rid>` content into each declared exact role/RID layer.
 - Exclude host boundary assemblies such as `Sunder.Sdk` and core Avalonia assemblies from private package output.
 
@@ -41,7 +42,7 @@ Package authors do not maintain `sunder-package.json` by hand.
 
 ## Expected Project Shape
 
-A package project declares package metadata in C# and normally exposes a Runtime module, an App module, or both. Each active role permits at most one public implementation. Build inspects compiled metadata and, by default, emits one exact target for every supported RID (`win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`). App targets use `avalonia`; Runtime targets use `dotnet`. A project with no module emits zero targets and is valid only when it declares at least one contract bundle.
+A package family normally contains a Worker project, an optional App project, a package-local Protocol project, and an Aggregate project. Build still inspects `ISunderAppPackageModule` metadata and infers exact `avalonia` App targets. It never infers a Runtime target from `ISunderRuntimePackageModule`; every Runtime leaf must explicitly declare one exact-RID `worker` target. A project with no App module or explicit worker emits zero targets and is valid only when it declares at least one contract bundle.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -54,21 +55,9 @@ using Sunder.Sdk.Packaging;
 ```
 
 ```csharp
-using Microsoft.Extensions.DependencyInjection;
-using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Worker;
 
-namespace MyCompany.Package;
-
-public sealed class PackageModule : ISunderRuntimePackageModule
-{
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
-    {
-    }
-
-    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
-    {
-    }
-}
+await SunderWorker.RunAsync(_ => new SunderWorkerOptions([]));
 ```
 
 ## Build Development Output
@@ -185,6 +174,7 @@ Common MSBuild properties used by the package targets:
 | `SunderPackageFileName` | Overrides the default archive file name |
 | `SunderPackageOutputPath` | Overrides output path for the explicit `PackSunderPackage` target |
 | `SunderPublishPackageOutputPath` | Overrides archive output path during `dotnet publish` |
+| `SunderPackageWorkerSigningTargets` | Semicolon-separated project targets that sign a private copy of the computed C# worker publish closure before indexing |
 
 Compatibility metadata is inferred automatically from authored assemblies, including async/iterator/lambda bodies. Arbitrary copy-local dependencies are not treated as authored. For unusual reflection or dynamic scenarios, declare the reachable capabilities and acknowledge every unresolved call site reported by the build:
 
@@ -197,40 +187,49 @@ Compatibility metadata is inferred automatically from authored assemblies, inclu
 
 `SunderSdkPackageVersion` is available as a verification-only override: it must match the informational/package version on the resolved `Sunder.Sdk` reference. The resolved version is emitted as `sdkVersion` on every inferred C# target.
 
-Explicit target items replace the inferred role/RID matrix. `Role` and `Rid` identify the exact target; `Kind` and `EntryPoint` default from the C# role but can be declared explicitly:
+Explicit target items replace the inferred App role/RID matrix. Runtime authoring requires one explicit exact-RID worker item:
 
 ```xml
 <ItemGroup>
   <SunderPackageTarget Include="runtime/linux-x64"
                        Role="runtime"
                        Rid="linux-x64"
-                       Kind="dotnet"
-                       EntryPoint="lib/MyPackage.dll" />
+                       Kind="worker"
+                       EntryPoint="lib/MyPackage" />
 </ItemGroup>
 ```
 
-An isolated .NET worker declares exactly one `runtime/<RID>` target with `Kind="worker"` per self-contained executable build. It requires `OutputType=Exe`, `SelfContained=true`, `UseAppHost=true`, and `PublishSingleFile=false`; the entry point defaults to the RID-specific apphost under `lib/`. The emitted leaf includes the complete self-contained publish closure and does not require an `ISunderRuntimePackageModule`. Aggregate the six native leaves for a universal package.
+An isolated .NET worker declares exactly one `runtime/<RID>` target with `Kind="worker"` per self-contained executable build. It requires `OutputType=Exe`, `SelfContained=true`, `UseAppHost=true`, `PublishSingleFile=false`, and use of the Worker V3 API so capability inference finds `worker-protocol.v3`. The entry point is the official project apphost under `lib/`: `$(TargetName).exe` for Windows and extensionless `$(TargetName)` for Linux/macOS. It cannot be renamed or factored into a shared aggregate layer. Every Runtime target also receives `rpc.v2` and must carry the SDK-version-matched baseline. The emitted leaf includes the complete self-contained publish closure and does not require an `ISunderRuntimePackageModule`. Aggregate the six native leaves for a universal package.
+
+For platform signing, append a project target to `SunderPackageWorkerSigningTargets`. That target receives a private copied instance of the complete closure as `@(SunderPackageWorkerSigningFile)` and the official apphost relative path as `$(SunderPackageWorkerEntryPointRelativePath)`. It runs after `ComputeFilesToPublish` without exposing NuGet or runtime-pack cache files to mutation, and before Sunder copies, indexes, and validates the leaf. Sign the supplied files in place and fail closed; later byte changes fail pack validation because packing never regenerates the established content index. Platform binary signatures do not constitute a Sunder package signature or publisher attestation.
 
 Schema-first RPC metadata is authored with strict MSBuild items. Every imported or provided contract must have a local bundle, so validation never depends on another installed package:
 
 ```xml
 <ItemGroup>
-  <SunderContractBundle Include="Contracts/chat-provider.rpc.json"
-                        ContractId="example.agent.chat-provider"
-                        Version="1.0.0"
-                        DescriptorPath="contracts/chat-provider.rpc.json" />
-  <SunderUsesContract Include="example.agent.chat-provider"
-                      VersionRange=">=1.0.0 &lt;2.0.0"
-                      Required="false"
-                      Actions="discover;invoke;subscribe" />
-  <SunderRpcProvider Include="example.package.chat"
-                     ContractId="example.agent.chat-provider"
-                     ContractVersion="1.0.0"
-                     Role="runtime" />
+  <SunderRpcBinding Include="Contracts/example.rpc.json"
+                    Namespace="Example.Package.Generated" />
+  <SunderContractBundle Include="Contracts/example.rpc.json"
+                        ContractId="example.rpc"
+                        Version="2.0.0"
+                        DescriptorPath="contracts/example.rpc.json"
+                        Exposure="public" />
+  <SunderUsesContract Include="example.rpc"
+                      Role="app"
+                      ContractVersion="2.0.0"
+                      Required="true"
+                      Actions="discover;invoke" />
+  <SunderRpcProvider Include="example.rpc.default"
+                     Role="runtime"
+                     ContractId="example.rpc"
+                     ContractVersion="2.0.0"
+                     Audience="owner" />
 </ItemGroup>
 ```
 
-`SunderContractBundle` requires `ContractId` and `Version`; `DescriptorPath` defaults to `contracts/&lt;file name&gt;` and must stay under `contracts/`. `SunderUsesContract` requires a strict `VersionRange`, an explicit Boolean `Required`, and one or more unique `Actions` from `discover`, `invoke`, and `subscribe`. `SunderRpcProvider` requires `ContractId`, `ContractVersion`, and an exact `app` or `runtime` `Role` that exists in the generated target matrix. Provider hashes are always derived from the matching descriptor bundle.
+`SunderContractBundle` accepts only a descriptorVersion 2 descriptor whose `contractId` and complete SemVer `version`, including build metadata, exactly match `ContractId` and `Version`. `Exposure` is required and is either `package` or `public`; `DescriptorPath` defaults to `contracts/&lt;file name&gt;` and must stay under `contracts/`. The build canonicalizes the immutable descriptor snapshot and derives `descriptorSha256` and `abiSha256`; hash metadata must never be authored.
+
+`SunderUsesContract` requires an existing `app` or `runtime` `Role`, an exact local `ContractVersion`, an explicit lowercase Boolean `Required`, and one or more unique `Actions` from `discover`, `invoke`, and `subscribe`. Version ranges are not accepted. `SunderRpcProvider` requires an existing target `Role`, exact local `ContractId` and `ContractVersion`, and `Audience="owner"` or `Audience="public"`. Public providers require public bundle exposure; package-exposed bundles can have owner-audience providers only. Uses are unique by `(Role, ContractId)` and providers by `(Role, ProviderId)`. Every Runtime target and every App target participating in RPC receives `rpc.v2`; legacy `rpc.v1` is removed.
 
 Aggregate projects can combine validated leaf trees without rebuilding them:
 
@@ -239,14 +238,14 @@ Aggregate projects can combine validated leaf trees without rebuilding them:
   <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
 </PropertyGroup>
 <ItemGroup>
-  <SunderPackageTargetLeaf Include="Runtime/bin/$(Configuration)/$(TargetFramework)/sunder-dev"
-                           DiscoveryRoot="Runtime/bin/$(Configuration)/$(TargetFramework)" />
+  <SunderPackageTargetLeaf Include="Worker/bin/$(Configuration)/$(TargetFramework)/linux-x64/sunder-dev"
+                           DiscoveryRoot="Worker/bin/$(Configuration)/$(TargetFramework)/linux-x64" />
   <SunderPackageTargetLeaf Include="App/bin/$(Configuration)/$(TargetFramework)/sunder-dev"
                            DiscoveryRoot="App/bin/$(Configuration)/$(TargetFramework)" />
 </ItemGroup>
 ```
 
-Every target leaf requires explicit `DiscoveryRoot` metadata matching the producer's `SunderDevOutputDiscoveryRoot`. The default producer root is `TargetDir`; use the same configured ancestor on both sides when leaves are nested more deeply. `AggregateSunderPackage` holds those roots while locating and locking leaves, verifies package-wide metadata agreement, rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output.
+Every target leaf requires explicit `DiscoveryRoot` metadata matching the producer's `SunderDevOutputDiscoveryRoot`. The default producer root is `TargetDir`; use the same configured ancestor on both sides when leaves are nested more deeply. `AggregateSunderPackage` holds those roots while locating and locking leaves, verifies package-wide metadata agreement (including identical contract bundles), rejects duplicate exact targets and projection collisions, and factors identical files into global or role-shared layers before validating the canonical output. Role-scoped uses and providers are unioned by `(Role, ContractId)` and `(Role, ProviderId)`: identical declarations from multiple RID leaves deduplicate, while conflicting declarations fail aggregation. App leaves therefore declare only App uses/providers and Runtime leaves only Runtime uses/providers; shared descriptor payload remains package-wide.
 
 ## Validate Before Publishing
 

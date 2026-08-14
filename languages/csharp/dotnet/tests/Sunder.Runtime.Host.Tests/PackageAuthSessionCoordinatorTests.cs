@@ -360,7 +360,7 @@ public sealed class PackageAuthSessionCoordinatorTests
         string packageId = "test.package")
     {
         var tempDirectory = CreateTempDirectory();
-        var assemblyPath = typeof(PackageAuthSessionCoordinator).Assembly.Location;
+        var callbackHandler = (IPackageCallbackHandler)authHandler;
 
         return new ActiveLoadedPackage(
             new ActivePackageDescriptor(packageId, "Test Package", "1.0.0", PackageHostRoles.Runtime, Icon: null, IsEnabled: true, PackageReadinessState.Ready, Views: []),
@@ -372,18 +372,14 @@ public sealed class PackageAuthSessionCoordinatorTests
                 null,
                 null,
                 new RestrictedFileMasterKeyProtection()),
-            authHandler,
-            new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
-            {
-                [((IPackageCallbackHandler)authHandler).CallbackHandlerId] = (IPackageCallbackHandler)authHandler,
-            },
-            BackgroundServices: [],
-            new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageLoadContext(
-                packageId,
-                assemblyPath,
-                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
-            EmptyTestPackageSettings.Instance);
+            new LocalPackageFileStore(Path.Combine(tempDirectory, "files")),
+            EmptyTestPackageSettings.Instance,
+            new TestRuntimePackageWorker(
+                authHandler,
+                new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [callbackHandler.CallbackHandlerId] = callbackHandler,
+                }));
     }
 
     private static string CreateTempDirectory()

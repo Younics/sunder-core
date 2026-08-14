@@ -17,7 +17,7 @@ test("UTC formatter emits exactly seven fractional digits", () => {
 test("all advertised browser calls use the host round-trip deadline shape", async () => {
   const received = new Map<string, BrowserCallOptions | undefined>();
   const candidate: SunderBrowserApi = {
-    version: 1,
+    version: 2,
     rpc: {
       discover: async (_contractId, options) => {
         received.set("discover", options);

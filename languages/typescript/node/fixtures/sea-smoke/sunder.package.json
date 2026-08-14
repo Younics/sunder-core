@@ -1,23 +1,41 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "sunder.sea.smoke",
   "name": "Sunder SEA Smoke",
-  "summary": "Native Node SEA protocol-handshake CI fixture.",
+  "summary": "Native Node SEA Worker V3 protocol-handshake CI fixture.",
   "version": "1.0.0",
   "entry": "src/worker.ts",
+  "workerCapabilities": [],
   "contracts": [
     {
-      "path": "contracts/example.rpc.json"
+      "path": "contracts/example.rpc.json",
+      "exposure": "public"
+    }
+  ],
+  "rpcBindings": [
+    {
+      "path": "contracts/example.rpc.json",
+      "outputFile": "example-messages.g.ts"
     }
   ],
   "providers": [
     {
       "providerId": "sunder.sea.smoke.provider",
+      "role": "runtime",
       "contractId": "example.messages",
-      "contractVersion": "1.0.0"
+      "contractVersion": "2.0.0",
+      "audience": "public"
     }
   ],
-  "usesContracts": [],
+  "usesContracts": [
+    {
+      "role": "runtime",
+      "contractId": "example.messages",
+      "contractVersion": "2.0.0",
+      "required": true,
+      "actions": ["discover", "invoke", "subscribe"]
+    }
+  ],
   "maximumExecutableBytes": 167772160,
   "maximumPackageBytes": 536870912
 }

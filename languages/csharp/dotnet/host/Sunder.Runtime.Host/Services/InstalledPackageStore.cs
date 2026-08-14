@@ -9,13 +9,14 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
 {
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 5;
 
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        RespectRequiredConstructorParameters = true,
         WriteIndented = true,
     };
 
@@ -38,7 +39,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is invalid.", ex);
         }
 
-        if (state?.SchemaVersion is not 1 and not 2 and not CurrentSchemaVersion)
+        if (state?.SchemaVersion != CurrentSchemaVersion)
         {
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' has an unsupported schema version.");
         }
@@ -47,13 +48,8 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         {
             throw new InvalidDataException($"Installed package catalog '{paths.StateFilePath}' is missing packages.");
         }
-        var packages = NormalizeCatalogForCompatibility(state.Packages);
-        ValidateCatalog(packages);
-        if (state.SchemaVersion != CurrentSchemaVersion)
-        {
-            await WriteAsync(packages, cancellationToken);
-        }
-        return packages;
+        ValidateCatalog(state.Packages);
+        return state.Packages;
     }
 
     public async Task<InstalledPackageRecord?> GetAsync(string packageId, CancellationToken cancellationToken = default)
@@ -64,7 +60,6 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         IReadOnlyList<InstalledPackageRecord> packages,
         CancellationToken cancellationToken = default)
     {
-        packages = NormalizeCatalogForCompatibility(packages);
         ValidateCatalog(packages);
         Directory.CreateDirectory(paths.CatalogRootPath);
         var state = new InstalledPackageStateFile(
@@ -94,6 +89,7 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             }
 
             ValidateProvenance(package);
+            ValidateCapabilityGrants(package);
 
             if (!paths.IsCanonicalInstalledPath(package.PackageId, package.Version, package.InstallPath))
             {
@@ -159,13 +155,6 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
         }
     }
 
-    internal static IReadOnlyList<InstalledPackageRecord> NormalizeCatalogForCompatibility(
-        IReadOnlyList<InstalledPackageRecord> packages)
-        => packages.Select(static package => package.Provenance is null
-                ? package with { Provenance = InstalledPackageProvenanceRecord.Unknown }
-                : package)
-            .ToArray();
-
     public InstalledPackageDescriptor ToDescriptor(InstalledPackageRecord package)
     {
         var validation = SunderPackageArchiveInspector.ValidateExtractedPackageAsync(package.InstallPath)
@@ -215,12 +204,17 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             (manifest.UsesContracts ?? [])
                 .Where(static use => use is not null)
                 .Select(static use => new PackageRpcContractUseDescriptor(
-                    use!.ContractId!,
-                    use.VersionRange!,
+                    use!.Role!,
+                    use.ContractId!,
+                    use.ContractVersion!,
+                    use.AbiSha256!,
                     use.Required!.Value,
                     (use.Actions ?? []).Where(static action => action is not null).Select(static action => action!).ToArray()))
                 .ToArray(),
-            (package.Provenance ?? InstalledPackageProvenanceRecord.Unknown).ToDescriptor());
+            package.Provenance.ToDescriptor(),
+            PackageSensitiveCapabilityPolicy.GetEffectiveCapabilities(package)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
     }
 
     public async Task<string?> TryResolvePackageAssetPathAsync(
@@ -305,6 +299,27 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
             || provenance.SourceKind == InstalledPackageSourceKind.Development && string.IsNullOrWhiteSpace(provenance.SourceIdentity))
         {
             throw new InvalidDataException($"Installed package '{package.PackageId}' has invalid unmanaged provenance.");
+        }
+    }
+
+    private static void ValidateCapabilityGrants(InstalledPackageRecord package)
+    {
+        var grants = package.CapabilityGrants
+                     ?? throw new InvalidDataException(
+                         $"Installed package '{package.PackageId}' is missing capability grants.");
+        var manifestSha256 = PackageSensitiveCapabilityPolicy.GetManifestSha256(package);
+        var capabilities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var grant in grants)
+        {
+            if (grant is null
+                || !PackageSensitiveCapabilityPolicy.IsSensitive(grant.Capability)
+                || !capabilities.Add(grant.Capability)
+                || !string.Equals(grant.PackageVersion, package.Version, StringComparison.Ordinal)
+                || !string.Equals(grant.ManifestSha256, manifestSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Installed package '{package.PackageId}' contains an invalid sensitive capability grant.");
+            }
         }
     }
 

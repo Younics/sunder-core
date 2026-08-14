@@ -6,18 +6,22 @@ public static class SunderPackageFormat
         ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]);
 
     public const int CurrentArchiveFormatVersion = 1;
-    public const int CurrentManifestVersion = 1;
+    public const int CurrentManifestVersion = 3;
     public const int CurrentContentIndexVersion = 1;
     public const string AppHostRole = "app";
     public const string RuntimeHostRole = "runtime";
     public const string AvaloniaTargetKind = "avalonia";
     public const string WebTargetKind = "web";
-    public const string DotnetTargetKind = "dotnet";
     public const string WorkerTargetKind = "worker";
-    public const string ProcessTargetKind = "process";
+    internal const string RpcV2Capability = "rpc.v2";
+    internal const string WorkerProtocolV3Capability = "worker-protocol.v3";
     public const string DiscoverContractAction = "discover";
     public const string InvokeContractAction = "invoke";
     public const string SubscribeContractAction = "subscribe";
+    public const string PackageContractExposure = "package";
+    public const string PublicContractExposure = "public";
+    public const string OwnerProviderAudience = "owner";
+    public const string PublicProviderAudience = "public";
     public const string Extension = ".sunderpkg";
     public const string ManifestPath = "manifest/sunder-package.json";
     public const string ContentIndexPath = "manifest/content-index.json";
@@ -58,12 +62,18 @@ public static class SunderPackageFormat
         => role switch
         {
             AppHostRole => kind is AvaloniaTargetKind or WebTargetKind,
-            RuntimeHostRole => kind is DotnetTargetKind or WorkerTargetKind or ProcessTargetKind,
+            RuntimeHostRole => kind is WorkerTargetKind,
             _ => false,
         };
 
     public static bool IsContractAction(string? value)
         => value is DiscoverContractAction or InvokeContractAction or SubscribeContractAction;
+
+    public static bool IsContractExposure(string? value)
+        => value is PackageContractExposure or PublicContractExposure;
+
+    public static bool IsProviderAudience(string? value)
+        => value is OwnerProviderAudience or PublicProviderAudience;
 
     public static bool IsWebViewPlacement(string? value)
         => value is "leftTop" or "middle" or "rightTop" or "leftBottom" or "rightBottom";

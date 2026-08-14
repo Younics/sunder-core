@@ -56,19 +56,33 @@ internal static class CliJsonData
         }).ToArray(),
         contracts = new
         {
-            bundles = version.ContractBundles.Select(item => new { contractId = item.ContractId, version = item.Version }).ToArray(),
-            uses = version.UsesContracts.Select(item => new
+            bundles = version.ContractBundles.Select(item => new
             {
                 contractId = item.ContractId,
-                versionRange = item.VersionRange,
+                version = item.Version,
+                descriptorPath = item.DescriptorPath,
+                descriptorSha256 = item.DescriptorSha256,
+                abiSha256 = item.AbiSha256,
+                exposure = item.Exposure,
+            }).ToArray(),
+            uses = version.UsesContracts.Select(item => new
+            {
+                role = item.Role,
+                contractId = item.ContractId,
+                contractVersion = item.ContractVersion,
+                abiSha256 = item.AbiSha256,
                 required = item.Required,
+                actions = item.Actions,
             }).ToArray(),
             providers = version.Providers.Select(item => new
             {
                 providerId = item.ProviderId,
+                role = item.Role,
                 contractId = item.ContractId,
                 contractVersion = item.ContractVersion,
-                role = item.Role,
+                descriptorSha256 = item.DescriptorSha256,
+                abiSha256 = item.AbiSha256,
+                audience = item.Audience,
             }).ToArray(),
         },
         artifact = new { sha256 = version.CanonicalArtifact.Sha256, size = version.CanonicalArtifact.Size },
@@ -137,6 +151,13 @@ internal static class CliJsonData
             version = item.Version,
             update = item.IsUpdate,
             deprecatedMessage = item.DeprecatedMessage,
+        }).ToArray(),
+        requiredCapabilityConsents = result.RequiredCapabilityConsents.Select(consent => new
+        {
+            packageId = consent.PackageId,
+            packageVersion = consent.PackageVersion,
+            manifestSha256 = consent.ManifestSha256,
+            capabilities = consent.Capabilities,
         }).ToArray(),
     };
 
@@ -238,6 +259,7 @@ internal static class CliJsonData
         RuntimeRegistryErrorCode.RegistryUnavailable => "registry_unavailable",
         RuntimeRegistryErrorCode.DownloadTooLarge => "download_too_large",
         RuntimeRegistryErrorCode.ArtifactVerificationFailed => "artifact_verification_failed",
+        RuntimeRegistryErrorCode.ConsentRequired => "consent_required",
         RuntimeRegistryErrorCode.Cancelled => "cancelled",
         _ => "internal_error",
     };

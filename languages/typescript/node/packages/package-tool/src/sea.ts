@@ -25,12 +25,16 @@ import {
   withOutputLocks,
 } from "./output";
 import {
-  bundleProduction,
+  bundleProductionWithGeneratedRpcBindings,
   maximumExecutableBytes,
   prepareProject,
   writeTargetLeaf,
   type PreparedProject,
 } from "./package";
+import {
+  generateRpcBindingsForLoadedProjectLocked,
+  withRpcBindingsOutputLock,
+} from "./rpc-bindings";
 
 const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 const DOWNLOAD_TIMEOUT_MILLISECONDS = 120_000;
@@ -75,58 +79,61 @@ export async function buildSeaTarget(options: SeaBuildOptions): Promise<{ leafPa
   const metadata = await readDistributionMetadata();
   const distribution = await acquirePinnedNode(metadata, rid);
   const pinnedNode = distribution.executablePath;
-  const workRoot = resolve(project.outputRoot, ".sunder-sea", rid);
-  return await withOutputLocks([workRoot], async () => {
-    await assertReplaceableGeneratedDirectory(workRoot, true);
-    let leafPath = "";
-    let bytes = 0;
-    const staged = await stageGeneratedDirectory(
-      workRoot,
-      "Sunder Node SEA work output v1\n",
-      async (stagingRoot) => {
-        const bundlePath = resolve(stagingRoot, "worker.cjs");
-        const workerNoticePath = await bundleProduction(project, rid, bundlePath);
-        const blobPath = resolve(stagingRoot, "sea-prep.blob");
-        const seaConfigPath = resolve(stagingRoot, "sea-config.json");
-        await writeFile(seaConfigPath, `${JSON.stringify({
-          main: bundlePath,
-          output: blobPath,
-          disableExperimentalSEAWarning: true,
-          useSnapshot: false,
-          useCodeCache: false,
-          execArgvExtension: "none",
-        }, null, 2)}\n`, "utf8");
-        await runChecked(pinnedNode, ["--experimental-sea-config", seaConfigPath], stagingRoot);
-        const stagedExecutablePath = resolve(stagingRoot, `${safeExecutableName(project.config.id)}${rid.startsWith("win-") ? ".exe" : ""}`);
-        await copyFile(pinnedNode, stagedExecutablePath);
-        if (!rid.startsWith("win-")) await chmod(stagedExecutablePath, 0o755);
-        await removeSignature(stagedExecutablePath, rid, options.allowUnsignedWindows);
-        await injectBlob(stagedExecutablePath, blobPath, rid);
-        await signExecutable(stagedExecutablePath, rid, options.allowUnsignedWindows);
-        bytes = (await stat(stagedExecutablePath)).size;
-        const maximum = maximumExecutableBytes(project.config);
-        if (bytes > maximum) {
-          throw new Error(`SEA executable is ${bytes} bytes and exceeds maximumExecutableBytes ${maximum}.`);
-        }
-        leafPath = await writeTargetLeaf({
-          project,
-          rid,
-          executablePath: stagedExecutablePath,
-          nodeNoticePath: distribution.noticePath,
-          workerNoticePath,
-          discoveryRoot: resolve(project.outputRoot, "targets"),
-        });
-      },
-    );
-    const stagedOutputs = [staged.output, staged.marker];
-    try {
-      await commitStagedOutputs(stagedOutputs);
-    } finally {
-      await cleanupStagedOutputs(stagedOutputs);
-    }
-    const executablePath = resolve(workRoot, `${safeExecutableName(project.config.id)}${rid.startsWith("win-") ? ".exe" : ""}`);
-    process.stdout.write(`Sunder SEA size (${rid}): ${bytes} bytes\n`);
-    return { leafPath, executablePath, bytes };
+  return await withRpcBindingsOutputLock(project.root, async () => {
+    await generateRpcBindingsForLoadedProjectLocked(project);
+    const workRoot = resolve(project.outputRoot, ".sunder-sea", rid);
+    return await withOutputLocks([workRoot], async () => {
+      await assertReplaceableGeneratedDirectory(workRoot, true);
+      let leafPath = "";
+      let bytes = 0;
+      const staged = await stageGeneratedDirectory(
+        workRoot,
+        "Sunder Node SEA work output v1\n",
+        async (stagingRoot) => {
+          const bundlePath = resolve(stagingRoot, "worker.cjs");
+          const workerNoticePath = await bundleProductionWithGeneratedRpcBindings(project, rid, bundlePath);
+          const blobPath = resolve(stagingRoot, "sea-prep.blob");
+          const seaConfigPath = resolve(stagingRoot, "sea-config.json");
+          await writeFile(seaConfigPath, `${JSON.stringify({
+            main: bundlePath,
+            output: blobPath,
+            disableExperimentalSEAWarning: true,
+            useSnapshot: false,
+            useCodeCache: false,
+            execArgvExtension: "none",
+          }, null, 2)}\n`, "utf8");
+          await runChecked(pinnedNode, ["--experimental-sea-config", seaConfigPath], stagingRoot);
+          const stagedExecutablePath = resolve(stagingRoot, `${safeExecutableName(project.config.id)}${rid.startsWith("win-") ? ".exe" : ""}`);
+          await copyFile(pinnedNode, stagedExecutablePath);
+          if (!rid.startsWith("win-")) await chmod(stagedExecutablePath, 0o755);
+          await removeSignature(stagedExecutablePath, rid, options.allowUnsignedWindows);
+          await injectBlob(stagedExecutablePath, blobPath, rid);
+          await signExecutable(stagedExecutablePath, rid, options.allowUnsignedWindows);
+          bytes = (await stat(stagedExecutablePath)).size;
+          const maximum = maximumExecutableBytes(project.config);
+          if (bytes > maximum) {
+            throw new Error(`SEA executable is ${bytes} bytes and exceeds maximumExecutableBytes ${maximum}.`);
+          }
+          leafPath = await writeTargetLeaf({
+            project,
+            rid,
+            executablePath: stagedExecutablePath,
+            nodeNoticePath: distribution.noticePath,
+            workerNoticePath,
+            discoveryRoot: resolve(project.outputRoot, "targets"),
+          });
+        },
+      );
+      const stagedOutputs = [staged.output, staged.marker];
+      try {
+        await commitStagedOutputs(stagedOutputs);
+      } finally {
+        await cleanupStagedOutputs(stagedOutputs);
+      }
+      const executablePath = resolve(workRoot, `${safeExecutableName(project.config.id)}${rid.startsWith("win-") ? ".exe" : ""}`);
+      process.stdout.write(`Sunder SEA size (${rid}): ${bytes} bytes\n`);
+      return { leafPath, executablePath, bytes };
+    });
   });
 }
 
@@ -142,23 +149,25 @@ export async function smokeSeaTarget(projectPath: string, rid = currentRid()): P
     const activationId = randomBytes(16).toString("hex");
     const sessionId = randomBytes(16).toString("hex");
     await rm(smokeRoot, { recursive: true, force: true });
-    await mkdir(smokeRoot, { recursive: true });
+    const temporaryRoot = resolve(smokeRoot, "temporary");
+    const workspaceRoot = resolve(smokeRoot, "workspace");
+    await mkdir(temporaryRoot, { recursive: true });
+    await mkdir(workspaceRoot, { recursive: true });
     const child = spawn(executablePath, [], {
       cwd: dirname(executablePath),
       stdio: ["pipe", "pipe", "pipe"],
       env: {
-        SUNDER_WORKER_PROTOCOL: "sunder.worker.v1",
+        SUNDER_WORKER_PROTOCOL: "sunder.worker.v3",
         SUNDER_PACKAGE_ID: project.config.id,
         SUNDER_PACKAGE_VERSION: project.config.version,
         SUNDER_ACTIVATION_ID: activationId,
         SUNDER_SESSION_ID: sessionId,
-        SUNDER_PACKAGE_CONTENT_PATH: dirname(executablePath),
-        SUNDER_PACKAGE_DATA_PATH: smokeRoot,
-        SUNDER_PACKAGE_STATE_PATH: resolve(smokeRoot, "state.json"),
-        SUNDER_PACKAGE_WORKING_PATH: dirname(executablePath),
-        TMPDIR: smokeRoot,
-        TMP: smokeRoot,
-        TEMP: smokeRoot,
+        SUNDER_PACKAGE_CONTENT_ROOT: dirname(executablePath),
+        SUNDER_WORKER_TEMP_ROOT: temporaryRoot,
+        SUNDER_PACKAGE_WORKSPACE_ROOT: workspaceRoot,
+        TMPDIR: temporaryRoot,
+        TMP: temporaryRoot,
+        TEMP: temporaryRoot,
         ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" } : { LANG: "C.UTF-8", LC_ALL: "C.UTF-8" }),
       },
     });
@@ -168,15 +177,21 @@ export async function smokeSeaTarget(projectPath: string, rid = currentRid()): P
     });
     const messages = new SmokeMessageQueue();
     child.stdout.on("data", (chunk: Buffer) => messages.push(chunk));
-    const providers = project.config.providers.map((provider) => {
+    const providers = project.config.providers.filter((provider) => provider.role === "runtime").map((provider) => {
       const contract = project.contracts.find((item) => item.descriptor.contractId === provider.contractId && item.descriptor.version === provider.contractVersion);
       if (contract === undefined) throw new Error(`Smoke provider '${provider.providerId}' contract is missing.`);
-      return { ...provider, contractSha256: contract.sha256 };
+      return {
+        providerId: provider.providerId,
+        contractId: provider.contractId,
+        contractVersion: provider.contractVersion,
+        descriptorSha256: contract.descriptorSha256,
+        abiSha256: contract.abiSha256,
+      };
     });
     child.stdin.write(encodeFrame({
       type: "host.hello",
-      protocol: "sunder.worker.v1",
-      protocolVersion: 1,
+      protocol: "sunder.worker.v3",
+      protocolVersion: 3,
       challenge: "native-sea-smoke",
       packageId: project.config.id,
       packageVersion: project.config.version,
@@ -186,8 +201,39 @@ export async function smokeSeaTarget(projectPath: string, rid = currentRid()): P
     }));
     try {
       const ready = await messages.next(15_000);
-      if (ready.type !== "worker.ready" || ready.challenge !== "native-sea-smoke") {
+      const contributions = ready.contributions;
+      if (ready.type !== "worker.ready"
+        || ready.challenge !== "native-sea-smoke"
+        || contributions === null
+        || typeof contributions !== "object"
+         || Array.isArray(contributions)
+         || !Array.isArray((contributions as Readonly<Record<string, JsonValue>>).storageMigrations)
+          || !Array.isArray((contributions as Readonly<Record<string, JsonValue>>).callbackHandlers)
+          || typeof (contributions as Readonly<Record<string, JsonValue>>).authHandler !== "boolean"
+          || (contributions as Readonly<Record<string, JsonValue>>).migrationPreparationLifecycle !== true
+          || !Array.isArray((contributions as Readonly<Record<string, JsonValue>>).rpcProviders)) {
         throw new Error(`SEA worker returned invalid ready envelope: ${JSON.stringify(ready)}`);
+      }
+      child.stdin.write(encodeFrame({ type: "host.start-candidate" }));
+      const candidate = await messages.next(5_000);
+      if (candidate.type !== "worker.candidate-started") throw new Error("SEA worker did not acknowledge candidate startup.");
+      child.stdin.write(encodeFrame({
+        type: "host.commit-generation",
+        activationId,
+        sessionGeneration: 1,
+      }));
+      const committed = await messages.next(5_000);
+      if (committed.type !== "worker.generation-committed") throw new Error("SEA worker did not acknowledge generation commit.");
+      child.stdin.write(encodeFrame({
+        type: "host.prepare-storage-migrations",
+        activationId,
+        sessionGeneration: 1,
+      }));
+      const prepared = await messages.next(5_000);
+      if (prepared.type !== "worker.storage-migrations-prepared"
+        || prepared.activationId !== activationId
+        || prepared.sessionGeneration !== 1) {
+        throw new Error("SEA worker did not acknowledge storage-migration preparation.");
       }
       child.stdin.write(encodeFrame({ type: "host.activate", sessionGeneration: 1 }));
       const activated = await messages.next(5_000);

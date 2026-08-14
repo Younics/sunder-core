@@ -7,6 +7,7 @@ using Sunder.Package.Format;
 
 namespace Sunder.Package.Build.Tasks;
 
+/// <summary>Aggregates validated exact-target Manifest V3 leaves into one canonical package tree.</summary>
 public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
 {
     public const string MarkerFileSuffix = ".sunder-aggregate-generated-output";
@@ -125,6 +126,22 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             {
                 return false;
             }
+            var roleContracts = MergeRoleScopedContracts(leaves);
+            if (roleContracts is null)
+            {
+                return false;
+            }
+            var stampedTargetManifests = PackageTargetBuilder.StampRpcV2Capabilities(
+                targets.Select(static target => target.Manifest).ToArray(),
+                roleContracts.RpcRoles,
+                Log);
+            if (stampedTargetManifests is null)
+            {
+                return false;
+            }
+            var stampedTargets = stampedTargetManifests.ToDictionary(
+                static target => new SunderPackageTargetKey(target.Role!, target.Rid!));
+            targets = targets.Select(target => target with { Manifest = stampedTargets[target.Key] }).ToArray();
 
             var parent = Path.GetDirectoryName(output)
                          ?? throw new InvalidOperationException($"Aggregate output '{output}' has no parent directory.");
@@ -132,7 +149,12 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             temporaryPath = output + ".stage-" + Guid.NewGuid().ToString("N");
             temporaryMarkerPath = markerPath + ".stage-" + Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(temporaryPath);
-            WriteAggregate(temporaryPath, leaves[0].Manifest, targets);
+            WriteAggregate(
+                temporaryPath,
+                leaves[0].Manifest,
+                targets,
+                roleContracts.Uses,
+                roleContracts.Providers);
 
             PackageContentIndexer.Write(temporaryPath);
             var validation = SunderPackageArchiveInspector
@@ -279,12 +301,117 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     }
 
     private static byte[] MetadataFingerprint(SunderPackageManifest source)
-        => JsonSerializer.SerializeToUtf8Bytes(CloneManifest(source, []), JsonOptions);
+        => JsonSerializer.SerializeToUtf8Bytes(CloneManifest(source, [], [], []), JsonOptions);
+
+    private RoleScopedContracts? MergeRoleScopedContracts(IReadOnlyList<Leaf> leaves)
+    {
+        var uses = new Dictionary<string, (SunderPackageContractUseManifest Value, string Leaf)>(StringComparer.Ordinal);
+        var providers = new Dictionary<string, (SunderPackageProviderManifest Value, string Leaf)>(StringComparer.Ordinal);
+        foreach (var leaf in leaves)
+        {
+            foreach (var use in (leaf.Manifest.UsesContracts ?? []).OfType<SunderPackageContractUseManifest>())
+            {
+                var key = RoleKey(use.Role!, use.ContractId!);
+                if (uses.TryGetValue(key, out var existing))
+                {
+                    if (!UsesAreIdentical(existing.Value, use))
+                    {
+                        Log.LogError(
+                            $"Target leaves '{existing.Leaf}' and '{leaf.RootPath}' declare conflicting contract use '{use.ContractId}' for role '{use.Role}'.");
+                    }
+                }
+                else
+                {
+                    uses.Add(key, (use, leaf.RootPath));
+                }
+            }
+
+            foreach (var provider in (leaf.Manifest.Provides ?? []).OfType<SunderPackageProviderManifest>())
+            {
+                var key = RoleKey(provider.Role!, provider.ProviderId!);
+                if (providers.TryGetValue(key, out var existing))
+                {
+                    if (!ProvidersAreIdentical(existing.Value, provider))
+                    {
+                        Log.LogError(
+                            $"Target leaves '{existing.Leaf}' and '{leaf.RootPath}' declare conflicting provider '{provider.ProviderId}' for role '{provider.Role}'.");
+                    }
+                }
+                else
+                {
+                    providers.Add(key, (provider, leaf.RootPath));
+                }
+            }
+        }
+
+        ValidateRoleScopedDeclarationSets(leaves);
+        if (Log.HasLoggedErrors) return null;
+        var mergedUses = uses.Values.Select(static item => item.Value)
+            .OrderBy(static use => RoleOrder(use.Role))
+            .ThenBy(static use => use.ContractId, StringComparer.Ordinal)
+            .Cast<SunderPackageContractUseManifest?>()
+            .ToArray();
+        var mergedProviders = providers.Values.Select(static item => item.Value)
+            .OrderBy(static provider => RoleOrder(provider.Role))
+            .ThenBy(static provider => provider.ProviderId, StringComparer.Ordinal)
+            .Cast<SunderPackageProviderManifest?>()
+            .ToArray();
+        var rpcRoles = mergedUses.Select(static use => use!.Role!)
+            .Concat(mergedProviders.Select(static provider => provider!.Role!))
+            .ToHashSet(StringComparer.Ordinal);
+        return new RoleScopedContracts(mergedUses, mergedProviders, rpcRoles);
+    }
+
+    private void ValidateRoleScopedDeclarationSets(IReadOnlyList<Leaf> leaves)
+    {
+        var roles = leaves.SelectMany(static leaf => leaf.Targets)
+            .Select(static target => target.Key.Role)
+            .Distinct(StringComparer.Ordinal);
+        foreach (var role in roles)
+        {
+            var roleLeaves = leaves
+                .Where(leaf => leaf.Targets.Any(target => target.Key.Role == role))
+                .ToArray();
+            if (roleLeaves.Length < 2) continue;
+
+            var expectedUses = UseKeys(roleLeaves[0], role);
+            var expectedProviders = ProviderKeys(roleLeaves[0], role);
+            foreach (var leaf in roleLeaves.Skip(1))
+            {
+                if (!expectedUses.SetEquals(UseKeys(leaf, role)))
+                {
+                    Log.LogError(
+                        $"Target leaves '{roleLeaves[0].RootPath}' and '{leaf.RootPath}' must declare identical contract use sets for role '{role}'; declarations cannot be omitted from individual RID leaves.");
+                }
+                if (!expectedProviders.SetEquals(ProviderKeys(leaf, role)))
+                {
+                    Log.LogError(
+                        $"Target leaves '{roleLeaves[0].RootPath}' and '{leaf.RootPath}' must declare identical provider sets for role '{role}'; declarations cannot be omitted from individual RID leaves.");
+                }
+            }
+        }
+    }
+
+    private static HashSet<string> UseKeys(Leaf leaf, string role)
+        => (leaf.Manifest.UsesContracts ?? [])
+            .OfType<SunderPackageContractUseManifest>()
+            .Where(use => use.Role == role)
+            .Select(static use => use.ContractId!)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static HashSet<string> ProviderKeys(Leaf leaf, string role)
+        => (leaf.Manifest.Provides ?? [])
+            .OfType<SunderPackageProviderManifest>()
+            .Where(provider => provider.Role == role)
+            .Select(static provider => provider.ProviderId!)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static void WriteAggregate(
         string outputPath,
         SunderPackageManifest sourceManifest,
-        IReadOnlyList<TargetLeaf> targets)
+        IReadOnlyList<TargetLeaf> targets,
+        IReadOnlyList<SunderPackageContractUseManifest?> uses,
+        IReadOnlyList<SunderPackageProviderManifest?> providers)
     {
         var orderedTargets = targets
             .OrderBy(static target => target.Key.Role == SunderPackageFormat.AppHostRole ? 0 : 1)
@@ -300,6 +427,20 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             var occurrences = orderedTargets
                 .Where(target => target.Files.ContainsKey(logicalPath))
                 .ToArray();
+            if (occurrences.Any(target =>
+                    target.Manifest.Kind == SunderPackageFormat.WorkerTargetKind
+                    && string.Equals(target.Manifest.EntryPoint, logicalPath, StringComparison.Ordinal)))
+            {
+                foreach (var target in occurrences)
+                {
+                    Copy(
+                        target.Files[logicalPath],
+                        $"payload/{target.Key.Role}/{target.Key.Rid}/{logicalPath}",
+                        outputPath,
+                        destinations);
+                }
+                continue;
+            }
             if (occurrences.Length == orderedTargets.Length && HaveIdenticalFile(occurrences, logicalPath))
             {
                 Copy(occurrences[0].Files[logicalPath], SunderPackageFormat.SharedPayloadRoot + logicalPath, outputPath, destinations);
@@ -331,7 +472,11 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             }
         }
 
-        var manifest = CloneManifest(sourceManifest, orderedTargets.Select(static target => target.Manifest).ToArray());
+        var manifest = CloneManifest(
+            sourceManifest,
+            orderedTargets.Select(static target => target.Manifest).ToArray(),
+            uses,
+            providers);
         var manifestPath = ArchiveRelativePath.Parse(SunderPackageFormat.ManifestPath).ToPlatformPath(outputPath);
         Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
         PackageManifestSerializer.Write(manifestPath, manifest, JsonOptions);
@@ -366,7 +511,9 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
 
     private static SunderPackageManifest CloneManifest(
         SunderPackageManifest source,
-        IReadOnlyList<SunderPackageTargetManifest?> targets)
+        IReadOnlyList<SunderPackageTargetManifest?> targets,
+        IReadOnlyList<SunderPackageContractUseManifest?> uses,
+        IReadOnlyList<SunderPackageProviderManifest?> providers)
         => new()
         {
             ArchiveFormatVersion = source.ArchiveFormatVersion,
@@ -379,9 +526,32 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
             DependsOn = source.DependsOn,
             Targets = targets,
             ContractBundles = source.ContractBundles,
-            UsesContracts = source.UsesContracts,
-            Provides = source.Provides,
+            UsesContracts = uses,
+            Provides = providers,
         };
+
+    private static bool UsesAreIdentical(
+        SunderPackageContractUseManifest left,
+        SunderPackageContractUseManifest right)
+        => left.Role == right.Role
+           && left.ContractId == right.ContractId
+           && left.ContractVersion == right.ContractVersion
+           && left.AbiSha256 == right.AbiSha256
+           && left.Required == right.Required
+           && (left.Actions ?? []).SequenceEqual(right.Actions ?? [], StringComparer.Ordinal);
+
+    private static bool ProvidersAreIdentical(
+        SunderPackageProviderManifest left,
+        SunderPackageProviderManifest right)
+        => left.ProviderId == right.ProviderId
+           && left.Role == right.Role
+           && left.ContractId == right.ContractId
+           && left.ContractVersion == right.ContractVersion
+           && left.DescriptorSha256 == right.DescriptorSha256
+           && left.AbiSha256 == right.AbiSha256
+           && left.Audience == right.Audience;
+
+    private static string RoleKey(string role, string id) => role + "\0" + id;
 
     private static string? OptionalMetadata(ITaskItem item, string name)
     {
@@ -397,6 +567,9 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         }
         return int.MaxValue;
     }
+
+    private static int RoleOrder(string? role)
+        => role == SunderPackageFormat.AppHostRole ? 0 : 1;
 
     private static void TryDeleteDirectory(string? path)
     {
@@ -436,4 +609,9 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         IReadOnlyDictionary<string, LeafFile> Files);
 
     private sealed record LeafFile(string FullPath, string Sha256, long Size);
+
+    private sealed record RoleScopedContracts(
+        IReadOnlyList<SunderPackageContractUseManifest?> Uses,
+        IReadOnlyList<SunderPackageProviderManifest?> Providers,
+        IReadOnlySet<string> RpcRoles);
 }

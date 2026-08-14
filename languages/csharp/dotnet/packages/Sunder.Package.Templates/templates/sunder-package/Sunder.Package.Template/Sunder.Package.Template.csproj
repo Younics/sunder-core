@@ -15,16 +15,42 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="Sunder.Package.Template.Runtime\Sunder.Package.Template.Runtime.csproj"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Sunder.Package.Template.Worker\Sunder.Package.Template.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=win-x64" />
+    <ProjectReference Include="Sunder.Package.Template.Worker\Sunder.Package.Template.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=win-arm64" />
+    <ProjectReference Include="Sunder.Package.Template.Worker\Sunder.Package.Template.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=linux-x64" />
+    <ProjectReference Include="Sunder.Package.Template.Worker\Sunder.Package.Template.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=linux-arm64" />
+    <ProjectReference Include="Sunder.Package.Template.Worker\Sunder.Package.Template.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=osx-x64" />
+    <ProjectReference Include="Sunder.Package.Template.Worker\Sunder.Package.Template.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=osx-arm64" />
     <ProjectReference Include="Sunder.Package.Template.App\Sunder.Package.Template.App.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="Exists('Sunder.Package.Template.App\Sunder.Package.Template.App.csproj')" />
   </ItemGroup>
 
   <ItemGroup>
-    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Runtime\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
-                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Runtime\bin\$(Configuration)\$(TargetFramework)" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\win-x64\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\win-x64" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\win-arm64\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\win-arm64" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\linux-x64\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\linux-x64" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\linux-arm64\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\linux-arm64" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\osx-x64\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\osx-x64" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\osx-arm64\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.Worker\bin\$(Configuration)\$(TargetFramework)\osx-arm64" />
     <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Template.App\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
                              DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Template.App\bin\$(Configuration)\$(TargetFramework)"
                              Condition="Exists('$(MSBuildProjectDirectory)\Sunder.Package.Template.App\Sunder.Package.Template.App.csproj')" />

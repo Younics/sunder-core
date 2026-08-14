@@ -50,6 +50,23 @@ public sealed class RegistryApiClientTests
     }
 
     [Fact]
+    public async Task GetVersionAsync_RemainsAHistoricalDetailRequest()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var httpClient = new HttpClient(handler);
+        using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
+
+        var result = await registryClient.GetVersionAsync("sunder.package.agent", "2.0.0");
+
+        Assert.Null(result);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(
+            new Uri("https://registry.example/api/v1/packages/sunder.package.agent/versions/2.0.0"),
+            request.RequestUri);
+        Assert.Equal(string.Empty, request.RequestUri?.Query);
+    }
+
+    [Fact]
     public async Task DownloadStackAsync_WhenVerificationFails_PreservesExistingDestinationAndDeletesTemporaryFile()
     {
         var downloaded = "corrupt download"u8.ToArray();

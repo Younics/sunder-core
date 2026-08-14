@@ -15,6 +15,7 @@ internal enum StorageCommitPhase
     MigrationBackup,
     Quarantine,
     FailureMarker,
+    MigrationJournal,
 }
 
 internal class AtomicFileSystem
@@ -366,7 +367,26 @@ internal sealed class AtomicFileDocument
 
         throw new TimeoutException($"Timed out waiting for the package storage lock '{_lockPath}'.", lastException);
     }
+
+    internal Task<AtomicFileSnapshot> CaptureSnapshotAsync(CancellationToken cancellationToken = default)
+        => ExecuteAsync(
+            transaction => new AtomicFileSnapshot(transaction.Read()),
+            cancellationToken);
+
+    internal Task RestoreSnapshotAsync(
+        AtomicFileSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return ExecuteAsync(transaction =>
+        {
+            transaction.Restore(snapshot.Contents);
+            return true;
+        }, cancellationToken);
+    }
 }
+
+internal sealed record AtomicFileSnapshot(byte[]? Contents);
 
 internal sealed class AtomicFileTransaction(
     string filePath,
@@ -393,6 +413,21 @@ internal sealed class AtomicFileTransaction(
     }
 
     internal void Write(byte[] contents) => WriteFile(filePath, contents, sensitive, commitPhase);
+
+    internal void Restore(byte[]? contents)
+    {
+        if (contents is not null)
+        {
+            Write(contents);
+            return;
+        }
+        if (!fileSystem.FileExists(filePath))
+        {
+            return;
+        }
+        fileSystem.DeleteFile(filePath);
+        fileSystem.SyncDirectory(directoryPath);
+    }
 
     internal string RetainMigrationBackup(byte[] contents)
     {

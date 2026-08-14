@@ -20,7 +20,6 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeTransportPolicyOptions>();
         services.AddSingleton<RuntimeAuthPolicyOptions>();
         services.AddSingleton<RuntimeStackPolicyOptions>();
-        services.AddSingleton<RuntimePackageOperationPolicyOptions>();
         services.AddSingleton<RuntimeRpcPolicyOptions>();
         services.AddSingleton<RuntimeProcessPolicyOptions>();
         services.AddSingleton<RuntimeLifecyclePolicyOptions>();
@@ -37,6 +36,7 @@ internal static class RuntimeHostComposition
         services.AddSingleton<RuntimeEventStreamService>();
         services.AddSingleton<RuntimeRpcCatalog>();
         services.AddSingleton<RuntimeRpcPermissionStore>();
+        services.AddSingleton<RuntimeRpcReadinessEvaluator>();
         services.AddSingleton(provider => new PackageLogStreamService(
             provider.GetRequiredService<RuntimePackagePaths>().PackageDataRootPath,
             provider.GetRequiredService<RuntimeProtocolDescriptor>().RuntimeInstanceId));
@@ -44,12 +44,12 @@ internal static class RuntimeHostComposition
             provider.GetRequiredService<ILogger<RuntimeSessionOwner>>(),
             provider.GetRequiredService<RuntimeEventStreamService>(),
             provider.GetRequiredService<RuntimeAuthPolicyOptions>(),
-            provider.GetRequiredService<RuntimePackageOperationPolicyOptions>(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetService<IHostApplicationLifetime>(),
             provider.GetRequiredService<PackageUiSnapshotStore>(),
             provider.GetRequiredService<RuntimeLifecyclePolicyOptions>(),
-            provider.GetRequiredService<RuntimeRpcCatalog>()));
+            provider.GetRequiredService<RuntimeRpcCatalog>(),
+            provider.GetRequiredService<RuntimeRpcReadinessEvaluator>()));
         services.AddSingleton(provider => provider.GetRequiredService<RuntimeSessionOwner>().State);
         services.AddSingleton<RuntimeRpcAppSessionManager>();
         services.AddSingleton<RuntimeRpcBroker>();
@@ -71,11 +71,7 @@ internal static class RuntimeHostComposition
         services.AddSingleton<InstalledPackageLifecycleService>();
         services.AddHostedService<PackageStageCleanupService>();
         services.AddSingleton<PackageSessionCommandService>();
-        services.AddSingleton<RuntimePackageDataService>();
-        services.AddSingleton(provider => new RuntimePackageOperationService(
-            provider.GetRequiredService<PackageSessionState>(),
-            provider.GetRequiredService<RuntimePackageOperationPolicyOptions>(),
-            provider.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None));
+        services.AddSingleton<PackageDataAccessService>();
         services.AddSingleton<PackageSettingsAccessService>();
         services.AddSingleton<PackageCallbackAccessService>();
         services.AddSingleton<PackageAuthAccessService>();

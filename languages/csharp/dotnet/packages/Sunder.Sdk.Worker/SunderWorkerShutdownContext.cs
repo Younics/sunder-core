@@ -1,13 +1,10 @@
-using Sunder.Sdk.Compatibility;
-
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Contains the Host-provided reason for stopping a worker activation.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+/// <summary>Contains the reason for stopping a worker activation or prepared candidate.</summary>
 public sealed class SunderWorkerShutdownContext
 {
     internal SunderWorkerShutdownContext(string reason) => Reason = reason;
 
-    /// <summary>Gets the bounded Host-provided shutdown reason.</summary>
+    /// <summary>Gets the bounded shutdown reason.</summary>
     public string Reason { get; }
 }

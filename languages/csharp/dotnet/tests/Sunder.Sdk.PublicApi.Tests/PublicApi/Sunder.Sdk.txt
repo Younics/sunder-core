@@ -85,10 +85,6 @@ type interface Sunder.Sdk.Abstractions.IPackageAuthHandler : Sunder.Sdk.Abstract
   method abstract System.Threading.Tasks.Task<Sunder.Sdk.Authentication.PackageAuthStatus> CompleteAuthorizationAsync(Sunder.Sdk.Authentication.PackageAuthSessionCompletionContext context, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.Task<Sunder.Sdk.Authentication.PackageAuthStatus> DisconnectAsync(System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Authentication.PackageAuthStatus> GetStatusAsync(System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-services.v1")
-type interface Sunder.Sdk.Abstractions.IPackageBackgroundService
-  method abstract System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken = null)
-  method abstract System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
 type interface Sunder.Sdk.Abstractions.IPackageCallbackClient
   property System.Boolean IsAvailable { get; }
@@ -132,10 +128,6 @@ attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("role-local-work
 type interface Sunder.Sdk.Abstractions.IPackageRoleLocalWorkspace
   property System.String WorkspaceRootPath { get; }
   method abstract System.String GetLocalPath(System.String relativePath)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
-type interface Sunder.Sdk.Abstractions.IPackageRuntimeGenerationParticipant : Sunder.Sdk.Abstractions.IPackageBackgroundService
-  property System.Threading.Tasks.Task GenerationCompletion { get; }
-  method abstract System.Threading.Tasks.Task CommitGenerationAsync(Sunder.Sdk.Abstractions.PackageRuntimeGeneration generation, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("secrets.v1")
 type interface Sunder.Sdk.Abstractions.IPackageSecrets
   method abstract System.Threading.Tasks.Task DeleteSecretAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
@@ -186,22 +178,6 @@ attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("core.v1")
 type interface Sunder.Sdk.Abstractions.ISunderAppPackageModule
   method abstract System.Void ConfigureAppServices(Microsoft.Extensions.DependencyInjection.IServiceCollection services, Sunder.Sdk.Abstractions.IPackageContext context)
   method abstract System.Void RegisterAppContributions(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, System.IServiceProvider services)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("contributions.v1")
-type interface Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry
-  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-services.v1")
-  method abstract System.Void RegisterBackgroundService<TService>() where TService : class, Sunder.Sdk.Abstractions.IPackageBackgroundService
-  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-  method abstract System.Void RegisterRuntimeOperation<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, IPackageRuntimeOperationHandler<TRequest, TResponse> handler) where TRequest : class where TResponse : class
-  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-  method abstract System.Void RegisterRuntimeStream<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, IPackageRuntimeStreamHandler<TRequest, TEvent> handler) where TRequest : class where TEvent : class
-  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-  method virtual System.Void RegisterRpcProvider(System.String providerId, Sunder.Sdk.Rpc.ISunderRpcServiceHandler handler)
-  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings.schema.v1")
-  method virtual System.Void RegisterSettingsSchema(Sunder.Sdk.Settings.PackageSettingsSchema schema)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("core.v1")
-type interface Sunder.Sdk.Abstractions.ISunderRuntimePackageModule
-  method abstract System.Void ConfigureRuntimeServices(Microsoft.Extensions.DependencyInjection.IServiceCollection services, Sunder.Sdk.Abstractions.IPackageContext context)
-  method abstract System.Void RegisterRuntimeContributions(Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry registry, System.IServiceProvider services)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
 type sealed class Sunder.Sdk.Abstractions.NullPackageCallbackClient : Sunder.Sdk.Abstractions.IPackageCallbackClient
   property static Sunder.Sdk.Abstractions.NullPackageCallbackClient Instance { get; }
@@ -230,17 +206,6 @@ type sealed class Sunder.Sdk.Abstractions.PackageHotbarView : System.IEquatable<
   method Sunder.Sdk.Abstractions.PackageHotbarView <Clone>$()
   method System.Void Deconstruct(out System.String ViewId, out System.String PackageId, out System.String PackageDisplayName, out System.String Title, out System.String Glyph, out Sunder.Sdk.Abstractions.PackageViewPlacement Placement, out System.Int32 Order, out System.Boolean IsOpen)
   method virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageHotbarView? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
-type sealed class Sunder.Sdk.Abstractions.PackageRuntimeGeneration : System.IEquatable<Sunder.Sdk.Abstractions.PackageRuntimeGeneration>
-  method .ctor(System.Guid ActivationId, System.Int64 SessionGeneration)
-  property System.Guid ActivationId { get; init; }
-  property System.Int64 SessionGeneration { get; init; }
-  method Sunder.Sdk.Abstractions.PackageRuntimeGeneration <Clone>$()
-  method System.Void Deconstruct(out System.Guid ActivationId, out System.Int64 SessionGeneration)
-  method virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageRuntimeGeneration? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
@@ -455,14 +420,14 @@ type sealed class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field static System.String CallbacksV1 = "callbacks.v1"
   field static System.String ContributionsV1 = "contributions.v1"
   field static System.String CoreV1 = "core.v1"
+  field static System.String DockerEnvironmentV1 = "docker-environment.v1"
   field static System.String LoggingV1 = "logging.v1"
   field static System.String NotificationsV1 = "notifications.v1"
   field static System.String PackagingV1 = "packaging.v1"
   field static System.String RoleLocalWorkspaceV1 = "role-local-workspace.v1"
   field static System.String RpcV1 = "rpc.v1"
+  field static System.String RpcV2 = "rpc.v2"
   field static System.String RuntimeGenerationsV1 = "runtime-generations.v1"
-  field static System.String RuntimeInvocationErrorsV1 = "runtime-invocation-errors.v1"
-  field static System.String RuntimeOperationsV1 = "runtime-operations.v1"
   field static System.String SecretsV1 = "secrets.v1"
   field static System.String SettingsNavigationV1 = "settings-navigation.v1"
   field static System.String SettingsSchemaV1 = "settings.schema.v1"
@@ -589,13 +554,13 @@ type sealed class Sunder.Sdk.Packaging.SunderPackageDependencyAttribute : System
   method .ctor()
   property System.String PackageId { get; set; }
   property System.String VersionRange { get; set; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type interface Sunder.Sdk.Rpc.ISunderRpcCallScope : Sunder.Sdk.Rpc.ISunderRpcClient, System.IAsyncDisposable
   property System.DateTimeOffset DeadlineUtc { get; }
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.IO.Stream source, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentFileAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String filePath, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<System.IO.Stream> OpenContentAsync(Sunder.Sdk.Rpc.SunderRpcContentReference reference, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type interface Sunder.Sdk.Rpc.ISunderRpcClient
   method abstract System.Collections.Generic.IAsyncEnumerable<Sunder.Sdk.Rpc.SunderRpcCatalogEvent> WatchAsync(System.Int64 afterRevision, System.Int64 afterSequence, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> SubscribeAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
@@ -604,14 +569,17 @@ type interface Sunder.Sdk.Rpc.ISunderRpcClient
   method abstract System.Threading.Tasks.ValueTask<System.Boolean> TryReportInvariantViolationAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.Exception exception, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> InvokeAsync(Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
   method virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.ISunderRpcCallScope> CreateCallScopeAsync(Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type interface Sunder.Sdk.Rpc.ISunderRpcDeclaredErrorMetadata
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.Collections.Generic.IReadOnlyDictionary<System.String, System.Collections.Generic.IReadOnlyList<System.String>>> DeclaredErrors { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type interface Sunder.Sdk.Rpc.ISunderRpcServiceHandler
   method abstract System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> InvokeServerStreamAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
   method abstract System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> InvokeUnaryAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcCSharpGenerator
   method static System.String Generate(Sunder.Sdk.Rpc.SunderRpcContractDescriptor descriptor, System.String namespaceName)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcCallOptions : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcCallOptions>
   method .ctor(System.DateTimeOffset? DeadlineUtc = null)
   property System.DateTimeOffset? DeadlineUtc { get; init; }
@@ -621,7 +589,7 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcCallOptions : System.IEquatable<Sunder
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcCatalogEvent : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcCatalogEvent>
   method .ctor(System.Int64 Revision, System.Int64 Sequence, Sunder.Sdk.Rpc.SunderRpcCatalogEventKind Kind, Sunder.Sdk.Rpc.SunderRpcProviderSnapshot? Provider)
   property Sunder.Sdk.Rpc.SunderRpcCatalogEventKind Kind { get; init; }
@@ -634,7 +602,7 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcCatalogEvent : System.IEquatable<Sunde
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcCatalogEventKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcCatalogEventKind Activated = 2
   field static Sunder.Sdk.Rpc.SunderRpcCatalogEventKind Added = 0
@@ -643,18 +611,20 @@ type enum Sunder.Sdk.Rpc.SunderRpcCatalogEventKind : System.IComparable, System.
   field static Sunder.Sdk.Rpc.SunderRpcCatalogEventKind Removed = 1
   field static Sunder.Sdk.Rpc.SunderRpcCatalogEventKind ResetRequired = 5
   field System.Int32 value__
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcCatalogSnapshot
   method .ctor(System.Int64 revision, System.Int64 sequence, System.Collections.Generic.IEnumerable<Sunder.Sdk.Rpc.SunderRpcProviderSnapshot> providers, System.Boolean resetRequired = false)
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Rpc.SunderRpcProviderSnapshot> Providers { get; }
   property System.Boolean ResetRequired { get; }
   property System.Int64 Revision { get; }
   property System.Int64 Sequence { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcClientExtensions
   method static IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(Sunder.Sdk.Rpc.ISunderRpcClient client, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, TRequest request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
+  method static IAsyncEnumerable<TEvent?> SubscribeAsync<TRequest, TEvent>(Sunder.Sdk.Rpc.ISunderRpcClient client, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, TRequest? request, System.Boolean requestAllowsNull, System.Boolean eventAllowsNull, System.Boolean useV2WireFormat = false, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
   method static ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(Sunder.Sdk.Rpc.ISunderRpcClient client, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, TRequest request, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+  method static ValueTask<TResponse?> InvokeAsync<TRequest, TResponse>(Sunder.Sdk.Rpc.ISunderRpcClient client, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint, System.String serviceId, System.String methodId, TRequest? request, System.Boolean requestAllowsNull, System.Boolean responseAllowsNull, System.Boolean useV2WireFormat = false, Sunder.Sdk.Rpc.SunderRpcCallOptions? options = null, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcContentReference : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcContentReference>
   method .ctor(System.String Id, System.Int64 Length, System.String Sha256, System.String MediaType, System.String FileName, System.DateTimeOffset ExpiresAtUtc, Sunder.Sdk.Rpc.SunderRpcContentRepeatability Repeatability)
   property System.DateTimeOffset ExpiresAtUtc { get; init; }
@@ -670,7 +640,7 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcContentReference : System.IEquatable<S
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions>
   method .ctor(System.String MediaType, System.String FileName, System.Int64? Length = null, System.DateTimeOffset? ExpiresAtUtc = null, Sunder.Sdk.Rpc.SunderRpcContentRepeatability Repeatability = SingleUse, System.Int32 MaximumUses = 1)
   property System.DateTimeOffset? ExpiresAtUtc { get; init; }
@@ -685,28 +655,36 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions : System.IE
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcContentRepeatability : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcContentRepeatability Repeatable = 1
   field static Sunder.Sdk.Rpc.SunderRpcContentRepeatability SingleUse = 0
   field System.Int32 value__
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcContractDescriptor
+  property System.String? AbiSha256 { get; }
   property System.String ContractId { get; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.Text.Json.JsonElement> Definitions { get; }
   property System.Int32 DescriptorVersion { get; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String?> Errors { get; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Rpc.SunderRpcServiceDescriptor> Services { get; }
   property System.String Sha256 { get; }
   property System.String Version { get; }
   method Sunder.Sdk.Rpc.SunderRpcServiceDescriptor? FindService(System.String serviceId)
   method System.Boolean IsValid(System.String schemaReference, System.Text.Json.JsonElement value, out System.String? error)
   method System.Byte[] GetCanonicalUtf8()
+  method System.Byte[]? GetCanonicalAbiProjectionUtf8()
   method static Sunder.Sdk.Rpc.SunderRpcContractDescriptor Parse(System.ReadOnlySpan<System.Byte> descriptorUtf8)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcDescriptorException : System.FormatException, System.Runtime.Serialization.ISerializable
   method .ctor(System.String message)
   method .ctor(System.String message, System.Exception innerException)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type enum Sunder.Sdk.Rpc.SunderRpcDispatchState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Sdk.Rpc.SunderRpcDispatchState NotDispatched = 0
+  field static Sunder.Sdk.Rpc.SunderRpcDispatchState PossiblyDispatched = 1
+  field System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcEndpointReference : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcEndpointReference>
   method .ctor(System.String value)
   property System.String Value { get; }
@@ -715,19 +693,21 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcEndpointReference : System.IEquatable<
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcError : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcError>
-  method .ctor(Sunder.Sdk.Rpc.SunderRpcErrorKind Kind, System.String Code, System.String Message)
+  method .ctor(Sunder.Sdk.Rpc.SunderRpcErrorKind Kind, System.String Code, System.String Message, Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState = NotDispatched, Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety = Safe)
   property System.String Code { get; init; }
+  property Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState { get; init; }
   property Sunder.Sdk.Rpc.SunderRpcErrorKind Kind { get; init; }
   property System.String Message { get; init; }
+  property Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety { get; init; }
   method Sunder.Sdk.Rpc.SunderRpcError <Clone>$()
-  method System.Void Deconstruct(out Sunder.Sdk.Rpc.SunderRpcErrorKind Kind, out System.String Code, out System.String Message)
+  method System.Void Deconstruct(out Sunder.Sdk.Rpc.SunderRpcErrorKind Kind, out System.String Code, out System.String Message, out Sunder.Sdk.Rpc.SunderRpcDispatchState DispatchState, out Sunder.Sdk.Rpc.SunderRpcRetrySafety RetrySafety)
   method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcError? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcErrorKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcErrorKind Cancelled = 6
   field static Sunder.Sdk.Rpc.SunderRpcErrorKind DeadlineExceeded = 5
@@ -741,11 +721,11 @@ type enum Sunder.Sdk.Rpc.SunderRpcErrorKind : System.IComparable, System.IConver
   field static Sunder.Sdk.Rpc.SunderRpcErrorKind Unavailable = 8
   field static Sunder.Sdk.Rpc.SunderRpcErrorKind Validation = 4
   field System.Int32 value__
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcException : System.Exception, System.Runtime.Serialization.ISerializable
   method .ctor(Sunder.Sdk.Rpc.SunderRpcError error)
   property Sunder.Sdk.Rpc.SunderRpcError Error { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcInvocationContext
   property System.Int32 CallDepth { get; }
   property System.String CallerPackageId { get; }
@@ -756,34 +736,49 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcInvocationContext
   method System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentAsync(System.IO.Stream source, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.ValueTask<Sunder.Sdk.Rpc.SunderRpcContentReference> RegisterContentFileAsync(System.String filePath, Sunder.Sdk.Rpc.SunderRpcContentRegistrationOptions options, System.Threading.CancellationToken cancellationToken = null)
   method System.Threading.Tasks.ValueTask<System.IO.Stream> OpenContentAsync(Sunder.Sdk.Rpc.SunderRpcContentReference reference, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcMethodDescriptor
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; }
+  property Sunder.Sdk.Rpc.SunderRpcMethodIdempotency Idempotency { get; }
   property Sunder.Sdk.Rpc.SunderRpcMethodKind Kind { get; }
   property System.String MethodId { get; }
   property System.String OutputSchemaReference { get; }
   property System.String RequestSchemaReference { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type enum Sunder.Sdk.Rpc.SunderRpcMethodIdempotency : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Sdk.Rpc.SunderRpcMethodIdempotency Idempotent = 1
+  field static Sunder.Sdk.Rpc.SunderRpcMethodIdempotency None = 0
+  field System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcMethodKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcMethodKind ServerStream = 1
   field static Sunder.Sdk.Rpc.SunderRpcMethodKind Unary = 0
   field System.Int32 value__
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type struct Sunder.Sdk.Rpc.SunderRpcOptional<T>
+  method .ctor(T? value)
+  property System.Boolean IsPresent { get; }
+  property T? Value { get; }
+  method System.Boolean TryGetValue(out T? value)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcProtocol
   field static System.Int32 DescriptorVersion = 1
+  field static System.Int32 DescriptorVersionV2 = 2
   field static System.String DiscoverAction = "discover"
   field static System.String InvokeAction = "invoke"
   field static System.String JsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema"
   field static System.Int32 MaximumDescriptorBytes = 4194304
   field static System.String SubscribeAction = "subscribe"
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcProviderSnapshot : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcProviderSnapshot>
-  method .ctor(System.String PackageId, System.String PackageVersion, System.String ProviderId, System.String ContractId, System.String ContractVersion, System.String ContractSha256, System.Guid ActivationId, System.Int64 ActivationEpoch, System.Int64 SessionGeneration, Sunder.Sdk.Rpc.SunderRpcEndpointReference Endpoint, System.Int64 CatalogRevision, Sunder.Sdk.Rpc.SunderRpcProviderState State, System.String? FaultCode = null)
+  method .ctor(System.String PackageId, System.String PackageVersion, System.String ProviderId, System.String ContractId, System.String ContractVersion, System.String DescriptorSha256, System.String? AbiSha256, System.Guid ActivationId, System.Int64 ActivationEpoch, System.Int64 SessionGeneration, Sunder.Sdk.Rpc.SunderRpcEndpointReference Endpoint, System.Int64 CatalogRevision, Sunder.Sdk.Rpc.SunderRpcProviderState State, System.String? FaultCode = null)
+  property System.String? AbiSha256 { get; init; }
   property System.Int64 ActivationEpoch { get; init; }
   property System.Guid ActivationId { get; init; }
   property System.Int64 CatalogRevision { get; init; }
   property System.String ContractId { get; init; }
-  property System.String ContractSha256 { get; init; }
   property System.String ContractVersion { get; init; }
+  property System.String DescriptorSha256 { get; init; }
   property Sunder.Sdk.Rpc.SunderRpcEndpointReference Endpoint { get; init; }
   property System.String? FaultCode { get; init; }
   property System.String PackageId { get; init; }
@@ -792,55 +787,32 @@ type sealed class Sunder.Sdk.Rpc.SunderRpcProviderSnapshot : System.IEquatable<S
   property System.Int64 SessionGeneration { get; init; }
   property Sunder.Sdk.Rpc.SunderRpcProviderState State { get; init; }
   method Sunder.Sdk.Rpc.SunderRpcProviderSnapshot <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String PackageVersion, out System.String ProviderId, out System.String ContractId, out System.String ContractVersion, out System.String ContractSha256, out System.Guid ActivationId, out System.Int64 ActivationEpoch, out System.Int64 SessionGeneration, out Sunder.Sdk.Rpc.SunderRpcEndpointReference Endpoint, out System.Int64 CatalogRevision, out Sunder.Sdk.Rpc.SunderRpcProviderState State, out System.String? FaultCode)
+  method System.Void Deconstruct(out System.String PackageId, out System.String PackageVersion, out System.String ProviderId, out System.String ContractId, out System.String ContractVersion, out System.String DescriptorSha256, out System.String? AbiSha256, out System.Guid ActivationId, out System.Int64 ActivationEpoch, out System.Int64 SessionGeneration, out Sunder.Sdk.Rpc.SunderRpcEndpointReference Endpoint, out System.Int64 CatalogRevision, out Sunder.Sdk.Rpc.SunderRpcProviderState State, out System.String? FaultCode)
   method virtual System.Boolean Equals(Sunder.Sdk.Rpc.SunderRpcProviderSnapshot? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type enum Sunder.Sdk.Rpc.SunderRpcProviderState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field static Sunder.Sdk.Rpc.SunderRpcProviderState Active = 0
   field static Sunder.Sdk.Rpc.SunderRpcProviderState Faulted = 2
   field static Sunder.Sdk.Rpc.SunderRpcProviderState Inactive = 1
   field System.Int32 value__
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type enum Sunder.Sdk.Rpc.SunderRpcRetrySafety : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field static Sunder.Sdk.Rpc.SunderRpcRetrySafety Safe = 0
+  field static Sunder.Sdk.Rpc.SunderRpcRetrySafety Unsafe = 1
+  field System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
 type sealed class Sunder.Sdk.Rpc.SunderRpcServiceDescriptor
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Rpc.SunderRpcMethodDescriptor> Methods { get; }
   property System.String ServiceId { get; }
   method Sunder.Sdk.Rpc.SunderRpcMethodDescriptor? FindMethod(System.String methodId)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type interface Sunder.Sdk.Runtime.IPackageRuntimeClient
-  property System.Boolean IsAvailable { get; }
-  method abstract IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, TRequest request, System.Threading.CancellationToken cancellationToken = null) where TRequest : class where TEvent : class
-  method abstract ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, TRequest request, System.Threading.CancellationToken cancellationToken = null) where TRequest : class where TResponse : class
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type interface Sunder.Sdk.Runtime.IPackageRuntimeOperationHandler<TRequest, TResponse> where TRequest : class where TResponse : class
-  method abstract ValueTask<TResponse> HandleAsync(TRequest request, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type interface Sunder.Sdk.Runtime.IPackageRuntimeStreamHandler<TRequest, TEvent> where TRequest : class where TEvent : class
-  method abstract IAsyncEnumerable<TEvent> SubscribeAsync(TRequest request, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type sealed class Sunder.Sdk.Runtime.NullPackageRuntimeClient : Sunder.Sdk.Runtime.IPackageRuntimeClient
-  property static Sunder.Sdk.Runtime.NullPackageRuntimeClient Instance { get; }
-  property System.Boolean IsAvailable { get; }
-  method virtual IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(PackageRuntimeStream<TRequest, TEvent> stream, TRequest request, System.Threading.CancellationToken cancellationToken = null) where TRequest : class where TEvent : class
-  method virtual ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(PackageRuntimeOperation<TRequest, TResponse> operation, TRequest request, System.Threading.CancellationToken cancellationToken = null) where TRequest : class where TResponse : class
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-invocation-errors.v1")
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type sealed class Sunder.Sdk.Runtime.PackageRuntimeInvocationException : System.Exception, System.Runtime.Serialization.ISerializable
-  method .ctor(System.String code, System.Boolean isTransient, System.Int32? statusCode = null, System.String? correlationId = null)
-  property System.String Code { get; }
-  property System.String? CorrelationId { get; }
-  property System.Boolean IsTransient { get; }
-  property System.Int32? StatusCode { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type sealed class Sunder.Sdk.Runtime.PackageRuntimeOperation<TRequest, TResponse> where TRequest : class where TResponse : class
-  method .ctor(System.String operationId)
-  property System.String OperationId { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-operations.v1")
-type sealed class Sunder.Sdk.Runtime.PackageRuntimeStream<TRequest, TEvent> where TRequest : class where TEvent : class
-  method .ctor(System.String streamId)
-  property System.String StreamId { get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type sealed class Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory : System.Text.Json.Serialization.JsonConverterFactory
+  method .ctor()
+  method virtual System.Boolean CanConvert(System.Type typeToConvert)
+  method virtual System.Text.Json.Serialization.JsonConverter CreateConverter(System.Type typeToConvert, System.Text.Json.JsonSerializerOptions options)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings.schema.v1")
 type sealed class Sunder.Sdk.Settings.PackageSettingsField : System.IEquatable<Sunder.Sdk.Settings.PackageSettingsField>
   method .ctor(System.String key, System.String label, Sunder.Sdk.Settings.PackageSettingsFieldKind kind, System.String? description = null, System.Boolean isRequired = false, System.String? placeholder = null, System.String? defaultValue = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Settings.PackageSettingsOption>? options = null)

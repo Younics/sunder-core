@@ -68,15 +68,7 @@ internal sealed class PackageStoreRecovery(
                        await File.ReadAllTextAsync(journalPath, cancellationToken),
                        InstalledPackageStore.JsonOptions)
                    ?? throw new InvalidDataException($"Package transaction journal '{journalPath}' is invalid.");
-            return journal with
-            {
-                PreviousPackages = journal.PreviousPackages is null
-                    ? null!
-                    : InstalledPackageStore.NormalizeCatalogForCompatibility(journal.PreviousPackages),
-                DesiredPackages = journal.DesiredPackages is null
-                    ? null!
-                    : InstalledPackageStore.NormalizeCatalogForCompatibility(journal.DesiredPackages),
-            };
+            return journal;
         }
         catch (JsonException exception)
         {
@@ -88,6 +80,7 @@ internal sealed class PackageStoreRecovery(
     {
         var catalog = await store.ListAsync(CancellationToken.None);
         var catalogCommitted = PackageStorePolicy.CatalogsEqual(catalog, journal.DesiredPackages);
+        var previousCatalogConfirmed = PackageStorePolicy.CatalogsEqual(catalog, journal.PreviousPackages);
         if (journal.Phase is PackageStoreTransactionPhase.CatalogCommitted
             or PackageStoreTransactionPhase.CleanupPending
             or PackageStoreTransactionPhase.Completed
@@ -102,6 +95,13 @@ internal sealed class PackageStoreRecovery(
             await transactions.CleanupCommittedAsync(journal, journalPath);
             PackageStoreFileSystem.TryDeleteDirectory(Path.GetDirectoryName(journalPath)!);
             return;
+        }
+
+        if (journal.Phase == PackageStoreTransactionPhase.CatalogCommitting
+            && !previousCatalogConfirmed)
+        {
+            throw new InvalidDataException(
+                $"Package transaction '{journal.TransactionId}' has an indeterminate authoritative catalog. Transaction evidence was preserved.");
         }
 
         await transactions.RollBackAsync(journal, journalPath);

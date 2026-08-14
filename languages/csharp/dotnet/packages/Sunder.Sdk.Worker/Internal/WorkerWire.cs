@@ -8,7 +8,8 @@ internal sealed record WorkerProviderIdentity(
     string ProviderId,
     string ContractId,
     string ContractVersion,
-    string ContractSha256);
+    string DescriptorSha256,
+    string AbiSha256);
 
 internal sealed record WorkerContentFileHandle(string HandleId, string FilePath);
 
@@ -23,12 +24,14 @@ internal static partial class WorkerWire
             "providerId",
             "contractId",
             "contractVersion",
-            "contractSha256");
+            "descriptorSha256",
+            "abiSha256");
         return new WorkerProviderIdentity(
             WorkerJson.RequiredString(value, "providerId", 256),
             WorkerJson.RequiredString(value, "contractId", 256),
             WorkerJson.RequiredString(value, "contractVersion", 128),
-            WorkerJson.RequiredString(value, "contractSha256", 64));
+            ReadSha256(value, "descriptorSha256", requireLowercase: true),
+            ReadSha256(value, "abiSha256", requireLowercase: true));
     }
 
     public static SunderRpcProviderSnapshot ReadProviderSnapshot(JsonElement value)
@@ -40,7 +43,8 @@ internal static partial class WorkerWire
             "providerId",
             "contractId",
             "contractVersion",
-            "contractSha256",
+            "descriptorSha256",
+            "abiSha256",
             "activationId",
             "activationEpoch",
             "sessionGeneration",
@@ -73,7 +77,8 @@ internal static partial class WorkerWire
             WorkerJson.RequiredString(value, "providerId", 256),
             WorkerJson.RequiredString(value, "contractId", 256),
             WorkerJson.RequiredString(value, "contractVersion", 128),
-            ReadSha256(value, "contractSha256"),
+            ReadSha256(value, "descriptorSha256", requireLowercase: true),
+            ReadSha256(value, "abiSha256", requireLowercase: true),
             activationGuid,
             WorkerJson.RequiredNonNegativeInt64(value, "activationEpoch"),
             WorkerJson.RequiredNonNegativeInt64(value, "sessionGeneration"),
@@ -92,7 +97,9 @@ internal static partial class WorkerWire
             throw new WorkerProtocolException("Host provider catalog providers must be an array.");
         }
 
-        var providers = providersValue.EnumerateArray().Select(ReadProviderSnapshot).ToArray();
+        var providers = providersValue.EnumerateArray()
+            .Select(ReadProviderSnapshot)
+            .ToArray();
         return new SunderRpcCatalogSnapshot(
             WorkerJson.RequiredNonNegativeInt64(value, "revision"),
             WorkerJson.RequiredNonNegativeInt64(value, "sequence"),
@@ -169,7 +176,7 @@ internal static partial class WorkerWire
 
     public static SunderRpcException ReadHostError(JsonElement value)
     {
-        WorkerJson.RequireOnlyProperties(value, "kind", "code", "message");
+        WorkerJson.RequireOnlyProperties(value, "kind", "code", "message", "dispatchState", "retrySafety");
         var kind = WorkerJson.RequiredString(value, "kind", 64) switch
         {
             "domain" => SunderRpcErrorKind.Domain,
@@ -191,16 +198,33 @@ internal static partial class WorkerWire
             throw new WorkerProtocolException("Host returned an unsafe RPC error code.");
         }
         var message = WorkerJson.RequiredString(value, "message", 512);
-        return new SunderRpcException(new SunderRpcError(kind, code, message), hostAuthenticated: true);
+        var dispatchState = WorkerJson.RequiredString(value, "dispatchState", 32) switch
+        {
+            "not-dispatched" => SunderRpcDispatchState.NotDispatched,
+            "possibly-dispatched" => SunderRpcDispatchState.PossiblyDispatched,
+            _ => throw new WorkerProtocolException("Host returned an invalid RPC dispatch state."),
+        };
+        var retrySafety = WorkerJson.RequiredString(value, "retrySafety", 16) switch
+        {
+            "safe" => SunderRpcRetrySafety.Safe,
+            "unsafe" => SunderRpcRetrySafety.Unsafe,
+            _ => throw new WorkerProtocolException("Host returned an invalid RPC retry safety."),
+        };
+        return new SunderRpcException(
+            new SunderRpcError(kind, code, message, dispatchState, retrySafety),
+            hostAuthenticated: true);
     }
 
-    public static void WriteProviderIdentity(Utf8JsonWriter writer, WorkerProviderIdentity provider)
+    public static void WriteProviderIdentity(
+        Utf8JsonWriter writer,
+        WorkerProviderIdentity provider)
     {
         writer.WriteStartObject();
         writer.WriteString("providerId", provider.ProviderId);
         writer.WriteString("contractId", provider.ContractId);
         writer.WriteString("contractVersion", provider.ContractVersion);
-        writer.WriteString("contractSha256", provider.ContractSha256);
+        writer.WriteString("descriptorSha256", provider.DescriptorSha256);
+        writer.WriteString("abiSha256", provider.AbiSha256);
         writer.WriteEndObject();
     }
 
@@ -296,10 +320,16 @@ internal static partial class WorkerWire
         writer.WriteEndObject();
     }
 
-    private static string ReadSha256(JsonElement value, string propertyName)
+    private static string ReadSha256(
+        JsonElement value,
+        string propertyName,
+        bool requireLowercase = false)
     {
         var sha256 = WorkerJson.RequiredString(value, propertyName, 64);
-        if (sha256.Length != 64 || sha256.Any(static character => !char.IsAsciiHexDigit(character)))
+        if (sha256.Length != 64
+            || sha256.Any(character => requireLowercase
+                ? character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')
+                : !char.IsAsciiHexDigit(character)))
         {
             throw new WorkerProtocolException($"Host envelope property '{propertyName}' is not a SHA-256 value.");
         }

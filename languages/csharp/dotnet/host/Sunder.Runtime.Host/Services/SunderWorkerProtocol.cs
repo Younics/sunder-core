@@ -7,12 +7,10 @@ namespace Sunder.Runtime.Host.Services;
 
 internal static class SunderWorkerProtocol
 {
-    public const string Name = "sunder.worker.v1";
-    public const int Version = 1;
-    public const string V2Capability = "worker-protocol.v2";
-
-    public static SunderWorkerProtocolIdentity V1 { get; } = new(Name, Version, UsesV2Lifecycle: false);
-    public static SunderWorkerProtocolIdentity V2 { get; } = new("sunder.worker.v2", 2, UsesV2Lifecycle: true);
+    public const string V3Capability = "worker-protocol.v3";
+    public const string Name = "sunder.worker.v3";
+    public const int Version = 3;
+    public const long MaximumSafeInteger = 9_007_199_254_740_991;
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
@@ -163,10 +161,10 @@ internal static class SunderWorkerProtocol
         if (!root.TryGetProperty(propertyName, out var value)
             || value.ValueKind != JsonValueKind.Number
             || !value.TryGetInt64(out var result)
-            || result < 0)
+            || result is < 0 or > MaximumSafeInteger)
         {
             throw new SunderWorkerProtocolException(
-                $"Worker envelope property '{propertyName}' must be a non-negative integer.");
+                $"Worker envelope property '{propertyName}' must be an integer from 0 through {MaximumSafeInteger}.");
         }
         return result;
     }
@@ -252,11 +250,35 @@ internal static class SunderWorkerProtocol
     private sealed class JsonObjectNames
     {
         public HashSet<string> Exact { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> IgnoreCase { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> IgnoreCase { get; } = new(AsciiCaseInsensitiveComparer.Instance);
+    }
+
+    private sealed class AsciiCaseInsensitiveComparer : IEqualityComparer<string>
+    {
+        public static AsciiCaseInsensitiveComparer Instance { get; } = new();
+
+        public bool Equals(string? left, string? right)
+        {
+            if (ReferenceEquals(left, right)) return true;
+            if (left is null || right is null || left.Length != right.Length) return false;
+            for (var index = 0; index < left.Length; index++)
+            {
+                if (Fold(left[index]) != Fold(right[index])) return false;
+            }
+            return true;
+        }
+
+        public int GetHashCode(string value)
+        {
+            var hash = new HashCode();
+            foreach (var character in value) hash.Add(Fold(character));
+            return hash.ToHashCode();
+        }
+
+        private static char Fold(char value)
+            => value is >= 'A' and <= 'Z' ? (char)(value + ('a' - 'A')) : value;
     }
 }
-
-internal sealed record SunderWorkerProtocolIdentity(string Name, int Version, bool UsesV2Lifecycle);
 
 internal static class WorkerJson
 {

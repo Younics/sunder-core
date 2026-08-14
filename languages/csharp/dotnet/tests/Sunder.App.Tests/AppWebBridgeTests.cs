@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Avalonia.Controls;
 using Sunder.App.Services;
@@ -10,6 +12,104 @@ namespace Sunder.App.Tests;
 
 public sealed class AppWebBridgeTests
 {
+    [Fact]
+    public async Task Invoke_UsesCallerDescriptorForAbiCompatibleAnnotationDifferentProvider()
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
+        try
+        {
+            var callerBytes = RpcDescriptorBytes("Caller request annotation.");
+            var providerBytes = RpcDescriptorBytes("Provider request annotation.");
+            var callerDescriptor = SunderRpcContractDescriptor.Parse(callerBytes);
+            var providerDescriptor = SunderRpcContractDescriptor.Parse(providerBytes);
+            Assert.Equal(callerDescriptor.ContractId, providerDescriptor.ContractId);
+            Assert.Equal(callerDescriptor.Version, providerDescriptor.Version);
+            Assert.Equal(callerDescriptor.AbiSha256, providerDescriptor.AbiSha256);
+            Assert.NotEqual(callerDescriptor.Sha256, providerDescriptor.Sha256);
+
+            var catalog = WriteContractCatalog(root, callerBytes, callerDescriptor);
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            var rpc = new InvocationRpcClient(providerDescriptor);
+            await using var bridge = new AppWebBridge(
+                webView,
+                server,
+                rpc,
+                catalog,
+                new ExternalBrowserService(),
+                _ => { });
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            await bridge.EstablishAsync(server.BaseUri);
+            var bootstrap = Assert.Single(webView.Scripts);
+            Assert.Contains(
+                "error: Object.freeze({ kind, code, message, dispatchState, retrySafety })",
+                bootstrap,
+                StringComparison.Ordinal);
+            webView.ClearScripts();
+
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_discover",
+                "rpc.discover",
+                new { contractId = callerDescriptor.ContractId }));
+            var discovery = ReadResponse(Assert.Single(webView.Scripts));
+            var discoveredProvider = Assert.Single(
+                discovery.GetProperty("value").GetProperty("providers").EnumerateArray().ToArray());
+            Assert.Equal(providerDescriptor.Sha256, discoveredProvider.GetProperty("descriptorSha256").GetString());
+            Assert.Equal(providerDescriptor.AbiSha256, discoveredProvider.GetProperty("abiSha256").GetString());
+            Assert.False(discoveredProvider.TryGetProperty("contractSha256", out _));
+            Assert.False(discoveredProvider.TryGetProperty("endpointReference", out _));
+            Assert.False(discoveredProvider.TryGetProperty("activationId", out _));
+            var providerHandle = discoveredProvider.GetProperty("providerHandle").GetString();
+            Assert.NotNull(providerHandle);
+
+            webView.ClearScripts();
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_invalid",
+                "rpc.invoke",
+                new
+                {
+                    providerHandle,
+                    serviceId = "example",
+                    methodId = "ping",
+                    request = new { message = 42 },
+                }));
+            var invalidResponse = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("rpc.bridge.request-schema", invalidResponse.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal("not-dispatched", invalidResponse.GetProperty("error").GetProperty("dispatchState").GetString());
+            Assert.Equal("safe", invalidResponse.GetProperty("error").GetProperty("retrySafety").GetString());
+            Assert.Equal(0, rpc.InvokeCalls);
+
+            webView.ClearScripts();
+            await bridge.HandleMessageAsync(Request(
+                bridge.SessionNonce,
+                origin,
+                "b_invoke",
+                "rpc.invoke",
+                new
+                {
+                    providerHandle,
+                    serviceId = "example",
+                    methodId = "ping",
+                    request = new { message = "hello" },
+                }));
+
+            var invocation = ReadResponse(Assert.Single(webView.Scripts));
+            Assert.Equal("result", invocation.GetProperty("type").GetString());
+            Assert.Equal("received hello", invocation.GetProperty("value").GetProperty("reply").GetString());
+            Assert.Equal(1, rpc.InvokeCalls);
+            Assert.Equal(InvocationRpcClient.EndpointReference, rpc.LastEndpointReference);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Navigation_RotatesTrustAndDoesNotLetLateResponsesRemoveNewDocumentRequests()
     {
@@ -24,7 +124,10 @@ public sealed class AppWebBridgeTests
                 webView,
                 server,
                 rpc,
-                AppWebRpcContractCatalog.Load(root, new SunderPackageManifest { ContractBundles = [] }),
+                AppWebRpcContractCatalog.Load(
+                    root,
+                    new SunderPackageManifest { ContractBundles = [] },
+                    new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, [])),
                 new ExternalBrowserService(),
                 _ => { });
             var origin = server.Origin.GetLeftPart(UriPartial.Authority);
@@ -88,7 +191,10 @@ public sealed class AppWebBridgeTests
                 webView,
                 server,
                 rpc,
-                AppWebRpcContractCatalog.Load(root, new SunderPackageManifest { ContractBundles = [] }),
+                AppWebRpcContractCatalog.Load(
+                    root,
+                    new SunderPackageManifest { ContractBundles = [] },
+                    new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, [])),
                 new ExternalBrowserService(),
                 _ => { });
             var origin = server.Origin.GetLeftPart(UriPartial.Authority);
@@ -136,6 +242,93 @@ public sealed class AppWebBridgeTests
             deadlineUtc = deadlineUtc?.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             payload,
         });
+
+    private static JsonElement ReadResponse(string script)
+    {
+        const string prefix = "window.__sunderReceive?.(";
+        const string suffix = ");";
+        Assert.StartsWith(prefix, script, StringComparison.Ordinal);
+        Assert.EndsWith(suffix, script, StringComparison.Ordinal);
+        var responseJson = JsonSerializer.Deserialize<string>(script[prefix.Length..^suffix.Length]);
+        Assert.NotNull(responseJson);
+        using var response = JsonDocument.Parse(responseJson);
+        return response.RootElement.Clone();
+    }
+
+    private static AppWebRpcContractCatalog WriteContractCatalog(
+        string root,
+        byte[] descriptorBytes,
+        SunderRpcContractDescriptor descriptor)
+    {
+        const string descriptorPath = "contracts/example.rpc.json";
+        var path = Path.Combine(root, descriptorPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, descriptorBytes);
+        var contentSha256 = Convert.ToHexString(SHA256.HashData(descriptorBytes)).ToLowerInvariant();
+        return AppWebRpcContractCatalog.Load(
+            root,
+            new SunderPackageManifest
+            {
+                ContractBundles =
+                [
+                    new SunderPackageContractBundleManifest
+                    {
+                        ContractId = descriptor.ContractId,
+                        Version = descriptor.Version,
+                        DescriptorPath = descriptorPath,
+                        DescriptorSha256 = descriptor.Sha256,
+                        AbiSha256 = descriptor.AbiSha256,
+                        Exposure = SunderPackageFormat.PublicContractExposure,
+                    },
+                ],
+            },
+            new SunderPackageContentIndex(
+                SunderPackageFormat.CurrentContentIndexVersion,
+                [new SunderPackageContentIndexEntry(descriptorPath, contentSha256, descriptorBytes.LongLength)]));
+    }
+
+    private static byte[] RpcDescriptorBytes(string requestAnnotation)
+        => Encoding.UTF8.GetBytes("""
+            {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "descriptorVersion": 2,
+              "contractId": "example.rpc",
+              "version": "1.0.0",
+              "errors": {},
+              "services": {
+                "example": {
+                  "methods": {
+                    "ping": {
+                      "kind": "unary",
+                      "idempotency": "idempotent",
+                      "errors": [],
+                      "requestSchema": { "$ref": "#/$defs/Request" },
+                      "responseSchema": { "$ref": "#/$defs/Response" }
+                    }
+                  }
+                }
+              },
+              "$defs": {
+                "Request": {
+                  "description": "__REQUEST_ANNOTATION__",
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "minLength": 1, "maxLength": 32 }
+                  },
+                  "required": ["message"],
+                  "additionalProperties": false
+                },
+                "Response": {
+                  "type": "object",
+                  "properties": {
+                    "reply": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  },
+                  "required": ["reply"],
+                  "additionalProperties": false
+                }
+              }
+            }
+            """.Replace("__REQUEST_ANNOTATION__", requestAnnotation, StringComparison.Ordinal));
 
     private static SunderPackageTargetManifest Target()
         => new()
@@ -278,6 +471,7 @@ public sealed class AppWebBridgeTests
                     "example.rpc",
                     "1.0.0",
                     new string('a', 64),
+                    new string('b', 64),
                     Guid.NewGuid(),
                     1,
                     1,
@@ -303,6 +497,76 @@ public sealed class AppWebBridgeTests
             DateTimeOffset? deadlineUtc,
             CancellationToken cancellationToken)
             => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { accepted = true }));
+
+        public async IAsyncEnumerable<JsonElement> SubscribeAsync(
+            string endpointReference,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            DateTimeOffset? deadlineUtc,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class InvocationRpcClient(SunderRpcContractDescriptor providerDescriptor) : IAppWebRpcClient
+    {
+        public const string EndpointReference = "rpc1_annotation_different_provider";
+        private int _invokeCalls;
+
+        public int InvokeCalls => Volatile.Read(ref _invokeCalls);
+
+        public string? LastEndpointReference { get; private set; }
+
+        public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+            string contractId,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new SunderRpcCatalogSnapshot(
+                1,
+                1,
+                [new SunderRpcProviderSnapshot(
+                    "provider.package",
+                    "1.0.0",
+                    "provider.main",
+                    providerDescriptor.ContractId,
+                    providerDescriptor.Version,
+                    providerDescriptor.Sha256,
+                    providerDescriptor.AbiSha256,
+                    Guid.NewGuid(),
+                    1,
+                    1,
+                    new SunderRpcEndpointReference(EndpointReference),
+                    1,
+                    SunderRpcProviderState.Active)]));
+
+        public async IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+            long afterRevision,
+            long afterSequence,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask<JsonElement> InvokeAsync(
+            string endpointReference,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            DateTimeOffset? deadlineUtc,
+            CancellationToken cancellationToken)
+        {
+            LastEndpointReference = endpointReference;
+            Interlocked.Increment(ref _invokeCalls);
+            return ValueTask.FromResult(JsonSerializer.SerializeToElement(new
+            {
+                reply = $"received {request.GetProperty("message").GetString()}",
+            }));
+        }
 
         public async IAsyncEnumerable<JsonElement> SubscribeAsync(
             string endpointReference,

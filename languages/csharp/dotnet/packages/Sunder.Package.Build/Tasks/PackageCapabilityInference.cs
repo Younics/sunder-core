@@ -15,6 +15,7 @@ internal sealed class PackageCapabilityInference(
     IReadOnlyList<string> dynamicAccessAcknowledgements,
     string projectDirectory)
 {
+    private const string WorkerProtocolV3Capability = "worker-protocol.v3";
     private static readonly OpCode[] SingleByteOpCodes = new OpCode[0x100];
     private static readonly OpCode[] MultiByteOpCodes = new OpCode[0x100];
     private readonly List<string> _diagnostics = [];
@@ -62,6 +63,7 @@ internal sealed class PackageCapabilityInference(
         _capabilityCatalog = SdkCapabilityCatalog.Create(
             referencePaths.Concat(runtimeCopyLocalPaths),
             _diagnostics);
+        var referencesAvalonia = false;
         foreach (var inspectedAssemblyPath in GetInspectedAssemblyPaths(assemblyPath))
         {
             try
@@ -75,6 +77,7 @@ internal sealed class PackageCapabilityInference(
                 }
 
                 var metadata = peReader.GetMetadataReader();
+                referencesAvalonia |= ReferencesAvalonia(metadata);
                 ValidateSdkAssemblyReferences(metadata, inspectedAssemblyPath);
                 InspectMetadataReferences(metadata, capabilities);
                 InspectAuthoredMethodBodies(peReader, metadata, capabilities);
@@ -85,7 +88,10 @@ internal sealed class PackageCapabilityInference(
             }
         }
 
-        InspectAvaloniaXamlSources(capabilities);
+        if (referencesAvalonia)
+        {
+            InspectAvaloniaXamlSources(capabilities);
+        }
 
         var explicitCapabilities = configuredCapabilities
             .Where(static value => !string.IsNullOrWhiteSpace(value))
@@ -143,6 +149,13 @@ internal sealed class PackageCapabilityInference(
            || assemblyName.Equals("Avalonia", StringComparison.OrdinalIgnoreCase)
            || assemblyName.StartsWith("Avalonia.", StringComparison.OrdinalIgnoreCase)
            || assemblyName.Equals("MicroCom.Runtime", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ReferencesAvalonia(MetadataReader metadata)
+        => metadata.AssemblyReferences
+            .Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name))
+            .Any(name => name.Equals("Sunder.Sdk.Avalonia", StringComparison.OrdinalIgnoreCase)
+                         || name.Equals("Avalonia", StringComparison.OrdinalIgnoreCase)
+                         || name.StartsWith("Avalonia.", StringComparison.OrdinalIgnoreCase));
 
     private void ValidateSdkAssemblyReferences(MetadataReader metadata, string assemblyPath)
     {
@@ -706,7 +719,6 @@ internal sealed class PackageCapabilityInference(
     {
         switch (@namespace, name)
         {
-            case ("Sunder.Sdk.Abstractions", "ISunderRuntimePackageModule"):
             case ("Sunder.Sdk.Abstractions", "ISunderAppPackageModule"):
             case ("Sunder.Sdk.Abstractions", "IPackageContext"):
                 capabilities.Add(SunderSdkCapabilities.CoreV1);
@@ -714,7 +726,6 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Packaging", _):
                 capabilities.Add(SunderSdkCapabilities.PackagingV1);
                 break;
-            case ("Sunder.Sdk.Abstractions", "ISunderRuntimeContributionRegistry"):
             case ("Sunder.Sdk.Abstractions", "ISunderAppContributionRegistry"):
             case ("Sunder.Sdk.Avalonia", "IAvaloniaPackageContributionRegistry"):
                 capabilities.Add(SunderSdkCapabilities.ContributionsV1);
@@ -723,12 +734,19 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "PackageViewPlacement"):
                 capabilities.Add(SunderSdkCapabilities.ViewsV1);
                 break;
-            case ("Sunder.Sdk.Abstractions", "IPackageBackgroundService"):
-                capabilities.Add(SunderSdkCapabilities.BackgroundServicesV1);
+            case ("Sunder.Sdk.Worker", "ISunderWorkerLifecycleService"):
+            case ("Sunder.Sdk.Worker", "SunderWorkerComposition"):
+                capabilities.UnionWith([
+                    SunderSdkCapabilities.BackgroundServicesV1,
+                    SunderSdkCapabilities.RuntimeGenerationsV1,
+                    WorkerProtocolV3Capability,
+                ]);
                 break;
-            case ("Sunder.Sdk.Abstractions", "IPackageRuntimeGenerationParticipant"):
-            case ("Sunder.Sdk.Abstractions", "PackageRuntimeGeneration"):
-                capabilities.UnionWith([SunderSdkCapabilities.BackgroundServicesV1, SunderSdkCapabilities.RuntimeGenerationsV1]);
+            case ("Sunder.Sdk.Worker", "SunderWorkerGenerationContext"):
+                capabilities.UnionWith([
+                    SunderSdkCapabilities.RuntimeGenerationsV1,
+                    WorkerProtocolV3Capability,
+                ]);
                 break;
             case ("Sunder.Sdk.Abstractions", "IBackgroundProcessQueue"):
             case ("Sunder.Sdk.Abstractions", "BackgroundProcessRequest"):
@@ -779,18 +797,11 @@ internal sealed class PackageCapabilityInference(
             case ("Sunder.Sdk.Abstractions", "NullPackageSettingsNavigationService"):
                 capabilities.Add(SunderSdkCapabilities.SettingsNavigationV1);
                 break;
-            case ("Sunder.Sdk.Runtime", "PackageRuntimeInvocationException"):
-                capabilities.UnionWith([SunderSdkCapabilities.RuntimeOperationsV1, SunderSdkCapabilities.RuntimeInvocationErrorsV1]);
-                break;
-            case ("Sunder.Sdk.Runtime", _):
-                capabilities.Add(SunderSdkCapabilities.RuntimeOperationsV1);
-                break;
             case ("Sunder.Sdk.Stacks", "IPackageStackContributor"):
             case ("Sunder.Sdk.Stacks", "IPackageStackExporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImporter"):
             case ("Sunder.Sdk.Stacks", "IPackageStackImportAppliedHandler"):
             case ("Sunder.Sdk.Stacks", "SunderStackContributorRpc"):
-            case ("Sunder.Sdk.Stacks", "SunderStackContributionRegistryExtensions"):
             case ("Sunder.Sdk.Stacks", "StackContributorRpcClient"):
                 capabilities.UnionWith([SunderSdkCapabilities.StacksV1, SunderSdkCapabilities.StacksRpcV1]);
                 break;
@@ -848,7 +859,7 @@ internal sealed class PackageCapabilityInference(
         }
 
         if ((@namespace == "Sunder.Sdk.Abstractions"
-                && typeName is "ISunderRuntimeContributionRegistry" or "ISunderAppContributionRegistry")
+                && typeName == "ISunderAppContributionRegistry")
             || (@namespace == "Sunder.Sdk.Avalonia"
                 && typeName is "IAvaloniaPackageContributionRegistry" or "AvaloniaPackageContributionRegistryExtensions"))
         {
@@ -860,15 +871,8 @@ internal sealed class PackageCapabilityInference(
                 case "RegisterSettingsView":
                     capabilities.Add(SunderSdkCapabilities.SettingsViewsV1);
                     break;
-                case "RegisterBackgroundService":
-                    capabilities.Add(SunderSdkCapabilities.BackgroundServicesV1);
-                    break;
                 case "RegisterSettingsSchema":
                     capabilities.Add(SunderSdkCapabilities.SettingsSchemaV1);
-                    break;
-                case "RegisterRuntimeOperation":
-                case "RegisterRuntimeStream":
-                    capabilities.Add(SunderSdkCapabilities.RuntimeOperationsV1);
                     break;
             }
         }

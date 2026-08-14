@@ -99,13 +99,6 @@
           "Sunder.Sdk": "[1.1.0, )"
         }
       },
-      "sunder.package.hosting": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.8, )",
-          "Sunder.Sdk": "[1.1.0, )"
-        }
-      },
       "sunder.registry.contracts": {
         "type": "Project"
       },
@@ -124,7 +117,6 @@
         "type": "Project",
         "dependencies": {
           "Sunder.Package.Format": "[1.0.0, )",
-          "Sunder.Package.Hosting": "[1.0.0, )",
           "Sunder.Registry.Contracts": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
           "Sunder.Runtime.LocalState": "[1.0.0, )",
@@ -147,6 +139,13 @@
         }
       },
       "sunder.sdk.stacks": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Sdk": "[1.1.0, )",
+          "Sunder.Sdk.Worker": "[1.1.0, )"
+        }
+      },
+      "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Sunder.Sdk": "[1.1.0, )"

@@ -14,12 +14,6 @@
           "Sunder.Sdk": "[1.1.0, )"
         }
       },
-      "sunder.package.hosting": {
-        "type": "Project",
-        "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
-        }
-      },
       "sunder.registry.contracts": {
         "type": "Project"
       },
@@ -36,6 +30,13 @@
         "type": "Project"
       },
       "sunder.sdk.stacks": {
+        "type": "Project",
+        "dependencies": {
+          "Sunder.Sdk": "[1.1.0, )",
+          "Sunder.Sdk.Worker": "[1.1.0, )"
+        }
+      },
+      "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Sunder.Sdk": "[1.1.0, )"

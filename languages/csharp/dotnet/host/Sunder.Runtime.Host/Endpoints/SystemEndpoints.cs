@@ -23,6 +23,7 @@ internal static class SystemEndpoints
                     startedAtUtc)
                 {
                     State = state,
+                    StartupFailure = snapshots.GetStartupFailure(),
                 });
             });
 

@@ -82,8 +82,7 @@ export async function renderBundledDependencyNotice(
 
 function normalizeModulePath(moduleId: string, projectRoot: string): string | null {
   if (moduleId.length === 0
-    || moduleId.startsWith("node:")
-    || moduleId.startsWith("sunder-contracts:")) return null;
+    || moduleId.startsWith("node:")) return null;
   if (moduleId.startsWith("\0") || moduleId.startsWith("<") || moduleId.startsWith("virtual:")) {
     throw new Error(`Rendered bundled module '${printableModuleId(moduleId)}' has no attributable project source or known dependency.`);
   }

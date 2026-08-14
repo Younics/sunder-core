@@ -44,6 +44,26 @@ internal static class PackageStorageGuards
         }
     }
 
+    internal static void PhysicalMigrationValues(
+        IReadOnlyDictionary<string, string>? values,
+        string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(values, parameterName);
+        foreach (var pair in values)
+        {
+            if (!IsValidPhysicalMigrationKey(pair.Key))
+            {
+                throw new ArgumentException(
+                    "Legacy physical package storage keys must be non-empty bounded Unicode strings.",
+                    parameterName);
+            }
+            Value(pair.Value, parameterName);
+        }
+    }
+
+    internal static bool IsValidPhysicalMigrationKey(string? key)
+        => !string.IsNullOrEmpty(key) && PackageStorageValidation.IsValidValue(key);
+
     internal static void RelativePath(string? relativePath, string parameterName)
     {
         ArgumentNullException.ThrowIfNull(relativePath, parameterName);

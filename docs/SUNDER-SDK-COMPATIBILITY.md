@@ -8,19 +8,31 @@ The compatibility boundary is each exact target's generated manifest metadata, t
 
 The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, an overlapping supported revision range, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
 
-The V1 App and Runtime use protocol revision `5`. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent.
+The current App and Runtime use protocol revision `8`. RPC V2 clients require `schema-first-rpc.v2`; package web Apps additionally require `app-web-rpc.v2` and use only the injected `sunder.bridge.v2` browser protocol. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent.
 
 ## Target Compatibility Fields
 
 - `archiveFormatVersion` and `manifestVersion`: package archive and manifest schema versions.
-- `sdkVersion`: optional strict SemVer identifying the SDK used to build one SDK-backed target.
+- `sdkVersion`: required strict SemVer for Runtime and optional strict SemVer identifying the SDK used to build another SDK-backed target.
 - `requiredHostCapabilities`: granular Host requirements for one exact target, inferred from authored SDK usage or declared by non-.NET tooling.
 
-An isolated Runtime target requiring `worker-protocol.v2` selects exact wire identity `sunder.worker.v2` before process launch. Worker targets without that requirement remain on `sunder.worker.v1`; there is no handshake fallback.
+Every Manifest V3 Runtime target requires `worker-protocol.v3` and selects exact wire identity `sunder.worker.v3` before process launch. Missing V3 capability, Worker V1, `dotnet`, and `process` fail compatibility validation; there is no probing, downgrade, or handshake fallback.
 
-V1 targets contain distinct V1-form capability ids. SDK-backed targets built on the coordinated 1.1 line require `sdkVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Missing, malformed, or unsupported target metadata is rejected before target code runs.
+Installed package catalogs accept only current schema 5 records with complete provenance, capability grants, content identity, and inventory. Older catalogs and package layouts are rejected without migration or rewrite. `Unknown` remains valid explicit provenance for current unmanaged packages, and those packages can adopt a Registry source through the normal source-adoption operation.
+
+SDK-backed targets contain distinct V1-form capability ids. Targets built on the coordinated 1.1 line require `sdkVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Every Runtime target additionally requires `rpc.v2` and `worker-protocol.v3`. Missing, malformed, mismatched, or unsupported target metadata is rejected before target code runs.
 
 Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`. Coordinated npm package dependencies, generated Node templates, and runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
+
+## Registry Resolution Profile
+
+Installable Registry resolution is filtered against the requesting Host, not only against the Registry's publication baseline. `RegistryClientCompatibilityProfile` carries bounded, non-empty sets of supported manifest versions, Runtime target kinds, and Worker capabilities plus one Worker protocol capability, one SDK baseline capability, and the exact current RID. The current Runtime sends Manifest V3, Runtime kind `worker`, `worker-protocol.v3`, `sdk-baseline-1-1.v1`, its complete Worker V3 capability allowlist, and the RID returned by the Runtime process.
+
+`RegistryResolveUpdatesRequest`, `RegistryResolveInstallPlanRequest`, and `RegistryResolvePackageChangesRequest` require this profile in their `compatibility` property. Package exact/tag GET resolution uses the same camel-case property names as query parameters: repeat `manifestVersions`, `runtimeTargetKinds`, and `workerCapabilities`; send `workerProtocol`, `sdkBaseline`, and `rid` once. `version` and `tag` remain mutually exclusive selection parameters. The desired target RIDs must agree with the profile RID.
+
+Missing, malformed, empty, oversized, internally inconsistent, or unsupported compatibility data fails resolution. Candidate filtering applies to exact versions, explicit tags, `latest` fallback, updates, transitive dependencies, install plans, and installed-version reuse. Public search, package details, version history, and immutable version details remain historical inspection APIs and do not require a compatibility profile.
+
+Compatibility is request data, not an ambient or client-selected HTTP header. App and CLI install/update operations delegate to Runtime; Runtime authors the profile from its own implementation before calling Registry. This prevents an App, CLI, proxy, or stale persisted option from claiming capabilities on the Host's behalf.
 
 ## Compatibility Rules
 
@@ -31,7 +43,7 @@ Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`. Coordinated n
 
 ## Host-Owned Type Identity
 
-Host-owned SDK/framework boundary assemblies are authoritative. App and Runtime substitute only assemblies on explicit Host allowlists; package-authored assembly names never grant shared identity. Cross-package behavior uses schema-first RPC rather than shared CLR types. For an allowlisted Host assembly:
+Host-owned SDK/framework boundary assemblies are authoritative for in-process App targets. App substitutes only assemblies on explicit Host allowlists; package-authored assembly names never grant shared identity. Workers carry their self-contained executable closure, and cross-package behavior uses schema-first RPC rather than shared CLR types. For an allowlisted Host assembly:
 
 - simple name, culture, and public-key token must match exactly;
 - substitution is allowed only within the requested assembly major version;
@@ -46,34 +58,33 @@ Current SDK capabilities are:
 | Capability | SDK Surface |
 | --- | --- |
 | `sdk-baseline-1-1.v1` | clean-break 1.1 contract identity required on every package |
-| `core.v1` | `ISunderRuntimePackageModule`, `ISunderAppPackageModule`, `IPackageContext` |
+| `core.v1` | `ISunderAppPackageModule`, `IPackageContext`, and Worker context contracts |
 | `packaging.v1` | canonical package id, strict SemVer, version-range primitives, and package metadata attributes |
-| `contributions.v1` | `ISunderRuntimeContributionRegistry`, `ISunderAppContributionRegistry` |
+| `contributions.v1` | `ISunderAppContributionRegistry` and immutable Worker contribution options |
 | `views.v1` | package view registration and placement |
 | `settings-views.v1` | settings view registration |
 | `settings-navigation.v1` | package settings navigation service |
-| `background-services.v1` | package background services |
-| `runtime-generations.v1` | post-publication Runtime generation participants |
 | `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
+| `background-services.v1` | package-owned `ISunderWorkerLifecycleService` composition and monitored active work |
+| `runtime-generations.v1` | staged Worker candidate preparation, exact generation commit, activation, completion, and shutdown |
 | `settings.schema.v1` | host-rendered package settings schema contracts |
 | `settings.v1` | validated writable package settings, stored independently from opaque state |
 | `storage.v1` | package storage/file/key-value abstractions |
 | `storage.key-migration.v1` | portable physical-key derivation and host-atomic storage-key migration |
 | `role-local-workspace.v1` | activation-owned App/Runtime role-local workspace capability |
+| `docker-environment.v1` | consent-gated propagation of the bounded Docker CLI connection environment to a Runtime worker |
 | `secrets.v1` | package secret storage abstraction |
 | `logging.v1` | package logging abstractions |
 | `notifications.v1` | package notifications |
 | `shell-view.v1` | shell view/hotbar/navigation services |
 | `view-navigation-preparation.v1` | hidden package-view preparation and post-presentation acknowledgement |
-| `runtime-operations.v1` | package-scoped typed App-to-Runtime operations and streams |
-| `runtime-invocation-errors.v1` | sanitized package-visible Runtime invocation failure metadata |
-| `rpc.v1` | schema-first cross-package RPC descriptors, discovery, invocation, subscription, and provider registration |
+| `rpc.v2` | canonical descriptor/ABI identities, RPC V2 bindings, discovery, invocation, subscription, and provider registration |
 | `stacks.v1` | `Sunder.Sdk.Stacks` Stack import/export data contracts |
 | `stacks.rpc.v1` | `Sunder.Sdk.Stacks` package-local provider/client adapters over the Stack RPC descriptor |
 | `callbacks.v1` | generic callback sessions |
 | `auth.v1` | auth status/disconnect integration |
 | `theming.v1` | semantic Sunder theme keys |
-| `worker-protocol.v2` | exact opt-in to the native isolated Runtime worker V2 lifecycle |
+| `worker-protocol.v3` | mandatory isolated Runtime worker lifecycle and canonical RPC V2 identities |
 
 `Sunder.Package.Build` infers target requirements from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the target assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Stack provider registration and client-only use of `StackContributorRpcClient` both infer `stacks.rpc.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
 
@@ -86,13 +97,13 @@ Manual MSBuild capability entries are required for unusual dynamic/reflection sc
 </ItemGroup>
 ```
 
-## Runtime Streams
+## RPC Streams
 
-Typed Runtime streams are bounded newline-framed JSON. Each frame is exactly one `event`, `completed`, or `error` envelope. A terminal frame is mandatory; EOF, an oversized frame, malformed JSON, or a trailing partial frame fails the subscription. Authentication, negotiated protocol revision/features, request deadlines, package-generation leases, and cancellation apply for the complete stream lifetime.
+RPC server-stream methods use descriptor-validated events and exact provider-generation leases. A terminal completion or error is mandatory; malformed, oversized, or out-of-schema events fail the subscription. Authentication, request deadlines, package-generation leases, and cancellation apply for the complete stream lifetime.
 
 ## Callback And Auth
 
-`callbacks.v1` is the generic host-owned callback-session capability. It includes Runtime handler registration, immutable bounded start parameters, App-side start/status/bounded-wait/cancel/launch access through `IPackageContext.Callbacks`, single callback completion, expiry, and activation/shutdown cancellation. Package-owned network listeners are outside V1.
+`callbacks.v1` is the generic host-owned callback-session capability. It includes immutable Worker handler registration, bounded start parameters, App-side start/status/bounded-wait/cancel/launch access through `IPackageContext.Callbacks`, single callback completion, expiry, and activation/shutdown cancellation. Package-owned network listeners are outside V1.
 
 `auth.v1` is only for auth-specific Host/App integration, including status and disconnect behavior. It always implies `callbacks.v1`; non-auth callback packages require only `callbacks.v1`.
 
@@ -110,4 +121,4 @@ Only the Host creates `SunderRpcInvocationContext`. Its content authority is val
 
 Invocations and subscriptions acquire provider-activation leases. Once retirement starts, the endpoint admits no new work, active calls receive retirement cancellation, and a same-id replacement cannot satisfy an old reference.
 
-The Host removes a retiring endpoint from discovery before waiting for its leases. A call that exceeds the bounded cleanup deadline keeps the provider and load context quarantined; the Host does not dispose provider-owned resources while leased work remains active.
+The Host removes a retiring endpoint from discovery before waiting for its leases. A call that exceeds the bounded cleanup deadline keeps the worker generation quarantined; the Host does not terminate provider-owned resources while leased work remains active.

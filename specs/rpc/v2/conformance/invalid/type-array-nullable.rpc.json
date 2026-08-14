@@ -1,0 +1,26 @@
+{
+  "descriptorVersion": 2,
+  "contractId": "example.rpc.v2.typearraynullable",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "read": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/MaybeText" },
+          "responseSchema": { "$ref": "#/$defs/MaybeText" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "MaybeText": {
+      "type": ["string", "null"],
+      "minLength": 0,
+      "maxLength": 64
+    }
+  }
+}

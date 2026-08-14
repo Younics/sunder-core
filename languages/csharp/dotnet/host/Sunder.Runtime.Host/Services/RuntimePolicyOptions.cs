@@ -43,16 +43,6 @@ internal sealed record RuntimeStackPolicyOptions
     public long MaxExportPayloadTotalBytes { get; init; } = 256L * 1024 * 1024;
 }
 
-internal sealed record RuntimePackageOperationPolicyOptions
-{
-    public int MaxRequestBytes { get; init; } = 1024 * 1024;
-    public int MaxResponseBytes { get; init; } = 4 * 1024 * 1024;
-    public int MaxEventBytes { get; init; } = 1024 * 1024;
-    public int MaxStreamRecordBytes { get; init; } = 1024 * 1024 + 16 * 1024;
-    public int MaxStreamErrorMessageCharacters { get; init; } = 4096;
-    public TimeSpan SessionDrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
-}
-
 internal sealed record RuntimeRpcPolicyOptions
 {
     public int MaxPayloadBytes { get; init; } = 1024 * 1024;
@@ -86,21 +76,23 @@ internal sealed record RuntimeProcessPolicyOptions
     public int MaxStderrBytes { get; init; } = 256 * 1024;
     public int MaxStderrLineCharacters { get; init; } = 4096;
     public TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(10);
-    public TimeSpan ActivationTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan CancellationDrainTimeout { get; init; } = TimeSpan.FromSeconds(5);
 }
 
 internal sealed record RuntimeLifecyclePolicyOptions
 {
+    internal static readonly TimeSpan DefaultPackageRuntimeGenerationActivationTimeout = TimeSpan.FromMinutes(2);
+
     public TimeSpan PendingStageLifetime { get; init; } = TimeSpan.FromMinutes(15);
     public TimeSpan StageSweepInterval { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan TerminalStageRetention { get; init; } = TimeSpan.FromMinutes(15);
     public int MaximumTerminalStageStatuses { get; init; } = 256;
-    public TimeSpan PackageBackgroundServiceStartupTimeout { get; init; } = TimeSpan.FromSeconds(10);
-    public TimeSpan PackageRuntimeGenerationActivationTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan SessionDrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan PackageWorkerStartupTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan PackageRuntimeGenerationActivationTimeout { get; init; } = DefaultPackageRuntimeGenerationActivationTimeout;
     public int PackageRuntimeGenerationActivationAttempts { get; init; } = 2;
-    public TimeSpan PackageBackgroundServiceCleanupTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan PackageWorkerCleanupTimeout { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan ShutdownTimeout { get; init; } = RuntimeShutdownDeadline.DefaultTimeout;
     public TimeSpan DevPackageOwnerLeaseLifetime { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan DevPackageOwnerSweepInterval { get; init; } = TimeSpan.FromSeconds(5);

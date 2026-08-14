@@ -18,8 +18,7 @@
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\MissingExternal\MissingExternal.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\MissingSdkDependency\MissingSdkDependency.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\SourceReferencePackage\SourceReferencePackage.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerExecutable\WorkerExecutable.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV2Executable\WorkerV2Executable.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV3Executable\WorkerV3Executable.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,7 +4,6 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
-using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
@@ -26,10 +25,15 @@ public sealed class RuntimeRpcBrokerTests
         var denied = await Assert.ThrowsAsync<SunderRpcException>(async () =>
             await client.DiscoverAsync("example.rpc"));
         Assert.Equal(SunderRpcErrorKind.PermissionDenied, denied.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, denied.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Safe, denied.Error.RetrySafety);
 
         await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
         await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
-        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        var provider = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers);
+        Assert.Equal(Contract().Sha256, provider.DescriptorSha256);
+        Assert.Equal(Contract().AbiSha256, provider.AbiSha256);
+        var endpoint = provider.Endpoint;
         var response = await client.InvokeAsync(
             endpoint,
             "messages",
@@ -44,7 +48,7 @@ public sealed class RuntimeRpcBrokerTests
                 "messages",
                 "send",
                 JsonSerializer.SerializeToElement(new { message = "hello" })));
-        Assert.Equal(SunderRpcErrorKind.Unavailable, spoofFailure.Error.Kind);
+        Assert.Equal(SunderRpcErrorKind.StaleEndpoint, spoofFailure.Error.Kind);
 
         activation.Handler.Unary = static (_, _) => throw new SunderRpcException(
             new SunderRpcError(SunderRpcErrorKind.Domain, "messages.rejected", "not accepted"));
@@ -55,7 +59,56 @@ public sealed class RuntimeRpcBrokerTests
                 "send",
                 JsonSerializer.SerializeToElement(new { message = "hello" })));
         Assert.Equal(SunderRpcErrorKind.Domain, domain.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, domain.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, domain.Error.RetrySafety);
         Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UndeclaredDomainError_FaultsProviderForUnaryAndStream(bool stream)
+    {
+        await using var fixture = new RpcFixture();
+        var handler = new TestHandler();
+        if (stream)
+        {
+            handler.Stream = static (_, _) => UndeclaredDomainFailure();
+        }
+        else
+        {
+            handler.Unary = static (_, _) => throw UndeclaredDomainException();
+        }
+        var activation = await fixture.PublishAsync(handler);
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(stream ? SunderRpcProtocol.SubscribeAction : SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        var request = JsonSerializer.SerializeToElement(new { message = "hello" });
+
+        SunderRpcException failure;
+        if (stream)
+        {
+            await using var subscription = client.SubscribeAsync(
+                endpoint,
+                "messages",
+                "watch",
+                request).GetAsyncEnumerator();
+            failure = await Assert.ThrowsAsync<SunderRpcException>(() => subscription.MoveNextAsync().AsTask());
+        }
+        else
+        {
+            failure = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+                endpoint,
+                "messages",
+                "send",
+                request).AsTask());
+        }
+
+        Assert.Equal(SunderRpcErrorKind.ProviderFaulted, failure.Error.Kind);
+        Assert.Equal("rpc.provider.undeclared-domain-error", failure.Error.Code);
+        Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
+        Assert.Equal(PackageReadinessState.Failed, fixture.Owner.State.GetSessionPackage("provider.package")!.Readiness);
     }
 
     [Fact]
@@ -75,6 +128,204 @@ public sealed class RuntimeRpcBrokerTests
             JsonSerializer.SerializeToElement(new { message = "hello" }));
 
         Assert.True(response.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task IdempotentUnary_DispatchedFailureIsRetrySafeButIsNotRetried()
+    {
+        await using var fixture = new RpcFixture();
+        var attempts = 0;
+        var descriptor = Contract(unaryIdempotency: "idempotent");
+        var activation = await fixture.PublishAsync(
+            new TestHandler
+            {
+                Unary = (_, _) =>
+                {
+                    attempts++;
+                    throw new SunderRpcException(new SunderRpcError(
+                        SunderRpcErrorKind.Domain,
+                        "messages.rejected",
+                        "not accepted"));
+                },
+            },
+            callerContract: descriptor,
+            providerContract: descriptor);
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(async () => await client.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" })));
+
+        Assert.Equal(1, attempts);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Safe, failure.Error.RetrySafety);
+    }
+
+    [Fact]
+    public async Task Matching_UsesExactVersionAndAbiRatherThanFullDescriptorHash()
+    {
+        await using var fixture = new RpcFixture();
+        var callerContract = Contract(requestTitle: "Caller-local annotation");
+        var providerContract = Contract();
+        Assert.NotEqual(providerContract.Sha256, callerContract.Sha256);
+        Assert.Equal(providerContract.AbiSha256, callerContract.AbiSha256);
+        var activation = await fixture.PublishAsync(
+            new TestHandler(),
+            callerContract: callerContract);
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+
+        var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
+        var response = await client.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" }));
+
+        Assert.True(response.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Matching_RejectsAbiAndCompleteVersionMismatches()
+    {
+        await using (var fixture = new RpcFixture())
+        {
+            var callerContract = Contract(requestMaximumLength: 127);
+            Assert.NotEqual(Contract().AbiSha256, callerContract.AbiSha256);
+            var activation = await fixture.PublishAsync(
+                new TestHandler(),
+                callerContract: callerContract);
+            await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+            await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+            var client = fixture.CreateClient(activation.Caller);
+            var endpoint = Assert.Single(fixture.Catalog.GetSnapshot().Providers).Endpoint;
+
+            Assert.Empty((await client.DiscoverAsync("example.rpc")).Providers);
+            Assert.Null(await client.GetProviderAsync(endpoint));
+            var denied = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(
+                endpoint,
+                "messages",
+                "send",
+                JsonSerializer.SerializeToElement(new { message = "hello" })).AsTask());
+            Assert.Equal(SunderRpcErrorKind.PermissionDenied, denied.Error.Kind);
+        }
+
+        await using (var fixture = new RpcFixture())
+        {
+            var activation = await fixture.PublishAsync(
+                new TestHandler(),
+                callerContract: Contract(version: "1.0.0+caller"));
+            await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+
+            Assert.Empty((await fixture.CreateClient(activation.Caller)
+                .DiscoverAsync("example.rpc")).Providers);
+        }
+    }
+
+    [Fact]
+    public async Task CallerRole_SelectsOnlyRoleLocalUses()
+    {
+        await using (var fixture = new RpcFixture())
+        {
+            var activation = await fixture.PublishAsync(
+                new TestHandler(),
+                webCaller: true,
+                runtimeCallerUsesContract: false,
+                appCallerUsesContract: true);
+            await fixture.GrantAsync(
+                "caller.package",
+                new string('a', 64),
+                SunderRpcProtocol.DiscoverAction,
+                SunderPackageFormat.AppHostRole);
+            var runtimeDenied = await Assert.ThrowsAsync<SunderRpcException>(() =>
+                fixture.CreateClient(activation.Caller).DiscoverAsync("example.rpc").AsTask());
+            Assert.Equal(SunderRpcErrorKind.PermissionDenied, runtimeDenied.Error.Kind);
+
+            var app = await fixture.OpenAppCallerAsync();
+            await fixture.GrantAsync(
+                "caller.package",
+                app.ManifestSha256,
+                SunderRpcProtocol.DiscoverAction,
+                SunderPackageFormat.AppHostRole);
+            Assert.Single((await fixture.Broker.DiscoverAppAsync(
+                app.Session.SessionId,
+                "example.rpc",
+                CancellationToken.None)).Providers);
+        }
+
+        await using (var fixture = new RpcFixture())
+        {
+            var activation = await fixture.PublishAsync(
+                new TestHandler(),
+                webCaller: true,
+                runtimeCallerUsesContract: true,
+                appCallerUsesContract: false);
+            await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+            Assert.Single((await fixture.CreateClient(activation.Caller)
+                .DiscoverAsync("example.rpc")).Providers);
+
+            var app = await fixture.OpenAppCallerAsync();
+            var appDenied = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Broker
+                .DiscoverAppAsync(app.Session.SessionId, "example.rpc", CancellationToken.None)
+                .AsTask());
+            Assert.Equal(SunderRpcErrorKind.PermissionDenied, appDenied.Error.Kind);
+        }
+    }
+
+    [Fact]
+    public async Task OwnerAudience_IsEnforcedForDiscoveryGetInvokeAndSubscribe()
+    {
+        await using var fixture = new RpcFixture();
+        var activation = await fixture.PublishAsync(
+            new TestHandler(),
+            providerUsesContract: true,
+            providerAudience: SunderPackageFormat.OwnerProviderAudience);
+        foreach (var action in new[]
+                 {
+                     SunderRpcProtocol.DiscoverAction,
+                     SunderRpcProtocol.InvokeAction,
+                     SunderRpcProtocol.SubscribeAction,
+                 })
+        {
+            await fixture.GrantAsync(action);
+        }
+        var endpoint = Assert.Single(fixture.Catalog.GetSnapshot().Providers).Endpoint;
+        var request = JsonSerializer.SerializeToElement(new { message = "hello" });
+        var publicCaller = fixture.CreateClient(activation.Caller);
+
+        Assert.Empty((await publicCaller.DiscoverAsync("example.rpc")).Providers);
+        Assert.Null(await publicCaller.GetProviderAsync(endpoint));
+        var invokeDenied = await Assert.ThrowsAsync<SunderRpcException>(() => publicCaller.InvokeAsync(
+            endpoint,
+            "messages",
+            "send",
+            request).AsTask());
+        Assert.Equal(SunderRpcErrorKind.PermissionDenied, invokeDenied.Error.Kind);
+        await using (var subscription = publicCaller.SubscribeAsync(
+                         endpoint,
+                         "messages",
+                         "watch",
+                         request).GetAsyncEnumerator())
+        {
+            var subscribeDenied = await Assert.ThrowsAsync<SunderRpcException>(() =>
+                subscription.MoveNextAsync().AsTask());
+            Assert.Equal(SunderRpcErrorKind.PermissionDenied, subscribeDenied.Error.Kind);
+        }
+
+        var owner = fixture.CreateClient(activation.Provider);
+        Assert.Equal(endpoint, Assert.Single((await owner.DiscoverAsync("example.rpc")).Providers).Endpoint);
+        Assert.True((await owner.InvokeAsync(endpoint, "messages", "send", request))
+            .GetProperty("accepted").GetBoolean());
+        await foreach (var item in owner.SubscribeAsync(endpoint, "messages", "watch", request))
+        {
+            Assert.True(item.GetProperty("accepted").GetBoolean());
+        }
     }
 
     [Fact]
@@ -174,7 +425,8 @@ public sealed class RuntimeRpcBrokerTests
         await fixture.GrantAsync(
             "sunder.package.agent",
             app.ManifestSha256,
-            SunderRpcProtocol.DiscoverAction);
+            SunderRpcProtocol.DiscoverAction,
+            SunderPackageFormat.AppHostRole);
         var endpoint = Assert.Single((await fixture.Broker.DiscoverAppAsync(
             app.Session.SessionId,
             "example.rpc",
@@ -306,11 +558,13 @@ public sealed class RuntimeRpcBrokerTests
         await fixture.GrantAsync(
             "caller.package",
             manifestSha256,
-            SunderRpcProtocol.DiscoverAction);
+            SunderRpcProtocol.DiscoverAction,
+            SunderPackageFormat.AppHostRole);
         await fixture.GrantAsync(
             "caller.package",
             manifestSha256,
-            SunderRpcProtocol.InvokeAction);
+            SunderRpcProtocol.InvokeAction,
+            SunderPackageFormat.AppHostRole);
         var endpoint = Assert.Single((await fixture.Broker.DiscoverAppAsync(
             session.SessionId,
             "example.rpc",
@@ -352,7 +606,8 @@ public sealed class RuntimeRpcBrokerTests
         await fixture.GrantAsync(
             "caller.package",
             first.ManifestSha256,
-            SunderRpcProtocol.DiscoverAction);
+            SunderRpcProtocol.DiscoverAction,
+            SunderPackageFormat.AppHostRole);
 
         var second = await fixture.OpenAppCallerAsync();
 
@@ -815,59 +1070,105 @@ public sealed class RuntimeRpcBrokerTests
         try
         {
             CancellationToken revocation;
+            var key = PermissionKey(SunderRpcProtocol.InvokeAction);
             using (var store = new RuntimeRpcPermissionStore(paths))
             {
                 await store.SetAsync(
-                    "caller.package",
-                    "1.0.0",
-                    new string('a', 64),
-                    "example.rpc",
-                    "invoke",
+                    key,
                     RuntimeRpcPermissionState.Granted,
                     CancellationToken.None);
-                Assert.True(store.TryAcquire(
-                    "caller.package",
-                    "1.0.0",
-                    new string('a', 64),
-                    "example.rpc",
-                    "invoke",
-                    out var lease));
+                Assert.True(store.TryAcquire(key, out var lease));
                 revocation = lease!.RevocationToken;
                 Assert.False(store.TryAcquire(
-                    "caller.package",
-                    "2.0.0",
-                    new string('a', 64),
-                    "example.rpc",
-                    "invoke",
+                    key with { CallerPackageVersion = "2.0.0" },
                     out _));
                 Assert.False(store.TryAcquire(
-                    "caller.package",
-                    "1.0.0",
-                    new string('b', 64),
-                    "example.rpc",
-                    "invoke",
+                    key with { ManifestSha256 = new string('b', 64) },
+                    out _));
+                Assert.False(store.TryAcquire(
+                    key with { CallerRole = SunderPackageFormat.AppHostRole },
+                    out _));
+                Assert.False(store.TryAcquire(
+                    key with { ContractVersion = "2.0.0" },
+                    out _));
+                Assert.False(store.TryAcquire(
+                    key with { AbiSha256 = new string('b', 64) },
                     out _));
                 await store.SetAsync(
-                    "caller.package",
-                    "1.0.0",
-                    new string('a', 64),
-                    "example.rpc",
-                    "invoke",
+                    key,
                     RuntimeRpcPermissionState.Denied,
                     CancellationToken.None);
                 Assert.True(revocation.IsCancellationRequested);
+                using var document = JsonDocument.Parse(File.ReadAllBytes(paths.RpcPermissionFilePath));
+                Assert.Equal(2, document.RootElement.GetProperty("SchemaVersion").GetInt32());
             }
             using var reloaded = new RuntimeRpcPermissionStore(paths);
-            Assert.False(reloaded.TryAcquire(
-                "caller.package",
-                "1.0.0",
-                new string('a', 64),
-                "example.rpc",
-                "invoke",
-                out _));
+            Assert.False(reloaded.TryAcquire(key, out _));
             Assert.Contains(
                 reloaded.GetSnapshot([]).Permissions,
-                permission => permission.State == RuntimeRpcPermissionState.Denied);
+                permission => permission.Key == key
+                              && permission.State == RuntimeRpcPermissionState.Denied);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PermissionStore_ExactRoleRevocationCancelsOnlyMatchingLease()
+    {
+        var root = CreateRoot();
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var store = new RuntimeRpcPermissionStore(new RuntimePackagePaths(root));
+            var runtimeKey = PermissionKey(SunderRpcProtocol.InvokeAction);
+            var appKey = runtimeKey with { CallerRole = SunderPackageFormat.AppHostRole };
+            await store.SetAsync(runtimeKey, RuntimeRpcPermissionState.Granted, CancellationToken.None);
+            await store.SetAsync(appKey, RuntimeRpcPermissionState.Granted, CancellationToken.None);
+            Assert.True(store.TryAcquire(runtimeKey, out var runtimeLease));
+            Assert.True(store.TryAcquire(appKey, out var appLease));
+
+            await store.SetAsync(runtimeKey, RuntimeRpcPermissionState.Denied, CancellationToken.None);
+
+            Assert.True(runtimeLease!.RevocationToken.IsCancellationRequested);
+            Assert.False(appLease!.RevocationToken.IsCancellationRequested);
+            Assert.True(store.TryAcquire(appKey, out _));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PermissionStore_RevocationCallbacksRunAfterWriteGateIsReleased()
+    {
+        var root = CreateRoot();
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var store = new RuntimeRpcPermissionStore(new RuntimePackagePaths(root));
+            var invokeKey = PermissionKey(SunderRpcProtocol.InvokeAction);
+            var discoverKey = PermissionKey(SunderRpcProtocol.DiscoverAction);
+            await store.SetAsync(invokeKey, RuntimeRpcPermissionState.Granted, CancellationToken.None);
+            Assert.True(store.TryAcquire(invokeKey, out var lease));
+            using var registration = lease!.RevocationToken.Register(() =>
+                store.SetAsync(
+                        discoverKey,
+                        RuntimeRpcPermissionState.Granted,
+                        CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult());
+
+            await Task.Run(() => store.SetAsync(
+                    invokeKey,
+                    RuntimeRpcPermissionState.Denied,
+                    CancellationToken.None))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(store.IsGranted(discoverKey));
         }
         finally
         {
@@ -882,6 +1183,23 @@ public sealed class RuntimeRpcBrokerTests
         Directory.CreateDirectory(root);
         var paths = new RuntimePackagePaths(root);
         var subject = PermissionSubject(PackageSourceKind.Installed);
+        var runtimeUse = Assert.Single(subject.ContractUses);
+        subject = subject with
+        {
+            ContractUses =
+            [
+                runtimeUse,
+                new SunderPackageContractUseManifest
+                {
+                    Role = SunderPackageFormat.AppHostRole,
+                    ContractId = runtimeUse.ContractId,
+                    ContractVersion = runtimeUse.ContractVersion,
+                    AbiSha256 = runtimeUse.AbiSha256,
+                    Required = runtimeUse.Required,
+                    Actions = runtimeUse.Actions,
+                },
+            ],
+        };
         try
         {
             using (var store = new RuntimeRpcPermissionStore(paths))
@@ -890,32 +1208,33 @@ public sealed class RuntimeRpcBrokerTests
 
                 Assert.Equal(1, store.Revision);
                 Assert.All(
-                    new[] { "discover", "invoke", "subscribe" },
-                    action => Assert.True(store.TryAcquire(
-                        subject.PackageId,
-                        subject.PackageVersion,
-                        subject.ManifestSha256,
-                        "example.rpc",
-                        action,
-                        out _)));
+                    new[] { SunderPackageFormat.AppHostRole, SunderPackageFormat.RuntimeHostRole },
+                    role => Assert.All(
+                        new[] { "discover", "invoke", "subscribe" },
+                        action => Assert.True(store.TryAcquire(
+                            PermissionKey(
+                                action,
+                                callerRole: role,
+                                packageId: subject.PackageId,
+                                packageVersion: subject.PackageVersion,
+                                manifestSha256: subject.ManifestSha256),
+                            out _))));
 
+                var deniedKey = PermissionKey(
+                    SunderRpcProtocol.InvokeAction,
+                    packageId: subject.PackageId,
+                    packageVersion: subject.PackageVersion,
+                    manifestSha256: subject.ManifestSha256);
                 await store.SetAsync(
-                    subject.PackageId,
-                    subject.PackageVersion,
-                    subject.ManifestSha256,
-                    "example.rpc",
-                    "invoke",
+                    deniedKey,
                     RuntimeRpcPermissionState.Denied,
                     CancellationToken.None);
                 var deniedRevision = store.Revision;
                 await store.GrantDeclaredInstalledActionsAsync([subject], CancellationToken.None);
 
-                Assert.False(store.TryAcquire(
-                    subject.PackageId,
-                    subject.PackageVersion,
-                    subject.ManifestSha256,
-                    "example.rpc",
-                    "invoke",
+                Assert.False(store.TryAcquire(deniedKey, out _));
+                Assert.True(store.TryAcquire(
+                    deniedKey with { CallerRole = SunderPackageFormat.AppHostRole },
                     out _));
                 Assert.Equal(deniedRevision, store.Revision);
 
@@ -926,11 +1245,11 @@ public sealed class RuntimeRpcBrokerTests
                 };
                 await store.GrantDeclaredInstalledActionsAsync([updatedSubject], CancellationToken.None);
                 Assert.True(store.TryAcquire(
-                    updatedSubject.PackageId,
-                    updatedSubject.PackageVersion,
-                    updatedSubject.ManifestSha256,
-                    "example.rpc",
-                    "invoke",
+                    deniedKey with
+                    {
+                        CallerPackageVersion = updatedSubject.PackageVersion,
+                        ManifestSha256 = updatedSubject.ManifestSha256,
+                    },
                     out _));
                 subject = updatedSubject;
             }
@@ -988,11 +1307,223 @@ public sealed class RuntimeRpcBrokerTests
 
         await Assert.ThrowsAsync<RuntimeValidationException>(() => fixture.SetPermissionAsync(
             new RuntimeRpcPermissionUpdateRequest(
-                "caller.package",
-                "example.rpc",
-                SunderRpcProtocol.InvokeAction),
+                PermissionKey(SunderRpcProtocol.InvokeAction)),
             RuntimeRpcPermissionState.Denied));
         Assert.False(File.Exists(fixture.PermissionFilePath));
+    }
+
+    [Fact]
+    public async Task PermissionService_UsesExactRoleAndRejectsStaleCallerFence()
+    {
+        await using var fixture = new RpcFixture();
+        await fixture.PublishAsync(new TestHandler(), webCaller: true);
+        var app = await fixture.OpenAppCallerAsync();
+        var runtimeKey = PermissionKey(
+            SunderRpcProtocol.InvokeAction,
+            manifestSha256: app.ManifestSha256);
+        var runtimeSnapshot = await fixture.SetPermissionAsync(
+            new RuntimeRpcPermissionUpdateRequest(runtimeKey),
+            RuntimeRpcPermissionState.Denied);
+        var runtimePermission = Assert.Single(runtimeSnapshot.Permissions, permission =>
+            permission.Key == runtimeKey);
+        Assert.Equal(RuntimeRpcPermissionState.Denied, runtimePermission.State);
+
+        var appKey = runtimeKey with { CallerRole = SunderPackageFormat.AppHostRole };
+        var appSnapshot = await fixture.SetPermissionAsync(
+            new RuntimeRpcPermissionUpdateRequest(appKey),
+            RuntimeRpcPermissionState.Granted);
+        Assert.Equal(
+            RuntimeRpcPermissionState.Denied,
+            Assert.Single(appSnapshot.Permissions, permission => permission.Key == runtimeKey).State);
+        Assert.Equal(
+            RuntimeRpcPermissionState.Granted,
+            Assert.Single(appSnapshot.Permissions, permission => permission.Key == appKey).State);
+
+        await Assert.ThrowsAsync<RuntimeValidationException>(() => fixture.SetPermissionAsync(
+            new RuntimeRpcPermissionUpdateRequest(runtimeKey with
+            {
+                ManifestSha256 = new string('f', 64),
+            }),
+            RuntimeRpcPermissionState.Granted));
+        await Assert.ThrowsAsync<RuntimeValidationException>(() => fixture.SetPermissionAsync(
+            new RuntimeRpcPermissionUpdateRequest(runtimeKey with
+            {
+                AbiSha256 = new string('f', 64),
+            }),
+            RuntimeRpcPermissionState.Granted));
+    }
+
+    [Fact]
+    public async Task RpcReadiness_RequiresCompatibleProviderAndEveryActionGrant()
+    {
+        var root = CreateRoot();
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var store = new RuntimeRpcPermissionStore(new RuntimePackagePaths(root));
+            var descriptor = Contract();
+            var caller = CreatePackage("caller.package", descriptor, null, usesContract: true);
+            var provider = CreatePackage("provider.package", descriptor, new TestHandler(), usesContract: false);
+            var session = CreateSession(caller, provider);
+            var evaluator = new RuntimeRpcReadinessEvaluator(store);
+
+            Assert.Equal(["caller.package"], evaluator.Evaluate(session));
+            Assert.Equal(
+                PackageReadinessState.Degraded,
+                session.GetSessionPackages().Single(package => package.PackageId == "caller.package").Readiness);
+
+            foreach (var action in new[]
+                     {
+                         SunderRpcProtocol.DiscoverAction,
+                         SunderRpcProtocol.InvokeAction,
+                         SunderRpcProtocol.SubscribeAction,
+                     })
+            {
+                await store.SetAsync(
+                    PermissionKey(action),
+                    RuntimeRpcPermissionState.Granted,
+                    CancellationToken.None);
+            }
+            Assert.Equal(["caller.package"], evaluator.Evaluate(session));
+            Assert.Equal(
+                PackageReadinessState.Ready,
+                session.GetSessionPackages().Single(package => package.PackageId == "caller.package").Readiness);
+
+            Assert.True(session.MarkPackageFailed(
+                "provider.package",
+                PackageFailureOrigin.RuntimeRpcProvider,
+                "faulted",
+                out _));
+            Assert.Equal(["caller.package"], evaluator.Evaluate(session));
+            Assert.Equal(
+                PackageReadinessState.Degraded,
+                session.GetSessionPackages().Single(package => package.PackageId == "caller.package").Readiness);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RpcReadiness_OwnerAndOptionalUsesDoNotRequirePublicGrant()
+    {
+        var root = CreateRoot();
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var store = new RuntimeRpcPermissionStore(new RuntimePackagePaths(root));
+            var descriptor = Contract();
+            var owner = CreatePackage(
+                "owner.package",
+                descriptor,
+                new TestHandler(),
+                usesContract: true,
+                providerAudience: SunderPackageFormat.OwnerProviderAudience);
+            var optional = CreatePackage("optional.package", descriptor, null, usesContract: true);
+            var optionalUse = optional.RpcContractUses.Single();
+            optional = optional with
+            {
+                RpcContractUses =
+                [
+                    new SunderPackageContractUseManifest
+                    {
+                        Role = optionalUse.Role,
+                        ContractId = optionalUse.ContractId,
+                        ContractVersion = optionalUse.ContractVersion,
+                        AbiSha256 = optionalUse.AbiSha256,
+                        Required = false,
+                        Actions = optionalUse.Actions,
+                    },
+                ],
+            };
+            var evaluator = new RuntimeRpcReadinessEvaluator(store);
+            var ownerSession = CreateSession(owner);
+            var optionalSession = CreateSession(optional);
+
+            Assert.Empty(evaluator.Evaluate(ownerSession));
+            Assert.Empty(evaluator.Evaluate(optionalSession));
+            Assert.All(ownerSession.GetSessionPackages(), package =>
+                Assert.Equal(PackageReadinessState.Ready, package.Readiness));
+            Assert.All(optionalSession.GetSessionPackages(), package =>
+                Assert.Equal(PackageReadinessState.Ready, package.Readiness));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RpcReadiness_MetadataRefreshPreservesSessionGeneration()
+    {
+        var root = CreateRoot();
+        Directory.CreateDirectory(root);
+        var paths = new RuntimePackagePaths(root);
+        using var store = new RuntimeRpcPermissionStore(paths);
+        var evaluator = new RuntimeRpcReadinessEvaluator(store);
+        var events = new RuntimeEventStreamService();
+        var owner = new RuntimeSessionOwner(
+            NullLogger<RuntimeSessionOwner>.Instance,
+            events,
+            rpcReadiness: evaluator);
+        var descriptor = Contract();
+        var session = CreateSession(
+            CreatePackage("caller.package", descriptor, null, usesContract: true),
+            CreatePackage("provider.package", descriptor, new TestHandler(), usesContract: false));
+        evaluator.Evaluate(session);
+        try
+        {
+            await owner.PublishAsync(
+                session,
+                owner.Sources.Snapshot(),
+                [],
+                [],
+                expectedGeneration: 0);
+            var degraded = owner.GetSnapshot();
+            Assert.Equal(1, degraded.SessionGeneration);
+            Assert.Equal(
+                PackageReadinessState.Degraded,
+                degraded.SessionPackages.Single(package => package.PackageId == "caller.package").Readiness);
+
+            foreach (var action in new[]
+                     {
+                         SunderRpcProtocol.DiscoverAction,
+                         SunderRpcProtocol.InvokeAction,
+                         SunderRpcProtocol.SubscribeAction,
+                     })
+            {
+                await store.SetAsync(
+                    PermissionKey(action),
+                    RuntimeRpcPermissionState.Granted,
+                    CancellationToken.None);
+            }
+            Assert.True(owner.RefreshRpcReadiness());
+            var ready = owner.GetSnapshot();
+            Assert.Equal(degraded.SessionGeneration, ready.SessionGeneration);
+            Assert.True(ready.EventSequence > degraded.EventSequence);
+            Assert.Equal(
+                PackageReadinessState.Ready,
+                ready.SessionPackages.Single(package => package.PackageId == "caller.package").Readiness);
+            Assert.Contains(
+                events.GetSnapshot(degraded.EventSequence).Events,
+                runtimeEvent => runtimeEvent.Kind == RuntimeEventKind.SnapshotMetadataChanged
+                                && runtimeEvent.SessionGeneration == degraded.SessionGeneration);
+
+            await store.SetAsync(
+                PermissionKey(SunderRpcProtocol.InvokeAction),
+                RuntimeRpcPermissionState.Denied,
+                CancellationToken.None);
+            Assert.True(owner.RefreshRpcReadiness());
+            Assert.Equal(
+                PackageReadinessState.Degraded,
+                owner.GetSnapshot().SessionPackages.Single(package => package.PackageId == "caller.package").Readiness);
+        }
+        finally
+        {
+            await owner.State.ClearActiveSessionAsync();
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -1057,6 +1588,8 @@ public sealed class RuntimeRpcBrokerTests
         var failure = await Assert.ThrowsAsync<SunderRpcException>(async () =>
             await stream.MoveNextAsync().AsTask());
         Assert.Equal(SunderRpcErrorKind.ResourceExhausted, failure.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, failure.Error.RetrySafety);
         Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
     }
 
@@ -1395,6 +1928,26 @@ public sealed class RuntimeRpcBrokerTests
     }
 
     [Fact]
+    public async Task AppCallScope_CloseAfterDeadlineIsIdempotent()
+    {
+        var clock = new ManualTimeProvider();
+        await using var fixture = new RpcFixture(
+            new RuntimeRpcPolicyOptions { DefaultDeadline = TimeSpan.FromMinutes(5) },
+            clock);
+        await fixture.PublishAsync(new TestHandler(), webCaller: true);
+        var app = await fixture.OpenAppCallerAsync();
+        var scope = fixture.Broker.CreateAppCallScope(
+            app.Session.SessionId,
+            new SunderRpcCallOptions(clock.GetUtcNow().AddMinutes(1)),
+            CancellationToken.None);
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        await fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, scope.Id);
+        await fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, scope.Id);
+    }
+
+    [Fact]
     public async Task CallScope_ExpiryDuringRegistrationCleansPartialContentAndScope()
     {
         var clock = new ManualTimeProvider();
@@ -1500,34 +2053,6 @@ public sealed class RuntimeRpcBrokerTests
     public void InvocationContext_HasNoPublicForgeableConstructor()
         => Assert.Empty(typeof(SunderRpcInvocationContext).GetConstructors());
 
-    [Fact]
-    public void ContributionRegistry_RequiresManifestDeclarationAndRejectsDuplicates()
-    {
-        var descriptor = Contract();
-        var declaration = ProviderManifest(descriptor);
-        var manifest = new SunderPackageManifest { Provides = [declaration] };
-        var contracts = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal)
-        {
-            [PackageSessionPreparer.ContractKey(descriptor.ContractId, descriptor.Version)] = descriptor,
-        };
-        var registry = new RuntimePackageContributionRegistry(
-            new ServiceCollection().BuildServiceProvider(),
-            "provider.package",
-            manifest: manifest,
-            rpcContracts: contracts);
-        registry.RegisterRpcProvider("example.provider", new TestHandler());
-        Assert.Throws<InvalidOperationException>(() =>
-            registry.RegisterRpcProvider("example.provider", new TestHandler()));
-
-        var undeclared = new RuntimePackageContributionRegistry(
-            new ServiceCollection().BuildServiceProvider(),
-            "provider.package",
-            manifest: new SunderPackageManifest(),
-            rpcContracts: contracts);
-        Assert.Throws<InvalidOperationException>(() =>
-            undeclared.RegisterRpcProvider("example.provider", new TestHandler()));
-    }
-
     private static async IAsyncEnumerable<JsonElement> Values(
         JsonElement first,
         JsonElement second,
@@ -1538,6 +2063,17 @@ public sealed class RuntimeRpcBrokerTests
         await Task.Yield();
         yield return second;
     }
+
+    private static async IAsyncEnumerable<JsonElement> UndeclaredDomainFailure()
+    {
+        yield return await Task.FromException<JsonElement>(UndeclaredDomainException());
+    }
+
+    private static SunderRpcException UndeclaredDomainException()
+        => new(new SunderRpcError(
+            SunderRpcErrorKind.Domain,
+            "messages.undeclared",
+            "This error is not declared by the method."));
 
     private static async Task DrainAsync<T>(System.Threading.Channels.ChannelReader<T> reader)
     {
@@ -1558,12 +2094,33 @@ public sealed class RuntimeRpcBrokerTests
             [
                 new SunderPackageContractUseManifest
                 {
+                    Role = SunderPackageFormat.RuntimeHostRole,
                     ContractId = "example.rpc",
-                    VersionRange = "1.0.0",
+                    ContractVersion = "1.0.0",
+                    AbiSha256 = Contract().AbiSha256,
                     Required = true,
                     Actions = ["discover", "invoke", "subscribe"],
                 },
             ]);
+
+    private static RuntimeRpcPermissionKey PermissionKey(
+        string action,
+        string callerRole = SunderPackageFormat.RuntimeHostRole,
+        string packageId = "caller.package",
+        string packageVersion = "1.0.0",
+        string? manifestSha256 = null,
+        string contractId = "example.rpc",
+        string contractVersion = "1.0.0",
+        string? abiSha256 = null)
+        => new(
+            packageId,
+            packageVersion,
+            manifestSha256 ?? new string('a', 64),
+            callerRole,
+            contractId,
+            contractVersion,
+            abiSha256 ?? Contract().AbiSha256!,
+            action);
 
     private sealed class RpcFixture : IAsyncDisposable
     {
@@ -1620,25 +2177,32 @@ public sealed class RuntimeRpcBrokerTests
             PackageSourceKind callerSourceKind = PackageSourceKind.Installed,
             TestHandler? siblingHandler = null,
             string callerPackageId = "caller.package",
-            TestHandler? healthyHandler = null)
+            TestHandler? healthyHandler = null,
+            SunderRpcContractDescriptor? callerContract = null,
+            bool runtimeCallerUsesContract = true,
+            bool appCallerUsesContract = true,
+            string providerAudience = SunderPackageFormat.PublicProviderAudience,
+            SunderRpcContractDescriptor? providerContract = null)
         {
-            var descriptor = Contract();
+            var descriptor = providerContract ?? Contract();
+            callerContract ??= descriptor;
             var caller = CreatePackage(
                 callerPackageId,
-                descriptor,
+                callerContract,
                 null,
-                usesContract: true,
+                usesContract: runtimeCallerUsesContract,
                 sourceKind: callerSourceKind);
             if (webCaller)
             {
-                caller = AddWebTarget(caller, descriptor);
+                caller = AddWebTarget(caller, callerContract, appCallerUsesContract);
             }
             var provider = CreatePackage(
                 "provider.package",
                 descriptor,
                 handler,
                 providerUsesContract,
-                siblingHandler: siblingHandler);
+                siblingHandler: siblingHandler,
+                providerAudience: providerAudience);
             var healthy = healthyHandler is null
                 ? null
                 : CreatePackage(
@@ -1673,13 +2237,13 @@ public sealed class RuntimeRpcBrokerTests
         public Task GrantAsync(string packageId, string action)
             => GrantAsync(packageId, new string('a', 64), action);
 
-        public Task GrantAsync(string packageId, string manifestSha256, string action)
+        public Task GrantAsync(
+            string packageId,
+            string manifestSha256,
+            string action,
+            string callerRole = SunderPackageFormat.RuntimeHostRole)
             => _permissions.SetAsync(
-                packageId,
-                "1.0.0",
-                manifestSha256,
-                "example.rpc",
-                action,
+                ActivePermissionKey(packageId, manifestSha256, callerRole, action),
                 RuntimeRpcPermissionState.Granted,
                 CancellationToken.None);
 
@@ -1709,13 +2273,40 @@ public sealed class RuntimeRpcBrokerTests
 
         public Task RevokeAsync(string action)
             => _permissions.SetAsync(
-                "caller.package",
-                "1.0.0",
-                new string('a', 64),
-                "example.rpc",
-                action,
+                ActivePermissionKey(
+                    "caller.package",
+                    new string('a', 64),
+                    SunderPackageFormat.RuntimeHostRole,
+                    action),
                 RuntimeRpcPermissionState.Denied,
                 CancellationToken.None);
+
+        private RuntimeRpcPermissionKey ActivePermissionKey(
+            string packageId,
+            string manifestSha256,
+            string callerRole,
+            string action)
+        {
+            var package = _activeSession!.LoadedPackageMap[packageId];
+            var uses = callerRole == SunderPackageFormat.RuntimeHostRole
+                ? package.RpcContractUses
+                : package.Source.Manifest!.UsesContracts ?? [];
+            var use = uses.Where(static candidate => candidate is not null)
+                .Select(static candidate => candidate!)
+                .Single(candidate =>
+                string.Equals(candidate.Role, callerRole, StringComparison.Ordinal)
+                && string.Equals(candidate.ContractId, "example.rpc", StringComparison.Ordinal)
+                && (candidate.Actions ?? []).Contains(action, StringComparer.Ordinal));
+            return new RuntimeRpcPermissionKey(
+                package.Descriptor.PackageId,
+                package.Descriptor.Version,
+                manifestSha256,
+                callerRole,
+                use.ContractId!,
+                use.ContractVersion!,
+                use.AbiSha256!,
+                action);
+        }
 
         public Task<RuntimeRpcPermissionSnapshot> SetPermissionAsync(
             RuntimeRpcPermissionUpdateRequest request,
@@ -1751,7 +2342,8 @@ public sealed class RuntimeRpcBrokerTests
 
     private static ActiveLoadedPackage AddWebTarget(
         ActiveLoadedPackage package,
-        SunderRpcContractDescriptor descriptor)
+        SunderRpcContractDescriptor descriptor,
+        bool usesContract)
     {
         var root = package.Source.SourceFolder;
         var manifestFolder = Path.Combine(root, "manifest");
@@ -1768,7 +2360,22 @@ public sealed class RuntimeRpcBrokerTests
             Name = package.Source.Manifest.Id,
             Version = package.Source.Manifest.Version,
             ContractBundles = package.Source.Manifest.ContractBundles,
-            UsesContracts = package.Source.Manifest.UsesContracts,
+            UsesContracts = usesContract
+                ? (package.Source.Manifest.UsesContracts ?? [])
+                    .Concat(
+                    [
+                        new SunderPackageContractUseManifest
+                        {
+                            Role = SunderPackageFormat.AppHostRole,
+                            ContractId = descriptor.ContractId,
+                            ContractVersion = descriptor.Version,
+                            AbiSha256 = descriptor.AbiSha256,
+                            Required = true,
+                            Actions = ["discover", "invoke", "subscribe"],
+                        },
+                    ])
+                    .ToArray()
+                : package.Source.Manifest.UsesContracts,
             Provides = package.Source.Manifest.Provides,
             Targets =
             [
@@ -1779,7 +2386,7 @@ public sealed class RuntimeRpcBrokerTests
                     Kind = SunderPackageFormat.WebTargetKind,
                     EntryPoint = "index.html",
                     SdkVersion = "1.1.0",
-                    RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v1"],
+                    RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v2"],
                     Views =
                     [
                         new SunderPackageWebViewManifest
@@ -1826,11 +2433,11 @@ public sealed class RuntimeRpcBrokerTests
         bool usesContract,
         PackageSourceKind sourceKind = PackageSourceKind.Installed,
         TestHandler? siblingHandler = null,
-        string providerId = "example.provider")
+        string providerId = "example.provider",
+        string providerAudience = SunderPackageFormat.PublicProviderAudience)
     {
         var root = CreateRoot();
         Directory.CreateDirectory(root);
-        var assemblyPath = typeof(RuntimeRpcBrokerTests).Assembly.Location;
         var manifest = new SunderPackageManifest
         {
             Id = packageId,
@@ -1842,7 +2449,9 @@ public sealed class RuntimeRpcBrokerTests
                     ContractId = descriptor.ContractId,
                     Version = descriptor.Version,
                     DescriptorPath = "contracts/rpc.json",
-                    Sha256 = descriptor.Sha256,
+                    DescriptorSha256 = descriptor.Sha256,
+                    AbiSha256 = descriptor.AbiSha256,
+                    Exposure = SunderPackageFormat.PublicContractExposure,
                 },
             ],
             UsesContracts = usesContract
@@ -1850,8 +2459,10 @@ public sealed class RuntimeRpcBrokerTests
                 [
                     new SunderPackageContractUseManifest
                     {
+                        Role = SunderPackageFormat.RuntimeHostRole,
                         ContractId = descriptor.ContractId,
-                        VersionRange = descriptor.Version,
+                        ContractVersion = descriptor.Version,
+                        AbiSha256 = descriptor.AbiSha256,
                         Required = true,
                         Actions = ["discover", "invoke", "subscribe"],
                     },
@@ -1860,8 +2471,12 @@ public sealed class RuntimeRpcBrokerTests
             Provides = handler is null
                 ? []
                 : siblingHandler is null
-                    ? [ProviderManifest(descriptor, providerId)]
-                    : [ProviderManifest(descriptor, providerId), ProviderManifest(descriptor, "example.sibling")],
+                    ? [ProviderManifest(descriptor, providerId, providerAudience)]
+                    :
+                    [
+                        ProviderManifest(descriptor, providerId, providerAudience),
+                        ProviderManifest(descriptor, "example.sibling", providerAudience),
+                    ],
         };
         var source = new RuntimePackageSource(
             packageId,
@@ -1886,15 +2501,9 @@ public sealed class RuntimeRpcBrokerTests
                 null,
                 null,
                 new RestrictedFileMasterKeyProtection()),
-            AuthHandler: null,
-            CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
-            BackgroundServices: [],
-            new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageLoadContext(
-                packageId,
-                assemblyPath,
-                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
-            EmptyTestPackageSettings.Instance)
+            new LocalPackageFileStore(Path.Combine(root, "files")),
+            EmptyTestPackageSettings.Instance,
+            new TestRuntimePackageWorker())
         {
             RpcContracts = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal)
             {
@@ -1944,40 +2553,62 @@ public sealed class RuntimeRpcBrokerTests
                     true,
                     PackageReadinessState.Ready,
                     [],
-                    null,
-                    null,
-                    null,
-                    0),
-                StringComparer.OrdinalIgnoreCase));
+                     null,
+                     null,
+                     null,
+                     0,
+                     package.RpcContractUses.Select(use => new PackageRpcContractUseDescriptor(
+                         use.Role!,
+                         use.ContractId!,
+                         use.ContractVersion!,
+                         use.AbiSha256!,
+                         use.Required == true,
+                         (use.Actions ?? []).Where(static action => action is not null).Select(static action => action!).ToArray()))
+                         .ToArray()),
+                 StringComparer.OrdinalIgnoreCase));
 
     private static SunderPackageProviderManifest ProviderManifest(
         SunderRpcContractDescriptor descriptor,
-        string providerId = "example.provider")
+        string providerId = "example.provider",
+        string audience = SunderPackageFormat.PublicProviderAudience)
         => new()
         {
             ProviderId = providerId,
             ContractId = descriptor.ContractId,
             ContractVersion = descriptor.Version,
-            ContractSha256 = descriptor.Sha256,
+            DescriptorSha256 = descriptor.Sha256,
+            AbiSha256 = descriptor.AbiSha256,
             Role = SunderPackageFormat.RuntimeHostRole,
+            Audience = audience,
         };
 
-    private static SunderRpcContractDescriptor Contract()
-        => SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+    private static SunderRpcContractDescriptor Contract(
+        string version = "1.0.0",
+        int requestMaximumLength = 128,
+        string? requestTitle = null,
+        string unaryIdempotency = "none")
+    {
+        var title = requestTitle is null
+            ? string.Empty
+            : $",\"title\":{JsonSerializer.Serialize(requestTitle)}";
+        return SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes($$$$"""
             {
-              "descriptorVersion":1,
+              "$schema":"https://json-schema.org/draft/2020-12/schema",
+              "descriptorVersion":2,
               "contractId":"example.rpc",
-              "version":"1.0.0",
-              "services":[{"serviceId":"messages","methods":[
-                {"methodId":"send","kind":"unary","requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}},
-                {"methodId":"watch","kind":"server-stream","requestSchema":{"$ref":"#/$defs/Request"},"eventSchema":{"$ref":"#/$defs/Response"}}
-              ]}],
+              "version":"{{{{version}}}}",
+              "errors":{"messages.rejected":{"description":"The message was rejected."}},
+              "services":{"messages":{"methods":{
+                "send":{"kind":"unary","idempotency":"{{{{unaryIdempotency}}}}","errors":["messages.rejected"],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}},
+                "watch":{"kind":"server-stream","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"eventSchema":{"$ref":"#/$defs/Response"}}
+              }}},
               "$defs":{
-                "Request":{"type":"object","properties":{"message":{"type":"string","minLength":1,"maxLength":128}},"required":["message"],"additionalProperties":false},
+                "Request":{"type":"object","properties":{"message":{"type":"string","minLength":1,"maxLength":{{{{requestMaximumLength}}}}}},"required":["message"],"additionalProperties":false{{{{title}}}}},
                 "Response":{"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"],"additionalProperties":false}
               }
             }
             """));
+    }
 
     private sealed record RpcActivation(
         RuntimeRpcCallerStamp Caller,

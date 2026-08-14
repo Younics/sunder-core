@@ -30,15 +30,18 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         _limits = limits;
     }
 
+    internal WorkerEnvironment Environment => _environment;
+
+    internal ValueTask ReportGenerationFaultAsync(
+        string code,
+        string message,
+        CancellationToken cancellationToken)
+        => _runtime.ReportGenerationFaultAsync(code, message, cancellationToken);
+
     public async ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
         SunderRpcCallOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        if (!_runtime.UsesV2Protocol)
-        {
-            throw new NotSupportedException(
-                "Caller-owned RPC call scopes are not supported by sunder.worker.v1.");
-        }
         cancellationToken.ThrowIfCancellationRequested();
         var capacity = ReserveCallScopeCapacity();
         var capacityReleased = false;
@@ -134,11 +137,6 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         Exception exception,
         CancellationToken cancellationToken)
     {
-        if (!_runtime.UsesV2Protocol)
-        {
-            throw new NotSupportedException(
-                "Provider invariant reporting is not supported by sunder.worker.v1.");
-        }
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(exception);
         var value = await UnaryCallAsync(
@@ -420,7 +418,7 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         string handleId,
         CancellationToken cancellationToken)
         => ReleaseContentAsync(
-            _runtime.UsesV2Protocol ? "worker.content-release" : "worker.content-discard",
+            "worker.content-release",
             "invocationId",
             invocationId,
             handleId,
@@ -899,7 +897,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         Func<JsonElement, ValueTask>? resultConsumer = null,
         bool logging = false,
         bool awaitHostTerminalAfterCancellation = false,
-        Action? started = null)
+        Action? started = null,
+        bool migrationPreparationRead = false)
     {
         OutboundCall call;
         try
@@ -914,7 +913,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                 resultConsumer,
                 logging,
                 awaitHostTerminalAfterCancellation,
-                started);
+                started,
+                migrationPreparationRead);
         }
         catch
         {
@@ -946,7 +946,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
             resultConsumer: null,
             logging: false,
             awaitHostTerminalAfterCancellation: false,
-            started: null);
+            started: null,
+            migrationPreparationRead: false);
         try
         {
             await call.RequestWrite.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -973,7 +974,8 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
         Func<JsonElement, ValueTask>? resultConsumer,
         bool logging,
         bool awaitHostTerminalAfterCancellation,
-        Action? started)
+        Action? started,
+        bool migrationPreparationRead)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var sequence = Interlocked.Increment(ref _nextId);
@@ -1003,7 +1005,9 @@ internal sealed partial class WorkerRpcClient : ISunderRpcClient
                     ? !_runtime.CanSendControlUnderGate
                     : logging
                         ? !_runtime.CanSendLoggingUnderGate
-                        : !_runtime.IsActiveUnderGate)
+                        : migrationPreparationRead
+                            ? !_runtime.CanReadStateForMigrationPreparationUnderGate
+                            : !_runtime.IsActiveUnderGate)
             {
                 throw SunderRpcException.Infrastructure(
                     SunderRpcErrorKind.Unavailable,

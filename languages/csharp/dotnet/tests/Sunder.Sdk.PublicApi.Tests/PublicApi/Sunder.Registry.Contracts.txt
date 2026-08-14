@@ -62,18 +62,44 @@ type sealed class Sunder.Registry.Contracts.RegistryCliTokenResponse : System.IE
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+type sealed class Sunder.Registry.Contracts.RegistryClientCompatibilityProfile : System.IEquatable<Sunder.Registry.Contracts.RegistryClientCompatibilityProfile>
+  method .ctor(System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, System.String WorkerProtocol, System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, System.String SdkBaseline, System.String Rid)
+  field static System.String ManifestVersionsQueryParameter = "manifestVersions"
+  field static System.Int32 MaximumIdentifierLength = 128
+  field static System.Int32 MaximumManifestVersions = 8
+  field static System.Int32 MaximumRuntimeTargetKinds = 8
+  field static System.Int32 MaximumWorkerCapabilities = 64
+  field static System.String RidQueryParameter = "rid"
+  field static System.String RuntimeTargetKindsQueryParameter = "runtimeTargetKinds"
+  field static System.String SdkBaselineQueryParameter = "sdkBaseline"
+  field static System.String WorkerCapabilitiesQueryParameter = "workerCapabilities"
+  field static System.String WorkerProtocolQueryParameter = "workerProtocol"
+  property System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions { get; }
+  property System.String Rid { get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds { get; }
+  property System.String SdkBaseline { get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities { get; }
+  property System.String WorkerProtocol { get; }
+  method Sunder.Registry.Contracts.RegistryClientCompatibilityProfile <Clone>$()
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, out System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, out System.String WorkerProtocol, out System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, out System.String SdkBaseline, out System.String Rid)
+  method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryClientCompatibilityProfile? other)
+  method virtual System.Boolean Equals(System.Object? obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryContractDescriptorMetadata : System.IEquatable<Sunder.Registry.Contracts.RegistryContractDescriptorMetadata>
-  method .ctor(System.String ContractId, System.String Version, System.String Sha256, System.Int64 Size, System.String DescriptorDownloadUrl, System.String FirstPublisherPackageId, System.String FirstPublisherPackageVersion, System.DateTimeOffset PublishedAtUtc)
+  method .ctor(System.String ContractId, System.String Version, System.String DescriptorSha256, System.String AbiSha256, System.String Exposure, System.Int64 Size, System.String DescriptorDownloadUrl, System.String FirstPublisherPackageId, System.String FirstPublisherPackageVersion, System.DateTimeOffset PublishedAtUtc)
+  property System.String AbiSha256 { get; init; }
   property System.String ContractId { get; init; }
   property System.String DescriptorDownloadUrl { get; init; }
+  property System.String DescriptorSha256 { get; init; }
+  property System.String Exposure { get; init; }
   property System.String FirstPublisherPackageId { get; init; }
   property System.String FirstPublisherPackageVersion { get; init; }
   property System.DateTimeOffset PublishedAtUtc { get; init; }
-  property System.String Sha256 { get; init; }
   property System.Int64 Size { get; init; }
   property System.String Version { get; init; }
   method Sunder.Registry.Contracts.RegistryContractDescriptorMetadata <Clone>$()
-  method System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String Sha256, out System.Int64 Size, out System.String DescriptorDownloadUrl, out System.String FirstPublisherPackageId, out System.String FirstPublisherPackageVersion, out System.DateTimeOffset PublishedAtUtc)
+  method System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String DescriptorSha256, out System.String AbiSha256, out System.String Exposure, out System.Int64 Size, out System.String DescriptorDownloadUrl, out System.String FirstPublisherPackageId, out System.String FirstPublisherPackageVersion, out System.DateTimeOffset PublishedAtUtc)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryContractDescriptorMetadata? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -175,25 +201,29 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageChangeRequest : Syste
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryPackageContractBundle : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageContractBundle>
-  method .ctor(System.String ContractId, System.String Version, System.String DescriptorPath, System.String Sha256)
+  method .ctor(System.String ContractId, System.String Version, System.String DescriptorPath, System.String DescriptorSha256, System.String AbiSha256, System.String Exposure)
+  property System.String AbiSha256 { get; init; }
   property System.String ContractId { get; init; }
   property System.String DescriptorPath { get; init; }
-  property System.String Sha256 { get; init; }
+  property System.String DescriptorSha256 { get; init; }
+  property System.String Exposure { get; init; }
   property System.String Version { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageContractBundle <Clone>$()
-  method System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String DescriptorPath, out System.String Sha256)
+  method System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String DescriptorPath, out System.String DescriptorSha256, out System.String AbiSha256, out System.String Exposure)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageContractBundle? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryPackageContractUse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageContractUse>
-  method .ctor(System.String ContractId, System.String VersionRange, System.Boolean Required, System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  method .ctor(System.String Role, System.String ContractId, System.String ContractVersion, System.String AbiSha256, System.Boolean Required, System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  property System.String AbiSha256 { get; init; }
   property System.Collections.Generic.IReadOnlyList<System.String> Actions { get; init; }
   property System.String ContractId { get; init; }
+  property System.String ContractVersion { get; init; }
   property System.Boolean Required { get; init; }
-  property System.String VersionRange { get; init; }
+  property System.String Role { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageContractUse <Clone>$()
-  method System.Void Deconstruct(out System.String ContractId, out System.String VersionRange, out System.Boolean Required, out System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  method System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String ContractVersion, out System.String AbiSha256, out System.Boolean Required, out System.Collections.Generic.IReadOnlyList<System.String> Actions)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageContractUse? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -429,14 +459,16 @@ type sealed class Sunder.Registry.Contracts.RegistryPackageProjectionKey : Syste
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryPackageProvider : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageProvider>
-  method .ctor(System.String ProviderId, System.String ContractId, System.String ContractVersion, System.String ContractSha256, System.String Role)
+  method .ctor(System.String ProviderId, System.String Role, System.String ContractId, System.String ContractVersion, System.String DescriptorSha256, System.String AbiSha256, System.String Audience)
+  property System.String AbiSha256 { get; init; }
+  property System.String Audience { get; init; }
   property System.String ContractId { get; init; }
-  property System.String ContractSha256 { get; init; }
   property System.String ContractVersion { get; init; }
+  property System.String DescriptorSha256 { get; init; }
   property System.String ProviderId { get; init; }
   property System.String Role { get; init; }
   method Sunder.Registry.Contracts.RegistryPackageProvider <Clone>$()
-  method System.Void Deconstruct(out System.String ProviderId, out System.String ContractId, out System.String ContractVersion, out System.String ContractSha256, out System.String Role)
+  method System.Void Deconstruct(out System.String ProviderId, out System.String Role, out System.String ContractId, out System.String ContractVersion, out System.String DescriptorSha256, out System.String AbiSha256, out System.String Audience)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageProvider? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -711,8 +743,9 @@ type sealed class Sunder.Registry.Contracts.RegistryPublishTokenSummary : System
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest>
-  method .ctor(System.String PackageId, System.String? Version, System.String? Tag, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false, System.String? VersionRange = null, System.Boolean Required = true)
+  method .ctor(System.String PackageId, System.String? Version, System.String? Tag, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false, System.String? VersionRange = null, System.Boolean Required = true)
   property System.Boolean AllowDowngrade { get; init; }
+  property Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets { get; init; }
   property System.Boolean IncludePrerelease { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages { get; init; }
@@ -723,7 +756,7 @@ type sealed class Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest : 
   property System.String? Version { get; init; }
   property System.String? VersionRange { get; init; }
   method Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall, out System.String? VersionRange, out System.Boolean Required)
+  method System.Void Deconstruct(out System.String PackageId, out System.String? Version, out System.String? Tag, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall, out System.String? VersionRange, out System.Boolean Required)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveInstallPlanRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
@@ -743,25 +776,27 @@ type sealed class Sunder.Registry.Contracts.RegistryResolveInstallPlanResponse :
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility, System.Boolean IncludePrerelease = false, System.Boolean AllowDowngrade = false, System.Boolean Reinstall = false)
   property System.Boolean AllowDowngrade { get; init; }
+  property Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility { get; init; }
   property System.Boolean IncludePrerelease { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages { get; init; }
   property System.Boolean Reinstall { get; init; }
   method Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageChangeRequest> Packages, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackageState> InstalledPackages, out Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility, out System.Boolean IncludePrerelease, out System.Boolean AllowDowngrade, out System.Boolean Reinstall)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolvePackageChangesRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
 type sealed class Sunder.Registry.Contracts.RegistryResolveUpdatesRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryResolveUpdatesRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, System.Boolean IncludePrerelease = false)
+  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility, System.Boolean IncludePrerelease = false)
+  property Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets { get; init; }
   property System.Boolean IncludePrerelease { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages { get; init; }
   method Sunder.Registry.Contracts.RegistryResolveUpdatesRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, out System.Boolean IncludePrerelease)
+  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryInstalledPackage> InstalledPackages, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> DesiredTargets, out Sunder.Registry.Contracts.RegistryClientCompatibilityProfile Compatibility, out System.Boolean IncludePrerelease)
   method virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryResolveUpdatesRequest? other)
   method virtual System.Boolean Equals(System.Object? obj)
   method virtual System.Int32 GetHashCode()

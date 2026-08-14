@@ -6,7 +6,7 @@ using Sunder.Package.Format;
 
 namespace Sunder.Package.Build.Tasks;
 
-/// <summary>MSBuild task for V1 package manifest generation.</summary>
+/// <summary>Generates an archive-format V1, Manifest V3 Sunder package manifest.</summary>
 public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilities.Task
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -34,6 +34,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
     public ITaskItem[] PackageTargets { get; set; } = [];
     public ITaskItem[] PackageViews { get; set; } = [];
     public ITaskItem[] ContractBundles { get; set; } = [];
+    public ITaskItem[] BindingSnapshots { get; set; } = [];
     public ITaskItem[] UsesContracts { get; set; } = [];
     public ITaskItem[] RpcProviders { get; set; } = [];
     public string? RuntimeIdentifier { get; set; }
@@ -50,6 +51,9 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
 
     [Output]
     public bool HasWorkerTarget { get; private set; }
+
+    [Output]
+    public string? WorkerEntryPointRelativePath { get; private set; }
 
     public override bool Execute()
     {
@@ -123,12 +127,19 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         }
         var contracts = PackageContractBuilder.Build(
             ManifestOutputPath,
+            ProjectDirectory,
             targets,
             ContractBundles,
+            BindingSnapshots,
             UsesContracts,
             RpcProviders,
             Log);
         if (contracts is null) return false;
+        var manifestTargets = PackageTargetBuilder.StampRpcV2Capabilities(
+            targets,
+            contracts.RpcRoles,
+            Log);
+        if (manifestTargets is null) return false;
 
         var manifest = new SunderPackageManifest
         {
@@ -140,7 +151,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             Version = PackageVersion,
             Icon = string.IsNullOrWhiteSpace(metadata.Icon) ? null : PackageAssetDiscovery.NormalizePath(metadata.Icon),
             DependsOn = metadata.Dependencies,
-            Targets = targets,
+            Targets = manifestTargets,
             ContractBundles = contracts.Bundles,
             UsesContracts = contracts.Uses,
             Provides = contracts.Providers,
@@ -152,9 +163,12 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             Directory.CreateDirectory(manifestDirectory);
         }
         PackageManifestSerializer.Write(ManifestOutputPath, manifest, JsonOptions);
-        ResolvedTargets = PackageTargetBuilder.ToTaskItems(targets);
+        ResolvedTargets = PackageTargetBuilder.ToTaskItems(manifestTargets);
         ResolvedContractFiles = contracts.Files;
-        HasWorkerTarget = targets.Any(static target => target.Kind == SunderPackageFormat.WorkerTargetKind);
+        HasWorkerTarget = manifestTargets.Any(static target => target.Kind == SunderPackageFormat.WorkerTargetKind);
+        WorkerEntryPointRelativePath = manifestTargets
+            .SingleOrDefault(static target => target.Kind == SunderPackageFormat.WorkerTargetKind)
+            ?.EntryPoint?["lib/".Length..];
         Log.LogMessage(MessageImportance.High, $"Generated Sunder package manifest at {ManifestOutputPath}");
         return !Log.HasLoggedErrors;
     }

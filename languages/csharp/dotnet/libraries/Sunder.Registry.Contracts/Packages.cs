@@ -122,20 +122,26 @@ public sealed record RegistryPackageContractBundle(
     string ContractId,
     string Version,
     string DescriptorPath,
-    string Sha256);
+    string DescriptorSha256,
+    string AbiSha256,
+    string Exposure);
 
 public sealed record RegistryPackageContractUse(
+    string Role,
     string ContractId,
-    string VersionRange,
+    string ContractVersion,
+    string AbiSha256,
     bool Required,
     IReadOnlyList<string> Actions);
 
 public sealed record RegistryPackageProvider(
     string ProviderId,
+    string Role,
     string ContractId,
     string ContractVersion,
-    string ContractSha256,
-    string Role);
+    string DescriptorSha256,
+    string AbiSha256,
+    string Audience);
 
 /// <summary>A package that declares a dependency on the package being viewed (a reverse dependency).</summary>
 public sealed record RegistryPackageDependent(
@@ -209,6 +215,8 @@ public sealed record RegistryPackageResolveResponse(
 public sealed record RegistryResolveUpdatesRequest(
     IReadOnlyList<RegistryInstalledPackage> InstalledPackages,
     IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
+    [property: System.Text.Json.Serialization.JsonRequired]
+    RegistryClientCompatibilityProfile Compatibility,
     bool IncludePrerelease = false);
 
 public sealed record RegistryInstalledPackage(
@@ -234,6 +242,8 @@ public sealed record RegistryResolveInstallPlanRequest(
     string? Tag,
     IReadOnlyList<RegistryPackageTargetRequest> DesiredTargets,
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
+    [property: System.Text.Json.Serialization.JsonRequired]
+    RegistryClientCompatibilityProfile Compatibility,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
     bool Reinstall = false,
@@ -251,6 +261,8 @@ public sealed record RegistryPackageChangeRequest(
 public sealed record RegistryResolvePackageChangesRequest(
     IReadOnlyList<RegistryPackageChangeRequest> Packages,
     IReadOnlyList<RegistryInstalledPackageState> InstalledPackages,
+    [property: System.Text.Json.Serialization.JsonRequired]
+    RegistryClientCompatibilityProfile Compatibility,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
     bool Reinstall = false);

@@ -69,7 +69,11 @@ internal sealed class AppPackageSnapshotCache
                 {
                     CopyDirectory(cached.ContentPath, packageFolder, cancellationToken);
                     _observedHashes.TryAdd(cacheIdentity, 0);
-                    return new AppPreparedPackageSource(cached.PackageId, packageFolder, cached.Manifest);
+                    return new AppPreparedPackageSource(
+                        cached.PackageId,
+                        packageFolder,
+                        cached.Manifest,
+                        AppPackageContentIndexer.ToContentIndex(cached.Files));
                 }
                 catch
                 {
@@ -240,7 +244,7 @@ internal sealed class AppPackageSnapshotCache
             }
             ValidateTarget(manifest, snapshot);
 
-            var files = await IndexContentAsync(contentPath, cancellationToken).ConfigureAwait(false);
+            var files = await AppPackageContentIndexer.IndexAsync(contentPath, cancellationToken).ConfigureAwait(false);
             var metadata = new CacheMetadata(
                 FormatRevision,
                 expectedHash,
@@ -264,7 +268,11 @@ internal sealed class AppPackageSnapshotCache
                 if (winner.Content is not null) return winner.Content;
                 throw new InvalidDataException("A concurrently published package content cache object is invalid.");
             }
-            return new CachedPackageContent(manifest.Id!, Path.Combine(objectPath, ContentDirectoryName), manifest);
+            return new CachedPackageContent(
+                manifest.Id!,
+                Path.Combine(objectPath, ContentDirectoryName),
+                manifest,
+                files);
         }
         finally
         {
@@ -305,7 +313,7 @@ internal sealed class AppPackageSnapshotCache
                 return CacheValidation.Invalid;
             }
 
-            var actualFiles = await IndexContentAsync(contentPath, cancellationToken).ConfigureAwait(false);
+            var actualFiles = await AppPackageContentIndexer.IndexAsync(contentPath, cancellationToken).ConfigureAwait(false);
             if (!metadata.Files.SequenceEqual(actualFiles)) return CacheValidation.Invalid;
             var manifest = AppPackageManifestReader.Read(contentPath);
             if (!string.Equals(manifest.Id, metadata.PackageId, StringComparison.OrdinalIgnoreCase))
@@ -318,7 +326,9 @@ internal sealed class AppPackageSnapshotCache
                     $"Package content hash '{expectedHash}' belongs to '{metadata.PackageId}', not '{snapshot.PackageId}'.");
             }
             ValidateTarget(manifest, snapshot);
-            return new CacheValidation(new CachedPackageContent(metadata.PackageId, contentPath, manifest), Corrupt: false);
+            return new CacheValidation(
+                new CachedPackageContent(metadata.PackageId, contentPath, manifest, metadata.Files),
+                Corrupt: false);
         }
         catch (OperationCanceledException)
         {
@@ -332,45 +342,6 @@ internal sealed class AppPackageSnapshotCache
         {
             return CacheValidation.Invalid;
         }
-    }
-
-    private static async Task<IReadOnlyList<CacheFileMetadata>> IndexContentAsync(
-        string contentPath,
-        CancellationToken cancellationToken)
-    {
-        var directories = Directory.EnumerateDirectories(contentPath, "*", SearchOption.AllDirectories).ToArray();
-        if (directories.Any(static path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0))
-        {
-            throw new InvalidDataException("Package content cache contains a linked directory.");
-        }
-        var paths = Directory.EnumerateFiles(contentPath, "*", SearchOption.AllDirectories)
-            .OrderBy(path => Path.GetRelativePath(contentPath, path), StringComparer.Ordinal)
-            .ToArray();
-        if (paths.Length == 0 || paths.Length > AppPackageSourcePreparer.MaxSnapshotFiles)
-        {
-            throw new InvalidDataException("Package content cache contains an invalid number of files.");
-        }
-
-        var files = new List<CacheFileMetadata>(paths.Length);
-        long totalLength = 0;
-        foreach (var path in paths)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new InvalidDataException("Package content cache contains a linked file.");
-            }
-            var length = new FileInfo(path).Length;
-            totalLength = checked(totalLength + length);
-            if (totalLength > AppPackageSourcePreparer.MaxSnapshotBytes)
-            {
-                throw new InvalidDataException("Package content cache exceeds the snapshot byte limit.");
-            }
-            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false)).ToLowerInvariant();
-            files.Add(new CacheFileMetadata(Path.GetRelativePath(contentPath, path).Replace('\\', '/'), length, hash));
-        }
-        return files;
     }
 
     private void Quarantine(string objectPath)
@@ -517,7 +488,8 @@ internal sealed class AppPackageSnapshotCache
     private sealed record CachedPackageContent(
         string PackageId,
         string ContentPath,
-        SunderPackageManifest Manifest);
+        SunderPackageManifest Manifest,
+        IReadOnlyList<AppPackageFileMetadata> Files);
     private sealed record CacheValidation(CachedPackageContent? Content, bool Corrupt)
     {
         public static CacheValidation Missing { get; } = new(null, Corrupt: false);
@@ -528,8 +500,7 @@ internal sealed class AppPackageSnapshotCache
         string ContentHash,
         string PackageId,
         PackageTargetDescriptor Target,
-        IReadOnlyList<CacheFileMetadata> Files);
-    private sealed record CacheFileMetadata(string Path, long Length, string Sha256);
+        IReadOnlyList<AppPackageFileMetadata> Files);
     private sealed record CacheObject(string Path, string Hash, DateTime LastAccessUtc, long Length);
 
     private sealed class CacheIdentityMismatchException(string message) : IOException(message);

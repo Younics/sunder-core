@@ -83,4 +83,5 @@ internal sealed class RuntimePackagePaths
 
     private static StringComparison PathComparison
         => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
 }

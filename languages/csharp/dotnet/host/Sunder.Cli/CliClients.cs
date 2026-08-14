@@ -97,9 +97,11 @@ internal interface ICliRuntimePackageClient : ICliRuntimeClientRole
     Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken token);
     Task<RuntimePackageSnapshot> GetPackageSnapshotAsync(CancellationToken token);
     Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken token);
+    Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token);
     Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken token);
     Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token);
     Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, CancellationToken token);
+    Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, PackageCapabilityConsent? capabilityConsent, CancellationToken token);
     Task<PackageOperationResult> SetPackageEnabledAsync(string packageId, bool enabled, CancellationToken token);
     Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(string packageId, CancellationToken token);
     Task<PackageOperationResult> UninstallPackageAsync(string packageId, PackageUninstallRequest request, CancellationToken token);
@@ -201,9 +203,11 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
     public Task<RuntimeRegistryAuthStatus> GetRegistryAuthStatusAsync(string origin, CancellationToken token) => _client.GetRegistryAuthStatusAsync(origin, token);
     public Task<RuntimeRegistryAuthStatus> LogoutRegistryAsync(string origin, CancellationToken token) => _client.LogoutRegistryAsync(origin, token);
     public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken token) => _client.InstallRegistryPackageAsync(request, token);
+    public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token) => _client.ResolveRegistryPackagePlanAsync(request, token);
     public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken token) => _client.UpdateRegistryPackagesAsync(request, token);
     public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token) => _client.AdoptRegistryPackageSourceAsync(request, token);
     public Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, CancellationToken token) => _client.ApplyLocalPackageAsync(path, packageId, allowDowngrade, reinstall, token);
+    public Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, PackageCapabilityConsent? capabilityConsent, CancellationToken token) => _client.ApplyLocalPackageAsync(path, packageId, allowDowngrade, reinstall, capabilityConsent, token);
     public Task<PackageOperationResult> SetPackageEnabledAsync(string packageId, bool enabled, CancellationToken token) => _client.SetPackageEnabledAsync(packageId, enabled, token);
     public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(string packageId, CancellationToken token) => _client.GetPackageUninstallPlanAsync(packageId, token);
     public Task<PackageOperationResult> UninstallPackageAsync(string packageId, PackageUninstallRequest request, CancellationToken token) => _client.UninstallPackageAsync(packageId, request, token);

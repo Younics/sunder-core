@@ -58,7 +58,7 @@ The nested Runtime worker (`Sunder.Runtime.Host`) owns:
 - installed package records
 - package archive validation
 - package graph activation
-- runtime services and background services
+- supervised package workers and their staged lifecycle
 - package configuration, secrets, auth callbacks, and runtime faults
 - package asset serving for active or installed packages
 - dev-package watching, debounce/stability checks, and generation-fenced reloads

@@ -442,14 +442,14 @@ type enum Sunder.Sdk.Stacks.StackValueSensitivity : System.IComparable, System.I
   field System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.SunderStackContributionRegistryExtensions
-  method static System.Void RegisterStackContributor(Sunder.Sdk.Abstractions.ISunderRuntimeContributionRegistry registry, System.String providerId, Sunder.Sdk.Stacks.IPackageStackContributor contributor, System.IServiceProvider services)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type sealed class Sunder.Sdk.Stacks.SunderStackContributorRpc
+  field static System.String AbiSha256 = "2468e4b2dea06c0f2c82ceb6972bbeb775a7b032b05f02aa33cd1b51709ef3e0"
   field static System.String ContractId = "sunder.stack.contributor"
-  field static System.String ContractVersion = "1.0.0"
+  field static System.String ContractVersion = "2.0.0"
+  field static System.String DescriptorSha256 = "177323e0de4f5ede5852565defc8ea9f92abf4bf952d61446d139c7a3c1c16a8"
+  field static System.Int32 DescriptorVersion = 2
   field static System.String ServiceId = "stack-contributor"
   property static Sunder.Sdk.Rpc.SunderRpcContractDescriptor Descriptor { get; }
   method static Sunder.Sdk.Rpc.ISunderRpcServiceHandler CreateHandler(Sunder.Sdk.Stacks.IPackageStackContributor contributor)
   method static Sunder.Sdk.Stacks.StackContributorRpcClient CreateClient(Sunder.Sdk.Rpc.ISunderRpcCallScope scope, Sunder.Sdk.Rpc.SunderRpcEndpointReference endpoint)
+  method static Sunder.Sdk.Worker.SunderWorkerProviderRegistration CreateWorkerProviderRegistration(System.String providerId, Sunder.Sdk.Stacks.IPackageStackContributor contributor)

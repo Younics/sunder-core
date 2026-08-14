@@ -22,7 +22,7 @@ internal interface IHostServiceReplacementFailure;
 
 internal sealed class HostServiceReplacementException(Exception innerException)
     : InvalidOperationException(
-        "The previous Sunder Host service was displaced before its replacement launch failed.",
+        "The previous Sunder Host service was displaced before the replacement candidate was submitted.",
         innerException),
         IHostServiceReplacementFailure;
 

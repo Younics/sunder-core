@@ -133,18 +133,6 @@ internal sealed partial class PackageSessionLoadService
 
         ThrowIfCancellationRequested(cancellationToken, sessionFolder);
         var orderedPackages = new PackageLoadPlanner().ResolveLoadOrder(preparedCandidates, errors);
-        RuntimeSharedAssemblyRegistry sharedAssemblyRegistry;
-        try
-        {
-            sharedAssemblyRegistry = new RuntimeSharedAssemblyRegistry(orderedPackages.Select(x => x.LibraryFolder));
-        }
-        catch (Exception ex)
-        {
-            errors.Add(ex.Message);
-            TryDeleteDirectory(sessionFolder);
-            return new PackageSessionLoadResult(null, warnings.ToArray(), errors.ToArray());
-        }
-
         var loadedPackages = new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase);
         var readySources = new List<RuntimePackageSource>(orderedPackages.Count);
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(initialSessionPackages, StringComparer.OrdinalIgnoreCase);
@@ -173,7 +161,7 @@ internal sealed partial class PackageSessionLoadService
 
                 var activationStarted = Stopwatch.GetTimestamp();
                 var activation = await _activator.ActivateAsync(
-                    preparedPackage, sharedAssemblyRegistry, warnings, errors, cancellationToken);
+                    preparedPackage, warnings, errors, cancellationToken);
                 _logger.LogInformation(
                     "Activated Runtime package {PackageId} in {ElapsedMilliseconds} ms",
                     preparedPackage.PackageId,
@@ -195,10 +183,9 @@ internal sealed partial class PackageSessionLoadService
                 sessionFolder,
                 loadedPackages,
                 sessionPackages,
-                sharedAssemblyRegistry,
                 false,
                 readySources);
-            await partialSession.StopBackgroundServicesAsync(_logger, TimeSpan.FromSeconds(5));
+            await partialSession.StopWorkersAsync(_logger, TimeSpan.FromSeconds(5));
             await partialSession.DisposeAsync();
             throw;
         }
@@ -207,7 +194,6 @@ internal sealed partial class PackageSessionLoadService
             sessionFolder,
             loadedPackages,
             sessionPackages,
-            sharedAssemblyRegistry,
             false,
             readySources);
         _logger.LogInformation(

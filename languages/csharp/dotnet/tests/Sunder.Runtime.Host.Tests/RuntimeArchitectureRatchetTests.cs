@@ -15,7 +15,7 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class RuntimeArchitectureRatchetTests
 {
     [Fact]
-    public void RuntimeCompatibilityProfile_SupportsEveryPublishedV1SdkCapability()
+    public void RuntimeCompatibilityProfile_SupportsEveryPublishedSdkCapability()
     {
         var publishedCapabilities = typeof(SunderSdkCapabilities)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
@@ -27,6 +27,23 @@ public sealed class RuntimeArchitectureRatchetTests
         var target = CreateTarget("1.1.0", publishedCapabilities);
 
         Assert.Empty(SunderSdkCompatibilityProfile.Validate("test.package", key, target));
+    }
+
+    [Fact]
+    public void WorkerV3CompatibilityProfile_ClassifiesEveryPublishedSdkCapability()
+    {
+        var publishedCapabilities = typeof(SunderSdkCapabilities)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(static field => field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
+            .Select(static field => (string)field.GetRawConstantValue()!)
+            .Append(SunderWorkerProtocol.V3Capability)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            publishedCapabilities,
+            SunderSdkCompatibilityProfile.WorkerV3CapabilityClassification.Keys
+                .Order(StringComparer.Ordinal));
     }
 
     [Theory]
@@ -64,7 +81,7 @@ public sealed class RuntimeArchitectureRatchetTests
         {
             Role = "runtime",
             Rid = "win-x64",
-            Kind = "dotnet",
+            Kind = SunderPackageFormat.WorkerTargetKind,
             EntryPoint = "lib/test.dll",
             TargetFramework = "net10.0",
             SdkVersion = sdkVersion,
@@ -320,6 +337,69 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.Contains("OnCompleted", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Run", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ResponseDrainDelay", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeHost_IsWorkerOnlyWhileAppRetainsAppModuleLoading()
+    {
+        var root = LocateRepositoryRoot();
+        var hostRoot = Path.Combine(
+            root,
+            "languages",
+            "csharp",
+            "dotnet",
+            "host",
+            "Sunder.Runtime.Host");
+        var hostProject = File.ReadAllText(Path.Combine(hostRoot, "Sunder.Runtime.Host.csproj"));
+        var hostSource = string.Join('\n', Directory.EnumerateFiles(hostRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .Select(File.ReadAllText));
+
+        Assert.DoesNotContain("Sunder.Package.Hosting", hostProject, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            typeof(PackageSessionState).Assembly.GetReferencedAssemblies(),
+            reference => string.Equals(reference.Name, "Sunder.Package.Hosting", StringComparison.Ordinal));
+        foreach (var removed in new[]
+                 {
+                     "AssemblyLoadContext",
+                     "ISunderRuntimePackageModule",
+                     "ISunderRuntimeContributionRegistry",
+                     "RuntimePackageLoadContext",
+                     "RuntimeSharedAssemblyRegistry",
+                     "RuntimePackageContributionRegistry",
+                     "RuntimePackageOperationService",
+                     "PackageRuntimeOperation",
+                     "PackageRuntimeStream",
+                     "sunder.worker.v1",
+                     "worker.content-discard",
+                     "UsesStagedLifecycle",
+                     "UsesCanonicalRpcV2Identity",
+                     "SUNDER_PACKAGE_CONTENT_PATH",
+                     "SUNDER_PACKAGE_DATA_PATH",
+                     "SUNDER_PACKAGE_STATE_PATH",
+                     "SUNDER_PACKAGE_WORKING_PATH",
+                 })
+        {
+            Assert.DoesNotContain(removed, hostSource, StringComparison.Ordinal);
+        }
+        Assert.Contains(nameof(ProcessRuntimeWorker), hostSource, StringComparison.Ordinal);
+
+        var appServices = Path.Combine(
+            root,
+            "languages",
+            "csharp",
+            "dotnet",
+            "host",
+            "Sunder.App",
+            "Services");
+        Assert.Contains(
+            nameof(Sunder.Sdk.Abstractions.ISunderAppPackageModule),
+            File.ReadAllText(Path.Combine(appServices, "AppPackageActivator.cs")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            nameof(Sunder.Sdk.Abstractions.ISunderAppPackageModule),
+            File.ReadAllText(Path.Combine(appServices, "AppSharedAssemblyRegistry.cs")),
+            StringComparison.Ordinal);
     }
 
     [Fact]

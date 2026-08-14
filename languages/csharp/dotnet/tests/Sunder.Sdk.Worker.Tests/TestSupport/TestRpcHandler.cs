@@ -3,8 +3,14 @@ using Sunder.Sdk.Rpc;
 
 namespace Sunder.Sdk.Worker.Tests.TestSupport;
 
-internal sealed class TestRpcHandler : ISunderRpcServiceHandler
+internal sealed class TestRpcHandler : ISunderRpcServiceHandler, ISunderRpcDeclaredErrorMetadata
 {
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> DeclaredErrors
+    {
+        get;
+        init;
+    } = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>(StringComparer.Ordinal);
+
     public Func<SunderRpcInvocationContext, string, string, JsonElement, CancellationToken, ValueTask<JsonElement>> Unary
     {
         get;

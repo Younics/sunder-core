@@ -14,7 +14,7 @@ public sealed partial class RuntimeManagementClient
     public Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcCatalogSnapshot>(
             "rpc/catalog",
-            RuntimeProtocolFeatures.SchemaFirstRpcV1,
+            RuntimeProtocolFeatures.SchemaFirstRpcV2,
             token);
 
     public Task<RuntimeRpcCatalogEventPage> GetRpcCatalogEventsAsync(
@@ -23,35 +23,31 @@ public sealed partial class RuntimeManagementClient
         CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcCatalogEventPage>(
             $"rpc/catalog/events?afterRevision={afterRevision}&afterSequence={afterSequence}",
-            RuntimeProtocolFeatures.SchemaFirstRpcV1,
+            RuntimeProtocolFeatures.SchemaFirstRpcV2,
             token);
 
     public Task<RuntimeRpcPermissionSnapshot> GetRpcPermissionsAsync(CancellationToken token = default)
         => GetRequiredAsync<RuntimeRpcPermissionSnapshot>(
             "rpc/permissions",
-            RuntimeProtocolFeatures.RpcPermissionsV1,
+            RuntimeProtocolFeatures.RpcPermissionsV2,
             token);
 
     public Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(
-        string callerPackageId,
-        string contractId,
-        string action,
+        RuntimeRpcPermissionKey key,
         CancellationToken token = default)
         => PostAsync<RuntimeRpcPermissionUpdateRequest, RuntimeRpcPermissionSnapshot>(
             "rpc/permissions/grant",
-            new RuntimeRpcPermissionUpdateRequest(callerPackageId, contractId, action),
-            RuntimeProtocolFeatures.RpcPermissionsV1,
+            new RuntimeRpcPermissionUpdateRequest(key),
+            RuntimeProtocolFeatures.RpcPermissionsV2,
             token);
 
     public Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(
-        string callerPackageId,
-        string contractId,
-        string action,
+        RuntimeRpcPermissionKey key,
         CancellationToken token = default)
         => PostAsync<RuntimeRpcPermissionUpdateRequest, RuntimeRpcPermissionSnapshot>(
             "rpc/permissions/revoke",
-            new RuntimeRpcPermissionUpdateRequest(callerPackageId, contractId, action),
-            RuntimeProtocolFeatures.RpcPermissionsV1,
+            new RuntimeRpcPermissionUpdateRequest(key),
+            RuntimeProtocolFeatures.RpcPermissionsV2,
             token);
 
     public Task<RuntimeRpcAppSessionDescriptor> OpenAppRpcSessionAsync(
@@ -60,7 +56,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcAppSessionOpenRequest, RuntimeRpcAppSessionDescriptor>(
             "rpc/app-sessions/open",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV1,
+            RuntimeProtocolFeatures.AppWebRpcV2,
             token);
 
     public async Task CloseAppRpcSessionAsync(
@@ -80,7 +76,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcAppCallScopeOpenRequest, RuntimeRpcAppCallScopeDescriptor>(
             "rpc/app/call-scopes/open",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV1,
+            RuntimeProtocolFeatures.AppWebRpcV2,
             token);
 
     public async Task CloseAppRpcCallScopeAsync(
@@ -98,7 +94,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcAppDiscoverRequest, RuntimeRpcAppDiscoverResponse>(
             "rpc/app/discover",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV1,
+            RuntimeProtocolFeatures.AppWebRpcV2,
             token);
 
     public Task<RuntimeRpcAppProviderResponse> GetAppRpcProviderAsync(
@@ -107,7 +103,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcAppProviderRequest, RuntimeRpcAppProviderResponse>(
             "rpc/app/provider",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV1,
+            RuntimeProtocolFeatures.AppWebRpcV2,
             token);
 
     public Task<RuntimeRpcAppInvariantViolationResponse> TryReportAppRpcInvariantViolationAsync(
@@ -118,7 +114,7 @@ public sealed partial class RuntimeManagementClient
         return PostAsync<RuntimeRpcAppInvariantViolationRequest, RuntimeRpcAppInvariantViolationResponse>(
             "rpc/app/invariant-violation",
             request with { ExceptionMessage = SanitizeInvariantMessage(request.ExceptionMessage) },
-            RuntimeProtocolFeatures.AppWebRpcV1,
+            RuntimeProtocolFeatures.AppWebRpcV2,
             token);
     }
 
@@ -128,7 +124,7 @@ public sealed partial class RuntimeManagementClient
         => PostAsync<RuntimeRpcAppInvokeRequest, RuntimeRpcAppInvokeResponse>(
             "rpc/app/invoke",
             request,
-            RuntimeProtocolFeatures.AppWebRpcV1,
+            RuntimeProtocolFeatures.AppWebRpcV2,
             token);
 
     public IAsyncEnumerable<RuntimeRpcAppCatalogFrame> WatchAppRpcAsync(
@@ -165,7 +161,7 @@ public sealed partial class RuntimeManagementClient
             Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(metadata, RpcStreamJsonOptions)));
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
-            new[] { RuntimeProtocolFeatures.AppWebRpcV1 });
+            new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
         using var response = await _httpClient.SendAsync(request, token).ConfigureAwait(false);
         return await _responses.ReadRequiredJsonAsync<RuntimeRpcAppContentRegisterResponse>(response, token)
             .ConfigureAwait(false);
@@ -215,7 +211,7 @@ public sealed partial class RuntimeManagementClient
         };
         request.Options.Set(
             RuntimeAuthenticatedHttpMessageHandler.RequiredFeaturesKey,
-            new[] { RuntimeProtocolFeatures.AppWebRpcV1 });
+            new[] { RuntimeProtocolFeatures.AppWebRpcV2 });
         return request;
     }
 

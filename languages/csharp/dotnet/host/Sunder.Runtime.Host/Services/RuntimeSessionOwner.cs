@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Sunder.Runtime.Contracts;
-using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -21,19 +20,21 @@ internal sealed class RuntimeSessionOwner
     private readonly TimeProvider _timeProvider;
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy;
     private readonly RuntimeRpcCatalog? _rpcCatalog;
+    private readonly RuntimeRpcReadinessEvaluator? _rpcReadiness;
     private readonly TaskCompletionSource _bootstrapCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private RuntimePackageSnapshot _snapshot;
+    private RuntimeStartupDiagnostic? _startupFailure;
 
     public RuntimeSessionOwner(
         ILogger<RuntimeSessionOwner> logger,
         RuntimeEventStreamService events,
         RuntimeAuthPolicyOptions? authPolicy = null,
-        RuntimePackageOperationPolicyOptions? packageOperationPolicy = null,
         TimeProvider? timeProvider = null,
         IHostApplicationLifetime? hostLifetime = null,
         PackageUiSnapshotStore? uiSnapshots = null,
         RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
-        RuntimeRpcCatalog? rpcCatalog = null)
+        RuntimeRpcCatalog? rpcCatalog = null,
+        RuntimeRpcReadinessEvaluator? rpcReadiness = null)
     {
         _logger = logger;
         _events = events;
@@ -41,6 +42,7 @@ internal sealed class RuntimeSessionOwner
         _timeProvider = timeProvider ?? TimeProvider.System;
         _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
         _rpcCatalog = rpcCatalog;
+        _rpcReadiness = rpcReadiness;
         _snapshot = new RuntimePackageSnapshot(
             events.RuntimeInstanceId,
             0,
@@ -55,7 +57,7 @@ internal sealed class RuntimeSessionOwner
             logger,
             () => callbacks?.Clear(),
             packageId => callbacks?.RemovePackageSessions(packageId),
-            packageOperationPolicy?.SessionDrainTimeout);
+            _lifecyclePolicy.SessionDrainTimeout);
         Callbacks = callbacks = new PackageCallbackSessionCoordinator(
             State,
             authPolicy,
@@ -82,13 +84,18 @@ internal sealed class RuntimeSessionOwner
     public RuntimePackageStamp Stamp => new(_events.RuntimeInstanceId, Generation);
 
     public RuntimePackageSnapshot GetSnapshot()
-        => _events.Capture(sequenceId =>
+    {
+        lock (_snapshotPublicationGate)
         {
-            lock (_snapshotGate)
+            return _events.Capture(sequenceId =>
             {
-                return _snapshot with { EventSequence = sequenceId };
-            }
-        });
+                lock (_snapshotGate)
+                {
+                    return _snapshot with { EventSequence = sequenceId };
+                }
+            });
+        }
+    }
 
     public Task WaitForBootstrapAsync(CancellationToken cancellationToken = default)
         => _bootstrapCompletion.Task.WaitAsync(cancellationToken);
@@ -104,16 +111,11 @@ internal sealed class RuntimeSessionOwner
         var prepared = await State.PreparePublicationAsync(session, expectedGeneration, cancellationToken);
         try
         {
-            var publication = await CommitPublicationAsync(prepared, sources, warnings, errors);
-            State.ActivatePublication(prepared);
-            return publication.Warnings;
+            return (await CommitPublicationAsync(prepared, sources, warnings, errors)).Warnings;
         }
         catch
         {
-            if (prepared.Committed && !prepared.Activated)
-            {
-                State.ActivatePublication(prepared);
-            }
+            State.DiscardPublication(prepared);
             throw;
         }
     }
@@ -128,17 +130,39 @@ internal sealed class RuntimeSessionOwner
         PackageSessionState.SessionPublication publication,
         PackageSessionSourceSnapshot sources,
         IReadOnlyList<string> warnings,
-        IReadOnlyList<string> errors)
+        IReadOnlyList<string> errors,
+        Action<long>? publishing = null)
     {
-        var result = await State.CommitPublicationAsync(
-            publication,
-            generation => CommitGeneration(
-                generation,
-                publication.Session.GetActivePackages(),
-                publication.Session.GetSessionPackages(),
-                sources,
-                warnings,
-                errors));
+        var result = await State.CommitPublicationAsync(publication, generation =>
+        {
+            void Publish()
+            {
+                lock (_snapshotPublicationGate)
+                {
+                    if (!CommitGeneration(
+                        generation,
+                        publication.Session.GetActivePackages(),
+                        publication.Session.GetSessionPackages(),
+                        sources,
+                        warnings,
+                        errors))
+                    {
+                        throw new RuntimeStaleGenerationException(
+                            "The candidate Runtime generation could not be published.");
+                    }
+                    publishing?.Invoke(generation);
+                }
+            }
+
+            if (_rpcCatalog is null)
+            {
+                Publish();
+            }
+            else
+            {
+                _rpcCatalog.PublishAtomically(Publish);
+            }
+        });
         if (result.Warnings.Count > 0)
         {
             AppendWarnings(result.Generation, result.Warnings);
@@ -149,45 +173,144 @@ internal sealed class RuntimeSessionOwner
     internal void DiscardPublication(PackageSessionState.SessionPublication publication)
         => State.DiscardPublication(publication);
 
-    internal void ActivatePublication(PackageSessionState.SessionPublication publication)
-        => State.ActivatePublication(publication);
+    internal bool RejectPublication(PackageSessionState.SessionPublication publication)
+        => State.RejectPublication(publication);
 
-    internal async Task<(RuntimePackageStamp Stamp, IReadOnlyList<string> Warnings)> FailPublicationAsync(
+    internal void RestoreRejectedPublication(PackageSessionState.SessionPublication publication)
+        => State.RestoreRejectedPublication(publication);
+
+    internal bool TryRestoreRejectedPublication(PackageSessionState.SessionPublication publication)
+        => State.TryRestoreRejectedPublication(publication);
+
+    internal Task WaitForDiscardedCandidateDrainAsync(
+        PackageSessionState.SessionPublication publication)
+        => State.WaitForDiscardedCandidateDrainAsync(publication);
+
+    internal Task WaitForPreviousRetirementCallbacksAsync(
+        PackageSessionState.SessionPublication publication)
+        => State.WaitForPreviousRetirementCallbacksAsync(publication);
+
+    internal void MarkPreviousWorkersQuiesced(
+        PackageSessionState.SessionPublication publication)
+        => State.MarkPreviousWorkersQuiesced(publication);
+
+    internal IReadOnlyList<DrainingPackageFault> GetDrainingFaults(
+        PackageSessionState.SessionPublication publication)
+        => State.GetDrainingFaults(publication);
+
+    internal Task BeginRecoveryPublicationAsync(
+        PackageSessionState.SessionPublication publication)
+        => State.BeginRecoveryPublicationAsync(publication);
+
+    internal Task<IReadOnlyList<string>> RetireAbandonedPublicationAsync(
+        PackageSessionState.SessionPublication publication)
+        => State.RetireAbandonedPublicationAsync(publication);
+
+    internal Task WaitForRecoveryPackageCallsAsync(
+        PackageSessionState.SessionPublication publication)
+        => State.WaitForRecoveryPackageCallsAsync(publication);
+
+    internal RuntimePackageStamp CommitRecoveryPublication(
         PackageSessionState.SessionPublication publication,
         PackageSessionSourceSnapshot sources,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
-        Exception exception)
+        Action<long>? publishing = null)
     {
-        var failureErrors = errors
-            .Append($"Package Runtime generation activation failed: {exception.Message}")
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var result = await State.FailCommittedPublicationAsync(
-            publication,
-            generation => CommitGeneration(
-                generation,
-                [],
-                [],
-                sources,
-                warnings,
-                failureErrors));
-        if (result.Warnings.Count > 0)
+        var generation = State.CommitRecoveryPublication(publication, committedGeneration =>
         {
-            AppendWarnings(result.Generation, result.Warnings);
-        }
-        return (new RuntimePackageStamp(_events.RuntimeInstanceId, result.Generation), result.Warnings);
+            void Publish()
+            {
+                lock (_snapshotPublicationGate)
+                {
+                    if (!CommitGeneration(
+                            committedGeneration,
+                            publication.PreviousEntry.Session.GetActivePackages(),
+                            publication.PreviousEntry.Session.GetSessionPackages(),
+                            sources,
+                            warnings,
+                            errors))
+                    {
+                        throw new RuntimeStaleGenerationException(
+                            "The recovered Runtime generation could not be published.");
+                    }
+                    publishing?.Invoke(committedGeneration);
+                }
+            }
+
+            if (_rpcCatalog is null)
+            {
+                Publish();
+            }
+            else
+            {
+                _rpcCatalog.PublishAtomically(Publish);
+            }
+        });
+        return new RuntimePackageStamp(_events.RuntimeInstanceId, generation);
+    }
+
+    internal RuntimePackageStamp AbandonRecoveryPublication(
+        PackageSessionState.SessionPublication publication,
+        PackageSessionSourceSnapshot sources,
+        IReadOnlyList<string> warnings,
+        IReadOnlyList<string> errors)
+    {
+        var generation = State.AbandonRecoveryPublication(publication, committedGeneration =>
+        {
+            void Publish()
+            {
+                lock (_snapshotPublicationGate)
+                {
+                    if (!CommitGeneration(
+                            committedGeneration,
+                            [],
+                            [],
+                            sources,
+                            warnings,
+                            errors))
+                    {
+                        throw new RuntimeStaleGenerationException(
+                            "The unavailable Runtime recovery generation could not be published.");
+                    }
+                    _rpcCatalog?.DeactivateAll(committedGeneration);
+                    _rpcCatalog?.VerifySessionGeneration(committedGeneration);
+                }
+            }
+
+            if (_rpcCatalog is null)
+            {
+                Publish();
+            }
+            else
+            {
+                _rpcCatalog.PublishAtomically(Publish);
+            }
+        });
+        return new RuntimePackageStamp(_events.RuntimeInstanceId, generation);
     }
 
     public void MarkReady(IReadOnlyList<string>? warnings = null, IReadOnlyList<string>? errors = null)
-        => SetBootstrapState(RuntimeBootstrapState.Ready, warnings, errors, message: null);
+    {
+        _startupFailure = null;
+        SetBootstrapState(RuntimeBootstrapState.Ready, warnings, errors, message: null);
+    }
 
-    public void MarkFailed(string message, IReadOnlyList<string>? warnings = null, IReadOnlyList<string>? errors = null)
-        => SetBootstrapState(
+    public void MarkFailed(
+        string code,
+        string message,
+        IReadOnlyList<string>? warnings = null,
+        IReadOnlyList<string>? errors = null)
+    {
+        _startupFailure = new RuntimeStartupDiagnostic(code, message);
+        SetBootstrapState(
             RuntimeBootstrapState.Failed,
             warnings,
             errors is { Count: > 0 } ? errors : [message],
             message);
+    }
+
+    internal RuntimeStartupDiagnostic? GetStartupFailure() => _startupFailure;
 
     public void MarkShuttingDown()
         => SetBootstrapState(RuntimeBootstrapState.ShuttingDown, warnings: null, errors: null, message: null);
@@ -328,9 +451,26 @@ internal sealed class RuntimeSessionOwner
 
     internal void HandleRuntimeGenerationFault(
         string packageId,
-        PackageRuntimeGeneration runtimeGeneration,
+        RuntimePackageGeneration runtimeGeneration,
         Exception exception)
     {
+        var origin = exception is ProcessRuntimeWorkerException
+            ? PackageFailureOrigin.RuntimeProcess
+            : PackageFailureOrigin.RuntimeBackgroundService;
+        if (State.RecordDrainingRuntimeGenerationFault(
+                packageId,
+                runtimeGeneration,
+                origin,
+                exception))
+        {
+            _logger.LogError(
+                exception,
+                "Package {PackageId} Runtime generation {ActivationId} faulted while its session was draining; the fault was retained for publication recovery",
+                packageId,
+                runtimeGeneration.ActivationId);
+            return;
+        }
+
         PackageSessionLease sessionLease;
         try
         {
@@ -350,9 +490,7 @@ internal sealed class RuntimeSessionOwner
                     packageId,
                     runtimeGeneration,
                     expectedGeneration,
-                    exception is ProcessRuntimeWorkerException
-                        ? PackageFailureOrigin.RuntimeProcess
-                        : PackageFailureOrigin.RuntimeBackgroundService,
+                    origin,
                     exception,
                     "maintain Runtime generation ownership",
                     committedGeneration =>
@@ -409,6 +547,10 @@ internal sealed class RuntimeSessionOwner
             var applied = apply(current.SessionGeneration, generation =>
             {
                 committedGeneration = generation;
+                if (_rpcReadiness is not null)
+                {
+                    State.RefreshRpcReadiness(_rpcReadiness, generation);
+                }
                 CommitGeneration(
                     generation,
                     State.GetActivePackages(),
@@ -429,6 +571,52 @@ internal sealed class RuntimeSessionOwner
         }
     }
 
+    internal bool RefreshRpcReadiness()
+    {
+        if (_rpcReadiness is null)
+        {
+            return false;
+        }
+        var refresh = State.RefreshRpcReadiness(_rpcReadiness);
+        if (refresh is null)
+        {
+            return false;
+        }
+        lock (_snapshotPublicationGate)
+        {
+            lock (_snapshotGate)
+            {
+                if (_snapshot.SessionGeneration != refresh.Generation)
+                {
+                    return false;
+                }
+            }
+
+            _events.PublishSnapshotMetadata(
+                refresh.Generation,
+                refresh.ChangedPackageIds,
+                runtimeEvent =>
+                {
+                    lock (_snapshotGate)
+                    {
+                        if (_snapshot.SessionGeneration == refresh.Generation)
+                        {
+                            _snapshot = new RuntimePackageSnapshot(
+                                _snapshot.RuntimeInstanceId,
+                                _snapshot.SessionGeneration,
+                                runtimeEvent.SequenceId,
+                                _snapshot.BootstrapState,
+                                refresh.ActivePackages,
+                                refresh.SessionPackages,
+                                _snapshot.Warnings,
+                                _snapshot.Errors);
+                        }
+                    }
+                });
+            return true;
+        }
+    }
+
     internal bool CommitGeneration(
         long generation,
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -437,11 +625,12 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors)
     {
+        var stateGeneration = State.Generation;
         lock (_snapshotPublicationGate)
         {
             lock (_snapshotGate)
             {
-                if (generation < _snapshot.SessionGeneration || generation < State.Generation)
+                if (generation < _snapshot.SessionGeneration || generation < stateGeneration)
                 {
                     return false;
                 }
@@ -669,6 +858,8 @@ internal sealed class RuntimeSessionOwner
 internal sealed class RuntimeSnapshotService(RuntimeSessionOwner sessions)
 {
     public RuntimePackageSnapshot GetSnapshot() => sessions.GetSnapshot();
+
+    public RuntimeStartupDiagnostic? GetStartupFailure() => sessions.GetStartupFailure();
 
     public RuntimePackageStageStatus? GetStageStatus(string stageId) => sessions.GetStageStatus(stageId);
 }

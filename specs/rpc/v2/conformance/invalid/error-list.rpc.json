@@ -1,0 +1,27 @@
+{
+  "descriptorVersion": 2,
+  "contractId": "example.rpc.v2.errorlist",
+  "version": "2.0.0",
+  "errors": [],
+  "services": {
+    "example": {
+      "methods": {
+        "ping": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Empty" },
+          "responseSchema": { "$ref": "#/$defs/Empty" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Empty": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+}

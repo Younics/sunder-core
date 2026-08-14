@@ -217,7 +217,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             status => SyncStatusText = status,
             RebuildRailCollectionsForLifecycle,
             PersistShellState,
-            RemoveRetainedPackageViews
+            RemoveRetainedPackageViews,
+            RefreshPackageMetadata
         );
         _packageLifecycleRefreshCoordinator = new ShellPackageLifecycleRefreshCoordinator(
             effectivePackageLifecycleCoordinator,
@@ -450,6 +451,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             ResumePackageViewPreloading();
         }
     }
+
+    internal Task ApplyPackageMetadataSnapshotAsync(
+        RuntimePackageSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+        => _packageLifecycleRefreshCoordinator.ApplyPackageMetadataAsync(
+            snapshot.ActivePackages,
+            cancellationToken);
 
     internal void ConfigurePackageViewStagingSurface(
         Action<Control> stageCandidateView,
@@ -780,6 +788,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _packageViewPreloader.RetainHotbarViews();
         NotifyLayoutStateChanged();
     }
+
+    private void RefreshPackageMetadata(IReadOnlySet<string> impactedPackageIds)
+        => _railCollectionPresenter.RefreshPackageMetadata(
+            _shellLayout.GetSlots(),
+            impactedPackageIds);
 
     private IEnumerable<ShellPackageView> GetOrderedViewsForPlacement(RailPlacement placement) =>
         ShellViewOrdering.GetOrderedViewsForPlacement(_viewsById.Values, _shellState, placement);

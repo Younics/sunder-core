@@ -25,10 +25,14 @@ internal sealed partial class CliCommandParser
         var all = Flag("--all", "Update all installed packages.");
         var prerelease = Flag("--include-prerelease", "Include prerelease versions.");
         var registryOrigin = ValueOption("--registry-origin", "Only update packages recorded from this Registry origin.", "url");
+        var approveSensitiveCapabilities = Flag(
+            "--approve-sensitive-capabilities",
+            "Explicitly approve exact capability escalations shown by Runtime preflight.");
         update.Arguments.Add(packageId);
         update.Options.Add(all);
         update.Options.Add(prerelease);
         update.Options.Add(registryOrigin);
+        update.Options.Add(approveSensitiveCapabilities);
         update.Validators.Add(result =>
         {
             var hasPackageId = result.GetResult(packageId)?.Tokens.Count > 0;
@@ -38,7 +42,8 @@ internal sealed partial class CliCommandParser
         Bind(update, "package update", result => new UpdatePackagesCommand(
             result.GetValue(packageId),
             result.GetValue(prerelease),
-            result.GetValue(registryOrigin)));
+            result.GetValue(registryOrigin),
+            result.GetValue(approveSensitiveCapabilities)));
     }
 
     private void BuildPackageSourceCommands(Command package)
@@ -53,6 +58,9 @@ internal sealed partial class CliCommandParser
         var allowDowngrade = Flag("--allow-downgrade", "Allow the adopted policy to select an older version.");
         var yes = Flag("--yes", "Confirm replacement and source adoption.");
         var dryRun = Flag("--dry-run", "Resolve and show the adoption plan without changing installed state.");
+        var approveSensitiveCapabilities = Flag(
+            "--approve-sensitive-capabilities",
+            "Explicitly approve exact capability escalations shown by Runtime preflight.");
         adopt.Arguments.Add(packageId);
         adopt.Options.Add(registryOrigin);
         adopt.Options.Add(version);
@@ -61,6 +69,7 @@ internal sealed partial class CliCommandParser
         adopt.Options.Add(allowDowngrade);
         adopt.Options.Add(yes);
         adopt.Options.Add(dryRun);
+        adopt.Options.Add(approveSensitiveCapabilities);
         adopt.Validators.Add(result =>
         {
             var origin = result.GetResult(registryOrigin)?.Tokens.FirstOrDefault()?.Value;
@@ -82,7 +91,8 @@ internal sealed partial class CliCommandParser
             result.GetValue(version),
             result.GetValue(prerelease),
             result.GetValue(allowDowngrade),
-            result.GetValue(dryRun)));
+            result.GetValue(dryRun),
+            result.GetValue(approveSensitiveCapabilities)));
     }
 
     private void BuildPackageConfigCommands(Command package)

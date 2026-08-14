@@ -5,12 +5,22 @@ using Sunder.Package.Format;
 namespace Sunder.App.ViewModels;
 
 public sealed record PackageRpcAccessItemViewModel(
+    string Role,
     string ContractId,
-    string VersionRange,
+    string ContractVersion,
     bool Required,
     int ActionCount,
     string ActionsText)
 {
+    public string CallerRoleText => Role switch
+    {
+        SunderPackageFormat.AppHostRole => "App caller",
+        SunderPackageFormat.RuntimeHostRole => "Runtime caller",
+        _ => $"{Role} caller",
+    };
+
+    public string ContractVersionText => $"Version {ContractVersion}";
+
     public string RequirementText => Required ? "Required" : "Optional";
 }
 
@@ -19,16 +29,18 @@ internal static class PackageRpcAccessProjection
     public static IReadOnlyList<PackageRpcAccessItemViewModel> FromRegistry(
         IEnumerable<RegistryPackageContractUse> uses)
         => Project(uses.Select(static use => new Source(
+            use.Role,
             use.ContractId,
-            use.VersionRange,
+            use.ContractVersion,
             use.Required,
             use.Actions)));
 
     public static IReadOnlyList<PackageRpcAccessItemViewModel> FromRuntime(
         IEnumerable<PackageRpcContractUseDescriptor> uses)
         => Project(uses.Select(static use => new Source(
+            use.Role,
             use.ContractId,
-            use.VersionRange,
+            use.ContractVersion,
             use.Required,
             use.Actions)));
 
@@ -37,8 +49,9 @@ internal static class PackageRpcAccessProjection
         => Project(uses
             .Where(static use => use is not null)
             .Select(static use => new Source(
-                use!.ContractId!,
-                use.VersionRange!,
+                use!.Role!,
+                use.ContractId!,
+                use.ContractVersion!,
                 use.Required!.Value,
                 (use.Actions ?? [])
                     .Where(static action => action is not null)
@@ -59,7 +72,9 @@ internal static class PackageRpcAccessProjection
 
     private static IReadOnlyList<PackageRpcAccessItemViewModel> Project(IEnumerable<Source> uses)
         => uses
-            .OrderBy(static use => use.ContractId, StringComparer.Ordinal)
+            .OrderBy(static use => use.Role, StringComparer.Ordinal)
+            .ThenBy(static use => use.ContractId, StringComparer.Ordinal)
+            .ThenBy(static use => use.ContractVersion, StringComparer.Ordinal)
             .Select(static use =>
             {
                 var actions = use.Actions
@@ -67,8 +82,9 @@ internal static class PackageRpcAccessProjection
                     .Order(StringComparer.Ordinal)
                     .ToArray();
                 return new PackageRpcAccessItemViewModel(
+                    use.Role,
                     use.ContractId,
-                    use.VersionRange,
+                    use.ContractVersion,
                     use.Required,
                     actions.Length,
                     string.Join(" | ", actions));
@@ -76,8 +92,9 @@ internal static class PackageRpcAccessProjection
             .ToArray();
 
     private sealed record Source(
+        string Role,
         string ContractId,
-        string VersionRange,
+        string ContractVersion,
         bool Required,
         IReadOnlyList<string> Actions);
 }

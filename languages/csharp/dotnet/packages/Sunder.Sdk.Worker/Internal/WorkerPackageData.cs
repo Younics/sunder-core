@@ -86,7 +86,7 @@ internal sealed class WorkerPackageSettings(WorkerRpcClient client) : IPackageSe
     }
 }
 
-internal sealed class WorkerPackageKeyValueStore(WorkerRpcClient client) : IPackageKeyValueStore
+internal sealed class WorkerPackageKeyValueStore(WorkerRpcClient client) : IPackageKeyValueStore, IPackageStorageKeyMigrator
 {
     public Task<string?> GetValueAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -126,6 +126,11 @@ internal sealed class WorkerPackageKeyValueStore(WorkerRpcClient client) : IPack
         return TranslateValidationAsync(client.ListStateKeysAsync(prefix, cancellationToken), nameof(prefix));
     }
 
+    public Task MigrateKeysAsync(
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
+        CancellationToken cancellationToken = default)
+        => client.MigrateStorageKeysAsync("state", migrations, cancellationToken);
+
     private static async Task<T> TranslateValidationAsync<T>(Task<T> operation, string parameterName)
     {
         try
@@ -151,7 +156,7 @@ internal sealed class WorkerPackageKeyValueStore(WorkerRpcClient client) : IPack
     }
 }
 
-internal sealed class WorkerPackageSecrets(WorkerRpcClient client) : IPackageSecrets
+internal sealed class WorkerPackageSecrets(WorkerRpcClient client) : IPackageSecrets, IPackageStorageKeyMigrator
 {
     public Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -171,6 +176,11 @@ internal sealed class WorkerPackageSecrets(WorkerRpcClient client) : IPackageSec
         WorkerPackageSettings.ValidateKey(key, nameof(key));
         return TranslateValidationAsync(client.DeleteSecretAsync(key, cancellationToken), nameof(key));
     }
+
+    public Task MigrateKeysAsync(
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
+        CancellationToken cancellationToken = default)
+        => client.MigrateStorageKeysAsync("secrets", migrations, cancellationToken);
 
     private static async Task<T> TranslateValidationAsync<T>(Task<T> operation, string parameterName)
     {
@@ -261,6 +271,86 @@ internal sealed class WorkerPackageFileStore(WorkerRpcClient client) : IPackageF
     }
 }
 
+internal sealed class WorkerPackageStorageContext : IPackageStorageContext
+{
+    public WorkerPackageStorageContext(WorkerRpcClient client, WorkerEnvironment environment)
+    {
+        Files = new WorkerPackageFileStore(client);
+        State = new WorkerPackageKeyValueStore(client);
+        RoleLocalWorkspace = new WorkerPackageRoleLocalWorkspace(
+            environment.PackageWorkspacePath
+            ?? throw new InvalidOperationException("Worker V3 persistent workspace is unavailable."));
+    }
+
+    public IPackageFileStore Files { get; }
+
+    public IPackageKeyValueStore State { get; }
+
+    public IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
+}
+
+internal sealed class WorkerPackageRoleLocalWorkspace : IPackageRoleLocalWorkspace
+{
+    public WorkerPackageRoleLocalWorkspace(string rootPath)
+        => WorkspaceRootPath = Path.GetFullPath(rootPath);
+
+    public string WorkspaceRootPath { get; }
+
+    public string GetLocalPath(string relativePath)
+    {
+        if (!PackageStorageValidation.IsValidRelativePath(relativePath))
+        {
+            throw new ArgumentException(
+                "Package workspace paths must be portable, non-empty, relative, and free of traversal.",
+                nameof(relativePath));
+        }
+
+        var segments = relativePath.Split('/');
+        var current = WorkspaceRootPath;
+        EnsureNotLink(current, nameof(relativePath));
+        foreach (var segment in segments)
+        {
+            current = Path.Combine(current, segment);
+            EnsureNotLink(current, nameof(relativePath));
+        }
+
+        var fullPath = Path.GetFullPath(Path.Combine([WorkspaceRootPath, .. segments]));
+        var rootPrefix = Path.EndsInDirectorySeparator(WorkspaceRootPath)
+            ? WorkspaceRootPath
+            : WorkspaceRootPath + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(
+                rootPrefix,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Package workspace paths must remain inside the persistent workspace.",
+                nameof(relativePath));
+        }
+        return fullPath;
+    }
+
+    private static void EnsureNotLink(string path, string parameterName)
+    {
+        try
+        {
+            if (new FileInfo(path).LinkTarget is not null
+                || new DirectoryInfo(path).LinkTarget is not null
+                || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new ArgumentException(
+                    "Package workspace paths must not traverse symbolic links or reparse points.",
+                    parameterName);
+            }
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+    }
+}
+
 internal sealed partial class WorkerRpcClient
 {
     internal const int InlineDataUtf8Bytes = 64 * 1024;
@@ -304,6 +394,17 @@ internal sealed partial class WorkerRpcClient
     internal Task<string?> GetStateAsync(string key, CancellationToken cancellationToken)
         => GetDataStringAsync("worker.state-get", key, "value", cancellationToken, sensitive: false);
 
+    internal Task<string?> GetStateForMigrationPreparationAsync(
+        string key,
+        CancellationToken cancellationToken)
+        => GetDataStringAsync(
+            "worker.state-get",
+            key,
+            "value",
+            cancellationToken,
+            sensitive: false,
+            migrationPreparationRead: true);
+
     internal async Task<bool> ContainsStateKeyAsync(string key, CancellationToken cancellationToken)
     {
         var value = await UnaryCallAsync(
@@ -324,17 +425,199 @@ internal sealed partial class WorkerRpcClient
         });
     }
 
+    internal async Task<bool> ContainsStateKeyForMigrationPreparationAsync(
+        string key,
+        CancellationToken cancellationToken)
+    {
+        var value = await UnaryCallAsync(
+            id => Serialize(writer =>
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "worker.state-get");
+                writer.WriteString("id", id);
+                writer.WriteString("key", key);
+                writer.WriteString("mode", "contains");
+                writer.WriteEndObject();
+            }),
+            cancellationToken,
+            migrationPreparationRead: true).ConfigureAwait(false);
+        return ParseHostValue(value, static result =>
+        {
+            if (result.ValueKind is JsonValueKind.True or JsonValueKind.False) return result.GetBoolean();
+            throw new WorkerProtocolException("Host package-state contains result must be a Boolean.");
+        });
+    }
+
     internal Task SetStateAsync(string key, string value, CancellationToken cancellationToken)
         => SetDataStringAsync("worker.state-set", key, value, cancellationToken, sensitive: false);
 
     internal Task DeleteStateAsync(string key, CancellationToken cancellationToken)
         => DeleteDataAsync("worker.state-delete", key, cancellationToken);
 
-    internal async Task<IReadOnlyList<string>> ListStateKeysAsync(
-        string? prefix,
+    internal async Task MigrateStorageKeysAsync(
+        string store,
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
         CancellationToken cancellationToken)
     {
-        var reservation = ReservePayloadHandle();
+        ArgumentNullException.ThrowIfNull(migrations);
+        if (migrations.Count == 0 || migrations.Any(static migration => migration is null))
+        {
+            throw new ArgumentException(
+                "At least one non-null package storage key migration is required.",
+                nameof(migrations));
+        }
+        if (migrations.Count > 32)
+        {
+            throw new ArgumentException("A worker storage migration cannot contain more than 32 rules.", nameof(migrations));
+        }
+        var descriptors = migrations.Select(static migration => migration.Descriptor).ToArray();
+        IReadOnlyList<string> physicalKeys = [];
+        if (descriptors.Any(static descriptor =>
+                descriptor.Kind == PackageStorageKeyMigrationDescriptorKind.DynamicCleanup))
+        {
+            physicalKeys = await ListPhysicalMigrationKeysAsync(store, cancellationToken).ConfigureAwait(false);
+        }
+        var dynamicActionCount = checked(physicalKeys.Count
+                                         * descriptors.Count(static descriptor =>
+                                             descriptor.Kind == PackageStorageKeyMigrationDescriptorKind.DynamicCleanup));
+        if (dynamicActionCount > 4096)
+        {
+            throw new InvalidOperationException(
+                "The worker storage migration exceeds the bounded dynamic-action limit.");
+        }
+
+        await UnaryCallAsync(
+            id => Serialize(writer =>
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "worker.migration-apply");
+                writer.WriteString("id", id);
+                writer.WriteString("store", store);
+                writer.WritePropertyName("rules");
+                writer.WriteStartArray();
+                for (var index = 0; index < descriptors.Length; index++)
+                {
+                    WriteMigrationRule(writer, migrations[index], descriptors[index], physicalKeys);
+                }
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<string>> ListPhysicalMigrationKeysAsync(
+        string store,
+        CancellationToken cancellationToken)
+    {
+        var value = await UnaryCallAsync(
+            id => Serialize(writer =>
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "worker.migration-keys");
+                writer.WriteString("id", id);
+                writer.WriteString("store", store);
+                writer.WriteEndObject();
+            }),
+            cancellationToken).ConfigureAwait(false);
+        return ParseHostValue(value, static result =>
+        {
+            WorkerJson.RequireOnlyProperties(result, "keys");
+            var keys = WorkerJson.RequiredValue(result, "keys");
+            if (keys.ValueKind != JsonValueKind.Array || keys.GetArrayLength() > 2048)
+            {
+                throw new WorkerProtocolException(
+                    "Host migration key snapshot must contain at most 2048 keys.");
+            }
+            var returned = keys.EnumerateArray().Select(static item =>
+            {
+                if (item.ValueKind != JsonValueKind.String
+                    || item.GetString()!.Length is 0 or > 4096)
+                {
+                    throw new WorkerProtocolException(
+                        "Host migration key snapshots contain only bounded non-empty strings.");
+                }
+                return item.GetString()!;
+            }).ToArray();
+            if (returned.Distinct(StringComparer.Ordinal).Count() != returned.Length
+                || !returned.SequenceEqual(returned.Order(StringComparer.Ordinal)))
+            {
+                throw new WorkerProtocolException(
+                    "Host migration key snapshot must be unique and ordinally sorted.");
+            }
+            return (IReadOnlyList<string>)returned;
+        });
+    }
+
+    private static void WriteMigrationRule(
+        Utf8JsonWriter writer,
+        PackageStorageKeyMigration migration,
+        PackageStorageKeyMigrationDescriptor descriptor,
+        IReadOnlyList<string> physicalKeys)
+    {
+        writer.WriteStartObject();
+        switch (descriptor.Kind)
+        {
+            case PackageStorageKeyMigrationDescriptorKind.Exact:
+                writer.WriteString("kind", "exact");
+                writer.WriteString("legacyKey", descriptor.LegacyPrefix);
+                writer.WriteString("destinationKey", descriptor.DestinationKey);
+                break;
+            case PackageStorageKeyMigrationDescriptorKind.OpaqueId:
+            case PackageStorageKeyMigrationDescriptorKind.OpaqueIdWithJsonIdentity:
+            case PackageStorageKeyMigrationDescriptorKind.OpaqueIdWithCaseInsensitiveJsonIdentity:
+                writer.WriteString("kind", descriptor.Kind switch
+                {
+                    PackageStorageKeyMigrationDescriptorKind.OpaqueId => "opaque-id",
+                    PackageStorageKeyMigrationDescriptorKind.OpaqueIdWithJsonIdentity => "opaque-id-json",
+                    _ => "opaque-id-json-case-insensitive",
+                });
+                writer.WriteString("legacyPrefix", descriptor.LegacyPrefix);
+                writer.WriteString("legacySuffix", descriptor.LegacySuffix);
+                writer.WriteString("destinationPrefix", descriptor.DestinationPrefix);
+                writer.WriteNumber("destinationVersion", descriptor.DestinationVersion);
+                if (descriptor.JsonIdentityProperty is not null)
+                {
+                    writer.WriteString("identityProperty", descriptor.JsonIdentityProperty);
+                }
+                break;
+            case PackageStorageKeyMigrationDescriptorKind.DynamicCleanup:
+                writer.WriteString("kind", "dynamic-cleanup");
+                writer.WritePropertyName("actions");
+                writer.WriteStartArray();
+                foreach (var key in physicalKeys)
+                {
+                    var action = descriptor.CleanupResolver!(key)
+                                 ?? throw new InvalidOperationException(
+                                     "A dynamic package storage cleanup resolver returned null.");
+                    writer.WriteStartObject();
+                    writer.WriteString("key", key);
+                    writer.WriteString("kind", action.Kind switch
+                    {
+                        PackageStorageKeyMigrationActionKind.NoMatch => "no-match",
+                        PackageStorageKeyMigrationActionKind.Delete => "delete",
+                        PackageStorageKeyMigrationActionKind.Rewrite => "rewrite",
+                        _ => throw new InvalidOperationException(
+                            "A dynamic package storage cleanup resolver returned an unsupported action."),
+                    });
+                    if (action.DestinationKey is null) writer.WriteNull("destinationKey");
+                    else writer.WriteString("destinationKey", action.DestinationKey);
+                    writer.WriteNumber("precedence", action.Precedence);
+                    writer.WriteEndObject();
+                }
+                writer.WriteEndArray();
+                break;
+            default:
+                throw new InvalidOperationException("The worker storage migration kind is unsupported.");
+        }
+        writer.WriteEndObject();
+    }
+
+    internal async Task<IReadOnlyList<string>> ListStateKeysAsync(
+        string? prefix,
+        CancellationToken cancellationToken,
+        bool migrationPreparationRead = false)
+    {
+        var reservation = ReservePayloadHandle(migrationPreparationRead);
         var retained = false;
         IReadOnlyList<string>? returnedKeys = null;
         try
@@ -363,7 +646,10 @@ internal sealed partial class WorkerRpcClient
                         return;
                     }
 
-                    var handle = RegisterPayloadHandle(result.Payload!, reservation);
+                    var handle = RegisterPayloadHandle(
+                        result.Payload!,
+                        reservation,
+                        migrationPreparationRead);
                     retained = true;
                     try
                     {
@@ -374,7 +660,8 @@ internal sealed partial class WorkerRpcClient
                     {
                         await ReleasePayloadHandleAsync(handle).ConfigureAwait(false);
                     }
-                }).ConfigureAwait(false);
+                },
+                migrationPreparationRead: migrationPreparationRead).ConfigureAwait(false);
             return returnedKeys!;
         }
         finally
@@ -382,6 +669,11 @@ internal sealed partial class WorkerRpcClient
             if (!retained) reservation.Release();
         }
     }
+
+    internal Task<IReadOnlyList<string>> ListStateKeysForMigrationPreparationAsync(
+        string? prefix,
+        CancellationToken cancellationToken)
+        => ListStateKeysAsync(prefix, cancellationToken, migrationPreparationRead: true);
 
     internal async Task<byte[]?> ReadPackageFileAsync(
         string relativePath,
@@ -494,9 +786,10 @@ internal sealed partial class WorkerRpcClient
         string key,
         string? mode,
         CancellationToken cancellationToken,
-        bool sensitive)
+        bool sensitive,
+        bool migrationPreparationRead = false)
     {
-        var reservation = ReservePayloadHandle();
+        var reservation = ReservePayloadHandle(migrationPreparationRead);
         var retained = false;
         string? returnedValue = null;
         try
@@ -525,7 +818,10 @@ internal sealed partial class WorkerRpcClient
                         return;
                     }
 
-                    var handle = RegisterPayloadHandle(result.Payload!, reservation);
+                    var handle = RegisterPayloadHandle(
+                        result.Payload!,
+                        reservation,
+                        migrationPreparationRead);
                     retained = true;
                     byte[]? bytes = null;
                     try
@@ -554,7 +850,8 @@ internal sealed partial class WorkerRpcClient
                         if (sensitive && bytes is not null) CryptographicOperations.ZeroMemory(bytes);
                         await ReleasePayloadHandleAsync(handle).ConfigureAwait(false);
                     }
-                }).ConfigureAwait(false);
+                },
+                migrationPreparationRead: migrationPreparationRead).ConfigureAwait(false);
             return returnedValue;
         }
         finally
@@ -718,11 +1015,11 @@ internal sealed partial class WorkerRpcClient
         }
     }
 
-    private WorkerResourceReservation ReservePayloadHandle()
+    private WorkerResourceReservation ReservePayloadHandle(bool migrationPreparationRead = false)
     {
         lock (_runtime.Gate)
         {
-            EnsureActiveUnderGate();
+            EnsureDataReadAvailableUnderGate(migrationPreparationRead);
             if (_openPayloadHandles >= _limits.MaximumPayloadHandles)
             {
                 throw SunderRpcException.Infrastructure(
@@ -743,7 +1040,8 @@ internal sealed partial class WorkerRpcClient
 
     private WorkerPayloadHandle RegisterPayloadHandle(
         WorkerDataPayload descriptor,
-        WorkerResourceReservation reservation)
+        WorkerResourceReservation reservation,
+        bool migrationPreparationRead = false)
     {
         var path = ResolveHostPayloadPath(descriptor.FilePath);
         var handle = new WorkerPayloadHandle(
@@ -754,7 +1052,7 @@ internal sealed partial class WorkerRpcClient
             reservation);
         lock (_runtime.Gate)
         {
-            EnsureActiveUnderGate();
+            EnsureDataReadAvailableUnderGate(migrationPreparationRead);
             if (_rememberedPayloadHandles.Contains(handle.Id)
                 || !_payloadHandles.TryAdd(handle.Id, handle))
             {
@@ -763,6 +1061,22 @@ internal sealed partial class WorkerRpcClient
             }
         }
         return handle;
+    }
+
+    private void EnsureDataReadAvailableUnderGate(bool migrationPreparationRead)
+    {
+        if (migrationPreparationRead)
+        {
+            if (!_runtime.CanReadStateForMigrationPreparationUnderGate)
+            {
+                throw SunderRpcException.Infrastructure(
+                    SunderRpcErrorKind.Unavailable,
+                    "rpc.worker.not-preparing-migrations",
+                    "The process worker is not preparing storage migrations.");
+            }
+            return;
+        }
+        EnsureActiveUnderGate();
     }
 
     private WorkerPayloadHandle? TryRegisterPayloadHandleForOperation(

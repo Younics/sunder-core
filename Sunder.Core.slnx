@@ -18,6 +18,7 @@
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.TestWorker/Sunder.Runtime.Host.TestWorker.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Sunder.Runtime.Host.InteropWorker.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
   </Folder>
   <Folder Name="/Sdk/">
@@ -39,8 +40,7 @@
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/MissingSdkDependency/MissingSdkDependency.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/SourceReferencePackage/SourceReferencePackage.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/SourceReferenceSdk/SourceReferenceSdk.csproj" />
-    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerExecutable/WorkerExecutable.csproj" />
-    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV2Executable/WorkerV2Executable.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV3Executable/WorkerV3Executable.csproj" />
   </Folder>
   <Folder Name="/Templates/">
     <Project Path="languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj" />

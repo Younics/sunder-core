@@ -36,6 +36,23 @@
       ]
     }
   ],
+  "compatibility": {
+    "manifestVersions": [
+      3
+    ],
+    "runtimeTargetKinds": [
+      "worker"
+    ],
+    "workerProtocol": "worker-protocol.v3",
+    "workerCapabilities": [
+      "core.v1",
+      "rpc.v2",
+      "sdk-baseline-1-1.v1",
+      "worker-protocol.v3"
+    ],
+    "sdkBaseline": "sdk-baseline-1-1.v1",
+    "rid": "win-x64"
+  },
   "includePrerelease": true,
   "allowDowngrade": false,
   "reinstall": false

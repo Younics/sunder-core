@@ -1,12 +1,38 @@
-import type { JsonValue, RpcContractDescriptor } from "./types";
+import type { JsonSchema, JsonValue, RpcContractDescriptor } from "./types";
 import { isPackageId, isSemanticVersion } from "./validation";
 
 const MAXIMUM_DESCRIPTOR_BYTES = 4 * 1024 * 1024;
 const MAXIMUM_DEPTH = 64;
+// A schema edge can add an intervening JSON container such as properties or
+// oneOf. This derived bound is deliberately above every valid depth-64 schema.
+const MAXIMUM_JSON_DEPTH = MAXIMUM_DEPTH * 4 + 16;
 const MAXIMUM_SCHEMA_NODES = 4096;
 const MAXIMUM_COLLECTION_ITEMS = 1_000_000;
 
 type JsonObject = { readonly [key: string]: JsonValue };
+type DescriptorVersion = 1 | 2;
+
+export type RpcDescriptorErrorCode =
+  | "descriptor-invalid"
+  | "descriptor-json"
+  | "descriptor-number"
+  | "descriptor-representation"
+  | "descriptor-version"
+  | "domain-error-reference"
+  | "method-shape"
+  | "schema-profile"
+  | "schema-reference-cycle"
+  | "schema-reference-shape";
+
+export class RpcDescriptorError extends TypeError {
+  public readonly code: RpcDescriptorErrorCode;
+
+  public constructor(code: RpcDescriptorErrorCode, message: string) {
+    super(message);
+    this.name = "RpcDescriptorError";
+    this.code = code;
+  }
+}
 
 export function parseRpcContractDescriptor(input: string | Uint8Array): RpcContractDescriptor {
   const text = typeof input === "string"
@@ -18,13 +44,24 @@ export function parseRpcContractDescriptor(input: string | Uint8Array): RpcContr
 }
 
 export function validateRpcContractDescriptor(value: unknown): asserts value is RpcContractDescriptor {
-  validateJsonValue(value, "$", 0, { nodes: 0 });
+  validateJsonValue(value, "$", 0);
   const root = objectValue(value, "$", "an object");
-  only(root, "$", "$schema", "descriptorVersion", "contractId", "version", "services", "$defs");
+  const descriptorVersion = required(root, "descriptorVersion", "$");
+  if (descriptorVersion !== 1 && descriptorVersion !== 2) {
+    fail("$.descriptorVersion must be 1 or 2.", "descriptor-version");
+  }
+  validateObjectNameCollisions(root, "$", descriptorVersion);
+  if (descriptorVersion === 1) {
+    if (has(root, "errors")) {
+      fail("A descriptor using V2 root fields must set descriptorVersion to 2.", "descriptor-version");
+    }
+    only(root, "$", "$schema", "descriptorVersion", "contractId", "version", "services", "$defs");
+  } else {
+    only(root, "$", "$schema", "descriptorVersion", "contractId", "version", "errors", "services", "$defs");
+  }
   if (has(root, "$schema") && root.$schema !== "https://json-schema.org/draft/2020-12/schema") {
     fail("$.$schema must be the JSON Schema Draft 2020-12 URI.");
   }
-  if (root.descriptorVersion !== 1) fail("$.descriptorVersion must be 1.");
   const contractId = stringValue(root, "contractId", "$", 128);
   if (!isPackageId(contractId)) fail("$.contractId must use lowercase dot-separated ASCII identifiers.");
   const version = stringValue(root, "version", "$", 256);
@@ -39,45 +76,71 @@ export function validateRpcContractDescriptor(value: unknown): asserts value is 
     if (!isDefinitionName(name)) fail(`$.$defs contains invalid schema name '${name}'.`);
   }
 
-  validateServices(required(root, "services", "$"), definitions);
-  const schemaState: SchemaState = { definitions, validated: new Set<string>(), nodes: 0 };
+  const declaredErrors = descriptorVersion === 2
+    ? validateErrors(required(root, "errors", "$"))
+    : new Set<string>();
+  validateServices(required(root, "services", "$"), definitions, descriptorVersion, declaredErrors);
+  const schemaState: SchemaState = { definitions, nodes: 0, version: descriptorVersion };
   for (const name of definitionNames) {
-    validateSchema(objectValue(definitions[name], `$.$defs.${name}`, "a schema object"), `$.$defs.${name}`, schemaState, new Set([name]), 1);
-    schemaState.validated.add(name);
+    validateSchema(objectValue(definitions[name], `$.$defs.${name}`, "a schema object"), `$.$defs.${name}`, schemaState, 1);
   }
+  validateReferenceDepths(definitionNames, definitions);
 }
 
 function validateJsonValue(
   value: unknown,
   path: string,
   depth: number,
-  state: { nodes: number },
 ): void {
-  if (depth > MAXIMUM_DEPTH || ++state.nodes > 100_000) fail("The RPC descriptor exceeds its JSON depth or token limit.");
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (depth > MAXIMUM_JSON_DEPTH) fail("The RPC descriptor exceeds its derived JSON traversal depth limit.");
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    validateUnicodeScalars(value, path);
+    return;
+  }
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) fail(`${path} contains a number that is not an IEEE-754 safe integer.`);
+    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
+      fail(`${path} contains a number that is not a canonical IEEE-754 safe integer.`, "descriptor-number");
+    }
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((item, index) => validateJsonValue(item, `${path}[${index}]`, depth + 1, state));
+    value.forEach((item, index) => validateJsonValue(item, `${path}[${index}]`, depth + 1));
     return;
   }
   if (typeof value !== "object") fail(`${path} contains a value that is not JSON.`);
+  for (const [name, item] of Object.entries(value)) {
+    validateUnicodeScalars(name, `${path} property name`);
+    validateJsonValue(item, `${path}.${name}`, depth + 1);
+  }
+}
+
+function validateObjectNameCollisions(value: JsonValue, path: string, version: DescriptorVersion): void {
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateObjectNameCollisions(item, `${path}[${index}]`, version));
+    return;
+  }
   const insensitive = new Set<string>();
   for (const [name, item] of Object.entries(value)) {
-    const folded = name.toLocaleLowerCase("en-US");
-    if (insensitive.has(folded)) fail(`${path} contains case-colliding property '${name}'.`);
+    const folded = version === 2 ? asciiCaseFold(name) : v1CaseFold(name);
+    if (insensitive.has(folded)) fail(`${path} contains case-colliding property '${name}'.`, "descriptor-json");
     insensitive.add(folded);
-    validateJsonValue(item, `${path}.${name}`, depth + 1, state);
+    validateObjectNameCollisions(item, `${path}.${name}`, version);
   }
 }
 
 export function canonicalizeDescriptor(value: JsonValue): string {
   const write = (item: JsonValue): string => {
-    if (item === null || typeof item === "boolean" || typeof item === "string") return JSON.stringify(item);
+    if (item === null || typeof item === "boolean") return JSON.stringify(item);
+    if (typeof item === "string") {
+      validateUnicodeScalars(item, "A canonical JSON string");
+      return JSON.stringify(item);
+    }
     if (typeof item === "number") {
-      if (!Number.isSafeInteger(item)) throw new TypeError("Descriptor numbers must be IEEE-754 safe integers.");
+      if (!Number.isSafeInteger(item) || Object.is(item, -0)) {
+        throw new TypeError("Descriptor numbers must be canonical IEEE-754 safe integers.");
+      }
       return String(item);
     }
     if (Array.isArray(item)) return `[${item.map(write).join(",")}]`;
@@ -87,17 +150,45 @@ export function canonicalizeDescriptor(value: JsonValue): string {
   return write(value);
 }
 
-function validateServices(value: JsonValue, definitions: JsonObject): void {
-  const entries: readonly [string | undefined, JsonValue][] = Array.isArray(value)
+function validateErrors(value: JsonValue): ReadonlySet<string> {
+  if (Array.isArray(value)) fail("$.errors must be a keyed object.", "descriptor-representation");
+  const errors = objectValue(value, "$.errors", "a keyed object");
+  const codes = Object.keys(errors);
+  if (codes.length > 256) fail("$.errors may contain at most 256 declarations.", "descriptor-representation");
+  for (const code of codes) {
+    if (!isMemberId(code)) fail(`$.errors contains invalid error code '${code}'.`, "descriptor-representation");
+    const declaration = objectValue(errors[code], `$.errors.${code}`, "an object");
+    only(declaration, `$.errors.${code}`, "description");
+    if (has(declaration, "description")) {
+      const description = declaration.description;
+      if (typeof description !== "string" || scalarLength(description) > 2048) {
+        fail(`$.errors.${code}.description must be a string of at most 2048 Unicode scalar values.`);
+      }
+    }
+  }
+  return new Set(codes);
+}
+
+function validateServices(
+  value: JsonValue,
+  definitions: JsonObject,
+  version: DescriptorVersion,
+  declaredErrors: ReadonlySet<string>,
+): void {
+  if (version === 2 && Array.isArray(value)) {
+    fail("$.services must be a keyed object in descriptor version 2.", "descriptor-representation");
+  }
+  const entries: readonly [string | undefined, JsonValue][] = version === 1 && Array.isArray(value)
     ? value.map((service) => [undefined, service] as const)
-    : Object.entries(objectValue(value, "$.services", "an array or object"));
+    : Object.entries(objectValue(value, "$.services", version === 2 ? "a keyed object" : "an array or object"));
   if (entries.length < 1 || entries.length > 64) fail("$.services must contain between 1 and 64 services.");
   const serviceIds = new Set<string>();
   let methodCount = 0;
   for (const [key, serviceValue] of entries) {
     const path = key === undefined ? "$.services[]" : `$.services.${key}`;
     const service = objectValue(serviceValue, path, "an object");
-    only(service, path, "serviceId", "methods");
+    if (version === 1) only(service, path, "serviceId", "methods");
+    else onlyWithCode(service, path, "descriptor-representation", "methods");
     const serviceId = key ?? stringValue(service, "serviceId", path, 128);
     if (has(service, "serviceId") && service.serviceId !== serviceId) fail(`${path}.serviceId must match its services object key.`);
     if (!isMemberId(serviceId)) fail(`${path}.serviceId is not a stable lowercase ASCII identifier.`);
@@ -105,9 +196,12 @@ function validateServices(value: JsonValue, definitions: JsonObject): void {
     serviceIds.add(serviceId);
 
     const methodsValue = required(service, "methods", path);
-    const methodEntries: readonly [string | undefined, JsonValue][] = Array.isArray(methodsValue)
+    if (version === 2 && Array.isArray(methodsValue)) {
+      fail(`${path}.methods must be a keyed object in descriptor version 2.`, "descriptor-representation");
+    }
+    const methodEntries: readonly [string | undefined, JsonValue][] = version === 1 && Array.isArray(methodsValue)
       ? methodsValue.map((method) => [undefined, method] as const)
-      : Object.entries(objectValue(methodsValue, `${path}.methods`, "an array or object"));
+      : Object.entries(objectValue(methodsValue, `${path}.methods`, version === 2 ? "a keyed object" : "an array or object"));
     if (methodEntries.length === 0) fail(`${path}.methods must contain at least one method.`);
     methodCount += methodEntries.length;
     if (methodCount > 512) fail("An RPC descriptor may declare at most 512 methods.");
@@ -115,7 +209,24 @@ function validateServices(value: JsonValue, definitions: JsonObject): void {
     for (const [methodKey, methodValue] of methodEntries) {
       const methodPath = methodKey === undefined ? `${path}.methods[]` : `${path}.methods.${methodKey}`;
       const method = objectValue(methodValue, methodPath, "an object");
-      only(method, methodPath, "methodId", "kind", "requestSchema", "responseSchema", "eventSchema");
+      if (version === 1) {
+        only(method, methodPath, "methodId", "kind", "requestSchema", "responseSchema", "eventSchema");
+      } else {
+        onlyWithCode(
+          method,
+          methodPath,
+          has(method, "responseSchema") && method.kind === "server-stream"
+            || has(method, "eventSchema") && method.kind === "unary"
+            ? "method-shape"
+            : "descriptor-representation",
+          "kind",
+          "idempotency",
+          "errors",
+          "requestSchema",
+          "responseSchema",
+          "eventSchema",
+        );
+      }
       const methodId = methodKey ?? stringValue(method, "methodId", methodPath, 128);
       if (has(method, "methodId") && method.methodId !== methodId) fail(`${methodPath}.methodId must match its methods object key.`);
       if (!isMemberId(methodId)) fail(`${methodPath}.methodId is not a stable lowercase ASCII identifier.`);
@@ -123,18 +234,48 @@ function validateServices(value: JsonValue, definitions: JsonObject): void {
       methodIds.add(methodId);
       const kind = stringValue(method, "kind", methodPath, 32);
       if (kind !== "unary" && kind !== "server-stream") fail(`${methodPath}.kind must be 'unary' or 'server-stream'.`);
-      readSchemaReference(required(method, "requestSchema", methodPath), `${methodPath}.requestSchema`, definitions);
+      if (version === 2) {
+        const idempotency = stringValue(method, "idempotency", methodPath, 16);
+        if (idempotency !== "none" && idempotency !== "idempotent") {
+          fail(`${methodPath}.idempotency must be 'none' or 'idempotent'.`, "method-shape");
+        }
+        const errorValues = arrayValue(required(method, "errors", methodPath), `${methodPath}.errors`);
+        if (errorValues.length > 256) fail(`${methodPath}.errors may contain at most 256 codes.`, "domain-error-reference");
+        const seenErrors = new Set<string>();
+        for (const errorValue of errorValues) {
+          if (typeof errorValue !== "string" || !isMemberId(errorValue) || seenErrors.has(errorValue)) {
+            fail(`${methodPath}.errors must contain distinct valid error codes.`, "domain-error-reference");
+          }
+          if (!declaredErrors.has(errorValue)) {
+            fail(`${methodPath}.errors references undeclared error '${errorValue}'.`, "domain-error-reference");
+          }
+          seenErrors.add(errorValue);
+        }
+      }
+      readSchemaReference(
+        required(method, "requestSchema", methodPath),
+        `${methodPath}.requestSchema`,
+        definitions,
+        version === 2,
+      );
       const output = kind === "unary" ? "responseSchema" : "eventSchema";
       const unexpected = kind === "unary" ? "eventSchema" : "responseSchema";
-      if (has(method, unexpected)) fail(`${methodPath}.${unexpected} is not valid for a ${kind} method.`);
-      readSchemaReference(required(method, output, methodPath), `${methodPath}.${output}`, definitions);
+      if (has(method, unexpected)) {
+        fail(`${methodPath}.${unexpected} is not valid for a ${kind} method.`, version === 2 ? "method-shape" : "descriptor-invalid");
+      }
+      readSchemaReference(
+        required(method, output, methodPath),
+        `${methodPath}.${output}`,
+        definitions,
+        version === 2,
+      );
     }
   }
 }
 
 interface SchemaState {
   readonly definitions: JsonObject;
-  readonly validated: Set<string>;
+  readonly version: DescriptorVersion;
   nodes: number;
 }
 
@@ -142,27 +283,14 @@ function validateSchema(
   schema: JsonObject,
   path: string,
   state: SchemaState,
-  referenceStack: Set<string>,
   depth: number,
 ): void {
   if (depth > MAXIMUM_DEPTH || ++state.nodes > MAXIMUM_SCHEMA_NODES) fail(`${path} exceeds the RPC schema depth or node-count limit.`);
   validateAnnotations(schema, path);
   if (has(schema, "$ref")) {
-    only(schema, path, "$ref", "title", "description");
-    const referenceName = referenceNameValue(schema.$ref, path, state.definitions);
-    if (referenceStack.has(referenceName)) fail(`${path} contains a recursive $ref cycle.`);
-    if (!state.validated.has(referenceName)) {
-      referenceStack.add(referenceName);
-      validateSchema(
-        objectValue(state.definitions[referenceName], `$.$defs.${referenceName}`, "a schema object"),
-        `$.$defs.${referenceName}`,
-        state,
-        referenceStack,
-        depth + 1,
-      );
-      referenceStack.delete(referenceName);
-      state.validated.add(referenceName);
-    }
+    if (state.version === 2) onlyWithCode(schema, path, "schema-reference-shape", "$ref");
+    else only(schema, path, "$ref", "title", "description");
+    referenceNameValue(schema.$ref, path, state.definitions);
     return;
   }
   if (has(schema, "oneOf")) {
@@ -173,25 +301,40 @@ function validateSchema(
       objectValue(variant, `${path}.oneOf[${index}]`, "a schema object"),
       `${path}.oneOf[${index}]`,
       state,
-      new Set(referenceStack),
       depth + 1,
     ));
     validateUnion(variants, path, state.definitions);
     return;
   }
 
-  const type = stringValue(schema, "type", path, 16);
+  if (has(schema, "logicalType")) {
+    if (state.version !== 2) fail(`${path}.logicalType is outside descriptor version 1.`, "schema-profile");
+    validateLogicalSchema(schema, path);
+    return;
+  }
+
+  if (typeof schema.type !== "string" || schema.type.length === 0 || schema.type.length > 16) {
+    fail(`${path}.type must be a supported schema type string.`, "schema-profile");
+  }
+  const type = schema.type;
   switch (type) {
     case "object":
-      validateObjectSchema(schema, path, state, referenceStack, depth);
+      validateObjectSchema(schema, path, state, depth);
       break;
     case "array":
-      only(schema, path, "type", "items", "minItems", "maxItems", "enum", "const", "title", "description");
+      if (state.version === 2) {
+        onlyWithCode(schema, path, "schema-profile", "type", "items", "minItems", "maxItems", "title", "description");
+      } else {
+        only(schema, path, "type", "items", "minItems", "maxItems", "enum", "const", "title", "description");
+      }
       validateOrderedBounds(schema, path, "minItems", "maxItems", MAXIMUM_COLLECTION_ITEMS);
-      validateSchema(objectValue(required(schema, "items", path), `${path}.items`, "a schema object"), `${path}.items`, state, referenceStack, depth + 1);
+      validateSchema(objectValue(required(schema, "items", path), `${path}.items`, "a schema object"), `${path}.items`, state, depth + 1);
       break;
     case "string":
       only(schema, path, "type", "minLength", "maxLength", "enum", "const", "title", "description");
+      if (!has(schema, "minLength") || !has(schema, "maxLength")) {
+        fail(`${path} must declare minLength and maxLength.`, state.version === 2 ? "schema-profile" : "descriptor-invalid");
+      }
       validateOrderedBounds(schema, path, "minLength", "maxLength", MAXIMUM_COLLECTION_ITEMS);
       break;
     case "integer":
@@ -203,19 +346,50 @@ function validateSchema(
       only(schema, path, "type", "enum", "const", "title", "description");
       break;
     default:
-      fail(`${path}.type '${type}' is outside the RPC schema profile.`);
+      fail(`${path}.type '${type}' is outside the RPC schema profile.`, "schema-profile");
   }
   validateEnumAndConst(schema, path, type);
+}
+
+function validateLogicalSchema(schema: JsonObject, path: string): void {
+  const logicalType = stringValue(schema, "logicalType", path, 32);
+  if (logicalType === "uuid" || logicalType === "utc-date-time") {
+    onlyWithCode(schema, path, "schema-profile", "type", "logicalType", "title", "description");
+    if (schema.type !== "string") fail(`${path}.type must be 'string' for logical type '${logicalType}'.`, "schema-profile");
+    return;
+  }
+  if (logicalType === "content-reference") {
+    onlyWithCode(schema, path, "schema-profile", "type", "logicalType", "title", "description");
+    if (schema.type !== "object") fail(`${path}.type must be 'object' for logical type 'content-reference'.`, "schema-profile");
+    return;
+  }
+  fail(`${path}.logicalType '${logicalType}' is outside the RPC schema profile.`, "schema-profile");
 }
 
 function validateObjectSchema(
   schema: JsonObject,
   path: string,
   state: SchemaState,
-  referenceStack: Set<string>,
   depth: number,
 ): void {
-  only(schema, path, "type", "properties", "required", "additionalProperties", "propertyNames", "minProperties", "maxProperties", "enum", "const", "title", "description");
+  if (state.version === 2) {
+    onlyWithCode(
+      schema,
+      path,
+      "schema-profile",
+      "type",
+      "properties",
+      "required",
+      "additionalProperties",
+      "propertyNames",
+      "minProperties",
+      "maxProperties",
+      "title",
+      "description",
+    );
+  } else {
+    only(schema, path, "type", "properties", "required", "additionalProperties", "propertyNames", "minProperties", "maxProperties", "enum", "const", "title", "description");
+  }
   const additional = required(schema, "additionalProperties", path);
   if (additional === false) {
     const properties = objectValue(required(schema, "properties", path), `${path}.properties`, "an object");
@@ -224,19 +398,24 @@ function validateObjectSchema(
     const requiredNames = arrayValue(required(schema, "required", path), `${path}.required`);
     const seen = new Set<string>();
     for (const name of requiredNames) {
-      if (typeof name !== "string" || name.length === 0 || seen.has(name)) fail(`${path}.required must contain unique non-empty property names.`);
+      if (typeof name !== "string" || scalarLength(name) === 0 || scalarLength(name) > 128 || seen.has(name)) {
+        fail(`${path}.required must contain unique property names of at most 128 Unicode scalar values.`);
+      }
       if (!has(properties, name)) fail(`${path}.required references undeclared property '${name}'.`);
       seen.add(name);
     }
     for (const name of propertyNames) {
-      if (name.length === 0 || name.length > 128) fail(`${path}.properties contains an empty or overlong property name.`);
-      validateSchema(objectValue(properties[name], `${path}.properties.${name}`, "a schema object"), `${path}.properties.${name}`, state, referenceStack, depth + 1);
+      if (scalarLength(name) === 0 || scalarLength(name) > 128) fail(`${path}.properties contains an empty or overlong property name.`);
+      validateSchema(objectValue(properties[name], `${path}.properties.${name}`, "a schema object"), `${path}.properties.${name}`, state, depth + 1);
     }
     const minimum = has(schema, "minProperties") ? integerBound(schema.minProperties, `${path}.minProperties`, 0, 256) : 0;
     const maximum = has(schema, "maxProperties") ? integerBound(schema.maxProperties, `${path}.maxProperties`, 0, 256) : propertyNames.length;
     if (minimum > maximum || maximum > propertyNames.length) fail(`${path}'s object property bounds are inconsistent with its closed properties.`);
     if (has(schema, "propertyNames")) fail(`${path}.propertyNames is only supported for bounded map schemas.`);
   } else {
+    if (additional === null || typeof additional !== "object" || Array.isArray(additional)) {
+      fail(`${path}.additionalProperties must be false or a schema object.`, state.version === 2 ? "schema-profile" : "descriptor-invalid");
+    }
     const additionalSchema = objectValue(additional, `${path}.additionalProperties`, "a schema object or false");
     if (has(schema, "properties") && Object.keys(objectValue(schema.properties, `${path}.properties`, "an object")).length !== 0) {
       fail(`${path} cannot mix named properties with map additionalProperties.`);
@@ -244,9 +423,14 @@ function validateObjectSchema(
     if (has(schema, "required") && arrayValue(schema.required, `${path}.required`).length !== 0) fail(`${path}.required must be absent or empty for a map schema.`);
     validateOrderedBounds(schema, path, "minProperties", "maxProperties", MAXIMUM_COLLECTION_ITEMS);
     const propertyNamesSchema = objectValue(required(schema, "propertyNames", path), `${path}.propertyNames`, "a schema object");
-    validateSchema(propertyNamesSchema, `${path}.propertyNames`, state, referenceStack, depth + 1);
-    if (propertyNamesSchema.type !== "string") fail(`${path}.propertyNames must be a bounded string schema.`);
-    validateSchema(additionalSchema, `${path}.additionalProperties`, state, referenceStack, depth + 1);
+    validateSchema(propertyNamesSchema, `${path}.propertyNames`, state, depth + 1);
+    if (propertyNamesSchema.type !== "string"
+      || has(propertyNamesSchema, "logicalType")
+      || !has(propertyNamesSchema, "minLength")
+      || !has(propertyNamesSchema, "maxLength")) {
+      fail(`${path}.propertyNames must be a bounded string schema.`, state.version === 2 ? "schema-profile" : "descriptor-invalid");
+    }
+    validateSchema(additionalSchema, `${path}.additionalProperties`, state, depth + 1);
   }
 }
 
@@ -261,12 +445,78 @@ function validateNumberSchema(schema: JsonObject, path: string, type: string): v
   if (type === "integer" && (!Number.isInteger(lower) || !Number.isInteger(upper))) fail(`${path} integer bounds must be integers.`);
 }
 
-function validateUnion(variants: readonly JsonValue[], path: string, definitions: JsonObject): void {
-  const resolved = variants.map((variant, index) => resolveSchema(
-    objectValue(variant, `${path}.oneOf[${index}]`, "a schema object"),
+function validateReferenceDepths(definitionNames: readonly string[], definitions: JsonObject): void {
+  const memo = new Map<string, number>();
+  for (const name of definitionNames) {
+    const depth = definitionDepth(name, definitions, memo, new Set());
+    if (depth > MAXIMUM_DEPTH) fail(`$.$defs.${name} exceeds the RPC schema depth limit.`, "schema-profile");
+  }
+}
+
+function definitionDepth(
+  name: string,
+  definitions: JsonObject,
+  memo: Map<string, number>,
+  visiting: Set<string>,
+): number {
+  const known = memo.get(name);
+  if (known !== undefined) return known;
+  if (visiting.has(name)) fail(`$.$defs.${name} contains a recursive $ref cycle.`, "schema-reference-cycle");
+  visiting.add(name);
+  const depth = schemaDepth(
+    objectValue(definitions[name], `$.$defs.${name}`, "a schema object"),
     definitions,
+    memo,
+    visiting,
+  );
+  visiting.delete(name);
+  memo.set(name, depth);
+  return depth;
+}
+
+function schemaDepth(
+  schema: JsonObject,
+  definitions: JsonObject,
+  memo: Map<string, number>,
+  visiting: Set<string>,
+): number {
+  if (has(schema, "$ref")) {
+    return 1 + definitionDepth(referenceNameValue(schema.$ref, "$ref", definitions), definitions, memo, visiting);
+  }
+  const children: JsonObject[] = [];
+  if (has(schema, "oneOf")) {
+    for (const variant of arrayValue(schema.oneOf, "oneOf")) {
+      children.push(objectValue(variant, "oneOf[]", "a schema object"));
+    }
+  } else if (!has(schema, "logicalType") && schema.type === "array") {
+    children.push(objectValue(schema.items, "items", "a schema object"));
+  } else if (!has(schema, "logicalType") && schema.type === "object") {
+    if (schema.additionalProperties === false) {
+      for (const child of Object.values(objectValue(schema.properties, "properties", "an object"))) {
+        children.push(objectValue(child, "properties[]", "a schema object"));
+      }
+    } else {
+      children.push(objectValue(schema.propertyNames, "propertyNames", "a schema object"));
+      children.push(objectValue(schema.additionalProperties, "additionalProperties", "a schema object"));
+    }
+  }
+  return 1 + Math.max(0, ...children.map((child) => schemaDepth(child, definitions, memo, visiting)));
+}
+
+function validateUnion(variants: readonly JsonValue[], path: string, definitions: JsonObject): void {
+  const schemas = variants.map((variant, index) => objectValue(
+    variant,
+    `${path}.oneOf[${index}]`,
+    "a schema object",
   ));
-  if (resolved.filter((schema) => schema.type === "null").length === 1 && resolved.length === 2) return;
+  const resolved = schemas.map((schema) => resolveSchema(schema, definitions));
+  if (resolved.length === 2 && resolved.filter((schema) => schema.type === "null").length === 1) {
+    const nullAcceptingBranches = schemas.filter((schema) => schemaAcceptsNull(schema, definitions, new Set())).length;
+    if (nullAcceptingBranches !== 1) {
+      fail(`${path}.oneOf nullable union must have exactly one branch accepting null.`, "schema-profile");
+    }
+    return;
+  }
   if (resolved.some((schema) => schema.type !== "object" || schema.additionalProperties !== false)) {
     fail(`${path}.oneOf variants must resolve to closed object schemas.`);
   }
@@ -292,11 +542,47 @@ function validateUnion(variants: readonly JsonValue[], path: string, definitions
   if (valid.length !== 1) fail(`${path}.oneOf must have exactly one unambiguous required string const discriminator.`);
 }
 
+export function rpcSchemaAcceptsNull(
+  schema: JsonSchema,
+  definitions: Readonly<Record<string, JsonSchema>>,
+): boolean {
+  return schemaAcceptsNull(schema, definitions, new Set());
+}
+
+function schemaAcceptsNull(
+  schema: JsonObject,
+  definitions: JsonObject,
+  references: Set<string>,
+): boolean {
+  if (has(schema, "$ref")) {
+    const name = referenceNameValue(schema.$ref, "$ref", definitions);
+    if (references.has(name)) fail("An RPC schema contains a recursive $ref cycle.", "schema-reference-cycle");
+    references.add(name);
+    const acceptsNull = schemaAcceptsNull(
+      objectValue(definitions[name], `$.$defs.${name}`, "a schema object"),
+      definitions,
+      references,
+    );
+    references.delete(name);
+    return acceptsNull;
+  }
+  if (has(schema, "oneOf")) {
+    let nullAcceptingBranches = 0;
+    for (const variant of arrayValue(schema.oneOf, "oneOf")) {
+      if (schemaAcceptsNull(objectValue(variant, "oneOf[]", "a schema object"), definitions, references)) {
+        nullAcceptingBranches++;
+      }
+    }
+    return nullAcceptingBranches === 1;
+  }
+  return schema.type === "null";
+}
+
 function resolveSchema(schema: JsonObject, definitions: JsonObject): JsonObject {
   const seen = new Set<string>();
   while (has(schema, "$ref")) {
     const name = referenceNameValue(schema.$ref, "$ref", definitions);
-    if (seen.has(name)) fail("An RPC schema contains a recursive $ref cycle.");
+    if (seen.has(name)) fail("An RPC schema contains a recursive $ref cycle.", "schema-reference-cycle");
     seen.add(name);
     schema = objectValue(definitions[name], `$.$defs.${name}`, "a schema object");
   }
@@ -330,8 +616,8 @@ function validateLiteralType(value: JsonValue, type: string, path: string): void
 
 function validateAnnotations(schema: JsonObject, path: string): void {
   for (const name of ["title", "description"] as const) {
-    if (has(schema, name) && (typeof schema[name] !== "string" || schema[name].length > 2048)) {
-      fail(`${path}.${name} must be a string of at most 2048 characters.`);
+    if (has(schema, name) && (typeof schema[name] !== "string" || scalarLength(schema[name]) > 2048)) {
+      fail(`${path}.${name} must be a string of at most 2048 Unicode scalar values.`);
     }
   }
 }
@@ -342,10 +628,19 @@ function validateOrderedBounds(schema: JsonObject, path: string, minimumName: st
   if (minimum > maximum) fail(`${path}.${minimumName} must not exceed ${maximumName}.`);
 }
 
-function readSchemaReference(value: JsonValue, path: string, definitions: JsonObject): string {
-  const reference = typeof value === "string"
-    ? value
-    : stringValue(objectWithOnly(value, path, "$ref"), "$ref", path, 256);
+function readSchemaReference(value: JsonValue, path: string, definitions: JsonObject, closedObjectOnly: boolean): string {
+  if (closedObjectOnly && (value === null || typeof value !== "object" || Array.isArray(value))) {
+    fail(`${path} must be the closed object { "$ref": "#/$defs/<name>" }.`, "schema-reference-shape");
+  }
+  let reference: string;
+  if (typeof value === "string") {
+    reference = value;
+  } else {
+    const object = objectValue(value, path, "an object");
+    if (closedObjectOnly) onlyWithCode(object, path, "schema-reference-shape", "$ref");
+    else only(object, path, "$ref");
+    reference = stringValue(object, "$ref", path, 256);
+  }
   referenceNameValue(reference, path, definitions);
   return reference;
 }
@@ -358,7 +653,7 @@ function referenceNameValue(value: JsonValue | undefined, path: string, definiti
 }
 
 function checkedDescriptorText(text: string): string {
-  if (text.charCodeAt(0) === 0xfeff) fail("An RPC descriptor must be UTF-8 without a byte-order mark.");
+  if (text.charCodeAt(0) === 0xfeff) fail("An RPC descriptor must be UTF-8 without a byte-order mark.", "descriptor-json");
   const length = new TextEncoder().encode(text).byteLength;
   if (length === 0 || length > MAXIMUM_DESCRIPTOR_BYTES) fail(`An RPC descriptor must be non-empty and no larger than ${MAXIMUM_DESCRIPTOR_BYTES} bytes.`);
   return text;
@@ -366,11 +661,14 @@ function checkedDescriptorText(text: string): string {
 
 function decodeDescriptor(bytes: Uint8Array): string {
   if (bytes.byteLength === 0 || bytes.byteLength > MAXIMUM_DESCRIPTOR_BYTES) fail(`An RPC descriptor must be non-empty and no larger than ${MAXIMUM_DESCRIPTOR_BYTES} bytes.`);
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    fail("An RPC descriptor must be UTF-8 without a byte-order mark.", "descriptor-json");
+  }
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
-    throw new TypeError(`The RPC descriptor is not strict UTF-8: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`The RPC descriptor is not strict UTF-8: ${error instanceof Error ? error.message : String(error)}`, "descriptor-json");
   }
   return checkedDescriptorText(text);
 }
@@ -378,7 +676,6 @@ function decodeDescriptor(bytes: Uint8Array): string {
 class StrictJsonParser {
   readonly #text: string;
   #index = 0;
-  #nodes = 0;
 
   public constructor(text: string) {
     this.#text = text;
@@ -393,7 +690,7 @@ class StrictJsonParser {
   }
 
   private parseValue(depth: number): JsonValue {
-    if (depth > MAXIMUM_DEPTH || ++this.#nodes > 100_000) fail("The RPC descriptor exceeds its JSON depth or token limit.");
+    if (depth > MAXIMUM_JSON_DEPTH) fail("The RPC descriptor exceeds its derived JSON traversal depth limit.");
     const character = this.#text[this.#index];
     if (character === "{") return this.parseObject(depth + 1);
     if (character === "[") return this.parseArray(depth + 1);
@@ -408,7 +705,6 @@ class StrictJsonParser {
     this.#index++;
     this.skipWhitespace();
     const output: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
-    const insensitive = new Set<string>();
     if (this.#text[this.#index] === "}") {
       this.#index++;
       return output;
@@ -416,10 +712,7 @@ class StrictJsonParser {
     while (true) {
       if (this.#text[this.#index] !== "\"") fail(`Expected a JSON property name at character ${this.#index}.`);
       const name = this.parseString();
-      const folded = name.toLocaleLowerCase("en-US");
-      if (has(output, name)) fail(`Duplicate JSON property '${name}' is not allowed.`);
-      if (insensitive.has(folded)) fail(`Case-colliding JSON property '${name}' is not allowed.`);
-      insensitive.add(folded);
+      if (has(output, name)) fail(`Duplicate JSON property '${name}' is not allowed.`, "descriptor-json");
       this.skipWhitespace();
       this.expect(":");
       this.skipWhitespace();
@@ -455,11 +748,14 @@ class StrictJsonParser {
     while (this.#index < this.#text.length) {
       const character = this.#text[this.#index++];
       if (character === "\"") {
+        let value: string;
         try {
-          return JSON.parse(this.#text.slice(start, this.#index)) as string;
+          value = JSON.parse(this.#text.slice(start, this.#index)) as string;
         } catch (error) {
-          throw new TypeError(`The RPC descriptor contains an invalid JSON string: ${error instanceof Error ? error.message : String(error)}`);
+          fail(`The RPC descriptor contains an invalid JSON string: ${error instanceof Error ? error.message : String(error)}`, "descriptor-json");
         }
+        validateUnicodeScalars(value, "A JSON string");
+        return value;
       }
       if (character === "\\") {
         const escape = this.#text[this.#index++];
@@ -482,9 +778,13 @@ class StrictJsonParser {
     if (match === null) fail(`Unexpected JSON token at character ${this.#index}.`);
     const token = match[0];
     this.#index += token.length;
-    if (!/^-?(?:0|[1-9][0-9]*)$/u.test(token)) fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`);
+    if (!/^-?(?:0|[1-9][0-9]*)$/u.test(token) || token === "-0") {
+      fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`, "descriptor-number");
+    }
     const value = Number(token);
-    if (!Number.isSafeInteger(value)) fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`);
+    if (!Number.isSafeInteger(value)) {
+      fail(`Descriptor number '${token}' must be a canonical IEEE-754 safe integer.`, "descriptor-number");
+    }
     return value;
   }
 
@@ -551,6 +851,18 @@ function only(object: JsonObject, path: string, ...allowed: readonly string[]): 
   for (const name of Object.keys(object)) if (!names.has(name)) fail(`${path} contains unsupported property '${name}'.`);
 }
 
+function onlyWithCode(
+  object: JsonObject,
+  path: string,
+  code: RpcDescriptorErrorCode,
+  ...allowed: readonly string[]
+): void {
+  const names = new Set(allowed);
+  for (const name of Object.keys(object)) {
+    if (!names.has(name)) fail(`${path} contains unsupported property '${name}'.`, code);
+  }
+}
+
 function has(object: JsonObject, name: string): boolean {
   return Object.prototype.hasOwnProperty.call(object, name);
 }
@@ -567,6 +879,32 @@ function ordinal(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function fail(message: string): never {
-  throw new TypeError(message);
+function asciiCaseFold(value: string): string {
+  return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 0x20));
+}
+
+function v1CaseFold(value: string): string {
+  return value.toLocaleLowerCase("en-US");
+}
+
+function scalarLength(value: string): number {
+  validateUnicodeScalars(value, "A JSON string");
+  return [...value].length;
+}
+
+function validateUnicodeScalars(value: string, path: string): void {
+  for (let index = 0; index < value.length; index++) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xd800 && current <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) fail(`${path} contains an unpaired UTF-16 surrogate.`, "descriptor-json");
+      index++;
+    } else if (current >= 0xdc00 && current <= 0xdfff) {
+      fail(`${path} contains an unpaired UTF-16 surrogate.`, "descriptor-json");
+    }
+  }
+}
+
+function fail(message: string, code: RpcDescriptorErrorCode = "descriptor-invalid"): never {
+  throw new RpcDescriptorError(code, message);
 }

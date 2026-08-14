@@ -8,12 +8,17 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Sunder.Package.Template.Protocol</AssemblyName>
     <Description>Package-local RPC descriptors and generated bindings for SUNDER_PACKAGE_NAME_XML.</Description>
+    <SunderPackageProject>false</SunderPackageProject>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Sunder.Sdk" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" PrivateAssets="all" />
+    <PackageReference Include="Sunder.Package.Build" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" PrivateAssets="all" />
     <EmbeddedResource Include="Contracts\sample.rpc.json"
                       LogicalName="Sunder.Package.Template.Protocol.Contracts.sample.rpc.json" />
+    <SunderRpcBinding Include="Contracts\sample.rpc.json"
+                      Namespace="Sunder.Package.Template.Protocol.Generated"
+                      OutputFile="SampleRpc.g.cs" />
   </ItemGroup>
 
 </Project>

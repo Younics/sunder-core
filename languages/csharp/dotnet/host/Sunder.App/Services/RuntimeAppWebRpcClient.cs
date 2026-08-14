@@ -385,7 +385,8 @@ internal sealed class RuntimeAppWebRpcClient(
             provider.ProviderId,
             provider.ContractId,
             provider.ContractVersion,
-            provider.ContractSha256,
+            provider.DescriptorSha256,
+            provider.AbiSha256,
             provider.ActivationId,
             provider.ActivationEpoch,
             provider.SessionGeneration,
@@ -465,7 +466,13 @@ internal sealed class RuntimeAppWebRpcClient(
                     _ => SunderRpcErrorKind.Protocol,
                 },
                 error.Code,
-                error.Message));
+                error.Message,
+                error.DispatchState == RuntimeRpcDispatchState.NotDispatched
+                    ? SunderRpcDispatchState.NotDispatched
+                    : SunderRpcDispatchState.PossiblyDispatched,
+                error.RetrySafety == RuntimeRpcRetrySafety.Safe
+                    ? SunderRpcRetrySafety.Safe
+                    : SunderRpcRetrySafety.Unsafe));
 
     private static SunderRpcException Protocol(string code, string message)
         => new(new SunderRpcError(SunderRpcErrorKind.Protocol, code, message));

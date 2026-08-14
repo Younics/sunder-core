@@ -1,9 +1,11 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Compatibility;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -31,10 +33,24 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     {
         var registryParameters = Assert.Single(registryType.GetConstructors()).GetParameters();
         var runtimeParameters = Assert.Single(runtimeType.GetConstructors()).GetParameters();
+        var alignedRuntimeParameters = runtimeParameters.Take(registryParameters.Length).ToArray();
 
-        Assert.Equal(registryParameters.Select(static parameter => parameter.Name), runtimeParameters.Select(static parameter => parameter.Name));
-        Assert.Equal(registryParameters.Select(static parameter => parameter.HasDefaultValue), runtimeParameters.Select(static parameter => parameter.HasDefaultValue));
-        Assert.Equal(registryParameters.Select(parameter => NormalizeShape(parameter.ParameterType)), runtimeParameters.Select(parameter => NormalizeShape(parameter.ParameterType)));
+        Assert.Equal(registryParameters.Select(static parameter => parameter.Name), alignedRuntimeParameters.Select(static parameter => parameter.Name));
+        Assert.Equal(registryParameters.Select(static parameter => parameter.HasDefaultValue), alignedRuntimeParameters.Select(static parameter => parameter.HasDefaultValue));
+        Assert.Equal(registryParameters.Select(parameter => NormalizeShape(parameter.ParameterType)), alignedRuntimeParameters.Select(parameter => NormalizeShape(parameter.ParameterType)));
+        if (runtimeType == typeof(RuntimeRegistryResolveInstallPlanResponse))
+        {
+            var consentParameter = Assert.Single(runtimeParameters.Skip(registryParameters.Length));
+            Assert.Equal("RequiredCapabilityConsents", consentParameter.Name);
+            Assert.True(consentParameter.HasDefaultValue);
+            Assert.Equal(
+                "System.Collections.Generic.IReadOnlyList<PackageCapabilityConsent>",
+                NormalizeShape(consentParameter.ParameterType));
+        }
+        else
+        {
+            Assert.Equal(registryParameters.Length, runtimeParameters.Length);
+        }
     }
 
     [Fact]
@@ -96,10 +112,33 @@ public sealed class RuntimeRegistryContractCompatibilityTests
             ["https://artifacts.example"]);
 
         var runtimeResponse = RuntimeRegistryContractMapper.ToRuntime(registryResponse);
+        var runtimeJson = JsonSerializer.SerializeToNode(runtimeResponse, JsonOptions)!.AsObject();
 
+        Assert.Empty(runtimeResponse.RequiredCapabilityConsents);
+        Assert.True(runtimeJson.Remove("requiredCapabilityConsents"));
         Assert.True(JsonNode.DeepEquals(
             JsonSerializer.SerializeToNode(registryResponse, JsonOptions),
-            JsonSerializer.SerializeToNode(runtimeResponse, JsonOptions)));
+            runtimeJson));
+    }
+
+    [Fact]
+    public void RegistryCompatibilityProfile_TracksCurrentManifestWorkerAndSdkSupport()
+    {
+        var profile = RuntimeRegistryContractMapper.CompatibilityProfile;
+
+        Assert.Equal([SunderPackageFormat.CurrentManifestVersion], profile.ManifestVersions);
+        Assert.Equal([SunderPackageFormat.WorkerTargetKind], profile.RuntimeTargetKinds);
+        Assert.Equal(SunderWorkerProtocol.V3Capability, profile.WorkerProtocol);
+        Assert.Equal(
+            SunderSdkCompatibilityProfile.WorkerV3CapabilityClassification
+                .Where(static capability => capability.Value)
+                .Select(static capability => capability.Key)
+                .Order(StringComparer.Ordinal),
+            profile.WorkerCapabilities);
+        Assert.Contains(profile.WorkerProtocol, profile.WorkerCapabilities);
+        Assert.Equal(SunderSdkCapabilities.Baseline11V1, profile.SdkBaseline);
+        Assert.Contains(profile.SdkBaseline, profile.WorkerCapabilities);
+        Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), profile.Rid);
     }
 
     private static string NormalizeShape(Type type)

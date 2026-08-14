@@ -15,68 +15,43 @@ internal sealed class WorkerHarness : IAsyncDisposable
     public const string ProviderId = "example.provider";
     public const string ContractId = "example.rpc";
     public const string ContractVersion = "1.0.0";
-    public static readonly string ContractSha256 = new('c', 64);
+    public static readonly string DescriptorSha256 = new('c', 64);
+    public static readonly string AbiSha256 = new('d', 64);
 
     private readonly CancellationTokenSource _runCancellation = new();
     private readonly WorkerFrameReader _outputReader;
-    private readonly WorkerProtocolIdentity _protocol;
     private readonly string _root;
 
-    public WorkerHarness(SunderWorkerOptions options, WorkerLimits? limits = null)
-        : this(WorkerProtocol.V1, limits, (input, output, diagnostics, environment, selectedLimits, cancellationToken) =>
-            SunderWorker.RunAsync(
-                options,
-                input,
-                output,
-                diagnostics,
-                environment,
-                selectedLimits,
-                cancellationToken))
-    {
-    }
-
     public WorkerHarness(
-        Func<SunderWorkerContext, SunderWorkerV2Options> configure,
-        WorkerLimits? limits = null)
-        : this(WorkerProtocol.V2, limits, (input, output, diagnostics, environment, selectedLimits, cancellationToken) =>
-            SunderWorkerV2.RunAsync(
-                configure,
-                input,
-                output,
-                diagnostics,
-                environment,
-                selectedLimits,
-                cancellationToken))
+        Func<SunderWorkerContext, SunderWorkerOptions> configure,
+        WorkerLimits? limits = null,
+        bool ignoreInputReadCancellation = false)
     {
-    }
-
-    private WorkerHarness(
-        WorkerProtocolIdentity protocol,
-        WorkerLimits? limits,
-        Func<Stream, Stream, TextWriter, Func<string, string?>, WorkerLimits, CancellationToken, Task> run)
-    {
-        _protocol = protocol;
         Limits = (limits ?? WorkerLimits.Default) with { };
-        Input = new AsyncByteStream();
+        Input = new AsyncByteStream(ignoreInputReadCancellation);
         Output = new AsyncByteStream();
         Diagnostics = new StringWriter();
         _outputReader = new WorkerFrameReader(Output, Limits);
         _root = Path.Combine(Path.GetTempPath(), "sunder-sdk-worker-tests", Guid.NewGuid().ToString("N"));
         ContentPath = Path.Combine(_root, "content");
         DataPath = Path.Combine(_root, "data");
+        WorkspacePath = Path.Combine(_root, "workspace");
         Directory.CreateDirectory(ContentPath);
         Directory.CreateDirectory(DataPath);
+        Directory.CreateDirectory(WorkspacePath);
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
-            ["SUNDER_WORKER_PROTOCOL"] = protocol.Name,
+            ["SUNDER_WORKER_PROTOCOL"] = WorkerProtocol.Name,
             ["SUNDER_PACKAGE_ID"] = PackageId,
             ["SUNDER_PACKAGE_VERSION"] = PackageVersion,
             ["SUNDER_ACTIVATION_ID"] = ActivationId,
             ["SUNDER_SESSION_ID"] = SessionId,
-            ["SUNDER_PACKAGE_CONTENT_PATH"] = ContentPath,
-            ["SUNDER_PACKAGE_DATA_PATH"] = DataPath,
+            ["SUNDER_PACKAGE_CONTENT_ROOT"] = ContentPath,
+            ["SUNDER_WORKER_TEMP_ROOT"] = DataPath,
+            ["SUNDER_PACKAGE_WORKSPACE_ROOT"] = WorkspacePath,
         };
-        RunTask = run(
+        RunTask = SunderWorker.RunAsync(
+            configure,
             Input,
             Output,
             Diagnostics,
@@ -92,58 +67,46 @@ internal sealed class WorkerHarness : IAsyncDisposable
     public Task RunTask { get; }
     public string ContentPath { get; }
     public string DataPath { get; }
+    public string WorkspacePath { get; }
 
     public void Cancel() => _runCancellation.Cancel();
 
     public static SunderWorkerProviderRegistration Registration(ISunderRpcServiceHandler handler)
-        => new(ProviderId, ContractId, ContractVersion, ContractSha256, handler);
+        => new(ProviderId, ContractId, ContractVersion, DescriptorSha256, AbiSha256, handler);
 
     public async Task HandshakeAndActivateAsync(long sessionGeneration = 7)
     {
         await HandshakeAsync();
-        if (_protocol.UsesV2Lifecycle)
-        {
-            await StartCandidateAndCommitAsync(sessionGeneration);
-        }
+        await StartCandidateAndCommitAsync(sessionGeneration);
+        await PrepareStorageMigrationsAsync(sessionGeneration);
         await SendAsync(new { type = "host.activate", sessionGeneration });
         using var activated = await ReadAsync();
         Assert.Equal("worker.activated", activated.RootElement.GetProperty("type").GetString());
         Assert.Equal(sessionGeneration, activated.RootElement.GetProperty("sessionGeneration").GetInt64());
     }
 
-    public async Task HandshakeAsync()
+    public async Task HandshakeAsync(string challenge = "challenge")
     {
         await SendAsync(new
         {
             type = "host.hello",
-            protocol = _protocol.Name,
-            protocolVersion = _protocol.Version,
-            challenge = "challenge",
+            protocol = WorkerProtocol.Name,
+            protocolVersion = WorkerProtocol.Version,
+            challenge,
             packageId = PackageId,
             packageVersion = PackageVersion,
             activationId = ActivationId,
             sessionId = SessionId,
-            providers = new[]
-            {
-                new
-                {
-                    providerId = ProviderId,
-                    contractId = ContractId,
-                    contractVersion = ContractVersion,
-                    contractSha256 = ContractSha256,
-                },
-            },
+            providers = new[] { ProviderIdentity() },
         });
         using (var ready = await ReadAsync())
         {
             Assert.Equal("worker.ready", ready.RootElement.GetProperty("type").GetString());
-            Assert.Equal("challenge", ready.RootElement.GetProperty("challenge").GetString());
-            if (_protocol.UsesV2Lifecycle)
-            {
-                var contributions = ready.RootElement.GetProperty("contributions");
-                ReadyContributions = contributions.Clone();
-                Assert.Single(contributions.GetProperty("rpcProviders").EnumerateArray());
-            }
+            Assert.Equal(challenge, ready.RootElement.GetProperty("challenge").GetString());
+            var contributions = ready.RootElement.GetProperty("contributions");
+            ReadyContributions = contributions.Clone();
+            Assert.Single(contributions.GetProperty("rpcProviders").EnumerateArray());
+            Assert.True(contributions.GetProperty("migrationPreparationLifecycle").GetBoolean());
         }
 
     }
@@ -152,10 +115,6 @@ internal sealed class WorkerHarness : IAsyncDisposable
 
     public async Task StartCandidateAndCommitAsync(long sessionGeneration = 7)
     {
-        if (!_protocol.UsesV2Lifecycle)
-        {
-            throw new InvalidOperationException("Only the V2 harness has candidate and generation-commit phases.");
-        }
         await SendAsync(new { type = "host.start-candidate" });
         using (var started = await ReadAsync())
         {
@@ -172,6 +131,20 @@ internal sealed class WorkerHarness : IAsyncDisposable
             Assert.Equal("worker.generation-committed", committed.RootElement.GetProperty("type").GetString());
             Assert.Equal(sessionGeneration, committed.RootElement.GetProperty("sessionGeneration").GetInt64());
         }
+    }
+
+    public async Task PrepareStorageMigrationsAsync(long sessionGeneration = 7)
+    {
+        await SendAsync(new
+        {
+            type = "host.prepare-storage-migrations",
+            activationId = ActivationId,
+            sessionGeneration,
+        });
+        using var prepared = await ReadAsync();
+        Assert.Equal("worker.storage-migrations-prepared", prepared.RootElement.GetProperty("type").GetString());
+        Assert.Equal(ActivationId, prepared.RootElement.GetProperty("activationId").GetString());
+        Assert.Equal(sessionGeneration, prepared.RootElement.GetProperty("sessionGeneration").GetInt64());
     }
 
     public Task SendInvocationAsync(
@@ -236,7 +209,8 @@ internal sealed class WorkerHarness : IAsyncDisposable
             providerId = ProviderId,
             contractId = ContractId,
             contractVersion = ContractVersion,
-            contractSha256 = ContractSha256,
+            descriptorSha256 = DescriptorSha256,
+            abiSha256 = AbiSha256,
             activationId = ActivationId,
             activationEpoch = 1,
             sessionGeneration,
@@ -244,6 +218,16 @@ internal sealed class WorkerHarness : IAsyncDisposable
             catalogRevision = 1,
             state = "active",
             faultCode = (string?)null,
+        };
+
+    private static object ProviderIdentity()
+        => new
+        {
+            providerId = ProviderId,
+            contractId = ContractId,
+            contractVersion = ContractVersion,
+            descriptorSha256 = DescriptorSha256,
+            abiSha256 = AbiSha256,
         };
 
     public static object ContentReference(string id, long length)

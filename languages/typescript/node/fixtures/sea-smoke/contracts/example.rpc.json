@@ -1,26 +1,46 @@
 {
-  "descriptorVersion": 1,
+  "descriptorVersion": 2,
   "contractId": "example.messages",
-  "version": "1.0.0",
-  "services": [
-    {
-      "serviceId": "messages",
-      "methods": [
-        {
-          "methodId": "send",
+  "version": "2.0.0",
+  "errors": {
+    "example.rejected": {
+      "description": "The conformance request was rejected."
+    }
+  },
+  "services": {
+    "messages": {
+      "methods": {
+        "send": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
           "requestSchema": { "$ref": "#/$defs/Request" },
           "responseSchema": { "$ref": "#/$defs/Response" }
         },
-        {
-          "methodId": "watch",
+        "data": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Request" },
+          "responseSchema": { "$ref": "#/$defs/Response" }
+        },
+        "fault": {
+          "kind": "unary",
+          "idempotency": "none",
+          "errors": ["example.rejected"],
+          "requestSchema": { "$ref": "#/$defs/Request" },
+          "responseSchema": { "$ref": "#/$defs/Response" }
+        },
+        "watch": {
           "kind": "server-stream",
+          "idempotency": "none",
+          "errors": [],
           "requestSchema": { "$ref": "#/$defs/Request" },
           "eventSchema": { "$ref": "#/$defs/Response" }
         }
-      ]
+      }
     }
-  ],
+  },
   "$defs": {
     "Request": {
       "type": "object",

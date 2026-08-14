@@ -1,0 +1,88 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="using:Sunder.App.Views.Controls"
+        xmlns:vm="using:Sunder.App.ViewModels"
+        x:Class="Sunder.App.Views.PackageCapabilityConsentWindow"
+        x:DataType="vm:PackageCapabilityConsentViewModel"
+        mc:Ignorable="d"
+        Width="660"
+        Height="560"
+        MinWidth="600"
+        MinHeight="500"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Approve Package Capability"
+        Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        ShowInTaskbar="False"
+        Classes="secondary-window">
+  <Grid RowDefinitions="52,*,Auto"
+        Background="{DynamicResource Sunder.Brush.Background.App}">
+    <controls:WindowTitleBar Grid.Row="0">
+      <controls:WindowTitleBar.LeadingContent>
+        <TextBlock Classes="section-title"
+                   VerticalAlignment="Center"
+                   Text="Sensitive Worker Capability" />
+      </controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
+
+    <ScrollViewer Grid.Row="1"
+                  Margin="20,12,20,8"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="14">
+        <Border Classes="settings-note-card">
+          <StackPanel Spacing="6">
+            <TextBlock FontWeight="SemiBold" Text="Review required access" />
+            <TextBlock Classes="muted"
+                       Text="These exact package manifests request access to your allowlisted Docker CLI connection environment. Package code runs with your user account; approve only packages and sources you trust."
+                       TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <ItemsControl ItemsSource="{Binding Items}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:PackageCapabilityConsentItemViewModel">
+              <Border Classes="card-surface" Margin="0,0,0,10">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding PackageId}" TextWrapping="Wrap" />
+                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding PackageVersion}" />
+                  </Grid>
+                  <TextBlock Classes="caption" Text="{Binding CapabilitiesText}" TextWrapping="Wrap" />
+                  <TextBlock Classes="muted"
+                             FontFamily="monospace"
+                             FontSize="11"
+                             Text="{Binding ManifestSha256}"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </ScrollViewer>
+
+    <Border Grid.Row="2"
+            Padding="20,14"
+            BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource Sunder.Brush.Border.Subtle}">
+      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+        <TextBlock Classes="caption"
+                   VerticalAlignment="Center"
+                   Text="Approval is fenced to the package IDs, versions, and manifest hashes shown above."
+                   TextWrapping="Wrap" />
+        <Button Grid.Column="1"
+                Classes="secondary-action"
+                Content="Cancel"
+                Click="CancelButton_OnClick" />
+        <Button Grid.Column="2"
+                Classes="primary-action"
+                Content="Approve and Continue"
+                Click="ApproveButton_OnClick" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

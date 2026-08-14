@@ -47,16 +47,12 @@ public sealed partial class RuntimeApiClient
         => _management.GetRpcPermissionsAsync(cancellationToken);
 
     public Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(
-        string callerPackageId,
-        string contractId,
-        string action,
+        RuntimeRpcPermissionKey key,
         CancellationToken cancellationToken = default)
-        => _management.GrantRpcPermissionAsync(callerPackageId, contractId, action, cancellationToken);
+        => _management.GrantRpcPermissionAsync(key, cancellationToken);
 
     public Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(
-        string callerPackageId,
-        string contractId,
-        string action,
+        RuntimeRpcPermissionKey key,
         CancellationToken cancellationToken = default)
-        => _management.RevokeRpcPermissionAsync(callerPackageId, contractId, action, cancellationToken);
+        => _management.RevokeRpcPermissionAsync(key, cancellationToken);
 }

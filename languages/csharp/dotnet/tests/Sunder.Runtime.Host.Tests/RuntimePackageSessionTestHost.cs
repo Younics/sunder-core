@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
@@ -10,7 +11,7 @@ internal sealed class RuntimePackageSessionTestHost
     private readonly PackageSessionLifecycleService _sessions;
     private readonly InstalledPackageLifecycleService _installed;
     private readonly RuntimePackageUiService _ui;
-    private readonly RuntimePackageDataService _data;
+    private readonly PackageDataAccessService _data;
     private readonly PackageSettingsAccessService _settings;
     private readonly PackageAuthAccessService _auth;
     private readonly RuntimeStackExportService _stackExport;
@@ -51,7 +52,6 @@ internal sealed class RuntimePackageSessionTestHost
             uiSnapshots: snapshots,
             lifecyclePolicy: lifecyclePolicy,
             rpcCatalog: _rpcCatalog);
-        RuntimeOperations = new RuntimePackageOperationService(_owner.State);
         var transportPolicy = new RuntimeTransportPolicyOptions();
         var rpcBroker = new RuntimeRpcBroker(
             _rpcCatalog,
@@ -69,7 +69,7 @@ internal sealed class RuntimePackageSessionTestHost
         var reconciler = new PackageSessionReconciler(installedPackageStore, loader);
         var publisher = new PackageSessionPublisher(
             _owner,
-            NullLogger<PackageSessionPublisher>.Instance,
+            new ForwardingLogger<PackageSessionPublisher>(logger),
             lifecyclePolicy,
             _rpcCatalog,
             _rpcPermissions);
@@ -104,7 +104,7 @@ internal sealed class RuntimePackageSessionTestHost
             reconciler,
             transfers,
             publisher,
-            NullLogger<InstalledPackageLifecycleService>.Instance,
+            new ForwardingLogger<InstalledPackageLifecycleService>(logger),
             lifecycleFaultInjector,
             lifecyclePolicy,
             timeProvider,
@@ -115,7 +115,7 @@ internal sealed class RuntimePackageSessionTestHost
             installedPackageStore,
             _sessions,
             _installed);
-        _data = new RuntimePackageDataService(_owner.State);
+        _data = new PackageDataAccessService(_owner.State);
         _settings = new PackageSettingsAccessService(_owner);
         _auth = new PackageAuthAccessService(_owner);
         _stackExport = new RuntimeStackExportService(_owner, transfers, packageArchiveInstaller.Paths, rpcBroker);
@@ -142,6 +142,8 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageLifecycleOperationResult> LoadStartupDevPackagesAsync(IReadOnlyList<string> folders, CancellationToken token = default) => _sessions.LoadStartupDevPackagesAsync(folders, token);
     internal Task<PackageSessionOperationResult> LoadDevPackageFromRuntimeInputAsync(string folder, bool watch = true, CancellationToken token = default) => _sessions.LoadDevPackageAsync(folder, watch, token);
     internal Task<PackageOperationResult> InstallPackageFromRuntimePathAsync(string path, CancellationToken token = default) => _installed.InstallFromRuntimePathAsync(path, token);
+    internal Task<PackageOperationResult> ApplyPackageStoreMutationsAsync(IReadOnlyList<PackageStoreMutation> mutations, CancellationToken token = default)
+        => _installed.ExecutePreparedMutationsAsync(mutations, token);
     internal async Task<PackageOperationResult> ReinstallPackageFromRuntimePathAsync(string packageId, string path, CancellationToken token = default)
         => await _installed.UpgradeFromRuntimePathAsync(packageId, path, reinstall: true, cancellationToken: token);
     public Task<PackageSessionStatus?> GetPackageSessionStatusAsync(string packageId, CancellationToken token = default) => _sessions.GetStatusAsync(packageId, token);
@@ -172,11 +174,45 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken token = default) => _installed.SetEnabledAsync(packageId, isEnabled, token);
     public Task<PackageOperationResult> UninstallPackageAsync(string packageId, PackageUninstallRequest request, CancellationToken token = default) => _installed.UninstallAsync(packageId, request, token);
     internal ActivePackageSession ActiveSession => _owner.State.ActiveSession;
-    internal RuntimePackageOperationService RuntimeOperations { get; }
     internal RuntimeRpcCatalog RpcCatalog => _rpcCatalog;
     internal ActivePackageSession? GetStagedLifecycleSession(string stageId) => _sessions.GetStagedSession(stageId);
     internal ActivePackageSession? GetStagedStoreSession(string stageId) => _installed.GetStagedSession(stageId);
     public Task InitializeAsync(CancellationToken token = default) => _installed.InitializeAsync(token);
+    internal async Task GrantRuntimeRpcPermissionsAsync(
+        string packageRoot,
+        CancellationToken token = default)
+    {
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(packageRoot, token);
+        if (!validation.Success || validation.Manifest is null || validation.ContentIndex is null)
+        {
+            throw new InvalidDataException(string.Join(Environment.NewLine, validation.Errors));
+        }
+        var manifest = validation.Manifest;
+        var manifestSha256 = RuntimeRpcPackageMetadata.GetManifestSha256(validation.ContentIndex);
+        var uses = (manifest.UsesContracts ?? [])
+            .Where(static use => use is not null
+                                 && use.Role == SunderPackageFormat.RuntimeHostRole)
+            .Select(static use => use!)
+            .ToArray();
+        foreach (var use in uses)
+        {
+            foreach (var action in use.Actions ?? [])
+            {
+                await _rpcPermissions.SetAsync(
+                    new RuntimeRpcPermissionKey(
+                        manifest.Id!,
+                        manifest.Version!,
+                        manifestSha256,
+                        use.Role!,
+                        use.ContractId!,
+                        use.ContractVersion!,
+                        use.AbiSha256!,
+                        action!),
+                    RuntimeRpcPermissionState.Granted,
+                    token);
+            }
+        }
+    }
     public async Task ShutdownAsync()
     {
         _stackImport.Dispose();
@@ -224,4 +260,20 @@ internal sealed class RuntimePackageSessionTestHost
         {
             CommittedStamp = result.CommittedStamp,
         };
+
+    private sealed class ForwardingLogger<TCategory>(ILogger logger) : ILogger<TCategory>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+            => logger.BeginScope(state);
+
+        public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => logger.Log(logLevel, eventId, state, exception, formatter);
+    }
 }

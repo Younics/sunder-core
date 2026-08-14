@@ -1,7 +1,4 @@
 using System.IO.Compression;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
@@ -381,6 +378,24 @@ public sealed class PackageStoreCoordinatorTests
     }
 
     [Fact]
+    public async Task CatalogWriteReportedFailure_WhenDesiredCatalogIsAuthoritative_RollsForward()
+    {
+        var fixture = await CreateFixtureAsync(
+            new OneShotFaultInjector(PackageStoreFaultPoint.CatalogReplaced, simulatedCrash: false));
+        var archive = CreatePackageArchive(fixture.Root, "test.package", "1.0.0");
+
+        var result = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archive),
+        ]);
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("desired catalog became authoritative", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("test.package", Assert.Single(await fixture.Store.ListAsync()).PackageId);
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Paths.TransactionRootPath));
+    }
+
+    [Fact]
     public async Task Recovery_WhenJournalContainsUnsafePath_RejectsWithoutDeletingOutsideDirectory()
     {
         var root = CreateTempDirectory();
@@ -734,38 +749,15 @@ public sealed class PackageStoreCoordinatorTests
         string payloadContent = "test")
     {
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "manifest"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "lib"));
-        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "assets"));
-        var manifestPath = Path.Combine(sourceRoot, "manifest", "sunder-package.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
-        {
-            ArchiveFormatVersion = 1,
-            ManifestVersion = 1,
-            Id = packageId,
-            Name = packageId,
-            Version = version,
-            Targets =
-            [
-                CreateTarget(SunderPackageFormat.AppHostRole, SunderPackageFormat.AvaloniaTargetKind, packageId),
-                CreateTarget(SunderPackageFormat.RuntimeHostRole, SunderPackageFormat.DotnetTargetKind, packageId),
-            ],
-            DependsOn = (dependencies ?? []).Select(dependency => new SunderPackageDependencyManifest
-            {
-                PackageId = dependency.PackageId,
-                VersionRange = dependency.VersionRange,
-            }).ToArray(),
-        }));
-        File.Copy(
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            sourceRoot,
+            packageId,
+            version,
             typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
-            Path.Combine(sourceRoot, "payload", "shared", "lib", packageId + ".dll"));
+            dependencies: dependencies);
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "payload", "shared", "assets"));
         File.WriteAllText(Path.Combine(sourceRoot, "payload", "shared", "assets", "test-content.txt"), payloadContent);
-        var entries = Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories)
-            .Select(path => CreateIndexEntry(sourceRoot, path))
-            .ToArray();
-        File.WriteAllText(
-            Path.Combine(sourceRoot, "manifest", "content-index.json"),
-            JsonSerializer.Serialize(new SunderPackageContentIndex(1, entries)));
+        CanonicalPackageTestBuilder.WriteContentIndex(sourceRoot);
         var archivePath = Path.Combine(root, $"{packageId}.{version}.{Guid.NewGuid():N}.sunderpkg");
         ZipFile.CreateFromDirectory(sourceRoot, archivePath);
         return archivePath;
@@ -781,28 +773,6 @@ public sealed class PackageStoreCoordinatorTests
             "shared",
             "assets",
             "test-content.txt"));
-
-    private static SunderPackageContentIndexEntry CreateIndexEntry(string sourceRoot, string path)
-    {
-        var relativePath = Path.GetRelativePath(sourceRoot, path).Replace('\\', '/');
-        using var stream = File.OpenRead(path);
-        return new SunderPackageContentIndexEntry(
-            relativePath,
-            Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant(),
-            new FileInfo(path).Length);
-    }
-
-    private static SunderPackageTargetManifest CreateTarget(string role, string kind, string packageId)
-        => new()
-        {
-            Role = role,
-            Rid = RuntimeInformation.RuntimeIdentifier,
-            Kind = kind,
-            EntryPoint = $"lib/{packageId}.dll",
-            TargetFramework = "net10.0",
-            SdkVersion = "1.1.0",
-            RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
-        };
 
     private static string CreateTempDirectory()
     {

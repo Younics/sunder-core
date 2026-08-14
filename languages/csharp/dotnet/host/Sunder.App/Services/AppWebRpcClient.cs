@@ -124,8 +124,15 @@ internal sealed class AppWebRpcContractCatalog
         _contracts = contracts;
     }
 
-    public static AppWebRpcContractCatalog Load(string contentRoot, SunderPackageManifest manifest)
+    public static AppWebRpcContractCatalog Load(
+        string contentRoot,
+        SunderPackageManifest manifest,
+        SunderPackageContentIndex contentIndex)
     {
+        if (contentIndex.SchemaVersion != SunderPackageFormat.CurrentContentIndexVersion)
+        {
+            throw new InvalidDataException("The web package content index version is invalid.");
+        }
         var contracts = new Dictionary<string, SunderRpcContractDescriptor>(StringComparer.Ordinal);
         foreach (var bundle in manifest.ContractBundles ?? [])
         {
@@ -139,28 +146,65 @@ internal sealed class AppWebRpcContractCatalog
             {
                 throw new InvalidDataException("A web package RPC contract descriptor path is invalid.");
             }
+            var indexedDescriptors = (contentIndex.Files ?? [])
+                .Where(entry => entry is not null
+                                && string.Equals(entry.Path, descriptorPath.ToString(), StringComparison.Ordinal))
+                .ToArray();
+            if (indexedDescriptors.Length != 1
+                || indexedDescriptors[0]!.Size < 0
+                || indexedDescriptors[0]!.Size > SunderPackageFormat.MaxContractDescriptorBytes
+                || !IsSha256(indexedDescriptors[0]!.Sha256))
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' has invalid content-index metadata.");
+            }
             var path = descriptorPath.ToPlatformPath(contentRoot);
             if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             {
                 throw new InvalidDataException(
                     $"Web package RPC contract descriptor '{bundle.DescriptorPath}' is missing or linked.");
             }
+            if (new FileInfo(path).Length != indexedDescriptors[0]!.Size)
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its content-index integrity check.");
+            }
             var bytes = File.ReadAllBytes(path);
             var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            if (!string.Equals(hash, bundle.Sha256, StringComparison.Ordinal))
+            var indexedDescriptor = indexedDescriptors[0]!;
+            if (bytes.LongLength != indexedDescriptor.Size
+                || !string.Equals(hash, indexedDescriptor.Sha256, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
-                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its manifest hash fence.");
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its content-index integrity check.");
             }
             var descriptor = SunderRpcContractDescriptor.Parse(bytes);
-            if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal)
-                || !string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal)
-                || !string.Equals(descriptor.Sha256, bundle.Sha256, StringComparison.Ordinal))
+            if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2)
             {
                 throw new InvalidDataException(
-                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' identity does not match its manifest.");
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' must use descriptorVersion {SunderRpcProtocol.DescriptorVersionV2}.");
             }
-            contracts.Add(Key(descriptor.ContractId, descriptor.Version, descriptor.Sha256), descriptor);
+            if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal)
+                || !string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its exact contract identity fence.");
+            }
+            if (!string.Equals(descriptor.Sha256, bundle.DescriptorSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its descriptorSha256 fence.");
+            }
+            if (!string.Equals(descriptor.AbiSha256, bundle.AbiSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract descriptor '{bundle.DescriptorPath}' failed its abiSha256 fence.");
+            }
+            if (!contracts.TryAdd(Key(descriptor.ContractId, descriptor.Version), descriptor))
+            {
+                throw new InvalidDataException(
+                    $"Web package RPC contract '{descriptor.ContractId}' version '{descriptor.Version}' is bundled more than once.");
+            }
         }
         return new AppWebRpcContractCatalog(contracts);
     }
@@ -172,7 +216,7 @@ internal sealed class AppWebRpcContractCatalog
         SunderRpcMethodKind kind)
     {
         if (!_contracts.TryGetValue(
-                Key(provider.ContractId, provider.ContractVersion, provider.ContractSha256),
+                Key(provider.ContractId, provider.ContractVersion),
                 out var contract))
         {
             throw Validation("rpc.bridge.contract-missing", "The provider contract is not bundled by the caller package.");
@@ -204,7 +248,7 @@ internal sealed class AppWebRpcContractCatalog
         System.Text.Json.JsonElement value,
         string label)
     {
-        var contract = _contracts[Key(provider.ContractId, provider.ContractVersion, provider.ContractSha256)];
+        var contract = _contracts[Key(provider.ContractId, provider.ContractVersion)];
         if (!contract.IsValid(schemaReference, value, out _))
         {
             throw Validation(
@@ -213,8 +257,12 @@ internal sealed class AppWebRpcContractCatalog
         }
     }
 
-    private static string Key(string contractId, string version, string hash)
-        => $"{contractId}\0{version}\0{hash}";
+    private static string Key(string contractId, string version)
+        => $"{contractId}\0{version}";
+
+    private static bool IsSha256(string? value)
+        => value is { Length: 64 }
+           && value.All(static character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static SunderRpcException Validation(string code, string message)
         => new(new SunderRpcError(SunderRpcErrorKind.Validation, code, message));

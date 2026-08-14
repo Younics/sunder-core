@@ -14,9 +14,9 @@ internal sealed record SearchPackagesCommand(string? Query, int Skip, int Take) 
 internal sealed record PackageInfoCommand(string PackageId, string? Version) : CliCommand;
 internal sealed record ListInstalledCommand : CliCommand;
 internal sealed record PackageStatusCommand(string PackageId) : CliCommand;
-internal sealed record InstallRegistryPackageCommand(string PackageId, string? Version, string? Tag, bool AllowDowngrade, bool Reinstall) : CliCommand;
-internal sealed record InstallLocalPackageCommand(string File, bool AllowDowngrade, bool Reinstall) : CliCommand;
-internal sealed record UpdatePackagesCommand(string? PackageId, bool IncludePrerelease, string? RegistryOrigin) : CliCommand;
+internal sealed record InstallRegistryPackageCommand(string PackageId, string? Version, string? Tag, bool AllowDowngrade, bool Reinstall, bool ApproveSensitiveCapabilities = false) : CliCommand;
+internal sealed record InstallLocalPackageCommand(string File, bool AllowDowngrade, bool Reinstall, bool ApproveSensitiveCapabilities = false) : CliCommand;
+internal sealed record UpdatePackagesCommand(string? PackageId, bool IncludePrerelease, string? RegistryOrigin, bool ApproveSensitiveCapabilities = false) : CliCommand;
 internal sealed record AdoptPackageSourceCommand(
     string PackageId,
     string RegistryOrigin,
@@ -24,7 +24,8 @@ internal sealed record AdoptPackageSourceCommand(
     string? Version,
     bool IncludePrerelease,
     bool AllowDowngrade,
-    bool DryRun) : CliCommand;
+    bool DryRun,
+    bool ApproveSensitiveCapabilities = false) : CliCommand;
 internal sealed record SetPackageEnabledCommand(string PackageId, bool Enabled) : CliCommand;
 internal sealed record UninstallPackageCommand(string PackageId, bool AllowCascade, bool DryRun) : CliCommand;
 internal sealed record ShowPackageConfigSchemaCommand(string PackageId) : CliCommand;

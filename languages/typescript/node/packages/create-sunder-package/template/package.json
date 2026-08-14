@@ -6,7 +6,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "sunder-package generate && tsc --noEmit",
     "test": "npm run typecheck && node --test test/*.test.cjs",
     "sunder:dev": "sunder-package dev --watch",
     "sunder:dev:once": "sunder-package dev",

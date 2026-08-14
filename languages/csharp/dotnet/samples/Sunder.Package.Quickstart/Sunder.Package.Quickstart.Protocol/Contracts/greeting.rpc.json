@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "descriptorVersion": 2,
+  "contractId": "docs.sunder.quickstart.greeting",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "greeting": {
+      "methods": {
+        "create": {
+          "kind": "unary",
+          "idempotency": "none",
+          "errors": [],
+          "requestSchema": {
+            "$ref": "#/$defs/GreetRequest"
+          },
+          "responseSchema": {
+            "$ref": "#/$defs/GreetResponse"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "Message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "InvocationCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "GreetRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "GreetResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "invocationCount": {
+          "$ref": "#/$defs/InvocationCount"
+        }
+      },
+      "required": [
+        "message",
+        "invocationCount"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

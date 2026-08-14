@@ -302,16 +302,21 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
-                RuntimeProtocolFeatures.SchemaFirstRpcV1,
-                RuntimeProtocolFeatures.RpcPermissionsV1,
+                RuntimeProtocolFeatures.SchemaFirstRpcV2,
+                RuntimeProtocolFeatures.RpcPermissionsV2,
             ],
         };
-        var permission = new RuntimeRpcPermissionDescriptor(
+        var key = new RuntimeRpcPermissionKey(
             "caller.package",
             "1.0.0",
             new string('a', 64),
+            "runtime",
             "example.rpc",
-            "invoke",
+            "1.0.0",
+            new string('b', 64),
+            "invoke");
+        var permission = new RuntimeRpcPermissionDescriptor(
+            key,
             Requested: true,
             RuntimeRpcPermissionState.Granted,
             Effective: true,
@@ -336,8 +341,8 @@ public sealed class RuntimeClientTransportTests
         Assert.Equal(2, (await client.GetRpcCatalogAsync()).Revision);
         Assert.Equal(3, (await client.GetRpcCatalogEventsAsync(2, 1)).Sequence);
         Assert.True(Assert.Single((await client.GetRpcPermissionsAsync()).Permissions).Effective);
-        Assert.Equal(5, (await client.GrantRpcPermissionAsync("caller.package", "example.rpc", "invoke")).Revision);
-        Assert.Equal(6, (await client.RevokeRpcPermissionAsync("caller.package", "example.rpc", "invoke")).Revision);
+        Assert.Equal(5, (await client.GrantRpcPermissionAsync(key)).Revision);
+        Assert.Equal(6, (await client.RevokeRpcPermissionAsync(key)).Revision);
         Assert.Contains(handler.PathAndQueries, path =>
             path.EndsWith("afterRevision=2&afterSequence=1", StringComparison.Ordinal));
     }
@@ -351,7 +356,7 @@ public sealed class RuntimeClientTransportTests
             SupportedFeatures =
             [
                 RuntimeProtocolFeatures.VersionedApiV1,
-                RuntimeProtocolFeatures.AppWebRpcV1,
+                RuntimeProtocolFeatures.AppWebRpcV2,
             ],
         };
         var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch

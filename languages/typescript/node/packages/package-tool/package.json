@@ -1,7 +1,7 @@
 {
   "name": "@sunder/package-tool",
   "version": "1.1.0",
-  "description": "Build tooling for Sunder TypeScript process packages and pinned Node SEA targets.",
+  "description": "Build tooling for Sunder TypeScript Worker V3 packages and pinned Node SEA targets.",
   "license": "MIT",
   "repository": {
     "type": "git",

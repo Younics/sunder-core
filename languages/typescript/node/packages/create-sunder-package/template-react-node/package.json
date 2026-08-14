@@ -6,7 +6,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
+    "typecheck": "sunder-package generate && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
     "test": "npm run typecheck && node --test test/*.test.cjs",
     "sunder:dev": "sunder-package dev --watch",
     "sunder:dev:once": "sunder-package dev",

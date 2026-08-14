@@ -8,16 +8,15 @@ internal sealed class RuntimeProtocolDescriptor
     private static readonly IReadOnlyList<string> Features = Array.AsReadOnly(new[]
     {
         RuntimeProtocolFeatures.VersionedApiV1,
-        RuntimeProtocolFeatures.PackageRuntimeOperationsV1,
-        RuntimeProtocolFeatures.PackageRuntimeStreamEnvelopesV1,
         RuntimeProtocolFeatures.PackageSessionDrainingV1,
         RuntimeProtocolFeatures.AtomicPackageSnapshotV1,
         RuntimeProtocolFeatures.PackageStageStatusV1,
         RuntimeProtocolFeatures.DevPackageOwnerLeasesV1,
         RuntimeProtocolFeatures.TargetAwarePackageSnapshotsV1,
-        RuntimeProtocolFeatures.SchemaFirstRpcV1,
-        RuntimeProtocolFeatures.RpcPermissionsV1,
-        RuntimeProtocolFeatures.AppWebRpcV1,
+        RuntimeProtocolFeatures.StartupDiagnosticsV1,
+        RuntimeProtocolFeatures.SchemaFirstRpcV2,
+        RuntimeProtocolFeatures.RpcPermissionsV2,
+        RuntimeProtocolFeatures.AppWebRpcV2,
     });
 
     public RuntimeProtocolDescriptor()

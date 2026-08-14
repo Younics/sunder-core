@@ -17,7 +17,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
 using Sunder.Sdk.Notifications;
-using Sunder.Sdk.Runtime;
+using Sunder.Sdk.Rpc;
 using Xunit;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
 using static Sunder.App.Tests.TestSupport.TestPaths;
@@ -1524,12 +1524,12 @@ public sealed class MainWindowViewModelShellViewTests
             long generation,
             IReadOnlyCollection<string>? retryPackageIds = null)
         {
-            var expectedInvocations = runtimeHandler.OperationRequestCount + 1;
+            var expectedInvocations = runtimeHandler.RpcRequestCount + 1;
             await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([activePackage], [source], generation),
                 [source],
                 retryPackageIds).WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(expectedInvocations, runtimeHandler.OperationRequestCount);
+            Assert.Equal(expectedInvocations, runtimeHandler.RpcRequestCount);
             Assert.True(harness.ViewModel.HasMiddleSelection);
             Assert.Equal("agent.chat", harness.ViewModel.MiddlePanel.ActiveViewId);
             Assert.NotNull(Assert.IsType<HostedPackageViewBoundary>(
@@ -1557,11 +1557,11 @@ public sealed class MainWindowViewModelShellViewTests
 
         await ApplyAsync(updatedPackage, updateSource, generation: 3);
 
-        var requestsBeforeRemove = runtimeHandler.OperationRequestCount;
+        var requestsBeforeRemove = runtimeHandler.RpcRequestCount;
         await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
             CreateRuntimeSnapshot([], [], generation: 4),
             []).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(requestsBeforeRemove, runtimeHandler.OperationRequestCount);
+        Assert.Equal(requestsBeforeRemove, runtimeHandler.RpcRequestCount);
         Assert.False(harness.ViewModel.HasMiddleSelection);
 
         await ApplyAsync(updatedPackage, updateSource, generation: 5, ["agent"]);
@@ -1584,14 +1584,14 @@ public sealed class MainWindowViewModelShellViewTests
                 ["agent"]));
         var rejectedView = Assert.Single(
             harness.StagingSurface.StagedViews.Skip(stagedBeforeRejection));
-        var requestsBeforeRetiredCall = runtimeHandler.OperationRequestCount;
+        await packageViewHostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var requestsBeforeRetiredCall = runtimeHandler.RpcRequestCount;
 
         var retiredCall = Assert.IsAssignableFrom<Task>(rejectedView.GetType()
             .GetMethod(nameof(ShellLifecycleThreadAffinedPackageView.InvokeRuntimePingAsync))!
             .Invoke(rejectedView, [CancellationToken.None]));
-        var retiredFailure = await Assert.ThrowsAsync<PackageRuntimeInvocationException>(() => retiredCall);
-        Assert.Equal("runtime.v1.unavailable", retiredFailure.Code);
-        Assert.Equal(requestsBeforeRetiredCall, runtimeHandler.OperationRequestCount);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => retiredCall);
+        Assert.Equal(requestsBeforeRetiredCall, runtimeHandler.RpcRequestCount);
 
         File.Delete(Path.Combine(
             packageSourceFolder,
@@ -1964,7 +1964,10 @@ public sealed class MainWindowViewModelShellViewTests
                 (createHostedViews, stabilizedViewIds) =>
                     railCollectionPresenter.Rebuild(slots, createHostedViews, stabilizedViewIds),
                 () => { },
-                _ => middlePanel.ClearRetainedViews()
+                _ => middlePanel.ClearRetainedViews(),
+                impactedPackageIds => railCollectionPresenter.RefreshPackageMetadata(
+                    slots,
+                    impactedPackageIds)
             );
             railCollectionPresenter.Rebuild(slots, createHostedViews: true);
             var originalHostedBoundary = Assert.IsType<HostedPackageViewBoundary>(
@@ -2003,6 +2006,22 @@ public sealed class MainWindowViewModelShellViewTests
                 Assert.Single(middleBar.Items, item => item.Id == "agent.chat")
             );
             Assert.True(selectionPresenter.HasMiddleSelection);
+            Assert.Equal(["tools.dashboard"], navigatedViewIds);
+
+            var hostedViewAfterLifecycleCommit = middlePanel.HostedView;
+            Assert.True(middlePanel.StageHostedView("tools.dashboard"));
+            var stagedView = Assert.Single(
+                middlePanel.HostedViews,
+                view => view.ViewId == "tools.dashboard");
+            lifecyclePresenter.ApplyPackageMetadata([
+                CreateActiveAgentPackage() with { Version = "1.0.1" },
+                CreateActiveToolsPackage() with { Readiness = PackageReadinessState.Degraded },
+            ]);
+
+            Assert.Same(hostedViewAfterLifecycleCommit, middlePanel.HostedView);
+            Assert.True(stagedView.IsStaged);
+            Assert.Equal("PACKAGE DEGRADED", middlePanel.Summary);
+            Assert.Contains("Readiness: Degraded", middlePanel.Lines);
             Assert.Equal(["tools.dashboard"], navigatedViewIds);
         }
         finally
@@ -3384,9 +3403,9 @@ public sealed class MainWindowViewModelShellViewTests
 
     private sealed class PackageRuntimePingHandler : HttpMessageHandler
     {
-        private int _operationRequestCount;
+        private int _rpcRequestCount;
 
-        public int OperationRequestCount => Volatile.Read(ref _operationRequestCount);
+        public int RpcRequestCount => Volatile.Read(ref _rpcRequestCount);
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -3398,7 +3417,7 @@ public sealed class MainWindowViewModelShellViewTests
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":5,\"minimumSupportedRevision\":5,\"maximumSupportedRevision\":5,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v1\",\"package-runtime-operations.v1\",\"package-runtime-stream-envelopes.v1\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
+                        "{\"protocolIdentity\":\"dev.sunder.runtime\",\"protocolRevision\":8,\"minimumSupportedRevision\":8,\"maximumSupportedRevision\":8,\"runtimeInstanceId\":\"11111111-1111-1111-1111-111111111111\",\"supportedFeatures\":[\"api.v1\",\"app-web-rpc.v2\",\"rpc.v2\"],\"product\":{\"productName\":\"Sunder.Runtime.Host\",\"productVersion\":\"Development\",\"informationalVersion\":\"Development\"}}",
                         System.Text.Encoding.UTF8,
                         "application/json"),
                 });
@@ -3420,15 +3439,12 @@ public sealed class MainWindowViewModelShellViewTests
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
             }
 
-            Assert.EndsWith(
-                "/api/v1/packages/agent/operations/test.runtime-ping.v1",
-                request.RequestUri?.AbsolutePath,
-                StringComparison.Ordinal);
-            Interlocked.Increment(ref _operationRequestCount);
+            Assert.Equal("/api/v1/rpc/app/invoke", request.RequestUri?.AbsolutePath);
+            Interlocked.Increment(ref _rpcRequestCount);
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "{\"value\":\"ok\"}",
+                    "{\"value\":{\"value\":\"ok\"},\"error\":null}",
                     System.Text.Encoding.UTF8,
                     "application/json"),
             });
@@ -3554,14 +3570,13 @@ public sealed class ShellLifecycleThreadAffinedPackageView
         IDisposable,
         IPackageViewNavigationTarget
 {
-    private static readonly PackageRuntimeOperation<ShellLifecycleRuntimePingRequest, ShellLifecycleRuntimePingResponse>
-        RuntimePing = new("test.runtime-ping.v1");
+    private static readonly SunderRpcEndpointReference RuntimePingEndpoint = new("rpc1_test_runtime_ping");
     private readonly TaskCompletionSource _attachedOrLoaded = new(
         TaskCreationOptions.RunContinuationsAsynchronously
     );
-    private readonly IPackageRuntimeClient _runtime;
+    private readonly ISunderRpcClient _runtime;
 
-    public ShellLifecycleThreadAffinedPackageView(IPackageRuntimeClient runtime)
+    public ShellLifecycleThreadAffinedPackageView(ISunderRpcClient runtime)
     {
         _runtime = runtime;
         AttachedToVisualTree += (_, _) => RecordAttachment("attached");
@@ -3626,10 +3641,12 @@ public sealed class ShellLifecycleThreadAffinedPackageView
 
     public async Task InvokeRuntimePingAsync(CancellationToken cancellationToken)
     {
-        var response = await _runtime.InvokeAsync(
-            RuntimePing,
+        var response = await _runtime.InvokeAsync<ShellLifecycleRuntimePingRequest, ShellLifecycleRuntimePingResponse>(
+            RuntimePingEndpoint,
+            "lifecycle",
+            "ping",
             new ShellLifecycleRuntimePingRequest("ping"),
-            cancellationToken);
+            cancellationToken: cancellationToken);
         if (!string.Equals(response.Value, "ok", StringComparison.Ordinal))
         {
             throw new InvalidDataException("Runtime ping returned an unexpected response.");

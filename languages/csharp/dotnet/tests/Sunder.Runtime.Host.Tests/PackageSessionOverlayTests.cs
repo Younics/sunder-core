@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,7 +5,6 @@ using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Stacks;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -14,20 +12,23 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class PackageSessionOverlayTests
 {
     [Fact]
-    public void RuntimeSharedAssemblyRegistry_ResolvesHostStackSdkAssembly()
-    {
-        using var registry = new RuntimeSharedAssemblyRegistry([]);
-        var stackSdkAssembly = typeof(IPackageStackExporter).Assembly;
-
-        Assert.Same(stackSdkAssembly, registry.ResolveSharedAssembly(stackSdkAssembly.GetName()));
-    }
-
-    [Fact]
     public async Task LoadInstalledWithDevOverlays_WhenPackageIdsCollide_UsesDevPackageSource()
     {
         var rootPath = CreateTempDirectory();
-        var installedPackage = CreatePackageLayout(rootPath, "installed", "test.package", "1.0.0", PackageSourceKind.Installed);
-        var devFolder = CreatePackageLayout(rootPath, "dev", "test.package", "2.0.0", PackageSourceKind.Dev).InstallPath;
+        var installedPackage = CreatePackageLayout(
+            rootPath,
+            "installed",
+            "test.package",
+            "1.0.0",
+            PackageSourceKind.Installed,
+            roles: [SunderPackageFormat.AppHostRole]);
+        var devFolder = CreatePackageLayout(
+            rootPath,
+            "dev",
+            "test.package",
+            "2.0.0",
+            PackageSourceKind.Dev,
+            roles: [SunderPackageFormat.AppHostRole]).InstallPath;
         var loadService = new PackageSessionLoadService(NullLogger.Instance);
 
         try
@@ -62,19 +63,22 @@ public sealed class PackageSessionOverlayTests
             "1.0.0",
             PackageSourceKind.Installed,
             ["core.package"],
-            ">=1.0.0 <2.0.0");
+            ">=1.0.0 <2.0.0",
+            [SunderPackageFormat.AppHostRole]);
         var installedCore = CreatePackageLayout(
             rootPath,
             "installed",
             "core.package",
             "1.5.0",
-            PackageSourceKind.Installed);
+            PackageSourceKind.Installed,
+            roles: [SunderPackageFormat.AppHostRole]);
         var devCoreFolder = CreatePackageLayout(
             rootPath,
             "dev",
             "core.package",
             "2.0.0",
-            PackageSourceKind.Dev).InstallPath;
+            PackageSourceKind.Dev,
+            roles: [SunderPackageFormat.AppHostRole]).InstallPath;
         var loadService = new PackageSessionLoadService(NullLogger.Instance);
 
         try
@@ -109,8 +113,15 @@ public sealed class PackageSessionOverlayTests
             "a.extension",
             "1.0.0",
             PackageSourceKind.Installed,
-            ["z.root"]);
-        var rootPackage = CreatePackageLayout(rootPath, "installed", "z.root", "1.0.0", PackageSourceKind.Installed);
+            ["z.root"],
+            roles: [SunderPackageFormat.AppHostRole]);
+        var rootPackage = CreatePackageLayout(
+            rootPath,
+            "installed",
+            "z.root",
+            "1.0.0",
+            PackageSourceKind.Installed,
+            roles: [SunderPackageFormat.AppHostRole]);
         var loadService = new PackageSessionLoadService(NullLogger.Instance);
 
         try
@@ -131,24 +142,26 @@ public sealed class PackageSessionOverlayTests
     }
 
     [Fact]
-    public async Task LoadInstalledAsync_WhenPackageRegistersReservedHostCapability_RejectsItClearly()
+    public async Task LoadDevAsync_WhenPackageDeclaresLegacyDotnetRuntimeTarget_RejectsBeforeActivation()
     {
         var rootPath = CreateTempDirectory();
-        var package = CreatePackageLayout(
-            rootPath,
-            "installed",
-            "reserved.package",
+        var folder = Path.Combine(rootPath, "dev", "legacy.package", "1.0.0");
+        CanonicalPackageTestBuilder.WriteExplodedPackage(
+            folder,
+            "legacy.package",
             "1.0.0",
-            PackageSourceKind.Installed);
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            roles: [SunderPackageFormat.RuntimeHostRole],
+            runtimeTargetKind: "dotnet");
         var loadService = new PackageSessionLoadService(NullLogger.Instance);
 
         try
         {
-            var result = await loadService.LoadInstalledAsync([package]);
+            var result = await loadService.LoadInstalledWithDevOverlaysAsync([], [folder]);
 
             Assert.Contains(result.Errors, error =>
-                error.Contains("reserved host capability", StringComparison.OrdinalIgnoreCase)
-                && error.Contains(typeof(IPackageContext).FullName!, StringComparison.Ordinal));
+                error.Contains("kind 'dotnet'", StringComparison.Ordinal)
+                && error.Contains("invalid for role 'runtime'", StringComparison.Ordinal));
             if (result.Session is not null)
             {
                 await result.Session.DisposeAsync();
@@ -158,27 +171,6 @@ public sealed class PackageSessionOverlayTests
         {
             TryDeleteDirectory(rootPath);
         }
-    }
-
-    [Fact]
-    public void RuntimeSharedAssemblyRegistry_WhenRequestedVersionIsOlderThanLoadedVersion_AllowsBinding()
-    {
-        var requested = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.2.0, Culture=neutral, PublicKeyToken=null");
-        var loaded = new AssemblyName("Sunder.Package.Agent.Contracts, Version=1.0.3.0, Culture=neutral, PublicKeyToken=null");
-
-        Assert.True(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, loaded));
-        Assert.False(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(loaded, requested));
-    }
-
-    [Fact]
-    public void RuntimeSharedAssemblyRegistry_RejectsHigherMajorAndDifferentContractIdentity()
-    {
-        var requested = new AssemblyName("Example.Contracts, Version=1.2.0.0, Culture=neutral, PublicKeyToken=0011223344556677");
-        var higherMajor = new AssemblyName("Example.Contracts, Version=2.0.0.0, Culture=neutral, PublicKeyToken=0011223344556677");
-        var unrelated = new AssemblyName("Example.Contracts, Version=1.3.0.0, Culture=neutral, PublicKeyToken=8899aabbccddeeff");
-
-        Assert.False(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, higherMajor));
-        Assert.False(RuntimeSharedAssemblyRegistry.IsSharedAssemblyReferenceSatisfiedBy(requested, unrelated));
     }
 
     [Fact]
@@ -301,7 +293,7 @@ public sealed class PackageSessionOverlayTests
             await AddInstalledPackageAsync(store, installedPackage);
             File.Delete(Path.Combine(
                 installedPackage.InstallPath,
-                installedPackage.ContentInventory.Single(entry => entry.Path.EndsWith(".dll", StringComparison.Ordinal)).Path.Replace('/', Path.DirectorySeparatorChar)));
+                installedPackage.ContentInventory.First(entry => entry.Path.EndsWith(".dll", StringComparison.Ordinal)).Path.Replace('/', Path.DirectorySeparatorChar)));
 
             var loadResult = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
 
@@ -318,48 +310,6 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
-            TryDeleteDirectory(paths.RootPath);
-        }
-    }
-
-    [Fact]
-    public async Task LoadStartupDevPackagesAsync_ActivatesEffectiveDevPackageExactlyOnce()
-    {
-        const string packageId = "startup.counted.package";
-        var paths = new RuntimePackagePaths(CreateTempDirectory());
-        var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
-        var installedPackage = CreatePackageLayout(paths.RootPath, "installed", packageId, "1.0.0", PackageSourceKind.Installed);
-        var devFolder = CreatePackageLayout(paths.RootPath, "startup-dev", packageId, "2.0.0", PackageSourceKind.Dev).InstallPath;
-        var counterPath = Path.Combine(paths.RootPath, "activation-counters.txt");
-        var previousCounterPath = Environment.GetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable);
-
-        try
-        {
-            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, counterPath);
-            await AddInstalledPackageAsync(store, installedPackage);
-
-            var result = await service.LoadStartupDevPackagesAsync([devFolder]);
-
-            Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
-            var active = Assert.Single(service.GetActivePackages());
-            Assert.Equal(packageId, active.PackageId);
-            Assert.Equal("2.0.0", active.Version);
-            var source = Assert.Single(service.GetActiveRuntimePackageSources());
-            Assert.Equal(PackageSourceKind.Dev, source.Kind);
-            Assert.Equal(devFolder, source.Folder);
-
-            var counters = File.ReadAllLines(counterPath);
-            Assert.Equal(1, counters.Count(value => value == "2.0.0:configure"));
-            Assert.Equal(1, counters.Count(value => value == "2.0.0:register"));
-            Assert.Equal(1, counters.Count(value => value == "2.0.0:start"));
-            Assert.DoesNotContain(counters, value => value.StartsWith("1.0.0:", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, previousCounterPath);
-            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -527,52 +477,6 @@ public sealed class PackageSessionOverlayTests
         }
         finally
         {
-            TryDeleteDirectory(paths.RootPath);
-        }
-    }
-
-    [Fact]
-    public async Task CommitPackageLifecycleStageAsync_WhenStageIsStale_DoesNotStartRejectedBackgroundServices()
-    {
-        const string packageId = "startup.counted.package";
-        var paths = new RuntimePackagePaths(CreateTempDirectory());
-        var store = new InstalledPackageStore(paths);
-        var installer = new SunderPackageArchiveInstaller(paths);
-        var service = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance, store, installer);
-        var startupDevFolder = CreatePackageLayout(
-            paths.RootPath,
-            "startup-dev",
-            packageId,
-            "1.0.0",
-            PackageSourceKind.Dev).InstallPath;
-        var counterPath = Path.Combine(paths.RootPath, "stale-stage-counters.txt");
-        var previousCounterPath = Environment.GetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable);
-
-        try
-        {
-            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, counterPath);
-            var initial = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
-            Assert.True(initial.Success, string.Join(Environment.NewLine, initial.Errors));
-            WritePackageManifest(startupDevFolder, packageId, "1.1.0");
-            var stage = await service.StagePackageLifecycleAsync(CreateHotReloadStageRequest(startupDevFolder));
-            Assert.True(stage.Success, string.Join(Environment.NewLine, stage.Errors));
-            Assert.DoesNotContain(File.ReadAllLines(counterPath), value => value == "1.1.0:start");
-
-            var superseding = await service.LoadStartupDevPackagesAsync([startupDevFolder]);
-            Assert.True(superseding.Success, string.Join(Environment.NewLine, superseding.Errors));
-            var startsBeforeReject = File.ReadAllLines(counterPath).Count(value => value == "1.1.0:start");
-
-            var rejected = await service.CommitPackageLifecycleStageAsync(stage.StageId!);
-
-            Assert.False(rejected.Success);
-            Assert.Equal(
-                startsBeforeReject,
-                File.ReadAllLines(counterPath).Count(value => value == "1.1.0:start"));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(RuntimeActivationCounter.EnvironmentVariable, previousCounterPath);
-            await service.ShutdownAsync();
             TryDeleteDirectory(paths.RootPath);
         }
     }
@@ -810,7 +714,8 @@ public sealed class PackageSessionOverlayTests
         string version,
         PackageSourceKind sourceKind,
         IReadOnlyList<string>? dependencies = null,
-        string dependencyVersionRange = ">=0.0.0-0")
+        string dependencyVersionRange = ">=0.0.0-0",
+        IReadOnlyList<string>? roles = null)
     {
         var packageFolder = Path.Combine(rootPath, folderName, packageId, version);
         var assemblyPath = typeof(PackageSessionOverlayTestPackageModule).Assembly.Location;
@@ -822,6 +727,7 @@ public sealed class PackageSessionOverlayTests
             packageId,
             version,
             assemblyPath,
+            roles: roles,
             dependencies: dependencyRecords);
         return CanonicalPackageTestBuilder.CreateInstalledRecord(
             packageFolder,
@@ -892,12 +798,8 @@ public sealed class PackageSessionOverlayTests
     }
 }
 
-public abstract class PackageSessionOverlayTestPackageModuleBase : ISunderRuntimePackageModule, ISunderAppPackageModule
+public abstract class PackageSessionOverlayTestPackageModuleBase : ISunderAppPackageModule
 {
-    public abstract void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context);
-
-    public abstract void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services);
-
     public abstract void ConfigureAppServices(IServiceCollection services, IPackageContext context);
 
     public abstract void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services);
@@ -905,57 +807,6 @@ public abstract class PackageSessionOverlayTestPackageModuleBase : ISunderRuntim
 
 public sealed class PackageSessionOverlayTestPackageModule : PackageSessionOverlayTestPackageModuleBase
 {
-    public static bool RegisterStackContributor { get; set; }
-
-    public static bool StackContributorContainsSecrets { get; set; }
-
-    public override void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
-    {
-        if (string.Equals(context.PackageId, "reserved.package", StringComparison.Ordinal))
-        {
-            services.AddSingleton<IPackageContext>(context);
-        }
-        if (RuntimeActivationCounter.TryRecord(context, "configure"))
-        {
-            services.AddSingleton<RuntimeActivationCounterBackgroundService>();
-        }
-        if (string.Equals(context.PackageId, "generation.failing.package", StringComparison.Ordinal))
-        {
-            services.AddSingleton<FailingGenerationActivationBackgroundService>();
-        }
-        if (string.Equals(context.PackageId, "generation.cancelling.package", StringComparison.Ordinal))
-        {
-            services.AddSingleton<CancellableGenerationActivationBackgroundService>();
-        }
-    }
-
-    public override void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
-    {
-        var context = services.GetRequiredService<IPackageContext>();
-        if (RuntimeActivationCounter.TryRecord(context, "register"))
-        {
-            registry.RegisterBackgroundService<RuntimeActivationCounterBackgroundService>();
-        }
-        if (string.Equals(context.PackageId, "generation.failing.package", StringComparison.Ordinal))
-        {
-            registry.RegisterBackgroundService<FailingGenerationActivationBackgroundService>();
-        }
-        if (string.Equals(context.PackageId, "generation.cancelling.package", StringComparison.Ordinal))
-        {
-            registry.RegisterBackgroundService<CancellableGenerationActivationBackgroundService>();
-        }
-        if (!RegisterStackContributor)
-        {
-            return;
-        }
-
-        var stackContributor = new PackageSessionOverlayTestStackContributor(
-            context.PackageId,
-            context.Version.ToString(),
-            StackContributorContainsSecrets);
-        registry.RegisterStackContributor("test.stack.provider", stackContributor, services);
-    }
-
     public override void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }
@@ -963,136 +814,4 @@ public sealed class PackageSessionOverlayTestPackageModule : PackageSessionOverl
     public override void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
     }
-}
-
-public sealed class RuntimeActivationCounterBackgroundService(IPackageContext context) : IPackageBackgroundService
-{
-    public Task StartAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        RuntimeActivationCounter.TryRecord(context, "start");
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-}
-
-public sealed class FailingGenerationActivationBackgroundService : IPackageRuntimeGenerationParticipant
-{
-    public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-    public Task CommitGenerationAsync(
-        PackageRuntimeGeneration generation,
-        CancellationToken cancellationToken = default)
-        => throw new InvalidOperationException("Injected Runtime generation activation failure.");
-}
-
-public sealed class CancellableGenerationActivationBackgroundService(IPackageContext context)
-    : IPackageRuntimeGenerationParticipant
-{
-    public const string CommitStartedPathEnvironmentVariable =
-        "SUNDER_RUNTIME_TEST_CANCELLING_GENERATION_PATH";
-    public const string TriggerVersionEnvironmentVariable =
-        "SUNDER_RUNTIME_TEST_CANCELLING_GENERATION_VERSION";
-
-    public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-    public async Task CommitGenerationAsync(
-        PackageRuntimeGeneration generation,
-        CancellationToken cancellationToken = default)
-    {
-        var triggerVersion = Environment.GetEnvironmentVariable(TriggerVersionEnvironmentVariable);
-        if (!string.Equals(context.Version.ToString(), triggerVersion, StringComparison.Ordinal))
-        {
-            return;
-        }
-        var path = Environment.GetEnvironmentVariable(CommitStartedPathEnvironmentVariable)
-            ?? throw new InvalidOperationException("The generation cancellation test marker path is unavailable.");
-        File.WriteAllText(path, generation.SessionGeneration.ToString(
-            System.Globalization.CultureInfo.InvariantCulture));
-        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-    }
-}
-
-internal static class RuntimeActivationCounter
-{
-    public const string EnvironmentVariable = "SUNDER_RUNTIME_TEST_ACTIVATION_COUNTER_PATH";
-    private const string CountedPackageId = "startup.counted.package";
-
-    public static bool TryRecord(IPackageContext context, string stage)
-    {
-        var path = Environment.GetEnvironmentVariable(EnvironmentVariable);
-        if (!string.Equals(context.PackageId, CountedPackageId, StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
-
-        File.AppendAllLines(path, [$"{context.Version}:{stage}"]);
-        return true;
-    }
-}
-
-internal sealed class PackageSessionOverlayTestStackContributor(
-    string packageId,
-    string version,
-    bool containsSecrets) : IPackageStackExporter, IPackageStackImporter
-{
-    public string ContributorId => "test.stack.contributor";
-
-    public string DisplayName => "Test Stack Contributor";
-
-    public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
-        StackExportDiscoveryContext context,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>(
-            [new StackExportItemDescriptor(
-                "test.profile",
-                "Test Profile",
-                "test-profile",
-                "A test profile export.",
-                Details:
-                [
-                    new StackExportItemDetail(
-                        "Profile data",
-                        "Test Profile",
-                        containsSecrets ? StackValueSensitivity.Secret : StackValueSensitivity.Public),
-                ])]);
-
-    public ValueTask<StackExportContribution> ExportAsync(
-        StackExportRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        if (!request.IsItemSelected("test.profile"))
-        {
-            return ValueTask.FromResult(new StackExportContribution([], [], []));
-        }
-
-        var packageRequirement = new StackPackageRequirement(
-            packageId,
-            CreatedWithVersion: version,
-            MinimumVersion: "1.0.0");
-        var fragment = new StackFragmentExport(
-            "test.profile",
-            "test/profile",
-            1,
-            "Test Profile",
-            "{\"name\":\"Test Profile\"}",
-            "A test profile export.");
-        return ValueTask.FromResult(new StackExportContribution([fragment], [packageRequirement], []));
-    }
-
-    public ValueTask<StackImportPreview> PreviewImportAsync(
-        StackImportPreviewRequest request,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new StackImportPreview([], [], [], []));
-
-    public ValueTask<StackImportResult> ImportAsync(
-        StackImportRequest request,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(new StackImportResult(StackImportOutcome.Completed, [], new Dictionary<string, string>(), [], []));
 }

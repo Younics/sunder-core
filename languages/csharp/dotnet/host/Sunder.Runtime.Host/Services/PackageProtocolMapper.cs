@@ -98,8 +98,10 @@ internal static class PackageProtocolMapper
         => (uses ?? [])
             .Where(static use => use is not null)
             .Select(static use => new PackageRpcContractUseDescriptor(
-                use!.ContractId!,
-                use.VersionRange!,
+                use!.Role!,
+                use.ContractId!,
+                use.ContractVersion!,
+                use.AbiSha256!,
                 use.Required!.Value,
                 (use.Actions ?? [])
                     .Where(static action => action is not null)

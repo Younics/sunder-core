@@ -1,16 +1,28 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="Sunder.Package.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.0.0</Version>
-    <IsPackable>false</IsPackable>
-    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <SunderPackageAggregateProject>true</SunderPackageAggregateProject>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" />
-    <ProjectReference Include="../../packages/Sunder.Sdk/Sunder.Sdk.csproj" />
-    <ProjectReference Include="../../packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="Sunder.Package.Quickstart.Worker\Sunder.Package.Quickstart.Worker.csproj"
+                      ReferenceOutputAssembly="false"
+                      AdditionalProperties="RuntimeIdentifier=$(NETCoreSdkRuntimeIdentifier)" />
+    <ProjectReference Include="Sunder.Package.Quickstart.App\Sunder.Package.Quickstart.App.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <ItemGroup>
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.Worker\bin\$(Configuration)\$(TargetFramework)\$(NETCoreSdkRuntimeIdentifier)\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.Worker\bin\$(Configuration)\$(TargetFramework)\$(NETCoreSdkRuntimeIdentifier)" />
+    <SunderPackageTargetLeaf Include="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.App\bin\$(Configuration)\$(TargetFramework)\sunder-dev"
+                             DiscoveryRoot="$(MSBuildProjectDirectory)\Sunder.Package.Quickstart.App\bin\$(Configuration)\$(TargetFramework)" />
+  </ItemGroup>
+
+  <Import Project="..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
 </Project>

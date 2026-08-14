@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Sunder.Host.Contracts;
 using Sunder.Host.Supervisor;
+using Sunder.Runtime.Host;
 using Xunit;
 
 namespace Sunder.Host.Supervisor.Tests;
@@ -413,6 +414,40 @@ public sealed partial class HostSupervisorFoundationTests
             Assert.Equal(HostRuntimeState.CrashLoop, coordinator.GetStatus().State);
             Assert.Equal(HostRuntimeDesiredState.Running, coordinator.GetStatus().DesiredState);
             Assert.Equal("host.worker-crash-loop", coordinator.GetStatus().FailureCode);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RuntimeWorkerCoordinator_ReportsTypedPreListenRuntimeFailure()
+    {
+        var root = CreateTempDirectory();
+        var runtimeStateRoot = Path.Combine(root, "runtime");
+        Directory.CreateDirectory(runtimeStateRoot);
+        await File.WriteAllTextAsync(Path.Combine(runtimeStateRoot, "unexpected-state"), "legacy");
+        try
+        {
+            using var store = new HostLifecycleStore(Path.Combine(root, "host"));
+            await using var coordinator = new RuntimeWorkerCoordinator(
+                typeof(RuntimeHostStartupOptions).Assembly.Location,
+                Path.Combine(root, "connection", "worker.json"),
+                TimeSpan.FromSeconds(30),
+                store,
+                getRecoveryDelay: static _ => TimeSpan.FromDays(1),
+                runtimeStateRoot: runtimeStateRoot);
+
+            var exception = await Assert.ThrowsAsync<RuntimeWorkerStartupException>(() =>
+                coordinator.ReconcileStartupAsync(CancellationToken.None));
+
+            Assert.Equal("runtime.v1.internal", exception.Code);
+            Assert.Equal(
+                "The Runtime V1 state root has no schema metadata and cannot be reset safely.",
+                exception.Message);
+            Assert.Equal("runtime.v1.internal", coordinator.GetStatus().FailureCode);
+            Assert.Equal(exception.Message, coordinator.GetStatus().FailureMessage);
         }
         finally
         {

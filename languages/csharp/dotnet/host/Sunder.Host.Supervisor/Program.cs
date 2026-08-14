@@ -44,6 +44,7 @@ var hostFeatures = new List<string>
     HostProtocolFeatures.RuntimeGatewayV1,
     HostProtocolFeatures.RuntimeLifecycleV1,
     HostProtocolFeatures.DurableOperationsV1,
+    HostProtocolFeatures.RuntimeStartupDiagnosticsV1,
 };
 
 builder.Services.AddSingleton(new HostBearerTokenValidator(externalToken));

@@ -15,6 +15,8 @@ internal interface IRuntimeWorkerConnectionSource
 internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource, IAsyncDisposable
 {
     private const int MaximumOperationMessageLength = 2048;
+    private const int MaximumStartupDiagnosticBytes = 4096;
+    private const string StartupDiagnosticPipeEnvironmentVariable = "SUNDER_RUNTIME_STARTUP_DIAGNOSTIC_PIPE";
     // The worker owns one 15-second cleanup deadline; keep grace outside that bound.
     private static readonly TimeSpan DefaultWorkerShutdownTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan DefaultTerminationWaitTimeout = TimeSpan.FromSeconds(5);
@@ -515,6 +517,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
 
         Process process;
         AnonymousPipeServerStream? lifetimePipe = null;
+        AnonymousPipeServerStream? startupDiagnosticPipe = null;
         RuntimeWorkerEndpointLease? endpointLease = null;
         var workerToken = RuntimeBearerToken.Create();
         try
@@ -523,11 +526,17 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             DeleteStaleConnection();
             endpointLease = RuntimeWorkerEndpointLease.Create();
             lifetimePipe = CreateSupervisorLifetimePipe();
-            process = StartWorkerProcess(workerToken, endpointLease.Endpoint, lifetimePipe);
+            startupDiagnosticPipe = CreateStartupDiagnosticPipe();
+            process = StartWorkerProcess(
+                workerToken,
+                endpointLease.Endpoint,
+                lifetimePipe,
+                startupDiagnosticPipe);
         }
         catch (Exception exception)
         {
             lifetimePipe?.Dispose();
+            startupDiagnosticPipe?.Dispose();
             endpointLease?.Dispose();
             RecordStartFailure(exception, cancellationToken);
             throw;
@@ -544,11 +553,14 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         try
         {
             lifetimePipe.DisposeLocalCopyOfClientHandle();
+            startupDiagnosticPipe.DisposeLocalCopyOfClientHandle();
             var (connection, handshake) = await WaitForReadyWorkerAsync(
                 process,
                 workerToken,
                 endpointLease.Endpoint,
+                startupDiagnosticPipe,
                 cancellationToken).ConfigureAwait(false);
+            startupDiagnosticPipe.Dispose();
             lock (_stateGate)
             {
                 if (!ReferenceEquals(_process, process) || _processExitObserved || process.HasExited)
@@ -633,9 +645,12 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 if (ReferenceEquals(_process, process))
                 {
                     ClearWorkerStateCore(HostRuntimeState.Failed);
-                    _failureCode = exception is OperationCanceledException
-                        ? "host.worker-start-cancelled"
-                        : "host.worker-start-failed";
+                    _failureCode = exception switch
+                    {
+                        RuntimeWorkerStartupException startup => startup.Code,
+                        OperationCanceledException => "host.worker-start-cancelled",
+                        _ => "host.worker-start-failed",
+                    };
                     _failureMessage = exception.Message;
                     if (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                     {
@@ -644,6 +659,7 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                 }
             }
             lifetimePipe.Dispose();
+            startupDiagnosticPipe.Dispose();
             endpointLease.Dispose();
             DeleteStaleConnection();
             process.Dispose();
@@ -777,10 +793,16 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
             PipeDirection.Out,
             HandleInheritability.Inheritable);
 
+    private static AnonymousPipeServerStream CreateStartupDiagnosticPipe()
+        => new(
+            PipeDirection.In,
+            HandleInheritability.Inheritable);
+
     private Process StartWorkerProcess(
         string workerToken,
         RuntimeIpcEndpoint endpoint,
-        AnonymousPipeServerStream lifetimePipe)
+        AnonymousPipeServerStream lifetimePipe,
+        AnonymousPipeServerStream startupDiagnosticPipe)
     {
         if (_runtimeHostPath is null)
         {
@@ -801,6 +823,8 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         startInfo.Environment["SUNDER_RUNTIME_CONNECTION_FILE"] = _connectionInfoPath;
         startInfo.Environment["SUNDER_RUNTIME_BEARER_TOKEN"] = workerToken;
         startInfo.Environment["SUNDER_RUNTIME_SUPERVISOR_PIPE"] = lifetimePipe.GetClientHandleAsString();
+        startInfo.Environment[StartupDiagnosticPipeEnvironmentVariable] =
+            startupDiagnosticPipe.GetClientHandleAsString();
         startInfo.Environment[RuntimeLocalState.StateRootEnvironmentVariable] = _runtimeStateRoot;
         startInfo.Environment[RuntimeIpcEndpoint.EnvironmentVariable] = endpoint.ToEnvironmentValue();
         return Process.Start(startInfo)
@@ -811,17 +835,33 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         Process process,
         string workerToken,
         RuntimeIpcEndpoint endpoint,
+        AnonymousPipeServerStream startupDiagnosticPipe,
         CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(_startupTimeout);
         try
         {
+            var diagnosticTask = ReadStartupDiagnosticAsync(startupDiagnosticPipe, deadline.Token);
             while (true)
             {
                 deadline.Token.ThrowIfCancellationRequested();
+                if (diagnosticTask.IsCompletedSuccessfully
+                    && diagnosticTask.Result is { } startupDiagnostic)
+                {
+                    throw new RuntimeWorkerStartupException(
+                        startupDiagnostic.Code,
+                        startupDiagnostic.Message);
+                }
                 if (process.HasExited)
                 {
+                    var exitDiagnostic = await diagnosticTask.ConfigureAwait(false);
+                    if (exitDiagnostic is not null)
+                    {
+                        throw new RuntimeWorkerStartupException(
+                            exitDiagnostic.Code,
+                            exitDiagnostic.Message);
+                    }
                     throw new InvalidOperationException($"Runtime worker exited with code {process.ExitCode} during startup.");
                 }
 
@@ -834,13 +874,22 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
                             () => connection,
                             RuntimeIpcHttpMessageHandlerFactory.Create(endpoint));
                         var handshake = await transport.ProbeHandshakeAsync(deadline.Token).ConfigureAwait(false);
-                        if (RuntimeProtocolCompatibility.GetIncompatibility(handshake) is not { } incompatibility)
+                        if (RuntimeProtocolCompatibility.GetIncompatibility(
+                                handshake,
+                                RuntimeProtocolFeatures.StartupDiagnosticsV1) is not { } incompatibility)
                         {
                             using var management = new RuntimeManagementClient(transport);
                             var status = await management.GetSystemStatusAsync(deadline.Token).ConfigureAwait(false);
                             if (status?.IsReady == true)
                             {
                                 return (connection, handshake);
+                            }
+                            if (status?.State == RuntimeBootstrapState.Failed)
+                            {
+                                throw new RuntimeWorkerStartupException(
+                                    status.StartupFailure?.Code ?? "runtime.v1.internal",
+                                    status.StartupFailure?.Message
+                                    ?? "Runtime startup failed without a diagnostic message.");
                             }
                             await Task.Delay(TimeSpan.FromMilliseconds(200), deadline.Token).ConfigureAwait(false);
                             continue;
@@ -857,6 +906,35 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException($"Runtime worker did not become ready within {_startupTimeout.TotalSeconds:0} seconds.");
+        }
+    }
+
+    private static async Task<RuntimeStartupDiagnostic?> ReadStartupDiagnosticAsync(
+        AnonymousPipeServerStream pipe,
+        CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream(MaximumStartupDiagnosticBytes);
+        var chunk = new byte[512];
+        while (buffer.Length <= MaximumStartupDiagnosticBytes)
+        {
+            var read = await pipe.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+            buffer.Write(chunk, 0, read);
+        }
+        if (buffer.Length == 0 || buffer.Length > MaximumStartupDiagnosticBytes)
+        {
+            return null;
+        }
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<RuntimeStartupDiagnostic>(buffer.ToArray());
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
         }
     }
 
@@ -1019,9 +1097,12 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         lock (_stateGate)
         {
             _state = HostRuntimeState.Failed;
-            _failureCode = exception is TimeoutException
-                ? "host.runtime-lease-timeout"
-                : "host.worker-start-failed";
+            _failureCode = exception switch
+            {
+                RuntimeWorkerStartupException startup => startup.Code,
+                TimeoutException => "host.runtime-lease-timeout",
+                _ => "host.worker-start-failed",
+            };
             _failureMessage = exception.Message;
             recoveryDelay = RecordWorkerFailureForRecoveryCore();
         }
@@ -1413,6 +1494,11 @@ internal sealed class RuntimeWorkerCoordinator : IRuntimeWorkerConnectionSource,
         _submissionGate.Dispose();
         _lifecycleGate.Dispose();
     }
+}
+
+internal sealed class RuntimeWorkerStartupException(string code, string message) : InvalidOperationException(message)
+{
+    public string Code { get; } = code;
 }
 
 internal sealed class HostLifecycleConflictException(

@@ -152,6 +152,25 @@ internal sealed class RuntimeEventStreamService
         }
     }
 
+    public void PublishSnapshotMetadata(
+        long generation,
+        IReadOnlyList<string> changedPackageIds,
+        Action<RuntimeEventDescriptor> committed)
+    {
+        var normalizedIds = NormalizePackageIds(changedPackageIds);
+        lock (_stateGate)
+        {
+            var runtimeEvent = _feed.Publish(sequenceId => CreateEvent(
+                sequenceId,
+                RuntimeEventKind.SnapshotMetadataChanged,
+                generation,
+                _operationPhase,
+                _bootstrapState,
+                normalizedIds));
+            committed(runtimeEvent);
+        }
+    }
+
     public T Capture<T>(Func<long, T> capture)
     {
         ArgumentNullException.ThrowIfNull(capture);

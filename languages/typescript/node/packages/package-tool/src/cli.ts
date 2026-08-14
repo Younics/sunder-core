@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { aggregateAndPack, buildDevPackage, buildWebTarget } from "./package";
 import { buildSeaTarget, smokeSeaTarget } from "./sea";
 import { SUPPORTED_RIDS, type SunderRid } from "./model";
+import { generateRpcBindings } from "./rpc-bindings";
 
 async function main(): Promise<void> {
   const [command, ...argumentsList] = process.argv.slice(2);
@@ -13,6 +14,9 @@ async function main(): Promise<void> {
   const options = parse(argumentsList);
   const projectPath = resolve(options.project ?? process.cwd());
   switch (command) {
+    case "generate":
+      await generateRpcBindings(projectPath);
+      break;
     case "dev":
       await buildDevPackage({ projectPath, watch: options.watch });
       break;
@@ -88,7 +92,7 @@ function requiredValue(argumentsList: readonly string[], index: number, option: 
 }
 
 function help(): void {
-  process.stdout.write(`Sunder TypeScript package tooling\n\nCommands:\n  dev      Build canonical current-RID process and optional Vite App targets (--watch optional)\n  build    Build pinned Node 24.18.1 SEA and optional Vite App exact-RID target leaves\n  smoke    Run a native sunder.worker.v1 handshake against the built SEA\n  package  Aggregate target leaves and write a deterministic .sunderpkg\n\nOptions:\n  --project <path>\n  --rid <exact-rid>\n  --leaf <canonical-leaf> (repeatable for package)\n  --discovery-root <path> (required with --leaf)\n  --watch\n  --allow-unsigned-windows\n`);
+  process.stdout.write(`Sunder TypeScript package tooling\n\nCommands:\n  generate Generate configured local RPC TypeScript bindings\n  dev      Build canonical current-RID worker and optional Vite App targets (--watch optional)\n  build    Build pinned Node 24.18.1 SEA and optional Vite App exact-RID target leaves\n  smoke    Run a native sunder.worker.v3 handshake against the built SEA\n  package  Aggregate target leaves and write a deterministic .sunderpkg\n\nOptions:\n  --project <path>\n  --rid <exact-rid>\n  --leaf <canonical-leaf> (repeatable for package)\n  --discovery-root <path> (required with --leaf)\n  --watch\n  --allow-unsigned-windows\n`);
 }
 
 interface CliOptions {

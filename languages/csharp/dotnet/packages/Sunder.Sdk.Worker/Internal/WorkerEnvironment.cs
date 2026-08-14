@@ -9,19 +9,17 @@ internal sealed record WorkerEnvironment(
     string ActivationId,
     Guid ActivationGuid,
     string SessionId,
-    string? PackageContentPath,
-    string? PackageDataPath)
+    string PackageContentPath,
+    string PackageDataPath,
+    string PackageWorkspacePath)
 {
-    public static WorkerEnvironment Capture(
-        Func<string, string?> getEnvironmentVariable,
-        WorkerProtocolIdentity expectedProtocol)
+    public static WorkerEnvironment Capture(Func<string, string?> getEnvironmentVariable)
     {
-        ArgumentNullException.ThrowIfNull(expectedProtocol);
         var protocol = Required(getEnvironmentVariable, "SUNDER_WORKER_PROTOCOL", 64);
-        if (!string.Equals(protocol, expectedProtocol.Name, StringComparison.Ordinal))
+        if (!string.Equals(protocol, WorkerProtocol.Name, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"SUNDER_WORKER_PROTOCOL does not select {expectedProtocol.Name}.");
+                $"SUNDER_WORKER_PROTOCOL does not select {WorkerProtocol.Name}.");
         }
 
         var packageId = Required(getEnvironmentVariable, "SUNDER_PACKAGE_ID", 256);
@@ -48,6 +46,17 @@ internal sealed record WorkerEnvironment(
             throw new InvalidOperationException("SUNDER_SESSION_ID contains unsupported characters.");
         }
 
+        var contentPath = RequiredPath(getEnvironmentVariable, "SUNDER_PACKAGE_CONTENT_ROOT");
+        var temporaryPath = RequiredPath(getEnvironmentVariable, "SUNDER_WORKER_TEMP_ROOT");
+        var workspacePath = RequiredPath(getEnvironmentVariable, "SUNDER_PACKAGE_WORKSPACE_ROOT");
+        if (PathsEqual(contentPath, temporaryPath)
+            || PathsEqual(contentPath, workspacePath)
+            || PathsEqual(temporaryPath, workspacePath))
+        {
+            throw new InvalidOperationException(
+                "Worker V3 content, temporary, and persistent workspace roots must be distinct.");
+        }
+
         return new WorkerEnvironment(
             protocol,
             packageId,
@@ -55,8 +64,9 @@ internal sealed record WorkerEnvironment(
             activationId,
             activationGuid,
             sessionId,
-            OptionalPath(getEnvironmentVariable, "SUNDER_PACKAGE_CONTENT_PATH"),
-            OptionalPath(getEnvironmentVariable, "SUNDER_PACKAGE_DATA_PATH"));
+            contentPath,
+            temporaryPath,
+            workspacePath);
     }
 
     private static string Required(
@@ -89,4 +99,21 @@ internal sealed record WorkerEnvironment(
             throw new InvalidOperationException($"{name} is not a valid filesystem path.", exception);
         }
     }
+
+    private static string RequiredPath(Func<string, string?> getEnvironmentVariable, string name)
+    {
+        var path = OptionalPath(getEnvironmentVariable, name)
+                   ?? throw new InvalidOperationException($"{name} must be a non-empty absolute path.");
+        if (!Path.IsPathFullyQualified(path) || !Directory.Exists(path))
+        {
+            throw new InvalidOperationException($"{name} must identify an existing absolute directory.");
+        }
+        return path;
+    }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.TrimEndingDirectorySeparator(left),
+            Path.TrimEndingDirectorySeparator(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }

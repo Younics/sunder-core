@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\Sunder.Package.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <SelfContained>true</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackageAssetsDirectory>$(MSBuildProjectDirectory)\..\Assets</SunderPackageAssetsDirectory>
+    <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\sunder-package.json'))</SunderGeneratedPackageManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Worker" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" />
+    <PackageReference Include="Sunder.Package.Build" Version="SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE" PrivateAssets="all" />
+    <ProjectReference Include="..\Sunder.Package.Template.Protocol\Sunder.Package.Template.Protocol.csproj"
+                      PrivateAssets="all" />
+    <Compile Include="..\PackageMetadata.cs" Link="PackageMetadata.cs" />
+    <SunderContractBundle Include="..\Sunder.Package.Template.Protocol\Contracts\sample.rpc.json"
+                          ContractId="SUNDER_PACKAGE_ID_TEXT.sample"
+                          Version="2.0.0"
+                          DescriptorPath="contracts/sample.rpc.json"
+                          Exposure="package" />
+    <SunderRpcProvider Include="SUNDER_PACKAGE_ID_TEXT.sample"
+                       ContractId="SUNDER_PACKAGE_ID_TEXT.sample"
+                       ContractVersion="2.0.0"
+                       Role="runtime"
+                       Audience="owner" />
+    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
+                         Role="runtime"
+                         Rid="$(RuntimeIdentifier)"
+                         Kind="worker" />
+  </ItemGroup>
+
+  <Import Project="Stacks.PackageReferences.props" Condition="Exists('Stacks.PackageReferences.props')" />
+</Project>

@@ -168,7 +168,7 @@ function validateJson(text: string, maximumDepth: number): void {
       }
       while (true) {
         const key = stringToken();
-        const lower = key.toLocaleLowerCase("en-US");
+        const lower = asciiCaseFold(key);
         if (exact.has(key) || folded.has(lower)) fail(`JSON contains duplicate or case-colliding property '${key}'.`);
         exact.add(key);
         folded.add(lower);
@@ -225,4 +225,8 @@ function validateJson(text: string, maximumDepth: number): void {
   value(1);
   whitespace();
   if (offset !== text.length) fail("JSON contains trailing data.");
+}
+
+function asciiCaseFold(value: string): string {
+  return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 0x20));
 }

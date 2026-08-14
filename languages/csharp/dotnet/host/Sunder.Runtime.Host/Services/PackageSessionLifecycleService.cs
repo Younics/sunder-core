@@ -318,10 +318,8 @@ internal sealed partial class PackageSessionLifecycleService
         IReadOnlyCollection<string> reloadFolders,
         CancellationToken cancellationToken,
         PackageSessionSourceSnapshot? candidateSources = null,
-        bool allowPackageErrors = false,
-        Action<bool>? publicationCommitted = null)
+        bool allowPackageErrors = false)
     {
-        publicationCommitted?.Invoke(false);
         var warnings = new List<string>();
         var errors = new List<string>();
         var baseGeneration = _sessions.Generation;
@@ -357,17 +355,14 @@ internal sealed partial class PackageSessionLifecycleService
                 baseGeneration,
                 cancellationToken,
                 pending => pendingPublication = pending);
-            publicationCommitted?.Invoke(pendingPublication?.Publication.Committed == true);
             warnings.AddRange(publication.CleanupWarnings);
         }
         catch (OperationCanceledException)
         {
-            publicationCommitted?.Invoke(pendingPublication?.Publication.Committed == true);
             throw;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            publicationCommitted?.Invoke(pendingPublication?.Publication.Committed == true);
             _logger.LogError(exception, "Failed to start package background services");
             const string message = "Package lifecycle load failed while starting background services.";
             return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message], impacted);

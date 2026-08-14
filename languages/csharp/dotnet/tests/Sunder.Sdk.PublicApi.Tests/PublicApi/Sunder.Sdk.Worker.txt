@@ -1,16 +1,38 @@
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-services.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
+type interface Sunder.Sdk.Worker.ISunderWorkerLifecycleService
+  property System.Threading.Tasks.Task Completion { get; }
+  method abstract System.Threading.Tasks.ValueTask ActivateAsync(Sunder.Sdk.Worker.SunderWorkerContext context, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask CommitGenerationAsync(Sunder.Sdk.Worker.SunderWorkerGenerationContext generation, System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask PrepareCandidateAsync(System.Threading.CancellationToken cancellationToken = null)
+  method abstract System.Threading.Tasks.ValueTask ShutdownAsync(Sunder.Sdk.Worker.SunderWorkerShutdownContext context, System.Threading.CancellationToken cancellationToken = null)
 type sealed class Sunder.Sdk.Worker.SunderWorker
-  method static System.Threading.Tasks.Task RunAsync(Sunder.Sdk.Worker.SunderWorkerOptions options, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
+  method static System.Threading.Tasks.Task RunAsync(System.Func<Sunder.Sdk.Worker.SunderWorkerContext, Sunder.Sdk.Worker.SunderWorkerOptions> configure, System.Threading.CancellationToken cancellationToken = null)
   method static System.Void WriteDiagnostic(System.String message, System.Exception? exception = null)
 type sealed class Sunder.Sdk.Worker.SunderWorkerCapabilities
-  field static System.String ProtocolV2 = "worker-protocol.v2"
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
-type sealed class Sunder.Sdk.Worker.SunderWorkerContext
+  field static System.String ProtocolV3 = "worker-protocol.v3"
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-services.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
+type sealed class Sunder.Sdk.Worker.SunderWorkerComposition : System.IAsyncDisposable
+  method .ctor(System.IServiceProvider services, System.Collections.Generic.IEnumerable<Sunder.Sdk.Worker.ISunderWorkerLifecycleService>? lifecycleServices = null)
+  property System.IServiceProvider Services { get; }
+  method virtual System.Threading.Tasks.ValueTask DisposeAsync()
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
+type sealed class Sunder.Sdk.Worker.SunderWorkerContext : Sunder.Sdk.Abstractions.IPackageContext
+  property Sunder.Sdk.Abstractions.IPackageCallbackClient Callbacks { get; }
+  property System.String ContentRootPath { get; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
   property Sunder.Sdk.Abstractions.IPackageFileStore Files { get; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("logging.v1")
   property Sunder.Sdk.Logging.IPackageLogging Logging { get; }
+  property System.String PackageId { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("role-local-workspace.v1")
+  property Sunder.Sdk.Abstractions.IPackageRoleLocalWorkspace RoleLocalWorkspace { get; }
   property Sunder.Sdk.Rpc.ISunderRpcClient Rpc { get; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("secrets.v1")
   property Sunder.Sdk.Abstractions.IPackageSecrets Secrets { get; }
@@ -18,41 +40,62 @@ type sealed class Sunder.Sdk.Worker.SunderWorkerContext
   property Sunder.Sdk.Abstractions.IPackageSettings Settings { get; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
   property Sunder.Sdk.Abstractions.IPackageKeyValueStore State { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+  property Sunder.Sdk.Abstractions.IPackageStorageContext Storage { get; }
+  property System.String TemporaryRootPath { get; }
+  property System.String Version { get; }
+  method System.Threading.Tasks.ValueTask ReportGenerationFaultAsync(System.String code, System.String message, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
 type sealed class Sunder.Sdk.Worker.SunderWorkerGenerationContext
   property System.Guid ActivationId { get; }
   property System.Int64 SessionGeneration { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
+type sealed class Sunder.Sdk.Worker.SunderWorkerMigrationPreparationContext
+  property Sunder.Sdk.Worker.SunderWorkerGenerationContext Generation { get; }
+  method System.Threading.Tasks.Task<System.Boolean> ContainsStateKeyAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.String>> ListStateKeysAsync(System.String? prefix = null, System.Threading.CancellationToken cancellationToken = null)
+  method System.Threading.Tasks.Task<System.String?> GetStateValueAsync(System.String key, System.Threading.CancellationToken cancellationToken = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v3")
 type sealed class Sunder.Sdk.Worker.SunderWorkerOptions
   method .ctor(System.Collections.Generic.IEnumerable<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> providers)
-  property System.Func<Sunder.Sdk.Rpc.ISunderRpcClient, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnActivated { get; init; }
-  property System.Func<Sunder.Sdk.Worker.SunderWorkerShutdownContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnShutdown { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> Providers { get; }
-type sealed class Sunder.Sdk.Worker.SunderWorkerProtocolException : System.Exception, System.Runtime.Serialization.ISerializable
-  method .ctor(System.String message)
-  method .ctor(System.String message, System.Exception innerException)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-type sealed class Sunder.Sdk.Worker.SunderWorkerProviderRegistration
-  method .ctor(System.String providerId, System.String contractId, System.String contractVersion, System.String contractSha256, Sunder.Sdk.Rpc.ISunderRpcServiceHandler handler)
-  property System.String ContractId { get; }
-  property System.String ContractSha256 { get; }
-  property System.String ContractVersion { get; }
-  property Sunder.Sdk.Rpc.ISunderRpcServiceHandler Handler { get; }
-  property System.String ProviderId { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-type sealed class Sunder.Sdk.Worker.SunderWorkerShutdownContext
-  property System.String Reason { get; }
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
-type sealed class Sunder.Sdk.Worker.SunderWorkerV2
-  method static System.Threading.Tasks.Task RunAsync(System.Func<Sunder.Sdk.Worker.SunderWorkerContext, Sunder.Sdk.Worker.SunderWorkerV2Options> configure, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v2")
-type sealed class Sunder.Sdk.Worker.SunderWorkerV2Options
-  method .ctor(System.Collections.Generic.IEnumerable<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> providers)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("auth.v1")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
+  property Sunder.Sdk.Abstractions.IPackageAuthHandler? AuthHandler { get; init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.IPackageCallbackHandler> CallbackHandlers { get; init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-services.v1")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("runtime-generations.v1")
+  property Sunder.Sdk.Worker.SunderWorkerComposition? Composition { get; init; }
   property System.Func<Sunder.Sdk.Worker.SunderWorkerContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnActivated { get; init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+  property System.Func<Sunder.Sdk.Worker.SunderWorkerMigrationPreparationContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnBeforeStorageMigrations { get; init; }
   property System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnCandidateStarted { get; init; }
   property System.Func<Sunder.Sdk.Worker.SunderWorkerGenerationContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnGenerationCommitted { get; init; }
   property System.Func<Sunder.Sdk.Worker.SunderWorkerShutdownContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? OnShutdown { get; init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Worker.SunderWorkerProviderRegistration> Providers { get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Storage.PackageStorageKeyMigration> SecretMigrations { get; init; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings.schema.v1")
   property Sunder.Sdk.Settings.PackageSettingsSchema? SettingsSchema { get; init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.key-migration.v1")
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Storage.PackageStorageKeyMigration> StateMigrations { get; init; }
+type sealed class Sunder.Sdk.Worker.SunderWorkerProtocolException : System.Exception, System.Runtime.Serialization.ISerializable
+  method .ctor(System.String message)
+  method .ctor(System.String message, System.Exception innerException)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v2")
+type sealed class Sunder.Sdk.Worker.SunderWorkerProviderRegistration
+  method .ctor(System.String providerId, System.String contractId, System.String contractVersion, System.String descriptorSha256, System.String abiSha256, Sunder.Sdk.Rpc.ISunderRpcServiceHandler handler)
+  property System.String AbiSha256 { get; }
+  property System.String ContractId { get; }
+  property System.String ContractVersion { get; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.Collections.Generic.IReadOnlyDictionary<System.String, System.Collections.Generic.IReadOnlyList<System.String>>> DeclaredErrors { get; }
+  property System.String DescriptorSha256 { get; }
+  property Sunder.Sdk.Rpc.ISunderRpcServiceHandler Handler { get; }
+  property System.String ProviderId { get; }
+type sealed class Sunder.Sdk.Worker.SunderWorkerShutdownContext
+  property System.String Reason { get; }

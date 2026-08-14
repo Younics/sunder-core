@@ -10,7 +10,13 @@ internal sealed record PackageStoreMutation(
     bool Reinstall = false,
     InstalledPackageProvenanceRecord? Provenance = null,
     bool AllowCascade = false,
-    string? ConfirmationToken = null);
+    string? ConfirmationToken = null,
+    PackageCapabilityConsent? CapabilityConsent = null,
+    string? ConsentManifestSha256 = null);
+
+internal sealed record RegistryPackageUploadMetadata(
+    InstalledPackageProvenanceRecord Provenance,
+    string ConsentManifestSha256);
 
 internal sealed record RegistryPackageStateExpectation(
     string PackageId,

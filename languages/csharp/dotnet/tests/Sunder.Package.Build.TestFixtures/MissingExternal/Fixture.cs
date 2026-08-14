@@ -12,13 +12,13 @@ public sealed class ExternalConsumer : ExternalBase
     public string CallExternal(string value) => ExternalApi.Normalize(value);
 }
 
-public sealed class FixturePackageModule : ISunderRuntimePackageModule
+public sealed class FixturePackageModule : ISunderAppPackageModule
 {
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }
 
-    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
+    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
     }
 }

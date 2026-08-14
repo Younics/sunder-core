@@ -24,7 +24,7 @@ public sealed class InstalledPackageStoreTests
     }
 
     [Fact]
-    public async Task ListAsync_MigratesSchemaOnePackagesToUnknownProvenance()
+    public async Task ListAsync_RejectsSchemaOneWithoutRewritingCatalog()
     {
         var paths = CreateRuntimePackagePaths();
         Directory.CreateDirectory(paths.CatalogRootPath);
@@ -36,17 +36,15 @@ public sealed class InstalledPackageStoreTests
         await File.WriteAllTextAsync(paths.StateFilePath, legacyState.ToJsonString(TestJsonOptions));
         var store = new InstalledPackageStore(paths);
 
-        var package = Assert.Single(await store.ListAsync());
+        var original = await File.ReadAllTextAsync(paths.StateFilePath);
 
-        Assert.Equal(InstalledPackageSourceKind.Unknown, package.Provenance?.SourceKind);
-        Assert.Equal(InstalledPackageVersionPolicy.Unmanaged, package.Provenance?.VersionPolicy);
-        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(paths.StateFilePath))!.AsObject();
-        Assert.Equal(3, migrated["schemaVersion"]!.GetValue<int>());
-        Assert.NotNull(migrated["packages"]!.AsArray()[0]!["provenance"]);
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.ListAsync());
+
+        Assert.Equal(original, await File.ReadAllTextAsync(paths.StateFilePath));
     }
 
     [Fact]
-    public async Task ListAsync_MigratesSchemaTwoWithoutGuessingThatExplicitPinsWereTransitive()
+    public async Task ListAsync_RejectsSchemaTwoWithoutRewritingCatalog()
     {
         var paths = CreateRuntimePackagePaths();
         Directory.CreateDirectory(paths.CatalogRootPath);
@@ -65,12 +63,11 @@ public sealed class InstalledPackageStoreTests
             JsonSerializer.Serialize(new InstalledPackageStateFile(2, [package]), TestJsonOptions));
         var store = new InstalledPackageStore(paths);
 
-        var migratedPackage = Assert.Single(await store.ListAsync());
+        var original = await File.ReadAllTextAsync(paths.StateFilePath);
 
-        Assert.Equal(InstalledPackageVersionPolicy.ExplicitVersion, migratedPackage.Provenance?.VersionPolicy);
-        Assert.Equal("1.0.0", migratedPackage.Provenance?.RequestedVersion);
-        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(paths.StateFilePath))!.AsObject();
-        Assert.Equal(3, migrated["schemaVersion"]!.GetValue<int>());
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.ListAsync());
+
+        Assert.Equal(original, await File.ReadAllTextAsync(paths.StateFilePath));
     }
 
     [Fact]
@@ -81,7 +78,7 @@ public sealed class InstalledPackageStoreTests
         Directory.CreateDirectory(outsidePath);
         Directory.CreateDirectory(paths.CatalogRootPath);
         await File.WriteAllTextAsync(paths.StateFilePath, JsonSerializer.Serialize(new InstalledPackageStateFile(
-            1,
+            5,
             [CreatePackage(paths, "unsafe.package") with { InstallPath = outsidePath }]), TestJsonOptions));
         var store = new InstalledPackageStore(paths);
 
@@ -169,22 +166,24 @@ public sealed class InstalledPackageStoreTests
         var installPath = paths.GetInstalledPackagePath("test.package", "1.0.0");
         var descriptorBytes = System.Text.Encoding.UTF8.GetBytes("""
             {
-              "descriptorVersion": 1,
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "descriptorVersion": 2,
               "contractId": "dev.sunder.execution",
               "version": "1.0.0",
-              "services": [
-                {
-                  "serviceId": "execution",
-                  "methods": [
-                    {
-                      "methodId": "run",
+              "errors": {},
+              "services": {
+                "execution": {
+                  "methods": {
+                    "run": {
                       "kind": "unary",
+                      "idempotency": "none",
+                      "errors": [],
                       "requestSchema": { "$ref": "#/$defs/Request" },
                       "responseSchema": { "$ref": "#/$defs/Response" }
                     }
-                  ]
+                  }
                 }
-              ],
+              },
               "$defs": {
                 "Request": {
                   "type": "object",
@@ -219,15 +218,19 @@ public sealed class InstalledPackageStoreTests
                     ContractId = "dev.sunder.execution",
                     Version = "1.0.0",
                     DescriptorPath = "contracts/execution.json",
-                    Sha256 = descriptorHash,
+                    DescriptorSha256 = descriptorHash,
+                    AbiSha256 = SunderRpcContractDescriptor.Parse(descriptorBytes).AbiSha256,
+                    Exposure = SunderPackageFormat.PackageContractExposure,
                 },
             ],
             usesContracts:
             [
                 new SunderPackageContractUseManifest
                 {
+                    Role = SunderPackageFormat.RuntimeHostRole,
                     ContractId = "dev.sunder.execution",
-                    VersionRange = ">=1.0.0 <2.0.0",
+                    ContractVersion = "1.0.0",
+                    AbiSha256 = SunderRpcContractDescriptor.Parse(descriptorBytes).AbiSha256,
                     Required = true,
                     Actions = ["discover", "invoke"],
                 },
@@ -246,8 +249,10 @@ public sealed class InstalledPackageStoreTests
 
         Assert.Equal(InstalledPackageSourceKind.Unknown, descriptor.Provenance.SourceKind);
         var contractUse = Assert.Single(descriptor.RpcContractUses);
+        Assert.Equal(SunderPackageFormat.RuntimeHostRole, contractUse.Role);
         Assert.Equal("dev.sunder.execution", contractUse.ContractId);
-        Assert.Equal(">=1.0.0 <2.0.0", contractUse.VersionRange);
+        Assert.Equal("1.0.0", contractUse.ContractVersion);
+        Assert.Equal(SunderRpcContractDescriptor.Parse(descriptorBytes).AbiSha256, contractUse.AbiSha256);
         Assert.True(contractUse.Required);
         Assert.Equal(["discover", "invoke"], contractUse.Actions);
 
@@ -263,8 +268,10 @@ public sealed class InstalledPackageStoreTests
             isEnabled: true,
             PackageReadinessState.Ready);
         var sessionUse = Assert.Single(sessionDescriptor.RpcContractUses);
+        Assert.Equal(contractUse.Role, sessionUse.Role);
         Assert.Equal(contractUse.ContractId, sessionUse.ContractId);
-        Assert.Equal(contractUse.VersionRange, sessionUse.VersionRange);
+        Assert.Equal(contractUse.ContractVersion, sessionUse.ContractVersion);
+        Assert.Equal(contractUse.AbiSha256, sessionUse.AbiSha256);
         Assert.Equal(contractUse.Required, sessionUse.Required);
         Assert.Equal(contractUse.Actions, sessionUse.Actions);
 
@@ -307,7 +314,9 @@ public sealed class InstalledPackageStoreTests
             [new InstalledPackageContentRecord("manifest/sunder-package.json", new string('0', 64), 0)],
             dependencies ?? [],
             isEnabled,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            InstalledPackageProvenanceRecord.Unknown,
+            []);
     }
 
     private static string CreateInstallPath(RuntimePackagePaths paths, string packageId, string version)

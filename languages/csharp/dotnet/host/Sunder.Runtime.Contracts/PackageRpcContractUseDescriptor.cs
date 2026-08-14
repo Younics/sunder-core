@@ -1,8 +1,10 @@
 namespace Sunder.Runtime.Contracts;
 
 public sealed record PackageRpcContractUseDescriptor(
+    string Role,
     string ContractId,
-    string VersionRange,
+    string ContractVersion,
+    string AbiSha256,
     bool Required,
     IReadOnlyList<string> Actions)
 {

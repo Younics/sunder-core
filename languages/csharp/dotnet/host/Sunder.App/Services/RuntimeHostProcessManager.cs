@@ -26,6 +26,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
     private readonly TimeSpan _startupTimeout;
     private readonly Func<bool> _isRuntimeLeaseAvailable;
     private readonly Func<Uri, CancellationToken, Task<HostHandshakeResponse?>> _tryGetHostHandshakeAsync;
+    private readonly Func<Uri, CancellationToken, Task<HostRuntimeStatus?>> _tryGetHostStatusAsync;
     private readonly Func<Uri, CancellationToken, Task<bool>> _tryEnsureSupervisedRuntimeStartedAsync;
     private readonly Func<bool> _isHostInstanceLockAvailable;
     private readonly UserHostPayloadStore? _userHostPayloadStore;
@@ -73,7 +74,8 @@ public sealed class RuntimeHostProcessManager : IDisposable
         UserHostPayloadStore? userHostPayloadStore = null,
         Func<Uri, CancellationToken, Task<bool>>? tryEnsureSupervisedRuntimeStartedAsync = null,
         Func<bool>? isHostInstanceLockAvailable = null,
-        IHostServiceManager? hostServiceManager = null)
+        IHostServiceManager? hostServiceManager = null,
+        Func<Uri, CancellationToken, Task<HostRuntimeStatus?>>? tryGetHostStatusAsync = null)
     {
         _startupOptions = startupOptions;
         _runtimeConnectionState = runtimeConnectionState ?? new RuntimeConnectionState(startupOptions.RuntimeUrl);
@@ -98,6 +100,18 @@ public sealed class RuntimeHostProcessManager : IDisposable
         else
         {
             _tryGetHostHandshakeAsync = static (_, _) => Task.FromResult<HostHandshakeResponse?>(null);
+        }
+        if (tryGetHostStatusAsync is not null)
+        {
+            _tryGetHostStatusAsync = tryGetHostStatusAsync;
+        }
+        else if (healthProbe is not null)
+        {
+            _tryGetHostStatusAsync = healthProbe.TryGetHostStatusAsync;
+        }
+        else
+        {
+            _tryGetHostStatusAsync = static (_, _) => Task.FromResult<HostRuntimeStatus?>(null);
         }
         if (tryEnsureSupervisedRuntimeStartedAsync is not null)
         {
@@ -239,28 +253,14 @@ public sealed class RuntimeHostProcessManager : IDisposable
             }
             RefreshPublishedConnection(runtimeUrl);
             var runningHandshake = await _tryGetRuntimeHandshakeAsync(runtimeUrl, cancellationToken);
-            var migratingDirectRuntime = payload is not null
-                                         && hostHandshake is null
-                                         && CanReuseRunningRuntime(runningHandshake);
-            if (migratingDirectRuntime)
+            if (CanReuseRunningRuntime(runningHandshake))
             {
-                AppSessionLog.WriteInfo("Replacing the legacy direct Runtime with the current-user Sunder Host.");
-                if (replacingPayload)
-                {
-                    rollbackPayload = payload!.Previous;
-                }
-                await _shutdownRuntimeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
-                if (!await WaitForStoppedRuntimeAsync(runtimeUrl, cancellationToken).ConfigureAwait(false))
+                if (payload is not null && hostHandshake is null)
                 {
                     throw new InvalidOperationException(
-                        "The legacy direct Sunder Runtime did not stop in time for Host activation.");
+                        $"A standalone Sunder Runtime is already running at '{runtimeUrl}'. Stop it before starting the managed Host, or keep using it through an explicit development Runtime configuration.");
                 }
-                previousHostStoppedForReplacement = rollbackPayload is not null;
-                runningHandshake = null;
-            }
-            else if (CanReuseRunningRuntime(runningHandshake))
-            {
-                if (payload is not null && hostHandshake is not null)
+                if (payload is not null)
                 {
                     _userHostPayloadStore!.Commit(payload);
                 }
@@ -288,21 +288,7 @@ public sealed class RuntimeHostProcessManager : IDisposable
             }
 
             var replaceExistingRuntime = payload is not null;
-            if (ShouldReplaceRunningRuntime(runningHandshake))
-            {
-                replaceExistingRuntime = true;
-                var runningVersion = runningHandshake!.Product?.ProductVersion ?? "unknown";
-                var reason = RuntimeProtocolCompatibility.GetIncompatibility(runningHandshake);
-                AppSessionLog.WriteInfo($"Replacing managed Sunder Host Runtime worker {runningVersion}: {reason}");
-                await _shutdownRuntimeAsync(runtimeUrl, cancellationToken);
-                var stopped = await WaitForStoppedRuntimeAsync(runtimeUrl, cancellationToken);
-                if (!stopped)
-                {
-                    throw new InvalidOperationException(
-                        $"Sunder.Runtime.Host {runningVersion} did not shut down in time to start the bundled compatible Runtime.");
-                }
-            }
-            else if (runningHandshake is not null)
+            if (runningHandshake is not null)
             {
                 throw CreateRuntimeUrlOccupiedException(runtimeUrl, runningHandshake.Product?.ProductName);
             }
@@ -446,27 +432,23 @@ public sealed class RuntimeHostProcessManager : IDisposable
                 Failure: HostServiceStartupFailure.TerminalState,
                 Observation.State: HostServiceState.Stopped or HostServiceState.Failed,
             };
-            var previousServiceWasDisplaced = startupException is IHostServiceReplacementFailure;
+            var candidateLaunchWasNotSubmitted = startupException is IHostServiceReplacementFailure;
             if (rollbackPayload is not null)
             {
-                if (payloadLaunchAccepted
-                    && (launchedServiceTerminationWasObserved
-                        || await TryStopFailedPayloadAsync(
-                                 runtimeUrl,
-                                 payload!.DeploymentIdentity,
-                                 acceptedLaunchReceipt,
-                                 compensationDeadline.Token)
-                             .ConfigureAwait(false)))
+                if (payloadLaunchAccepted)
                 {
-                    canAbandonPayload = true;
-                    await TryRestorePreviousPayloadAsync(
-                            rollbackPayload,
-                            rollbackRuntimeUrl,
-                            compensationDeadline.Token)
-                        .ConfigureAwait(false);
+                    if (!launchedServiceTerminationWasObserved)
+                    {
+                        await TryStopFailedPayloadAsync(
+                                runtimeUrl,
+                                payload!.DeploymentIdentity,
+                                acceptedLaunchReceipt,
+                                compensationDeadline.Token)
+                            .ConfigureAwait(false);
+                    }
                 }
-                else if (!payloadLaunchAccepted
-                         && (previousHostStoppedForReplacement || previousServiceWasDisplaced))
+                else if (candidateLaunchWasNotSubmitted
+                         || !payloadLaunchAttempted && previousHostStoppedForReplacement)
                 {
                     await TryRestorePreviousPayloadAsync(
                             rollbackPayload,
@@ -477,13 +459,15 @@ public sealed class RuntimeHostProcessManager : IDisposable
             }
             else if (payloadLaunchAccepted)
             {
-                canAbandonPayload = launchedServiceTerminationWasObserved
-                                    || await TryStopFailedPayloadAsync(
-                                             runtimeUrl,
-                                             payload!.DeploymentIdentity,
-                                             acceptedLaunchReceipt,
-                                             compensationDeadline.Token)
-                                         .ConfigureAwait(false);
+                if (!launchedServiceTerminationWasObserved)
+                {
+                    await TryStopFailedPayloadAsync(
+                            runtimeUrl,
+                            payload!.DeploymentIdentity,
+                            acceptedLaunchReceipt,
+                            compensationDeadline.Token)
+                        .ConfigureAwait(false);
+                }
             }
             if (canAbandonPayload && payload is not null)
             {
@@ -721,6 +705,17 @@ public sealed class RuntimeHostProcessManager : IDisposable
                 return true;
             }
 
+            var hostStatus = await _tryGetHostStatusAsync(runtimeUrl, cancellationToken).ConfigureAwait(false);
+            if (hostStatus?.State is HostRuntimeState.Failed or HostRuntimeState.CrashLoop)
+            {
+                throw new InvalidOperationException(
+                    $"Sunder Host Runtime startup failed"
+                    + (string.IsNullOrWhiteSpace(hostStatus.FailureCode)
+                        ? string.Empty
+                        : $" ({hostStatus.FailureCode})")
+                    + $": {hostStatus.FailureMessage ?? hostStatus.State.ToString()}.");
+            }
+
             if (launchReceipt is not null)
             {
                 HostServiceObservation observation;
@@ -811,12 +806,6 @@ public sealed class RuntimeHostProcessManager : IDisposable
     internal static bool CanReuseRunningRuntime(
         RuntimeHandshakeResponse? handshake)
         => RuntimeProtocolCompatibility.IsCompatible(handshake);
-
-    internal static bool ShouldReplaceRunningRuntime(
-        RuntimeHandshakeResponse? handshake)
-        => handshake is not null
-           && string.Equals(handshake.ProtocolIdentity, RuntimeProtocol.Identity, StringComparison.Ordinal)
-           && !RuntimeProtocolCompatibility.IsCompatible(handshake);
 
     private static bool ShouldUseDefaultHostPayloadStore(
         AppStartupOptions startupOptions,

@@ -1,6 +1,6 @@
 # Testing And CI
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
 
 Package tests should cover package-owned behavior at the narrowest boundary, then prove that Release output can be activated and packaged. Do not reference App or Runtime implementation projects just to make a unit test easier.
 
@@ -9,13 +9,13 @@ Package tests should cover package-owned behavior at the narrowest boundary, the
 | Layer | What to verify |
 | --- | --- |
 | Pure unit | DTO validation, schema construction, parsing, domain logic, and cancellation. |
-| Handler/service | Runtime operation, stream, callback/auth, Stack, and background-service behavior using small test implementations of SDK interfaces. |
+| Handler/service | RPC provider, server-stream, callback/auth, Stack, and Worker lifecycle behavior using small test implementations of SDK interfaces. |
 | App view model | State transitions and commands without constructing the Sunder shell. Keep most UI behavior outside the control. |
-| Compiled package | Both module roles, contribution registration, Avalonia XAML, and SDK member names still compile. |
+| Compiled package | Worker V3, generated Protocol bindings, App module registration, Avalonia XAML, and SDK member names still compile. |
 | Artifact | `PackSunderPackage` emits one `.sunderpkg` and the exact archive passes `sunder dev package validate`. |
 | Host smoke | The package activates as a development package; primary App-to-Runtime behavior and unload/reload work. |
 
-The repository's [quickstart project](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds it in normal CI. Generated-template CI separately builds and publishes headless, Avalonia, Stack, and combined variants so the template and `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
+The repository's [quickstart project](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) is the compiled-package layer for these guides. `Sunder.Core.slnx` builds its current-RID Worker/App aggregate in normal CI. Generated-template CI separately builds and publishes universal headless, Avalonia, Stack, and package-dependency variants so all six Worker leaves and the `Sunder.Package.Build` path are exercised with packed NuGet dependencies.
 
 ## Unit-Test Package Code
 
@@ -27,9 +27,11 @@ public async Task Greet_IncrementsPersistedCount()
 {
     var state = new InMemoryKeyValueStore();
     var context = new TestPackageContext(state);
-    using var handler = new GreetHandler(context);
+    using var handler = new GreetingProvider(context);
 
-    var result = await handler.HandleAsync(new GreetRequest("Ada"));
+    var result = await handler.CreateAsync(
+        TestRpcInvocationContext.Create(),
+        new GreetRequest { Name = "Ada" });
 
     Assert.Equal("Hello, Ada!", result.Message);
     Assert.Equal("1", await state.GetValueAsync("greeting.count"));
@@ -42,12 +44,12 @@ Test concurrent calls for handlers documented as concurrent. Test cancellation b
 
 ## Test Activation Code
 
-Module configuration should be deterministic and side-effect free. A small registry spy can verify contribution ids and instances after building a service collection. Useful failures to cover include:
+Worker configuration and App module configuration should be deterministic and side-effect free. Inspect the immutable Worker options and use a small App registry spy to verify contribution ids. Useful failures to cover include:
 
-- duplicate operation, stream, callback, view, settings, exporter, or importer ids;
+- duplicate provider, callback, view, settings, exporter, or importer ids;
 - malformed settings schemas and package-owned metadata;
 - missing DI registrations and reserved host-service replacement;
-- App/Runtime assumptions made during pre-publication composition; and
+- App/Worker assumptions made during pre-publication composition; and
 - cleanup of timers, subscriptions, streams, and other owned resources.
 
 Do not assert host-private concrete types, local-state paths, HTTP endpoints, generated manifest JSON layout, or exception implementation classes. Those are not package-author contracts.
@@ -71,7 +73,7 @@ Launch the exact `sunder-dev` directory produced by the test commit and exercise
 
 - clean activation of every declared role;
 - the primary view and its first navigation;
-- one App-to-Runtime request and any primary stream;
+- one owner RPC request and any primary RPC stream;
 - settings/state persistence across reload;
 - callback/auth cancellation where applicable;
 - repeated rebuild with `--watch`;

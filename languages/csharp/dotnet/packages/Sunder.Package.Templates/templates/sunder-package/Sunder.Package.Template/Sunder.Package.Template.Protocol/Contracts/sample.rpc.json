@@ -1,14 +1,15 @@
 {
-  "descriptorVersion": 1,
+  "descriptorVersion": 2,
   "contractId": "SUNDER_PACKAGE_ID_TEXT.sample",
-  "version": "1.0.0",
-  "services": [
-    {
-      "serviceId": "sample",
-      "methods": [
-        {
-          "methodId": "greet",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "sample": {
+      "methods": {
+        "greet": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
           "requestSchema": {
             "$ref": "#/$defs/SampleRequest"
           },
@@ -16,9 +17,9 @@
             "$ref": "#/$defs/SampleResponse"
           }
         }
-      ]
+      }
     }
-  ],
+  },
   "$defs": {
     "String": {
       "type": "string",

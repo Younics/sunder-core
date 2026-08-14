@@ -1,6 +1,12 @@
+using System.IO.Compression;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Sunder.Cli;
+using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Cli.Tests;
 
@@ -47,6 +53,166 @@ public sealed class CliDelegationTests
         Assert.Null(captured?.Tag);
         Assert.True(captured?.AllowDowngrade);
         Assert.True(captured?.Reinstall);
+    }
+
+    [Fact]
+    public async Task Registry_install_approval_preflights_and_forwards_exact_sensitive_capability_fences()
+    {
+        var consent = new PackageCapabilityConsent(
+            "demo",
+            "1.2.3",
+            new string('a', 64),
+            ["docker-environment.v1"]);
+        RuntimeRegistryPackageRequest? captured = null;
+        var preflightCalls = 0;
+        var runtime = new FakeRuntimeClient
+        {
+            ResolveRegistry = (request, _) =>
+            {
+                preflightCalls++;
+                Assert.Equal("demo", Assert.Single(request.Packages).PackageId);
+                return Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
+                    true, [], [], [], [], [], [consent]));
+            },
+            InstallRegistry = (request, _) =>
+            {
+                captured = request;
+                return Task.FromResult(Success("Installed."));
+            },
+        };
+
+        var result = await CliTestHost.RunAsync([
+            "package", "install", "demo", "--version", "1.2.3", "--approve-sensitive-capabilities",
+        ], runtime);
+
+        Assert.Equal(CliExitCodes.Success, result.ExitCode);
+        Assert.Equal(1, preflightCalls);
+        Assert.Equal([consent], captured?.CapabilityConsents);
+        Assert.Contains("Approved sensitive capability fences", result.Output, StringComparison.Ordinal);
+        Assert.Contains(consent.ManifestSha256, result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Registry_install_without_approval_surfaces_runtime_consent_requirement()
+    {
+        var consent = new PackageCapabilityConsent(
+            "demo",
+            "1.2.3",
+            new string('b', 64),
+            ["docker-environment.v1"]);
+        RuntimeRegistryPackageRequest? captured = null;
+        var runtime = new FakeRuntimeClient
+        {
+            ResolveRegistry = (_, _) => throw new InvalidOperationException("Preflight requires explicit approval."),
+            InstallRegistry = (request, _) =>
+            {
+                captured = request;
+                return Task.FromResult(new RuntimeRegistryPackageChangeResult(
+                    false,
+                    RuntimeRegistryErrorCode.ConsentRequired,
+                    "Sensitive capability consent is required.",
+                    false,
+                    false,
+                    [],
+                    ["Sensitive capability consent is required."],
+                    [],
+                    [],
+                    [consent]));
+            },
+        };
+
+        var result = await CliTestHost.RunAsync([
+            "package", "install", "demo", "--version", "1.2.3",
+        ], runtime);
+
+        Assert.Equal(CliExitCodes.Conflict, result.ExitCode);
+        Assert.Null(captured?.CapabilityConsents);
+        Assert.Contains("Required sensitive capability consent", result.Output, StringComparison.Ordinal);
+        Assert.Contains("--approve-sensitive-capabilities", result.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Local_upgrade_inherits_sensitive_capabilities_without_redundant_consent(bool approve)
+    {
+        var package = CreateSensitivePackageArchive();
+        var applyCalls = 0;
+        var runtime = new FakeRuntimeClient
+        {
+            Installed = _ => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([
+                InstalledPackage("demo.sensitive", [SunderSdkCapabilities.DockerEnvironmentV1]),
+            ]),
+            ApplyLocal = (_, packageId, _, _, _) =>
+            {
+                applyCalls++;
+                Assert.Equal("demo.sensitive", packageId);
+                return Task.FromResult(PackageSuccess("Updated."));
+            },
+            ApplyLocalWithConsent = (_, _, _, _, _, _) =>
+                throw new InvalidOperationException("Inherited capabilities must not send redundant consent."),
+        };
+        try
+        {
+            var arguments = new List<string> { "package", "install", "--file", package.ArchivePath };
+            if (approve) arguments.Add("--approve-sensitive-capabilities");
+
+            var result = await CliTestHost.RunAsync(arguments.ToArray(), runtime);
+
+            Assert.Equal(CliExitCodes.Success, result.ExitCode);
+            Assert.Equal(1, applyCalls);
+            Assert.DoesNotContain("Required sensitive capability consent", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(package.RootPath, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Local_upgrade_requires_exact_manifest_fenced_consent_only_for_escalation(bool approve)
+    {
+        var package = CreateSensitivePackageArchive();
+        PackageCapabilityConsent? captured = null;
+        var runtime = new FakeRuntimeClient
+        {
+            Installed = _ => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([
+                InstalledPackage("demo.sensitive", []),
+            ]),
+            ApplyLocal = (_, _, _, _, _) =>
+                throw new InvalidOperationException("An unapproved escalation must not be applied."),
+            ApplyLocalWithConsent = (_, _, _, _, consent, _) =>
+            {
+                captured = consent;
+                return Task.FromResult(PackageSuccess("Updated."));
+            },
+        };
+        try
+        {
+            var arguments = new List<string> { "package", "install", "--file", package.ArchivePath };
+            if (approve) arguments.Add("--approve-sensitive-capabilities");
+
+            var result = await CliTestHost.RunAsync(arguments.ToArray(), runtime);
+
+            Assert.Equal(approve ? CliExitCodes.Success : CliExitCodes.Conflict, result.ExitCode);
+            if (!approve)
+            {
+                Assert.Null(captured);
+                Assert.Contains("Required sensitive capability consent", result.Output, StringComparison.Ordinal);
+                return;
+            }
+            var consent = Assert.IsType<PackageCapabilityConsent>(captured);
+            Assert.Equal("demo.sensitive", consent.PackageId);
+            Assert.Equal("2.0.0", consent.PackageVersion);
+            Assert.Equal(package.ManifestSha256, consent.ManifestSha256);
+            Assert.Equal([SunderSdkCapabilities.DockerEnvironmentV1], consent.Capabilities);
+        }
+        finally
+        {
+            Directory.Delete(package.RootPath, recursive: true);
+        }
     }
 
     [Fact]
@@ -398,4 +564,107 @@ public sealed class CliDelegationTests
 
     private static RuntimeRegistryPackageChangeResult Success(string message)
         => new(true, RuntimeRegistryErrorCode.None, message, true, false, [], [], ["demo"], []);
+
+    private static PackageOperationResult PackageSuccess(string message)
+        => new(true, message, true, false, [], []);
+
+    private static InstalledPackageDescriptor InstalledPackage(
+        string packageId,
+        IReadOnlyList<string> capabilities)
+        => new(
+            packageId,
+            packageId,
+            "1.0.0",
+            PackageHostRoles.Runtime,
+            Summary: null,
+            Icon: null,
+            IsEnabled: true,
+            DependsOn: [],
+            DateTimeOffset.UnixEpoch,
+            StatusMessage: null,
+            GrantedSensitiveCapabilities: capabilities);
+
+    private static SensitivePackageArchive CreateSensitivePackageArchive()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "sunder-cli-capability-tests",
+            Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var manifestDirectory = Path.Combine(source, "manifest");
+        var rid = RuntimeInformation.RuntimeIdentifier;
+        var executableName = rid.StartsWith("win-", StringComparison.Ordinal) ? "worker.exe" : "worker";
+        var payloadDirectory = Path.Combine(source, "payload", "runtime", rid, "lib");
+        Directory.CreateDirectory(manifestDirectory);
+        Directory.CreateDirectory(payloadDirectory);
+        File.WriteAllBytes(Path.Combine(payloadDirectory, executableName), [0x53, 0x55, 0x4e, 0x44, 0x45, 0x52]);
+        var manifest = new SunderPackageManifest
+        {
+            ArchiveFormatVersion = SunderPackageFormat.CurrentArchiveFormatVersion,
+            ManifestVersion = SunderPackageFormat.CurrentManifestVersion,
+            Id = "demo.sensitive",
+            Name = "Sensitive Demo",
+            Version = "2.0.0",
+            DependsOn = [],
+            ContractBundles = [],
+            UsesContracts = [],
+            Provides = [],
+            Targets =
+            [
+                new SunderPackageTargetManifest
+                {
+                    Role = SunderPackageFormat.RuntimeHostRole,
+                    Rid = rid,
+                    Kind = SunderPackageFormat.WorkerTargetKind,
+                    EntryPoint = $"lib/{executableName}",
+                    TargetFramework = "net10.0",
+                    SdkVersion = "1.1.0",
+                    RequiredHostCapabilities =
+                    [
+                        "sdk-baseline-1-1.v1",
+                        "core.v1",
+                        SunderSdkCapabilities.DockerEnvironmentV1,
+                        "rpc.v2",
+                        "worker-protocol.v3",
+                    ],
+                },
+            ],
+        };
+        var manifestPath = Path.Combine(
+            source,
+            SunderPackageFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar));
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest));
+        var manifestSha256 = HashFile(manifestPath);
+        var indexPath = Path.Combine(
+            source,
+            SunderPackageFormat.ContentIndexPath.Replace('/', Path.DirectorySeparatorChar));
+        var entries = Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+            .Where(path => !string.Equals(path, indexPath, StringComparison.Ordinal))
+            .Select(path => new FileInfo(path))
+            .Select(file => new SunderPackageContentIndexEntry(
+                Path.GetRelativePath(source, file.FullName).Replace('\\', '/'),
+                HashFile(file.FullName),
+                file.Length))
+            .OrderBy(static entry => entry.Path, StringComparer.Ordinal)
+            .ToArray();
+        File.WriteAllText(
+            indexPath,
+            JsonSerializer.Serialize(new SunderPackageContentIndex(
+                SunderPackageFormat.CurrentContentIndexVersion,
+                entries)));
+        var archivePath = Path.Combine(root, "demo.sensitive.sunderpkg");
+        ZipFile.CreateFromDirectory(source, archivePath);
+        return new SensitivePackageArchive(root, archivePath, manifestSha256);
+    }
+
+    private static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private sealed record SensitivePackageArchive(
+        string RootPath,
+        string ArchivePath,
+        string ManifestSha256);
 }

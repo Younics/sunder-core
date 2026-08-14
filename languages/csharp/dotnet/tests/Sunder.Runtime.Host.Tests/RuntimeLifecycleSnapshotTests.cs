@@ -43,10 +43,12 @@ public sealed class RuntimeLifecycleSnapshotTests
             NullLogger<RuntimeSessionOwner>.Instance,
             new RuntimeEventStreamService());
 
-        owner.MarkFailed("bootstrap failed", ["warning"], ["package failed"]);
+        owner.MarkFailed("runtime.v1.package-validation", "bootstrap failed", ["warning"], ["package failed"]);
 
         var snapshot = owner.GetSnapshot();
         Assert.Equal(RuntimeBootstrapState.Failed, snapshot.BootstrapState);
+        Assert.Equal("runtime.v1.package-validation", owner.GetStartupFailure()?.Code);
+        Assert.Equal("bootstrap failed", owner.GetStartupFailure()?.Message);
         Assert.Contains("warning", snapshot.Warnings);
         Assert.Contains("package failed", snapshot.Errors);
     }
@@ -331,33 +333,25 @@ public sealed class RuntimeLifecycleSnapshotTests
             null,
             null,
             0);
-        var assemblyPath = typeof(RuntimeLifecycleSnapshotTests).Assembly.Location;
         var loaded = new ActiveLoadedPackage(
             descriptor,
             new RuntimePackageSource(packageId, PackageSourceKind.Dev, root),
             null,
             new JsonPackageKeyValueStore(Path.Combine(root, "state.json")),
             new JsonPackageSecretsStore(Path.Combine(root, "secrets.json")),
-            null,
-            new Dictionary<string, IPackageCallbackHandler>(),
-            [],
-            new ThrowingServiceProvider(),
-            new RuntimePackageLoadContext(
-                packageId,
-                assemblyPath,
-                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
-            EmptyTestPackageSettings.Instance);
+            new LocalPackageFileStore(Path.Combine(root, "files")),
+            EmptyTestPackageSettings.Instance,
+            new ThrowingRuntimePackageWorker());
         return new ActivePackageSession(
             root,
             new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase) { [packageId] = loaded },
             new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase) { [packageId] = sessionDescriptor });
     }
 
-    private sealed class ThrowingServiceProvider : IServiceProvider, IDisposable
+    private sealed class ThrowingRuntimePackageWorker : TestRuntimePackageWorker
     {
-        public object? GetService(Type serviceType) => null;
-
-        public void Dispose() => throw new IOException("Injected cleanup failure.");
+        public override ValueTask DisposeAsync()
+            => ValueTask.FromException(new IOException("Injected cleanup failure."));
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider

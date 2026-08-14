@@ -98,6 +98,15 @@ internal sealed class PackageSettings(JsonPackageKeyValueStore store) : IPackage
         CancellationToken cancellationToken = default)
         => store.ReplaceValuesAsync(values, cancellationToken);
 
+    internal Task<AtomicFileSnapshot> CaptureMigrationSnapshotAsync(
+        CancellationToken cancellationToken = default)
+        => store.CaptureMigrationSnapshotAsync(cancellationToken);
+
+    internal Task RestoreMigrationSnapshotAsync(
+        AtomicFileSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+        => store.RestoreMigrationSnapshotAsync(snapshot, cancellationToken);
+
     private PackageSettingsField GetField(string key)
     {
         PackageStorageGuards.Key(key, nameof(key));

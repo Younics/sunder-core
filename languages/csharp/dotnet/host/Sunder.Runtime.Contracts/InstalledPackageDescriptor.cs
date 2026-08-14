@@ -12,11 +12,14 @@ public sealed record InstalledPackageDescriptor(
     DateTimeOffset InstalledAtUtc,
     string? StatusMessage,
     IReadOnlyList<PackageRpcContractUseDescriptor>? RpcContractUses = null,
-    InstalledPackageProvenance? Provenance = null)
+    InstalledPackageProvenance? Provenance = null,
+    IReadOnlyList<string>? GrantedSensitiveCapabilities = null)
 {
     private IReadOnlyList<PackageRpcContractUseDescriptor> _rpcContractUses =
         RuntimeContractCollections.Freeze(RpcContractUses ?? []);
     private InstalledPackageProvenance _provenance = Provenance ?? InstalledPackageProvenance.Unknown;
+    private IReadOnlyList<string> _grantedSensitiveCapabilities =
+        RuntimeContractCollections.Freeze(GrantedSensitiveCapabilities ?? []);
 
     public IReadOnlyList<PackageRpcContractUseDescriptor> RpcContractUses
     {
@@ -28,5 +31,11 @@ public sealed record InstalledPackageDescriptor(
     {
         get => _provenance;
         init => _provenance = value ?? InstalledPackageProvenance.Unknown;
+    }
+
+    public IReadOnlyList<string> GrantedSensitiveCapabilities
+    {
+        get => _grantedSensitiveCapabilities;
+        init => _grantedSensitiveCapabilities = RuntimeContractCollections.Freeze(value);
     }
 }

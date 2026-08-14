@@ -18,7 +18,7 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
         [typeof(Avalonia.Markup.Xaml.AvaloniaXamlLoader).Assembly.GetName().Name!] = typeof(Avalonia.Markup.Xaml.AvaloniaXamlLoader).Assembly,
         [typeof(IServiceCollection).Assembly.GetName().Name!] = typeof(IServiceCollection).Assembly,
         [typeof(ILoggerFactory).Assembly.GetName().Name!] = typeof(ILoggerFactory).Assembly,
-        [typeof(ISunderRuntimePackageModule).Assembly.GetName().Name!] = typeof(ISunderRuntimePackageModule).Assembly,
+        [typeof(ISunderAppPackageModule).Assembly.GetName().Name!] = typeof(ISunderAppPackageModule).Assembly,
         [typeof(IAvaloniaPackageContributionRegistry).Assembly.GetName().Name!] = typeof(IAvaloniaPackageContributionRegistry).Assembly,
         [typeof(IPackageStackExporter).Assembly.GetName().Name!] = typeof(IPackageStackExporter).Assembly,
     };

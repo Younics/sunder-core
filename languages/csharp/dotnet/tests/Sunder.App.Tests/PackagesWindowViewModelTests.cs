@@ -1,6 +1,7 @@
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
+using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
@@ -25,6 +26,30 @@ public sealed class PackagesWindowViewModelTests
 
         Assert.Equal(["agent"], executor.EnabledPackageIds);
         Assert.Equal("Queued enable for agent.", viewModel.Operations.StatusText);
+    }
+
+    [Fact]
+    public async Task UnknownProvenancePackage_OffersExplicitRegistrySourceAdoption()
+    {
+        var package = CreateInstalledPackage("sunder.package.agent", isEnabled: false);
+        var runtimeClient = new FakeRuntimeApiClient([package]);
+        var executor = new FakePackageOperationExecutor();
+        using var viewModel = CreateViewModel(runtimeClient, operationExecutor: executor);
+        viewModel.RegistryUrlText = "https://registry.example/";
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.ShowAdoptSelectedInstalledPackageSource);
+        Assert.True(viewModel.AdoptSelectedInstalledPackageSourceCommand.CanExecute(null));
+        Assert.True(viewModel.EnableSelectedPackageCommand.CanExecute(null));
+
+        await viewModel.AdoptSelectedInstalledPackageSourceCommand.ExecuteAsync(null);
+
+        Assert.Equal("sunder.package.agent", executor.AdoptedPackageId);
+        Assert.Equal(new Uri("https://registry.example/"), executor.AdoptionRegistryUrl);
+        Assert.Equal(
+            "Queued Registry source adoption for sunder.package.agent.",
+            viewModel.Operations.StatusText);
     }
 
     [Fact]
@@ -174,8 +199,10 @@ public sealed class PackagesWindowViewModelTests
                 rpcContractUses:
                 [
                     new PackageRpcContractUseDescriptor(
+                        SunderPackageFormat.RuntimeHostRole,
                         "dev.sunder.execution",
-                        ">=1.0.0 <2.0.0",
+                        "1.4.2+desktop",
+                        new string('a', 64),
                         Required: true,
                         Actions: ["invoke", "discover"]),
                 ]),
@@ -186,8 +213,11 @@ public sealed class PackagesWindowViewModelTests
 
         var package = Assert.IsType<PackageCatalogItemViewModel>(viewModel.SelectedInstalledPackage);
         var access = Assert.Single(package.RpcContractUses);
+        Assert.Equal(SunderPackageFormat.RuntimeHostRole, access.Role);
         Assert.Equal("dev.sunder.execution", access.ContractId);
-        Assert.Equal(">=1.0.0 <2.0.0", access.VersionRange);
+        Assert.Equal("1.4.2+desktop", access.ContractVersion);
+        Assert.Equal("Runtime caller", access.CallerRoleText);
+        Assert.Equal("Version 1.4.2+desktop", access.ContractVersionText);
         Assert.Equal("Required", access.RequirementText);
         Assert.Equal("discover | invoke", access.ActionsText);
         Assert.Equal("1 contract | 2 actions", package.RpcAccessSummary);
@@ -205,8 +235,10 @@ public sealed class PackagesWindowViewModelTests
                     rpcContractUses:
                     [
                         new PackageRpcContractUseDescriptor(
+                            SunderPackageFormat.AppHostRole,
                             "dev.sunder.tools",
                             "1.0.0",
+                            new string('b', 64),
                             Required: true,
                             Actions: ["invoke"]),
                     ]),
@@ -225,6 +257,40 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task PackageSnapshotReadiness_RemainsCurrentAfterOlderCatalogRefresh()
+    {
+        var ready = CreateSessionPackage("agent", PackageReadinessState.Ready);
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage("agent", isEnabled: true),
+        ])
+        {
+            SessionPackages = [ready],
+        };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.InitializeAsync();
+        var snapshot = new RuntimePackageSnapshot(
+            Guid.NewGuid(),
+            SessionGeneration: 1,
+            EventSequence: 2,
+            RuntimeBootstrapState.Ready,
+            ActivePackages: [],
+            SessionPackages: [ready with { Readiness = PackageReadinessState.Degraded }],
+            Warnings: [],
+            Errors: []);
+
+        await viewModel.ApplyPackageSnapshotAsync(snapshot, CancellationToken.None);
+        Assert.Equal(
+            "Degraded",
+            Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "agent").StatusText);
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            "Degraded",
+            Assert.Single(viewModel.Installed.Packages, package => package.PackageId == "agent").StatusText);
+    }
+
+    [Fact]
     public async Task DevOverlayDetails_UseActiveSessionRpcAccessInsteadOfInstalledManifest()
     {
         var runtimeClient = new FakeRuntimeApiClient(
@@ -235,8 +301,10 @@ public sealed class PackagesWindowViewModelTests
                 rpcContractUses:
                 [
                     new PackageRpcContractUseDescriptor(
+                        SunderPackageFormat.RuntimeHostRole,
                         "example.installed",
                         "1.0.0",
+                        new string('c', 64),
                         Required: true,
                         Actions: ["invoke"]),
                 ]),
@@ -260,8 +328,10 @@ public sealed class PackagesWindowViewModelTests
                     RpcContractUses:
                     [
                         new PackageRpcContractUseDescriptor(
+                            SunderPackageFormat.AppHostRole,
                             "example.development",
                             "2.0.0",
+                            new string('d', 64),
                             Required: true,
                             Actions: ["discover", "invoke"]),
                     ]),
@@ -272,7 +342,9 @@ public sealed class PackagesWindowViewModelTests
         await viewModel.InitializeAsync();
 
         var access = Assert.Single(viewModel.SelectedInstalledPackage!.RpcContractUses);
+        Assert.Equal(SunderPackageFormat.AppHostRole, access.Role);
         Assert.Equal("example.development", access.ContractId);
+        Assert.Equal("2.0.0", access.ContractVersion);
         Assert.Equal("discover | invoke", access.ActionsText);
     }
 
@@ -593,8 +665,10 @@ public sealed class PackagesWindowViewModelTests
                     version,
                     [
                         new RegistryPackageContractUse(
+                            SunderPackageFormat.AppHostRole,
                             "dev.sunder.execution",
-                            ">=1.0.0 <2.0.0",
+                            "1.7.3",
+                            new string('e', 64),
                             Required: true,
                             Actions: ["invoke", "discover"]),
                     ]));
@@ -610,7 +684,11 @@ public sealed class PackagesWindowViewModelTests
         await WaitForConditionAsync(() => viewModel.Marketplace.RpcContractUses.Count == 1);
 
         var access = Assert.Single(viewModel.Marketplace.RpcContractUses);
+        Assert.Equal(SunderPackageFormat.AppHostRole, access.Role);
         Assert.Equal("dev.sunder.execution", access.ContractId);
+        Assert.Equal("1.7.3", access.ContractVersion);
+        Assert.Equal("App caller", access.CallerRoleText);
+        Assert.Equal("Version 1.7.3", access.ContractVersionText);
         Assert.Equal("discover | invoke", access.ActionsText);
         Assert.Equal("1 contract | 2 actions", viewModel.Marketplace.RpcAccessSummary);
     }
@@ -943,6 +1021,24 @@ public sealed class PackagesWindowViewModelTests
                 : null
         );
 
+    private static SessionPackageDescriptor CreateSessionPackage(
+        string packageId,
+        PackageReadinessState readiness)
+        => new(
+            packageId,
+            ToDisplayName(packageId),
+            "1.0.0",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
+            Icon: null,
+            IsEnabled: true,
+            readiness,
+            Views: [],
+            FailureOrigin: null,
+            LastError: null,
+            LastFailureAtUtc: null,
+            FailureCount: 0,
+            RpcContractUses: []);
+
     private static RegistryPackageSummary CreateRegistryPackage(string packageId, string latestVersion = "1.0.0") =>
         new(
             packageId,
@@ -990,8 +1086,8 @@ public sealed class PackagesWindowViewModelTests
             ContractBundles: [],
             UsesContracts: usesContracts ?? [],
             Providers: [],
-            ManifestFormatVersion: 1,
-            ArchiveFormatVersion: 1,
+            ManifestFormatVersion: SunderPackageFormat.CurrentManifestVersion,
+            ArchiveFormatVersion: SunderPackageFormat.CurrentArchiveFormatVersion,
             PublishedAtUtc: DateTimeOffset.UtcNow,
             TrustedArtifactOrigins: []);
 
@@ -1046,6 +1142,10 @@ public sealed class PackagesWindowViewModelTests
 
         public string? MarketplaceInstallVersion { get; private set; }
 
+        public string? AdoptedPackageId { get; private set; }
+
+        public Uri? AdoptionRegistryUrl { get; private set; }
+
         public BackgroundProcessSnapshot? GetActiveOperationForPackage(string packageId) => null;
 
         public BackgroundProcessSnapshot? GetActivePackageStoreOperation() => null;
@@ -1069,6 +1169,16 @@ public sealed class PackagesWindowViewModelTests
             string displayName,
             string version)
             => CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName);
+
+        public BackgroundProcessSnapshot EnqueueRegistrySourceAdoption(
+            string packageId,
+            string displayName,
+            Uri registryUrl)
+        {
+            AdoptedPackageId = packageId;
+            AdoptionRegistryUrl = registryUrl;
+            return CreateSnapshot(packageId, PackageOperationKind.AdoptRegistrySource, displayName);
+        }
 
         public BackgroundProcessSnapshot EnqueueUpdateAll()
             => CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages");
@@ -1489,6 +1599,9 @@ public sealed class PackagesWindowViewModelTests
 
         public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Updated packages.", true, false, [], [], [], []));
+
+        public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimeRegistryPackageChangeResult(true, RuntimeRegistryErrorCode.None, "Adopted package source.", true, false, [], [], [request.PackageId], []));
 
         public void Dispose() { }
 

@@ -22,8 +22,14 @@
     <Compile Include="..\PackageMetadata.cs" Link="PackageMetadata.cs" />
     <SunderContractBundle Include="..\Sunder.Package.Template.Protocol\Contracts\sample.rpc.json"
                           ContractId="SUNDER_PACKAGE_ID_TEXT.sample"
-                          Version="1.0.0"
-                          DescriptorPath="contracts/sample.rpc.json" />
+                          Version="2.0.0"
+                          DescriptorPath="contracts/sample.rpc.json"
+                          Exposure="package" />
+    <SunderUsesContract Include="SUNDER_PACKAGE_ID_TEXT.sample"
+                        Role="app"
+                        ContractVersion="2.0.0"
+                        Required="true"
+                        Actions="discover;invoke" />
   </ItemGroup>
 
 </Project>

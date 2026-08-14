@@ -41,6 +41,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
         CanEnable = state.CanEnable;
         CanDisable = state.CanDisable;
         CanUninstall = state.CanUninstall;
+        CanAdoptRegistrySource = state.CanAdoptRegistrySource;
         AvailableVersion = state.AvailableVersion;
         DeprecatedUpdateMessage = state.DeprecatedUpdateMessage;
         OperationHint = state.OperationHint;
@@ -79,6 +80,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     public bool CanDisable { get; }
 
     public bool CanUninstall { get; }
+
+    public bool CanAdoptRegistrySource { get; }
 
     public string? AvailableVersion { get; }
 
@@ -150,6 +153,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
             installedPackage is { IsEnabled: false },
             installedPackage is { IsEnabled: true },
             installedPackage is not null,
+            installedPackage is not null
+            && installedPackage.Provenance.SourceKind != InstalledPackageSourceKind.Registry,
             update?.AvailableVersion,
             update?.DeprecatedMessage,
             ToOperationHint(installedPackage, update),
@@ -232,6 +237,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
             ? "Disable or uninstall this package. Running shell changes apply live when possible."
             : "Enable or uninstall this package. Running shell changes apply live when possible.";
     }
+
 }
 
 internal sealed record PackageCatalogItemState(
@@ -250,6 +256,7 @@ internal sealed record PackageCatalogItemState(
     bool CanEnable,
     bool CanDisable,
     bool CanUninstall,
+    bool CanAdoptRegistrySource,
     string? AvailableVersion,
     string? DeprecatedUpdateMessage,
     string OperationHint,

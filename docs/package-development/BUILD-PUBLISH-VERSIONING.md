@@ -1,31 +1,40 @@
 # Build, Validate, Publish, And Version
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 5. Use the matching `sdk/v*` tag for released build behavior.
+> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V3, .NET 10, and Runtime protocol revision 8. Use the matching `sdk/v*` tag for released build behavior.
 
 `Sunder.Package.Build` turns compiled package metadata into generated development output and immutable distributable archives. Package authors own C# metadata and normal MSBuild version properties; they do not maintain `sunder-package.json`.
 
-## Project Baseline
+## Worker Leaf Baseline
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Version>1.2.3</Version>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <PublishSingleFile>false</PublishSingleFile>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk" Version="[1.1.0,1.2.0)" />
+    <PackageReference Include="Sunder.Sdk.Worker" Version="[1.1.0,1.2.0)" />
     <PackageReference Include="Sunder.Package.Build"
                       Version="[1.1.0,1.2.0)"
                       PrivateAssets="all" />
+    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
+                         Role="runtime"
+                         Rid="$(RuntimeIdentifier)"
+                         Kind="worker" />
   </ItemGroup>
 </Project>
 ```
 
-Add `Sunder.Sdk.Avalonia` or `Sunder.Sdk.Stacks` with the same coordinated minor range only when used. App projects also reference the Avalonia packages they use directly. `Sunder.Package.Build` has no consumer compile/runtime asset and must remain private build tooling.
+Use one Worker build per supported exact RID and aggregate the leaves for a universal package. A C# Runtime leaf always uses the official apphost name derived from the project target name: `.exe` for a Windows RID and the extensionless apphost for Linux/macOS. Custom C# worker entry-point names, managed `.dll` entry points, and an apphost stored in a shared layer are rejected. App projects reference `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, and the Avalonia packages they use directly. Add `Sunder.Sdk.Stacks` to a Worker only when used. `Sunder.Package.Build` has no consumer compile/runtime asset and must remain private build tooling.
 
 Declare identity and display metadata in the target assemblies. Aggregate leaves must compile the same metadata:
 
@@ -41,7 +50,7 @@ using Sunder.Sdk.Packaging;
 
 `Version` is separate assembly/package build metadata. Runtime dependencies use `[assembly: SunderPackageDependency(...)]`; NuGet `PackageReference` items are compile/build dependencies and do not create installed-package dependencies.
 
-The generated aggregate imports `Sunder.Package.props` from every leaf. Edit its single `<Version>` value; do not duplicate versions across the aggregate, Runtime, App, or Protocol projects. A standalone custom project may keep the same single `Version` property in its project or a shared imported props file.
+The generated aggregate imports `Sunder.Package.props` from every leaf. Edit its single `<Version>` value; do not duplicate versions across the Aggregate, Worker, App, or Protocol projects. A standalone custom project may keep the same single `Version` property in its project or a shared imported props file.
 
 ## Build Output
 
@@ -67,9 +76,27 @@ bin/Debug/net10.0/sunder-dev/
       <rid>/
 ```
 
-It contains generated metadata, exact target requirements, authored assemblies, eligible copy-local runtime dependencies, native runtime assets, package-local RPC descriptors, and files copied from source `Assets/**`. Host-provided SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
+It contains generated metadata, exact target requirements, the Worker's complete self-contained publish closure, App assemblies and eligible dependencies, package-local RPC descriptors, and files copied from source `Assets/**`. Host-provided App SDK/framework boundary assemblies are excluded. Do not edit, commit, or use `sunder-dev` as the source of truth.
 
 `SunderDevOutputPath` may override only the direct `TargetDir/sunder-dev` child. This restriction lets the build safely delete stale generated output without accepting an arbitrary directory.
+
+## Sign Worker Binaries
+
+Platform signing must mutate Sunder's private intermediate copy of the computed self-contained publish closure before it is indexed. Append a project-owned target to `SunderPackageWorkerSigningTargets`:
+
+```xml
+<PropertyGroup>
+  <SunderPackageWorkerSigningTargets>$(SunderPackageWorkerSigningTargets);SignSunderWorkerPublishFiles</SunderPackageWorkerSigningTargets>
+</PropertyGroup>
+
+<Target Name="SignSunderWorkerPublishFiles">
+  <!-- Invoke the platform signer over @(SunderPackageWorkerSigningFile). -->
+</Target>
+```
+
+`@(SunderPackageWorkerSigningFile)` is a private copied instance of the complete `ComputeFilesToPublish` closure; signing it cannot mutate NuGet or .NET runtime-pack caches. `$(SunderPackageWorkerEntryPointRelativePath)` identifies the official apphost within that item set. Sign the supplied files in platform-required order and the apphost last, mutate them in place, and fail the target when signing fails. The hook runs after publish-file computation and before `sunder-dev` copy/index/validation. Do not sign or edit `sunder-dev` or the final archive afterward.
+
+Embedded Authenticode or Apple code signatures are covered by the normal content index. They do not add a Sunder package signature or publisher attestation. Any post-index byte change causes validation and packing to fail.
 
 ## Pack An Archive
 
@@ -89,13 +116,13 @@ bin/Release/net10.0/MyPackage.1.2.3.sunderpkg
 dotnet publish .\MyPackage.csproj -c Release --no-restore
 ```
 
-The pack task validates its indexed staging tree, creates the deterministic archive, then independently extracts and validates that exact written file. A final validation failure removes the new archive. `SunderPackageFileName`, `SunderPackageOutputPath`, and `SunderPublishPackageOutputPath` customize names/locations when release automation needs them. Prefer defaults unless the pipeline has one explicit artifact convention.
+The pack task validates its existing indexed staging tree without rewriting the index, creates the deterministic archive, then independently extracts and validates that exact written file. A post-signing mutation therefore fails instead of being assigned a new hash. A final validation failure removes the new archive. `SunderPackageFileName`, `SunderPackageOutputPath`, and `SunderPublishPackageOutputPath` customize names/locations when release automation needs them. Prefer defaults unless the pipeline has one explicit artifact convention.
 
 The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for generated manifest, development output, archive layout, hashes, safety checks, and size limits.
 
 ## Capability Inference
 
-Build tooling scans each managed target assembly and its authored project-reference outputs, including compiler-generated async, iterator, and lambda bodies. It reads capability annotations from the resolved `Sunder.Sdk*` assemblies, closes capability dependencies, and detects Sunder theme resources in source/compiled Avalonia XAML.
+Build tooling scans each C# target assembly and its authored project-reference outputs, including compiler-generated async, iterator, and lambda bodies. It reads capability annotations from the resolved `Sunder.Sdk*` assemblies, closes capability dependencies, and detects Sunder theme resources in source/compiled Avalonia XAML. Every Runtime target is also stamped with `rpc.v2` and must infer `worker-protocol.v3` plus the SDK-version-matched baseline.
 
 Inference fails closed for unreadable metadata, unresolved IL, or unclassified dynamic/reflection access. For a genuine dynamic call site, declare the capability and acknowledge the exact diagnostic location:
 
@@ -148,10 +175,10 @@ Package versions are strict SemVer 2.0 values. Use:
 
 - patch for backward-compatible fixes;
 - minor for backward-compatible package features or additive contracts;
-- major for breaking package behavior, persisted schema, operation DTO, or public contracts changes; and
+- major for breaking package behavior, persisted schema, RPC contract, or public contracts changes; and
 - prerelease identifiers for artifacts that should not automatically become `latest`.
 
-Keep operation/stream ids, view ids, settings keys, callback handler ids, Stack contributor/schema ids, and package ids stable. Version serialized DTOs and persisted data additively where possible. If a bad immutable version is published, publish a fixed version and deprecate or yank the bad version; never replace its bytes.
+Keep RPC provider/service/method ids, view ids, settings keys, callback handler ids, Stack contributor/schema ids, and package ids stable. Evolve RPC descriptors and persisted data additively where possible. If a bad immutable version is published, publish a fixed version and deprecate or yank the bad version; never replace its bytes.
 
 Sunder SDK compatibility is capability-based, with `[1.1.0,1.2.0)` as the current coordinated package line. Do not widen the range across an untested SDK minor. See [Sunder SDK Compatibility](../SUNDER-SDK-COMPATIBILITY.md) before changing SDK references, RPC descriptors, or package-local generated bindings.
 

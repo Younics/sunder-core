@@ -55,6 +55,9 @@ internal static class RuntimeContractTestData
             Name = packageId,
             Version = "1.0.0",
             DependsOn = [],
+            ContractBundles = [],
+            UsesContracts = [],
+            Provides = [],
             Targets = (runtimeIdentifiers ?? [RuntimeInformation.RuntimeIdentifier])
                 .Select(rid => new SunderPackageTargetManifest
                 {

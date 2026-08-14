@@ -41,10 +41,13 @@
               <DataTemplate x:DataType="vm:PackageRpcAccessItemViewModel">
                 <Border Classes="settings-note-card" Margin="0,0,0,8">
                   <StackPanel Spacing="4">
-                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                       <TextBlock FontWeight="SemiBold" Text="{Binding ContractId}" />
-                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding VersionRange}" />
-                      <TextBlock Grid.Column="2" Classes="caption" Text="{Binding RequirementText}" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding RequirementText}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="8">
+                      <TextBlock Classes="caption" Text="{Binding CallerRoleText}" />
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding ContractVersionText}" />
                     </Grid>
                     <TextBlock Classes="muted" Text="{Binding ActionsText}" TextWrapping="Wrap" />
                   </StackPanel>

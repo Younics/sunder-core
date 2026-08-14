@@ -205,6 +205,7 @@ public sealed class UserHostPayloadStoreTests
                     HostProtocolFeatures.RuntimeGatewayV1,
                     HostProtocolFeatures.RuntimeLifecycleV1,
                     HostProtocolFeatures.DurableOperationsV1,
+                    HostProtocolFeatures.RuntimeStartupDiagnosticsV1,
                 ],
                 new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "different", "different"))
             {

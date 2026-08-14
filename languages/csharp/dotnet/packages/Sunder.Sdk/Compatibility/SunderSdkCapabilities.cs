@@ -1,6 +1,6 @@
 namespace Sunder.Sdk.Compatibility;
 
-/// <summary>Defines V1 host capability identifiers emitted into package manifests.</summary>
+/// <summary>Defines versioned host capability identifiers emitted into package manifests.</summary>
 public static class SunderSdkCapabilities
 {
     /// <summary>Clean-break Sunder SDK 1.1 contract baseline.</summary>
@@ -17,9 +17,9 @@ public static class SunderSdkCapabilities
     public const string SettingsViewsV1 = "settings-views.v1";
     /// <summary>Settings navigation contracts.</summary>
     public const string SettingsNavigationV1 = "settings-navigation.v1";
-    /// <summary>Background service contracts.</summary>
+    /// <summary>Activation-scoped worker background service contracts.</summary>
     public const string BackgroundServicesV1 = "background-services.v1";
-    /// <summary>Post-publication Runtime generation lifecycle contracts.</summary>
+    /// <summary>Staged worker generation lifecycle contracts.</summary>
     public const string RuntimeGenerationsV1 = "runtime-generations.v1";
     /// <summary>Background process contracts.</summary>
     public const string BackgroundProcessesV1 = "background-processes.v1";
@@ -33,6 +33,8 @@ public static class SunderSdkCapabilities
     public const string StorageKeyMigrationV1 = "storage.key-migration.v1";
     /// <summary>Activation-owned role-local workspace contracts.</summary>
     public const string RoleLocalWorkspaceV1 = "role-local-workspace.v1";
+    /// <summary>Consent-gated propagation of allowlisted Docker CLI connection variables to Runtime workers.</summary>
+    public const string DockerEnvironmentV1 = "docker-environment.v1";
     /// <summary>Secret storage contracts.</summary>
     public const string SecretsV1 = "secrets.v1";
     /// <summary>Logging contracts.</summary>
@@ -43,12 +45,10 @@ public static class SunderSdkCapabilities
     public const string ShellViewV1 = "shell-view.v1";
     /// <summary>Hidden package-view navigation preparation and presentation acknowledgement contracts.</summary>
     public const string ViewNavigationPreparationV1 = "view-navigation-preparation.v1";
-    /// <summary>Package-scoped App-to-Runtime operation contracts.</summary>
-    public const string RuntimeOperationsV1 = "runtime-operations.v1";
-    /// <summary>Sanitized package-visible Runtime invocation failure contracts.</summary>
-    public const string RuntimeInvocationErrorsV1 = "runtime-invocation-errors.v1";
-    /// <summary>Schema-first cross-package RPC contracts, discovery, invocation, and provider registration.</summary>
+    /// <summary>Legacy RPC V1 capability identifier retained for compatibility diagnostics.</summary>
     public const string RpcV1 = "rpc.v1";
+    /// <summary>Canonical schema-first RPC V2 contracts, discovery, invocation, and provider registration.</summary>
+    public const string RpcV2 = "rpc.v2";
     /// <summary>Stack data contracts.</summary>
     public const string StacksV1 = "stacks.v1";
     /// <summary>Stack RPC provider and adapter contracts.</summary>

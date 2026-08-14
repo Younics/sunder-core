@@ -1,14 +1,16 @@
 # Package Trust And Security
 
-> **Applies to:** Sunder SDK `1.1.x`, package and Stack format V1, .NET 10, and Runtime protocol revision 5.
+> **Applies to:** Sunder SDK `1.1.x`, package archive V1, package manifest V3, Stack format V1, .NET 10, and Runtime protocol revision 8.
 
 Installing a Sunder package is a code-trust decision. V1 validates package integrity and structure, but it does not sandbox package code or cryptographically attest a package publisher.
 
 ## Execution Trust
 
-Runtime `dotnet` modules execute inside `Sunder.Runtime.Host`; Runtime `worker` targets execute in supervised child processes; App modules execute inside `Sunder.App`. Every process runs with the current desktop user's operating-system permissions. Worker isolation contains lifecycle and failures but is not an operating-system sandbox. Package code can use normal platform APIs to access resources available to that user, including files, network, processes, and user credentials outside Sunder.
+Runtime targets execute only as supervised Worker V3 child processes; App modules execute inside `Sunder.App`. Every process runs with the current desktop user's operating-system permissions. Worker isolation contains lifecycle and failures but is not an operating-system sandbox. Package code can use normal platform APIs to access resources available to that user, including files, network, processes, and user credentials outside Sunder.
 
-Collectible `AssemblyLoadContext`, separate DI providers, role boundaries, constrained host-service registration, path validation, and package-scoped APIs improve lifecycle and integrity. They are **not** a security boundary. Native libraries are supported and execute with the same permissions.
+Process supervision, App load contexts, separate role lifetimes, path validation, and package-scoped APIs improve lifecycle and integrity. They are **not** a security boundary. Native libraries are supported and execute with the same permissions.
+
+Workers receive an explicit environment rather than the Runtime process environment. The baseline is limited to OS process lookup, home, locale, package-local temp, and documented activation variables. It excludes Runtime/Registry tokens, cloud credentials, managed/native profiler injection, startup hooks, and arbitrary `SUNDER_*` bootstrap values. `docker-environment.v1` is an install/update consent requirement that admits only the bounded Docker connection allowlist; it never admits Docker auth JSON or passphrases. This reduces accidental ambient leakage but is not a sandbox: package code still runs as the user and can read resources that user can access.
 
 Only install packages whose code and distribution source you trust. A Registry ownership record controls publication; it does not make the contained code safe.
 
@@ -20,7 +22,7 @@ RPC content references are not ambient bearer capabilities. Caller-owned call sc
 
 The V1 package validator checks the generated manifest, exact content index, SHA-256 hashes and sizes, canonical roots/paths, ZIP entry safety and expansion limits, target kind/role/entry-point shape, declared compatibility, dependencies, RPC descriptors, web view declarations, and icon content. Runtime stages and validates before committing install/update state. Validation does not execute target code or prove that an entry point behaves safely.
 
-Current `.sunderpkg` archives contain no signature file. Content hashes detect corruption or modification relative to the archive's own index, but they do not prove who created the archive. Do not describe V1 package validation as code signing or publisher attestation.
+Current `.sunderpkg` archives contain no signature file. A C# build may platform-sign its apphost and native closure through the pre-index signing hook; those embedded signature bytes are then hash-bound like all other content, and post-index tampering is rejected. Content hashes and embedded platform signatures still do not establish a Sunder publisher identity. Do not describe V1 package validation as package signing or Registry publisher attestation.
 
 The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for archive and extraction validation. Avoid copying those rules into package policy or implementing a second validator.
 
@@ -42,7 +44,7 @@ Use `IPackageSecrets` for credentials. Runtime encrypts package secrets at rest,
 Never place secrets in:
 
 - package state/files/settings defaults;
-- Runtime operation DTOs unless the specific flow absolutely requires it;
+- RPC DTOs unless the specific flow absolutely requires it;
 - logs, structured attributes, exception messages, or notification text;
 - command-line arguments, package-process environment variables, or callback launch URLs (the CLI's documented one-shot CI publication variable is a separate automation boundary);
 - package assets, manifests, generated output, tests, or source control; or
@@ -54,11 +56,11 @@ Logging's sensitive-key redaction is heuristic and does not sanitize messages or
 
 Treat `ContentRootPath` as read-only. Use bounded `Storage.Files` for normal mutable files and `RoleLocalWorkspace` only for libraries that require a local path. File-store paths reject traversal and observed links/reparse points. Workspace paths are lexically contained, but packages are responsible for links they create and for third-party APIs that follow them.
 
-Do not expose host paths through Runtime operation DTOs, Stack records, errors, or UI. App and Runtime may not share a filesystem.
+Do not expose host paths through RPC DTOs, Stack records, errors, or UI. App and Runtime may not share a filesystem.
 
 ## Network And Callbacks
 
-App/CLI-to-Host and Host-to-Runtime traffic is authenticated. Connection credentials are current-user private state and must never appear in package configuration, logs, process arguments, or package APIs.
+App/CLI-to-Host and Host-to-worker traffic is authenticated. Connection credentials are current-user private state and must never appear in package configuration, logs, process arguments, or package APIs.
 
 Human Registry credentials are Runtime-owned and never returned to CLI commands. Protected publication automation may use the CLI's bounded environment/stdin credential sources, but must use a scoped Registry publish token and keep it out of arguments and logs.
 
@@ -76,7 +78,7 @@ For outbound HTTP:
 
 Do not render untrusted HTML or execute package/Registry text as markup or script. Encode text, bound images/downloads, and keep user confirmation around destructive operations. Package icon validation allows only bounded recognized raster formats; SVG is not accepted in V1 because Sunder has no complete sanitizer for scripts, external resources, and compressed expansion.
 
-An App package runs in the shell process. A UI exception is contained as a client-local package fault where possible, but malicious or unsafe App code can still affect the process. Keep App dependencies minimal and perform privileged/destructive work in explicit Runtime operations with validation and confirmation.
+An App package runs in the shell process. A UI exception is contained as a client-local package fault where possible, but malicious or unsafe App code can still affect the process. Keep App dependencies minimal and perform privileged/destructive work through explicit owner RPC methods with validation and confirmation.
 
 ## Stacks
 

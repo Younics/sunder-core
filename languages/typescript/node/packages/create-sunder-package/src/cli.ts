@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import { isPackageId } from "@sunder/sdk";
+import { isPackageId, PACKAGE_ID_MAXIMUM_LENGTH } from "@sunder/sdk";
+
+const PROVIDER_ID_SUFFIX = ".provider";
+const VIEW_ID_SUFFIX = ".main";
+const MAXIMUM_SCAFFOLD_PACKAGE_ID_LENGTH = PACKAGE_ID_MAXIMUM_LENGTH - PROVIDER_ID_SUFFIX.length;
 
 const PRESETS: ReadonlyMap<string, ScaffoldPreset> = new Map([
   ["node", {
@@ -24,6 +28,11 @@ async function main(): Promise<void> {
   const packageId = options.packageId ?? derivePackageId(basename(output));
   const packageName = options.packageName ?? title(packageId);
   if (!isPackageId(packageId)) throw new Error("--package-id must be lowercase dot-separated ASCII of at most 128 characters.");
+  const providerId = `${packageId}${PROVIDER_ID_SUFFIX}`;
+  const viewId = `${packageId}${VIEW_ID_SUFFIX}`;
+  if (!isPackageId(providerId) || !isPackageId(viewId)) {
+    throw new Error(`--package-id must be at most ${MAXIMUM_SCAFFOLD_PACKAGE_ID_LENGTH} characters because generated provider and view IDs must fit the package-tool ${PACKAGE_ID_MAXIMUM_LENGTH}-character limit.`);
+  }
   if (packageName.length === 0 || packageName.length > 256 || packageName.trim() !== packageName || /\p{Cc}/u.test(packageName)) {
     throw new Error("--package-name must be trimmed, non-empty, control-free, and at most 256 characters.");
   }
@@ -36,11 +45,12 @@ async function main(): Promise<void> {
   const templateRoot = resolve(__dirname, "..", preset.templateDirectory);
   const replacements = new Map([
     ["__SUNDER_PACKAGE_ID_JSON__", escapeJsonString(packageId)],
-    ["__SUNDER_PROVIDER_ID_JSON__", escapeJsonString(`${packageId}.provider`)],
-    ["__SUNDER_VIEW_ID_JSON__", escapeJsonString(`${packageId}.main`)],
+    ["__SUNDER_PROVIDER_ID_JSON__", escapeJsonString(providerId)],
+    ["__SUNDER_VIEW_ID_JSON__", escapeJsonString(viewId)],
     ["__SUNDER_PACKAGE_NAME_JSON__", escapeJsonString(packageName)],
     ["__SUNDER_NPM_PACKAGE_NAME_JSON__", escapeJsonString(packageId.replaceAll(".", "-"))],
     ["__SUNDER_PACKAGE_NAME_HTML__", escapeHtml(packageName)],
+    ["sunderpackageidscaffoldtoken", packageId],
     ["SUNDER_PACKAGE_ID", escapeMarkdown(packageId)],
     ["SUNDER_PACKAGE_NAME", escapeMarkdown(packageName)],
   ]);
@@ -51,13 +61,14 @@ async function main(): Promise<void> {
 async function copyTemplate(source: string, destination: string, replacements: ReadonlyMap<string, string>): Promise<void> {
   await mkdir(destination, { recursive: true });
   for (const entry of await readdir(source, { withFileTypes: true })) {
+    if (entry.name === ".sunder") continue;
     const sourcePath = resolve(source, entry.name);
     const targetName = entry.name === "gitignore" ? ".gitignore" : entry.name;
     const targetPath = resolve(destination, targetName);
     if (entry.isDirectory()) {
       await copyTemplate(sourcePath, targetPath, replacements);
     } else if (entry.isFile()) {
-      const content = (await readFile(sourcePath, "utf8")).replace(/__SUNDER_[A-Z0-9_]+__|SUNDER_PACKAGE_(?:ID|NAME)/gu, (token) => {
+      const content = (await readFile(sourcePath, "utf8")).replace(/__SUNDER_[A-Z0-9_]+__|SUNDER_PACKAGE_(?:ID|NAME)|sunderpackageidscaffoldtoken/gu, (token) => {
         const replacement = replacements.get(token);
         if (replacement === undefined) throw new Error(`Template contains unknown scaffold token '${token}'.`);
         return replacement;

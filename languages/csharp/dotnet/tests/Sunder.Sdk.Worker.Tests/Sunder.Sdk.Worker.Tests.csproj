@@ -8,4 +8,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\..\..\specs\worker\v3\conformance\corpus.json"
+          Link="WorkerV3Conformance\corpus.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

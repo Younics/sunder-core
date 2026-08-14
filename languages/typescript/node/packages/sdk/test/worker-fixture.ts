@@ -1,12 +1,15 @@
-import { RpcError, runWorker, safeStderr, type JsonValue, type RpcClient, type RpcContentReference, type RpcInvocationContext } from "../src/index";
-import { readFile } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { PackageStorageKeyMigration, PackageStorageKeyMigrationAction, RpcDomainError, RpcError, runWorker, safeStderr, type JsonValue, type PackageStorageKeyMigration as StorageMigration, type RpcClient, type RpcContentReference, type RpcInvocationContext, type WorkerAuthHandler, type WorkerCallbackHandler, type WorkerContext, type WorkerMigrationPreparationContext, type WorkerOptions } from "../src/index";
+import { workerV3ConformanceCorpus, type StorageMigrationRule } from "./worker-v3-conformance-corpus";
 
 const identity = {
   providerId: "example.provider",
   contractId: "example.rpc",
   contractVersion: "1.0.0",
-  contractSha256: "a".repeat(64),
+  descriptorSha256: "a".repeat(64),
+  abiSha256: "b".repeat(64),
 } as const;
+const mode = process.env.SUNDER_TEST_MODE;
 
 async function* stream(context: RpcInvocationContext, request: JsonValue): AsyncIterable<JsonValue> {
   context.signal.throwIfAborted();
@@ -17,8 +20,10 @@ async function* stream(context: RpcInvocationContext, request: JsonValue): Async
 }
 
 async function outbound(client: RpcClient): Promise<void> {
-  const mode = process.env.SUNDER_TEST_MODE;
-  if (mode === "outbound-unary") {
+  if (mode === "outbound-get-provider") {
+    await client.getProvider("rpc1_endpoint");
+    safeStderr("OUTBOUND_PROVIDER_OK");
+  } else if (mode === "outbound-unary") {
     await client.discover("example.rpc");
     safeStderr("OUTBOUND_OK");
   } else if (mode === "outbound-stream") {
@@ -40,18 +45,209 @@ async function outbound(client: RpcClient): Promise<void> {
       });
       throw new Error("Expired Host-authoritative deadline unexpectedly succeeded.");
     } catch (error) {
-      if (!(error instanceof RpcError) || error.error.kind !== "deadline-exceeded") throw error;
+      if (!(error instanceof RpcError)
+        || error.error.kind !== "deadline-exceeded"
+        || error.error.dispatchState !== "possibly-dispatched"
+        || error.error.retrySafety !== "unsafe") throw error;
       safeStderr("OUTBOUND_HOST_DEADLINE_OK");
     }
   } else if (mode === "outbound-limit") {
-    client.watch(0, 0);
-    client.watch(0, 0);
+    for (let index = 0; index <= 32; index++) client.watch(0, index);
   }
 }
 
-void runWorker({
+async function activationOutbound(client: RpcClient): Promise<void> {
+  const catalog = await client.discover("example.rpc");
+  if (catalog.revision !== 1) throw new Error("Activation discovery returned the wrong revision.");
+  const result = await client.invoke("rpc1_endpoint", "messages", "echo", null);
+  if (result === null
+    || Array.isArray(result)
+    || typeof result !== "object"
+    || (result as Readonly<Record<string, JsonValue>>).accepted !== true) {
+    throw new Error("Activation invocation returned an invalid result.");
+  }
+  safeStderr("ACTIVATION_RPC_OK");
+}
+
+async function scopeOutbound(client: RpcClient): Promise<void> {
+  const scope = await client.createCallScope({ deadline: new Date("2030-01-02T03:04:05.678Z") });
+  if (scope.deadline.toISOString() !== "2030-01-02T03:04:00.000Z") throw new Error("Host scope deadline was not retained.");
+  await scope.getProvider("rpc1_endpoint");
+  if (!await scope.reportInvariantViolation("rpc1_endpoint", new Error("line one\nline two"))) {
+    throw new Error("Host rejected the invariant report.");
+  }
+  await scope.discover("example.rpc");
+  await scope.invoke("rpc1_endpoint", "messages", "echo", null);
+  await scope.close();
+  await scope.close();
+  safeStderr("SCOPE_RPC_OK");
+}
+
+async function scopeContent(context: WorkerContext): Promise<void> {
+  const scope = await context.rpc.createCallScope();
+  const registered = await scope.content.register(
+    "rpc1_endpoint",
+    Readable.from([Buffer.from("caller source", "utf8")]),
+    { mediaType: "text/plain", fileName: "caller.txt", length: 13 },
+  );
+  const opened = await scope.content.open(registered);
+  let value = "";
+  for await (const chunk of opened.stream) value += Buffer.from(chunk).toString("utf8");
+  await opened.discard();
+  await scope.close();
+  if (value !== "host content") throw new Error("Scoped content was not verified and streamed.");
+  safeStderr("SCOPE_CONTENT_OK");
+}
+
+async function packageData(context: WorkerContext): Promise<void> {
+  if (await context.settings.get("setting.one") !== "effective") throw new Error("Effective setting changed.");
+  if ((await context.settings.getStored("setting.large"))?.length !== 70_000) throw new Error("Stored payload setting changed.");
+  await context.settings.set("setting.large", "s".repeat(70_000));
+  await context.settings.delete("setting.one");
+  if (!await context.state.has("state.one")) throw new Error("State contains changed.");
+  if ((await context.state.list()).join(",") !== "state.a,state.b") throw new Error("State key list changed.");
+  const file = await context.files.read("cache/input.bin");
+  if (file?.toString("utf8") !== "file input") throw new Error("Package file read changed.");
+  await context.files.write("cache/output.bin", Buffer.from("file output", "utf8"));
+  await context.files.delete("cache/input.bin");
+  if (await context.secrets.get("provider.token") !== "secret") throw new Error("Secret get changed.");
+  await context.secrets.set("provider.token", "updated");
+  await context.secrets.delete("provider.token");
+  safeStderr("PACKAGE_DATA_OK");
+}
+
+async function conformancePackageData(context: WorkerContext): Promise<void> {
+  const { key, value } = workerV3ConformanceCorpus.packageData;
+  await context.state.set(key, value);
+  if (await context.state.get(key) !== value) throw new Error("Worker V3 conformance state value changed.");
+  await context.state.delete(key);
+}
+
+function conformanceMigrations(store: "state" | "secrets"): readonly StorageMigration[] {
+  const plan = workerV3ConformanceCorpus.storageMigrations.plans.find((candidate) => candidate.store === store);
+  return plan?.rules.map(conformanceMigration) ?? [];
+}
+
+function conformanceMigration(rule: StorageMigrationRule): StorageMigration {
+  switch (rule.kind) {
+    case "exact":
+      return PackageStorageKeyMigration.exact(rule.legacyKey, rule.destinationKey);
+    case "opaque-id":
+      return PackageStorageKeyMigration.opaqueId(
+        rule.legacyPrefix,
+        rule.legacySuffix,
+        rule.destinationPrefix,
+        rule.destinationVersion,
+      );
+    case "opaque-id-json":
+      return PackageStorageKeyMigration.opaqueIdWithJsonIdentity(
+        rule.legacyPrefix,
+        rule.legacySuffix,
+        rule.destinationPrefix,
+        rule.destinationVersion,
+        rule.identityProperty,
+      );
+    case "opaque-id-json-case-insensitive":
+      return PackageStorageKeyMigration.opaqueIdWithCaseInsensitiveJsonIdentity(
+        rule.legacyPrefix,
+        rule.legacySuffix,
+        rule.destinationPrefix,
+        rule.destinationVersion,
+        rule.identityProperty,
+      );
+    case "dynamic-cleanup":
+      return PackageStorageKeyMigration.dynamicCleanup((key) => {
+        const action = workerV3ConformanceCorpus.storageMigrations.dynamicActions.find((candidate) => candidate.key === key);
+        if (action === undefined || action.kind === "no-match") return PackageStorageKeyMigrationAction.noMatch;
+        if (action.kind === "delete") return PackageStorageKeyMigrationAction.delete;
+        return PackageStorageKeyMigrationAction.rewrite(action.destinationKey!, action.precedence);
+      });
+  }
+}
+
+async function logging(context: WorkerContext): Promise<void> {
+  context.logging.createLogger("Example.Worker").information("detached", {
+    eventId: 7,
+    eventName: "detached.event",
+    attributes: { configured: true, count: 2 },
+  });
+  await context.logging.events.write({
+    level: "warning",
+    eventName: "worker.event",
+    message: "awaited",
+    attributes: { item: "value" },
+    error: new Error("event failure", { cause: new TypeError("inner") }),
+  });
+  safeStderr("LOGGING_OK");
+}
+
+const callbackHandler: WorkerCallbackHandler = {
+  callbackHandlerId: "example.callback",
+  async startCallback(context, signal) {
+    signal.throwIfAborted();
+    if (context.purpose === "wait") {
+      safeStderr("CONTRIBUTION_WAITING");
+      await new Promise<void>((_resolvePromise, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }
+    if (context.parameters.input !== "value") throw new Error("Callback parameters changed.");
+    return { flow: "browser", launchUrl: "https://example.test/callback", message: "continue" };
+  },
+  completeCallback(context, signal) {
+    signal.throwIfAborted();
+    if (context.queryValues.code !== "ok" || context.queryValues.optional !== null) {
+      throw new Error("Callback query values changed.");
+    }
+    return { state: "completed", message: "complete" };
+  },
+  cancelCallback(context, signal) {
+    signal.throwIfAborted();
+    safeStderr(`CALLBACK_CANCELLED:${context.callbackSessionId}:${context.reason}`);
+  },
+};
+
+const authHandler: WorkerAuthHandler = {
+  getStatus(signal) {
+    signal.throwIfAborted();
+    return { status: "connected", message: "ready", canAuthorize: false, canDisconnect: true };
+  },
+  startAuthorization(context, signal) {
+    signal.throwIfAborted();
+    if (!context.callbackUri.startsWith("https://")) throw new Error("Auth callback URI changed.");
+    return { flow: "browser", launchUrl: "https://example.test/auth", message: "authorize" };
+  },
+  completeAuthorization(context, signal) {
+    signal.throwIfAborted();
+    if (context.queryValues.code !== "auth-code") throw new Error("Auth query values changed.");
+    return { status: "connected", message: "authorized", canAuthorize: false, canDisconnect: true };
+  },
+  disconnect(signal) {
+    signal.throwIfAborted();
+    return { status: "not-connected", message: "disconnected", canAuthorize: true, canDisconnect: false };
+  },
+  cancelCallback(context, signal) {
+    signal.throwIfAborted();
+    safeStderr(`AUTH_CANCELLED:${context.callbackSessionId}:${context.reason}`);
+  },
+};
+
+void runWorker((workerContext) => {
+  const options: WorkerOptions = {
   providers: [{
     ...identity,
+    declaredErrors: {
+      messages: {
+        content: [],
+        domain: workerV3ConformanceCorpus.rpc.declaredErrors.domain ?? [],
+        echo: [],
+        fault: [],
+        infrastructure: [],
+        "undeclared-domain": workerV3ConformanceCorpus.rpc.declaredErrors["undeclared-domain"] ?? [],
+        wait: [],
+        watch: [],
+      },
+    },
     handler: {
       async invokeUnary(context, _serviceId, methodId, request): Promise<JsonValue> {
         if (methodId === "wait") {
@@ -60,8 +256,21 @@ void runWorker({
           });
         }
         if (methodId === "domain") {
-          throw new RpcError({ kind: "domain", code: "example.rejected", message: "rejected" });
+          throw new RpcDomainError(
+            workerV3ConformanceCorpus.rpc.domainFault.error.code,
+            workerV3ConformanceCorpus.rpc.domainFault.error.message,
+          );
         }
+        if (methodId === "undeclared-domain") {
+          throw new RpcDomainError(
+            workerV3ConformanceCorpus.rpc.undeclaredDomainFault.thrownError.code,
+            workerV3ConformanceCorpus.rpc.undeclaredDomainFault.thrownError.message,
+          );
+        }
+        if (methodId === "infrastructure") {
+          throw new RpcError({ kind: "validation", code: "rpc.validation", message: "must be hidden" });
+        }
+        if (methodId === "fault") throw new TypeError("must be hidden");
         if (methodId === "content") {
           if (request === null || Array.isArray(request) || typeof request !== "object") {
             throw new TypeError("Content test request must be an object.");
@@ -72,14 +281,15 @@ void runWorker({
           if (typeof registerPath !== "string" || reference === null || Array.isArray(reference) || typeof reference !== "object") {
             throw new TypeError("Content test request is invalid.");
           }
-           const registered = await context.content.registerFile(registerPath, {
-             mediaType: "text/plain",
-             fileName: "provider.txt",
-             length: 16,
-             expiresAt: new Date("2030-01-02T03:04:05.678Z"),
+          const registered = await context.content.registerFile(registerPath, {
+            mediaType: "text/plain",
+            fileName: "provider.txt",
+            length: 16,
+            expiresAt: new Date("2030-01-02T03:04:05.678Z"),
           });
-          const opened = await context.content.openFile(reference as unknown as RpcContentReference);
-          const openedValue = await readFile(opened.filePath, "utf8");
+          const opened = await context.content.open(reference as unknown as RpcContentReference);
+          let openedValue = "";
+          for await (const chunk of opened.stream) openedValue += Buffer.from(chunk).toString("utf8");
           await opened.discard();
           return { registered: { ...registered }, openedValue };
         }
@@ -88,19 +298,156 @@ void runWorker({
       invokeServerStream: (context, _serviceId, _methodId, request) => stream(context, request),
     },
   }],
-  onActivated: outbound,
-  onShutdown: async ({ reason }) => {
+  ...(mode === "conformance" ? {
+    stateMigrations: conformanceMigrations("state"),
+    secretMigrations: conformanceMigrations("secrets"),
+  } : {}),
+  async onActivated(context, signal) {
+    signal.throwIfAborted();
+    if (mode === "activation-await-rpc") {
+      await activationOutbound(context.rpc);
+      return;
+    }
+    if (mode === "scope-roundtrip") {
+      await scopeOutbound(context.rpc);
+      return;
+    }
+    if (mode === "scope-content") {
+      await scopeContent(context);
+      return;
+    }
+    if (mode === "package-data") {
+      await packageData(context);
+      return;
+    }
+    if (mode === "conformance") {
+      await conformancePackageData(context);
+      return;
+    }
+    if (mode === "logging") {
+      await logging(context);
+      return;
+    }
+    if (mode === "context") {
+      if (context !== workerContext
+        || context.packageId !== "example.package"
+        || context.packageVersion !== "1.0.0"
+        || context.storage.state !== context.state
+        || context.storage.files !== context.files
+        || context.storage.workspace !== context.workspace
+        || !Object.isFrozen(context)
+        || !Object.isFrozen(context.storage)) {
+        throw new Error("Worker context identity or immutable composition changed.");
+      }
+      safeStderr(`CONTEXT_OK:${context.workspace.resolve("db/items.sqlite")}`);
+      return;
+    }
+    if (mode === "generation-fault") {
+      setImmediate(() => {
+        void (async () => {
+          await context.reportGenerationFault("example.generation-fault", "generation failed\nwithout secrets");
+          try {
+            await context.reportGenerationFault("example.second", "must fail");
+            throw new Error("Duplicate generation fault unexpectedly succeeded.");
+          } catch {
+            safeStderr("GENERATION_FAULT_OK");
+          }
+        })().catch((error: unknown) => {
+          safeStderr("GENERATION_FAULT_FAILED", error);
+          process.exit(70);
+        });
+      });
+      return;
+    }
+    setImmediate(() => {
+      void outbound(context.rpc).catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") {
+          safeStderr("OUTBOUND_CANCELLED");
+          return;
+        }
+        safeStderr("OUTBOUND_FAILED", error);
+        process.exit(70);
+      });
+    });
+  },
+  ...(mode === "commit-retry" ? {
+    async onGenerationCommitted(_generation: unknown, _context: unknown, signal: AbortSignal) {
+      signal.throwIfAborted();
+      safeStderr("COMMIT_STARTED");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    },
+  } : {}),
+  ...(mode === "candidate-abort" ? {
+    async onCandidateStarted(_context: WorkerContext, signal: AbortSignal) {
+      safeStderr("CANDIDATE_STARTED");
+      await new Promise<void>((_resolvePromise, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+  } : {}),
+  ...(mode === "migration-preparation" ? {
+    async onBeforeStorageMigrations(preparation: WorkerMigrationPreparationContext, signal: AbortSignal) {
+      signal.throwIfAborted();
+      if (preparation.activationId !== "a".repeat(32)
+        || preparation.sessionGeneration !== 1
+        || !Object.isFrozen(preparation)
+        || !Object.isFrozen(preparation.state)) {
+        throw new Error("Storage-migration preparation context is invalid.");
+      }
+      let mutationRejected = false;
+      try {
+        await workerContext.state.set("legacy.value", "forbidden", { signal });
+      } catch (error) {
+        mutationRejected = error instanceof RpcError && error.error.code === "rpc.worker.not-active";
+      }
+      if (!mutationRejected) throw new Error("The normal mutable state surface was admitted during migration preparation.");
+      const value = await preparation.state.get("legacy.value", { signal });
+      const present = await preparation.state.has("legacy.value", { signal });
+      const keys = await preparation.state.list("legacy", { signal });
+      if (value !== "stored" || !present || keys.length !== 1 || keys[0] !== "legacy.value") {
+        throw new Error("Storage-migration preparation state snapshot was invalid.");
+      }
+      safeStderr("MIGRATION_PREPARATION_OK");
+    },
+  } : {}),
+  settingsSchema: mode === "settings-schema" ? {
+    summary: "Worker settings.",
+    sections: [{
+      sectionId: "general",
+      title: "General",
+      fields: [{
+        key: "enabled",
+        label: "Enabled",
+        kind: "boolean",
+        defaultValue: "true",
+      }, {
+        key: "mode",
+        label: "Mode",
+        kind: "select",
+        options: [{ value: "fast", label: "Fast" }],
+      }],
+    }],
+  } : null,
+  callbackHandlers: mode === "contributions" || mode === "contribution-cancel" || mode === "composition-snapshot"
+    ? [callbackHandler]
+    : [],
+  authHandler: mode === "contributions" ? authHandler : null,
+  onShutdown: async ({ reason }, context, signal) => {
+    signal.throwIfAborted();
     if (process.env.SUNDER_TEST_MODE !== "shutdown-lifecycle") return;
+    if (context !== workerContext) throw new Error("Worker lifecycle context changed.");
     await new Promise((resolve) => setTimeout(resolve, 25));
     safeStderr(`SHUTDOWN_DONE:${reason}`);
   },
-  limits: process.env.SUNDER_TEST_MODE === "outbound-stream-overflow"
-    ? { maxStreamQueueMessages: 2 }
-    : process.env.SUNDER_TEST_MODE === "inbound-limit"
-      ? { maxInboundCalls: 1 }
-      : process.env.SUNDER_TEST_MODE === "outbound-limit"
-        ? { maxOutboundCalls: 1 }
-        : undefined,
+  };
+  if (mode === "composition-snapshot") {
+    queueMicrotask(() => {
+      (callbackHandler as unknown as { startCallback: WorkerCallbackHandler["startCallback"] }).startCallback = () => {
+        throw new Error("Mutable callback handler escaped the composition snapshot.");
+      };
+    });
+  }
+  return options;
 }).catch(() => {
   process.exitCode = 70;
 });

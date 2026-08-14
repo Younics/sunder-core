@@ -1,6 +1,6 @@
 namespace Sunder.Sdk.Abstractions
 {
-    public interface ISunderRuntimePackageModule;
+    public interface ISunderAppPackageModule;
 
     public interface IPackageStorageKeyMigrator;
 
@@ -10,9 +10,4 @@ namespace Sunder.Sdk.Abstractions
 namespace Sunder.Sdk.Storage
 {
     public sealed class PackageStorageKeyMigration;
-}
-
-namespace Sunder.Sdk.Runtime
-{
-    public sealed class PackageRuntimeInvocationException;
 }

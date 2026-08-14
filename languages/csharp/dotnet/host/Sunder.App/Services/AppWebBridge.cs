@@ -9,8 +9,8 @@ namespace Sunder.App.Services;
 
 internal sealed class AppWebBridge : IAsyncDisposable
 {
-    internal const string Protocol = "sunder.bridge.v1";
-    internal const int ProtocolVersion = 1;
+    internal const string Protocol = "sunder.bridge.v2";
+    internal const int ProtocolVersion = 2;
     internal const int MaxMessageBytes = 1024 * 1024;
     internal const int MaxMessageDepth = 32;
     internal const int MaxPendingRequests = 64;
@@ -282,6 +282,10 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         invocation.MethodId,
                         SunderRpcMethodKind.Unary);
                     _contracts.ValidateRequest(provider, method, invocation.Request);
+                    pending.MarkPossiblyDispatched(
+                        method.Idempotency == SunderRpcMethodIdempotency.Idempotent
+                            ? SunderRpcRetrySafety.Safe
+                            : SunderRpcRetrySafety.Unsafe);
                     var response = await _rpc.InvokeAsync(
                         provider.Endpoint.Value,
                         invocation.ServiceId,
@@ -289,8 +293,15 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         invocation.Request,
                         request.DeadlineUtc,
                         pending.Token).ConfigureAwait(false);
-                    EnsureBounded(response);
-                    _contracts.ValidateOutput(provider, method, response);
+                    try
+                    {
+                        EnsureBounded(response);
+                        _contracts.ValidateOutput(provider, method, response);
+                    }
+                    catch (SunderRpcException exception)
+                    {
+                        throw WithDispatchMetadata(exception, pending);
+                    }
                     await FinishResultAsync(request.RequestId, pending, response).ConfigureAwait(false);
                     return;
                 }
@@ -304,6 +315,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                         invocation.MethodId,
                         SunderRpcMethodKind.ServerStream);
                     _contracts.ValidateRequest(provider, method, invocation.Request);
+                    pending.MarkPossiblyDispatched(SunderRpcRetrySafety.Unsafe);
                     await foreach (var item in _rpc.SubscribeAsync(
                                        provider.Endpoint.Value,
                                        invocation.ServiceId,
@@ -312,8 +324,15 @@ internal sealed class AppWebBridge : IAsyncDisposable
                                        request.DeadlineUtc,
                                        pending.Token).WithCancellation(pending.Token).ConfigureAwait(false))
                     {
-                        EnsureBounded(item);
-                        _contracts.ValidateOutput(provider, method, item);
+                        try
+                        {
+                            EnsureBounded(item);
+                            _contracts.ValidateOutput(provider, method, item);
+                        }
+                        catch (SunderRpcException exception)
+                        {
+                            throw WithDispatchMetadata(exception, pending);
+                        }
                         await SendEventAsync(request.RequestId, pending, item).ConfigureAwait(false);
                     }
                     await FinishCompleteAsync(request.RequestId, pending).ConfigureAwait(false);
@@ -367,11 +386,15 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 ? new SunderRpcError(
                     SunderRpcErrorKind.DeadlineExceeded,
                     "rpc.call.deadline-exceeded",
-                    "The browser bridge request deadline elapsed.")
+                    "The browser bridge request deadline elapsed.",
+                    pending.DispatchState,
+                    pending.RetrySafety)
                 : new SunderRpcError(
                     SunderRpcErrorKind.Cancelled,
                     "rpc.bridge.cancelled",
-                    "The browser bridge request was cancelled.");
+                    "The browser bridge request was cancelled.",
+                    pending.DispatchState,
+                    pending.RetrySafety);
             await FinishErrorAsync(request.RequestId, pending, error).ConfigureAwait(false);
         }
         catch (SunderRpcException exception)
@@ -387,7 +410,9 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 new SunderRpcError(
                     SunderRpcErrorKind.Unavailable,
                     "rpc.bridge.unavailable",
-                    "The browser bridge request could not be completed.")).ConfigureAwait(false);
+                    "The browser bridge request could not be completed.",
+                    pending.DispatchState,
+                    pending.RetrySafety)).ConfigureAwait(false);
         }
     }
 
@@ -494,7 +519,9 @@ internal sealed class AppWebBridge : IAsyncDisposable
             providerId = provider.ProviderId,
             contractId = provider.ContractId,
             contractVersion = provider.ContractVersion,
-            contractSha256 = provider.ContractSha256,
+            descriptorSha256 = provider.DescriptorSha256,
+            abiSha256 = provider.AbiSha256
+                ?? throw new InvalidDataException("The Runtime provider is missing its V2 ABI identity."),
             providerHandle = handle,
             catalogRevision = provider.CatalogRevision,
             state = provider.State switch
@@ -541,7 +568,16 @@ internal sealed class AppWebBridge : IAsyncDisposable
         {
             if (send)
             {
-                await SendAsync(requestId, pending, type, value, error).ConfigureAwait(false);
+                var sent = await TrySendAsync(requestId, pending, type, value, error).ConfigureAwait(false);
+                if (!sent && error is null)
+                {
+                    await TrySendAsync(
+                        requestId,
+                        pending,
+                        "error",
+                        value: null,
+                        ResponseLimit(pending)).ConfigureAwait(false);
+                }
             }
         }
         finally
@@ -563,10 +599,13 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 return;
             }
         }
-        await SendAsync(requestId, pending, "event", value, error: null).ConfigureAwait(false);
+        if (!await TrySendAsync(requestId, pending, "event", value, error: null).ConfigureAwait(false))
+        {
+            throw new SunderRpcException(ResponseLimit(pending));
+        }
     }
 
-    private async Task SendAsync(
+    private async Task<bool> TrySendAsync(
         string requestId,
         PendingRequest pending,
         string type,
@@ -581,7 +620,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 || pending.DocumentGeneration != _documentGeneration
                 || Volatile.Read(ref _disposed) != 0)
             {
-                return;
+                return true;
             }
             nonce = _nonce;
         }
@@ -598,28 +637,20 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 kind = ErrorKind(error.Kind),
                 code = error.Code,
                 message = error.Message,
+                dispatchState = error.DispatchState == SunderRpcDispatchState.NotDispatched
+                    ? "not-dispatched"
+                    : "possibly-dispatched",
+                retrySafety = error.RetrySafety == SunderRpcRetrySafety.Safe ? "safe" : "unsafe",
             },
         };
         var json = JsonSerializer.Serialize(envelope, JsonOptions);
         if (Encoding.UTF8.GetByteCount(json) > MaxMessageBytes)
         {
-            if (error is not null)
-            {
-                return;
-            }
-            await SendAsync(
-                requestId,
-                pending,
-                "error",
-                value: null,
-                new SunderRpcError(
-                    SunderRpcErrorKind.ResourceExhausted,
-                    "rpc.bridge.response-limit",
-                    "The browser bridge response exceeds its size limit.")).ConfigureAwait(false);
-            return;
+            return false;
         }
         var script = $"window.__sunderReceive?.({JsonSerializer.Serialize(json)});";
         await _webView.InvokeScriptAsync(script).ConfigureAwait(false);
+        return true;
     }
 
     private string CreateBootstrapScript(string sessionNonce)
@@ -631,7 +662,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
             (() => {
               'use strict';
               const protocol = {{{protocol}}};
-              const version = 1;
+              const version = 2;
               const nonce = {{{nonce}}};
               const expectedOrigin = {{{origin}}};
               if (location.origin !== expectedOrigin || typeof window.invokeCSharpAction !== 'function') return false;
@@ -643,9 +674,9 @@ internal sealed class AppWebBridge : IAsyncDisposable
               const maxQueuedEvents = 32;
               const maxQueuedCharacters = 4 * 1024 * 1024;
               let queuedCharacters = 0;
-              const failure = (kind, code, message) => Object.assign(new Error(message), {
+              const failure = (kind, code, message, dispatchState = 'not-dispatched', retrySafety = 'safe') => Object.assign(new Error(message), {
                 name: 'SunderRpcError',
-                error: Object.freeze({ kind, code, message })
+                error: Object.freeze({ kind, code, message, dispatchState, retrySafety })
               });
               const finish = (state, error) => {
                 if (state.done) return;
@@ -669,7 +700,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                   try {
                     window.invokeCSharpAction(JSON.stringify({ protocol, version, nonce, origin: location.origin, requestId, method: 'bridge.cancel', deadlineUtc: null, payload: { targetRequestId: requestId } }));
                   } catch {
-                    finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.'));
+                    finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.', 'possibly-dispatched', 'unsafe'));
                   }
                 };
                 state.cancel = cancel;
@@ -684,7 +715,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                   try {
                     window.invokeCSharpAction(body);
                   } catch {
-                    finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.'));
+                    finish(state, failure('unavailable', 'rpc.bridge.native-unavailable', 'The native browser bridge is unavailable.', 'possibly-dispatched', 'unsafe'));
                   }
                 }
                 if (!state.done) {
@@ -717,7 +748,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                 if (!state || state.done) return;
                 if (message.type === 'event') {
                   if (!state.stream) {
-                    finish(state, failure('protocol', 'rpc.bridge.unexpected-event', 'The browser bridge returned an unexpected stream event.'));
+                    finish(state, failure('protocol', 'rpc.bridge.unexpected-event', 'The browser bridge returned an unexpected stream event.', 'possibly-dispatched', 'unsafe'));
                     return;
                   }
                   const waiter = state.waiters.shift();
@@ -725,7 +756,7 @@ internal sealed class AppWebBridge : IAsyncDisposable
                     waiter.ok({ done: false, value: message.value });
                   } else if (state.queue.length >= maxQueuedEvents || queuedCharacters + raw.length > maxQueuedCharacters) {
                     state.cancel();
-                    finish(state, failure('resource-exhausted', 'rpc.bridge.event-queue-limit', 'The browser bridge event queue limit was reached.'));
+                    finish(state, failure('resource-exhausted', 'rpc.bridge.event-queue-limit', 'The browser bridge event queue limit was reached.', 'possibly-dispatched', 'unsafe'));
                   } else {
                     state.queue.push({ value: message.value, size: raw.length });
                     queuedCharacters += raw.length;
@@ -733,21 +764,23 @@ internal sealed class AppWebBridge : IAsyncDisposable
                   return;
                 }
                 if (message.type === 'result') {
-                  if (state.stream) finish(state, failure('protocol', 'rpc.bridge.unexpected-result', 'The browser bridge returned an unexpected unary result.'));
+                  if (state.stream) finish(state, failure('protocol', 'rpc.bridge.unexpected-result', 'The browser bridge returned an unexpected unary result.', 'possibly-dispatched', 'unsafe'));
                   else { state.resolve(message.value); finish(state); }
                   return;
                 }
                 if (message.type === 'complete') {
                   if (state.stream) finish(state);
-                  else finish(state, failure('protocol', 'rpc.bridge.unexpected-complete', 'The browser bridge completed without a unary result.'));
+                  else finish(state, failure('protocol', 'rpc.bridge.unexpected-complete', 'The browser bridge completed without a unary result.', 'possibly-dispatched', 'unsafe'));
                   return;
                 }
                 if (message.type === 'error') {
                   const detail = message.error ?? {};
-                  finish(state, failure(detail.kind ?? 'protocol', detail.code ?? 'rpc.bridge.error', detail.message ?? 'Sunder RPC failed.'));
+                  const dispatchState = detail.dispatchState === 'not-dispatched' ? 'not-dispatched' : 'possibly-dispatched';
+                  const retrySafety = detail.retrySafety === 'safe' ? 'safe' : 'unsafe';
+                  finish(state, failure(detail.kind ?? 'protocol', detail.code ?? 'rpc.bridge.error', detail.message ?? 'Sunder RPC failed.', dispatchState, retrySafety));
                   return;
                 }
-                finish(state, failure('protocol', 'rpc.bridge.message-type', 'The browser bridge returned an unknown message type.'));
+                finish(state, failure('protocol', 'rpc.bridge.message-type', 'The browser bridge returned an unknown message type.', 'possibly-dispatched', 'unsafe'));
               }});
               const rpc = Object.freeze({
                 discover: (contractId, options) => send('rpc.discover', { contractId }, options, false),
@@ -923,8 +956,30 @@ internal sealed class AppWebBridge : IAsyncDisposable
         var message = error.Message.Replace('\r', ' ').Replace('\n', ' ').Trim();
         if (message.Length == 0) message = "The Sunder RPC request failed.";
         if (message.Length > 512) message = message[..512];
-        return new SunderRpcError(error.Kind, code, message);
+        return new SunderRpcError(
+            error.Kind,
+            code,
+            message,
+            error.DispatchState,
+            error.RetrySafety);
     }
+
+    private static SunderRpcException WithDispatchMetadata(
+        SunderRpcException exception,
+        PendingRequest pending)
+        => new(exception.Error with
+        {
+            DispatchState = pending.DispatchState,
+            RetrySafety = pending.RetrySafety,
+        });
+
+    private static SunderRpcError ResponseLimit(PendingRequest pending)
+        => new(
+            SunderRpcErrorKind.ResourceExhausted,
+            "rpc.bridge.response-limit",
+            "The browser bridge response exceeds its size limit.",
+            pending.DispatchState,
+            pending.RetrySafety);
 
     private static string ErrorKind(SunderRpcErrorKind kind)
         => kind switch
@@ -975,6 +1030,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
         private CancellationTokenRegistration _lifetimeRegistration;
         private CancellationTokenRegistration _deadlineRegistration;
         private int _cancellationReason;
+        private int _dispatchState;
+        private int _retrySafety;
         private int _completed;
         private int _disposed;
 
@@ -993,6 +1050,12 @@ internal sealed class AppWebBridge : IAsyncDisposable
         public bool TimedOut => Volatile.Read(ref _cancellationReason) == (int)CancellationReason.Deadline;
 
         public bool IsCompleted => Volatile.Read(ref _completed) != 0;
+
+        public SunderRpcDispatchState DispatchState
+            => (SunderRpcDispatchState)Volatile.Read(ref _dispatchState);
+
+        public SunderRpcRetrySafety RetrySafety
+            => (SunderRpcRetrySafety)Volatile.Read(ref _retrySafety);
 
         public static PendingRequest Create(
             long documentGeneration,
@@ -1021,6 +1084,12 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
 
         public bool TryComplete() => Interlocked.Exchange(ref _completed, 1) == 0;
+
+        public void MarkPossiblyDispatched(SunderRpcRetrySafety retrySafety)
+        {
+            Volatile.Write(ref _retrySafety, (int)retrySafety);
+            Volatile.Write(ref _dispatchState, (int)SunderRpcDispatchState.PossiblyDispatched);
+        }
 
         public void Cancel()
         {

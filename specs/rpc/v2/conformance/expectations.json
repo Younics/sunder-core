@@ -1,0 +1,148 @@
+{
+  "formatVersion": 1,
+  "descriptorVersion": 2,
+  "hashes": {
+    "algorithm": "sha256",
+    "encoding": "lowercase-hex",
+    "descriptorInput": "canonical-descriptor",
+    "abiInput": "domain-separator || normalized-canonical-abi-projection",
+    "abiDomainSeparatorHex": "73756e6465722e7270632e6162692e763200"
+  },
+  "fixtures": [
+    {
+      "path": "valid/complete.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "faf19f8b2f0e402e67a454b7ee3978607874d21a13f1f4ff3d8e71aac40cd9dd",
+      "abiSha256": "db7269872c792d6a33d0de559bf69301b0753aca9a634764d9675722dba9f405",
+      "canonicalDescriptorBytes": 2926,
+      "canonicalAbiProjectionBytes": 2674
+    },
+    {
+      "path": "valid/minimal-annotation-variant.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "bce0c66688d3987eda8bb5e151c637f3859bb9cae039ccdce8f7fc6674e6d17c",
+      "abiSha256": "45788031fe686da6d7f608d1b68b978b43f6ab0b51d8aa9461b012ad4f2a8544",
+      "canonicalDescriptorBytes": 461,
+      "canonicalAbiProjectionBytes": 351
+    },
+    {
+      "path": "valid/minimal-reordered.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "9d593e62790998a4367b5d1ffb4c07dbe834aa7978507293a4078c1fcdd31016",
+      "abiSha256": "45788031fe686da6d7f608d1b68b978b43f6ab0b51d8aa9461b012ad4f2a8544",
+      "canonicalDescriptorBytes": 448,
+      "canonicalAbiProjectionBytes": 351
+    },
+    {
+      "path": "valid/minimal.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "9d593e62790998a4367b5d1ffb4c07dbe834aa7978507293a4078c1fcdd31016",
+      "abiSha256": "45788031fe686da6d7f608d1b68b978b43f6ab0b51d8aa9461b012ad4f2a8544",
+      "canonicalDescriptorBytes": 448,
+      "canonicalAbiProjectionBytes": 351
+    },
+    {
+      "path": "valid/set-order-variant.rpc.json",
+      "valid": true,
+      "schemaValid": true,
+      "descriptorSha256": "bdfe76db7b75d96c4dedcf61802d1d6a238bfe3eaf270b5c395940e590e3d800",
+      "abiSha256": "db7269872c792d6a33d0de559bf69301b0753aca9a634764d9675722dba9f405",
+      "canonicalDescriptorBytes": 2926,
+      "canonicalAbiProjectionBytes": 2674
+    },
+    {
+      "path": "invalid/error-list.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/logical-type-with-bounds.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/method-list.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/noncanonical-number.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "descriptor-number"
+    },
+    {
+      "path": "invalid/open-record.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/recursive-reference.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "schema-reference-cycle"
+    },
+    {
+      "path": "invalid/repeated-method-id.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/server-stream-response.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "method-shape"
+    },
+    {
+      "path": "invalid/service-list.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-representation"
+    },
+    {
+      "path": "invalid/string-reference.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-reference-shape"
+    },
+    {
+      "path": "invalid/type-array-nullable.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/unbounded-string.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "schema-profile"
+    },
+    {
+      "path": "invalid/undeclared-domain-error.rpc.json",
+      "valid": false,
+      "schemaValid": true,
+      "errorCode": "domain-error-reference"
+    },
+    {
+      "path": "invalid/unsafe-integer.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-number"
+    },
+    {
+      "path": "invalid/wrong-descriptor-version.rpc.json",
+      "valid": false,
+      "schemaValid": false,
+      "errorCode": "descriptor-version"
+    }
+  ]
+}

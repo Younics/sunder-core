@@ -487,7 +487,13 @@ internal static class RuntimeRpcEndpoints
                 _ => RuntimeRpcErrorKind.Protocol,
             },
             error.Code,
-            error.Message);
+            error.Message,
+            error.DispatchState == SunderRpcDispatchState.NotDispatched
+                ? RuntimeRpcDispatchState.NotDispatched
+                : RuntimeRpcDispatchState.PossiblyDispatched,
+            error.RetrySafety == SunderRpcRetrySafety.Safe
+                ? RuntimeRpcRetrySafety.Safe
+                : RuntimeRpcRetrySafety.Unsafe);
 
     private static async Task WriteFrameAsync<T>(
         HttpResponse response,

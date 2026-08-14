@@ -14,12 +14,16 @@ internal static class SunderRpcSchemaProfile
     private const int MaximumEnumValues = 256;
     private static readonly string[] AnnotationProperties = ["title", "description"];
 
-    public static void ValidateDefinitions(IReadOnlyDictionary<string, JsonElement> definitions)
+    public static void ValidateDefinitions(
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        int descriptorVersion)
     {
+        var isV2 = descriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
         var validated = new HashSet<string>(StringComparer.Ordinal);
         var nodes = 0;
         foreach (var definition in definitions)
         {
+            if (validated.Contains(definition.Key)) continue;
             ValidateSchema(
                 definition.Value,
                 "$.$defs." + definition.Key,
@@ -27,9 +31,12 @@ internal static class SunderRpcSchemaProfile
                 new HashSet<string>(StringComparer.Ordinal) { definition.Key },
                 validated,
                 ref nodes,
-                depth: 1);
+                depth: 1,
+                isV2);
             validated.Add(definition.Key);
         }
+
+        ValidateResolvedDepth(definitions);
     }
 
     public static bool IsInstanceValid(
@@ -56,18 +63,26 @@ internal static class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth)
+        int depth,
+        bool isV2)
     {
-        if (depth > MaximumSchemaDepth || ++nodes > MaximumSchemaNodes)
+        if (++nodes > MaximumSchemaNodes)
         {
-            throw Error($"{path} exceeds the RPC schema depth or node-count limit.");
+            throw Error($"{path} exceeds the RPC schema node-count limit.");
         }
         RequireObject(schema, path);
         ValidateAnnotations(schema, path);
 
         if (schema.TryGetProperty("$ref", out var referenceElement))
         {
-            SunderRpcDescriptorParser.RequireOnlyProperties(schema, path, "$ref", "title", "description");
+            if (isV2)
+            {
+                SunderRpcDescriptorParser.RequireOnlyProperties(schema, path, "$ref");
+            }
+            else
+            {
+                SunderRpcDescriptorParser.RequireOnlyProperties(schema, path, "$ref", "title", "description");
+            }
             if (referenceElement.ValueKind != JsonValueKind.String
                 || !SunderRpcDescriptorParser.TryGetReferenceName(referenceElement.GetString(), out var referenceName)
                 || !definitions.TryGetValue(referenceName, out var referencedSchema))
@@ -87,7 +102,8 @@ internal static class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1);
+                    depth + 1,
+                    isV2);
                 validatedDefinitions.Add(referenceName);
             }
             referenceStack.Remove(referenceName);
@@ -97,8 +113,13 @@ internal static class SunderRpcSchemaProfile
         if (schema.TryGetProperty("oneOf", out var oneOf))
         {
             SunderRpcDescriptorParser.RequireOnlyProperties(schema, path, "oneOf", "title", "description");
-            if (IsNullableUnion(oneOf, definitions))
+            var nullAcceptingVariants = CountNullAcceptingVariants(oneOf, definitions);
+            if (nullAcceptingVariants > 0)
             {
+                if (!IsNullableUnion(oneOf, definitions, nullAcceptingVariants))
+                {
+                    throw Error($"{path}.oneOf must have exactly one direct null variant and exactly one branch that accepts null.");
+                }
                 ValidateNullableUnion(
                     oneOf,
                     path + ".oneOf",
@@ -106,7 +127,8 @@ internal static class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1);
+                    depth + 1,
+                    isV2);
             }
             else
             {
@@ -117,20 +139,42 @@ internal static class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1);
+                    depth + 1,
+                    isV2);
             }
             return;
         }
 
         var typeElement = SunderRpcDescriptorParser.Required(schema, "type", path, JsonValueKind.String);
         var type = typeElement.GetString();
+        if (isV2 && schema.TryGetProperty("logicalType", out _))
+        {
+            ValidateLogicalSchema(schema, path, type);
+            return;
+        }
         switch (type)
         {
             case "object":
-                ValidateObjectSchema(schema, path, definitions, referenceStack, validatedDefinitions, ref nodes, depth);
+                ValidateObjectSchema(
+                    schema,
+                    path,
+                    definitions,
+                    referenceStack,
+                    validatedDefinitions,
+                    ref nodes,
+                    depth,
+                    isV2);
                 break;
             case "array":
-                ValidateArraySchema(schema, path, definitions, referenceStack, validatedDefinitions, ref nodes, depth);
+                ValidateArraySchema(
+                    schema,
+                    path,
+                    definitions,
+                    referenceStack,
+                    validatedDefinitions,
+                    ref nodes,
+                    depth,
+                    isV2);
                 break;
             case "string":
                 ValidateStringSchema(schema, path);
@@ -154,7 +198,7 @@ internal static class SunderRpcSchemaProfile
                 throw Error($"{path}.type '{type}' is outside the RPC schema profile.");
         }
 
-        ValidateEnumAndConst(schema, path, type!);
+        ValidateEnumAndConst(schema, path, type!, isV2);
     }
 
     private static void ValidateObjectSchema(
@@ -164,23 +208,9 @@ internal static class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth)
+        int depth,
+        bool isV2)
     {
-        SunderRpcDescriptorParser.RequireOnlyProperties(
-            schema,
-            path,
-            "type",
-            "properties",
-            "required",
-            "additionalProperties",
-            "propertyNames",
-            "minProperties",
-            "maxProperties",
-            "enum",
-            "const",
-            "title",
-            "description");
-
         var properties = schema.TryGetProperty("properties", out var propertiesElement)
             ? propertiesElement
             : default;
@@ -192,6 +222,53 @@ internal static class SunderRpcSchemaProfile
         if (!isRecord && !isMap)
         {
             throw Error($"{path}.additionalProperties must be false for records or a bounded value schema for maps.");
+        }
+
+        if (isV2 && isRecord)
+        {
+            SunderRpcDescriptorParser.RequireOnlyProperties(
+                schema,
+                path,
+                "type",
+                "properties",
+                "required",
+                "additionalProperties",
+                "minProperties",
+                "maxProperties",
+                "title",
+                "description");
+        }
+        else if (isV2)
+        {
+            SunderRpcDescriptorParser.RequireOnlyProperties(
+                schema,
+                path,
+                "type",
+                "properties",
+                "required",
+                "additionalProperties",
+                "propertyNames",
+                "minProperties",
+                "maxProperties",
+                "title",
+                "description");
+        }
+        else
+        {
+            SunderRpcDescriptorParser.RequireOnlyProperties(
+                schema,
+                path,
+                "type",
+                "properties",
+                "required",
+                "additionalProperties",
+                "propertyNames",
+                "minProperties",
+                "maxProperties",
+                "enum",
+                "const",
+                "title",
+                "description");
         }
 
         if (isRecord)
@@ -206,6 +283,10 @@ internal static class SunderRpcSchemaProfile
                 throw Error($"{path}.properties exceeds the {MaximumProperties}-property limit.");
             }
             var required = SunderRpcDescriptorParser.Required(schema, "required", path, JsonValueKind.Array);
+            if (required.GetArrayLength() > MaximumProperties)
+            {
+                throw Error($"{path}.required exceeds the {MaximumProperties}-property limit.");
+            }
             var requiredNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var item in required.EnumerateArray())
             {
@@ -225,7 +306,8 @@ internal static class SunderRpcSchemaProfile
             }
             foreach (var property in properties.EnumerateObject())
             {
-                if (property.Name.Length is 0 or > 128)
+                if (property.Name.Length == 0
+                    || SunderRpcDescriptorParser.CountUnicodeScalars(property.Name) > 128)
                 {
                     throw Error($"{path}.properties contains an empty or overlong property name.");
                 }
@@ -236,7 +318,8 @@ internal static class SunderRpcSchemaProfile
                     referenceStack,
                     validatedDefinitions,
                     ref nodes,
-                    depth + 1);
+                    depth + 1,
+                    isV2);
             }
             ValidateOptionalPropertyBounds(schema, path, propertyCount);
             if (schema.TryGetProperty("propertyNames", out _))
@@ -269,9 +352,13 @@ internal static class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1);
+                depth + 1,
+                isV2);
             if (!propertyNames.TryGetProperty("type", out var keyType)
-                || keyType.GetString() != "string")
+                || keyType.GetString() != "string"
+                || propertyNames.TryGetProperty("logicalType", out _)
+                || !propertyNames.TryGetProperty("minLength", out _)
+                || !propertyNames.TryGetProperty("maxLength", out _))
             {
                 throw Error($"{path}.propertyNames must be a bounded string schema.");
             }
@@ -282,7 +369,8 @@ internal static class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1);
+                depth + 1,
+                isV2);
         }
     }
 
@@ -293,19 +381,35 @@ internal static class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth)
+        int depth,
+        bool isV2)
     {
-        SunderRpcDescriptorParser.RequireOnlyProperties(
-            schema,
-            path,
-            "type",
-            "items",
-            "minItems",
-            "maxItems",
-            "enum",
-            "const",
-            "title",
-            "description");
+        if (isV2)
+        {
+            SunderRpcDescriptorParser.RequireOnlyProperties(
+                schema,
+                path,
+                "type",
+                "items",
+                "minItems",
+                "maxItems",
+                "title",
+                "description");
+        }
+        else
+        {
+            SunderRpcDescriptorParser.RequireOnlyProperties(
+                schema,
+                path,
+                "type",
+                "items",
+                "minItems",
+                "maxItems",
+                "enum",
+                "const",
+                "title",
+                "description");
+        }
         var minimum = RequiredBound(schema, "minItems", path, 0, MaximumCollectionItems);
         var maximum = RequiredBound(schema, "maxItems", path, 0, MaximumCollectionItems);
         if (minimum > maximum)
@@ -313,7 +417,15 @@ internal static class SunderRpcSchemaProfile
             throw Error($"{path}.minItems must not exceed maxItems.");
         }
         var items = SunderRpcDescriptorParser.Required(schema, "items", path, JsonValueKind.Object);
-        ValidateSchema(items, path + ".items", definitions, referenceStack, validatedDefinitions, ref nodes, depth + 1);
+        ValidateSchema(
+            items,
+            path + ".items",
+            definitions,
+            referenceStack,
+            validatedDefinitions,
+            ref nodes,
+            depth + 1,
+            isV2);
     }
 
     private static void ValidateStringSchema(JsonElement schema, string path)
@@ -370,6 +482,32 @@ internal static class SunderRpcSchemaProfile
         }
     }
 
+    private static void ValidateLogicalSchema(JsonElement schema, string path, string? type)
+    {
+        SunderRpcDescriptorParser.RequireOnlyProperties(
+            schema,
+            path,
+            "type",
+            "logicalType",
+            "title",
+            "description");
+        var logicalType = SunderRpcDescriptorParser.Required(
+            schema,
+            "logicalType",
+            path,
+            JsonValueKind.String).GetString();
+        var valid = logicalType switch
+        {
+            "uuid" or "utc-date-time" => type == "string",
+            "content-reference" => type == "object",
+            _ => false,
+        };
+        if (!valid)
+        {
+            throw Error($"{path} has an unsupported logical type or underlying type.");
+        }
+    }
+
     private static void ValidateTaggedUnion(
         JsonElement oneOf,
         string path,
@@ -377,7 +515,8 @@ internal static class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth)
+        int depth,
+        bool isV2)
     {
         if (oneOf.ValueKind != JsonValueKind.Array
             || oneOf.GetArrayLength() is < 2 or > MaximumUnionVariants)
@@ -396,7 +535,8 @@ internal static class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1);
+                depth + 1,
+                isV2);
             variants.Add(ResolveSchema(variant, definitions));
         }
 
@@ -420,10 +560,61 @@ internal static class SunderRpcSchemaProfile
 
     private static bool IsNullableUnion(
         JsonElement oneOf,
-        IReadOnlyDictionary<string, JsonElement> definitions)
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        int nullAcceptingVariants)
         => oneOf.ValueKind == JsonValueKind.Array
            && oneOf.GetArrayLength() == 2
-           && oneOf.EnumerateArray().Count(variant => IsNullSchema(ResolveSchema(variant, definitions))) == 1;
+           && nullAcceptingVariants == 1
+           && oneOf.EnumerateArray().Count(variant =>
+               TryResolveSchema(variant, definitions, out var resolved) && IsNullSchema(resolved)) == 1;
+
+    private static int CountNullAcceptingVariants(
+        JsonElement oneOf,
+        IReadOnlyDictionary<string, JsonElement> definitions)
+        => CountNullAcceptingVariants(
+            oneOf,
+            definitions,
+            new HashSet<string>(StringComparer.Ordinal));
+
+    private static int CountNullAcceptingVariants(
+        JsonElement oneOf,
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        HashSet<string> referenceStack)
+        => oneOf.ValueKind == JsonValueKind.Array
+            ? oneOf.EnumerateArray().Count(variant =>
+                SchemaAcceptsNull(variant, definitions, referenceStack))
+            : 0;
+
+    private static bool SchemaAcceptsNull(
+        JsonElement schema,
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        HashSet<string> referenceStack)
+    {
+        if (schema.TryGetProperty("$ref", out var reference))
+        {
+            if (reference.ValueKind != JsonValueKind.String
+                || !SunderRpcDescriptorParser.TryGetReferenceName(reference.GetString(), out var name)
+                || !referenceStack.Add(name)
+                || !definitions.TryGetValue(name, out var target))
+            {
+                return false;
+            }
+            var acceptsNull = SchemaAcceptsNull(target, definitions, referenceStack);
+            referenceStack.Remove(name);
+            return acceptsNull;
+        }
+        if (IsNullSchema(schema))
+        {
+            return true;
+        }
+        if (!schema.TryGetProperty("oneOf", out var oneOf)
+            || oneOf.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        return CountNullAcceptingVariants(oneOf, definitions, referenceStack) == 1;
+    }
 
     private static void ValidateNullableUnion(
         JsonElement oneOf,
@@ -432,7 +623,8 @@ internal static class SunderRpcSchemaProfile
         HashSet<string> referenceStack,
         HashSet<string> validatedDefinitions,
         ref int nodes,
-        int depth)
+        int depth,
+        bool isV2)
     {
         var index = 0;
         foreach (var variant in oneOf.EnumerateArray())
@@ -444,7 +636,8 @@ internal static class SunderRpcSchemaProfile
                 referenceStack,
                 validatedDefinitions,
                 ref nodes,
-                depth + 1);
+                depth + 1,
+                isV2);
         }
     }
 
@@ -490,12 +683,123 @@ internal static class SunderRpcSchemaProfile
         JsonElement schema,
         IReadOnlyDictionary<string, JsonElement> definitions)
     {
+        if (!TryResolveSchema(schema, definitions, out var resolved))
+        {
+            throw Error("A schema reference could not be resolved.");
+        }
+        return resolved;
+    }
+
+    private static bool TryResolveSchema(
+        JsonElement schema,
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        out JsonElement resolved)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
         while (schema.TryGetProperty("$ref", out var reference))
         {
-            SunderRpcDescriptorParser.TryGetReferenceName(reference.GetString(), out var name);
-            schema = definitions[name];
+            if (reference.ValueKind != JsonValueKind.String
+                || !SunderRpcDescriptorParser.TryGetReferenceName(reference.GetString(), out var name)
+                || !visited.Add(name)
+                || !definitions.TryGetValue(name, out schema))
+            {
+                resolved = default;
+                return false;
+            }
         }
-        return schema;
+        resolved = schema;
+        return true;
+    }
+
+    private static void ValidateResolvedDepth(IReadOnlyDictionary<string, JsonElement> definitions)
+    {
+        var heights = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var name in definitions.Keys.OrderBy(static name => name, StringComparer.Ordinal))
+        {
+            var height = GetDefinitionHeight(
+                name,
+                definitions,
+                heights,
+                new HashSet<string>(StringComparer.Ordinal));
+            if (height > MaximumSchemaDepth)
+            {
+                throw Error($"$.$defs.{name} exceeds the resolved RPC schema depth limit of {MaximumSchemaDepth}.");
+            }
+        }
+    }
+
+    private static int GetDefinitionHeight(
+        string name,
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        Dictionary<string, int> heights,
+        HashSet<string> referenceStack)
+    {
+        if (heights.TryGetValue(name, out var height))
+        {
+            return height;
+        }
+        if (!referenceStack.Add(name))
+        {
+            throw Error($"$.$defs.{name} contains a recursive $ref cycle, which is outside the bounded RPC profile.");
+        }
+
+        height = GetSchemaHeight(definitions[name], definitions, heights, referenceStack);
+        referenceStack.Remove(name);
+        heights.Add(name, height);
+        return height;
+    }
+
+    private static int GetSchemaHeight(
+        JsonElement schema,
+        IReadOnlyDictionary<string, JsonElement> definitions,
+        Dictionary<string, int> heights,
+        HashSet<string> referenceStack)
+    {
+        if (schema.TryGetProperty("$ref", out var reference))
+        {
+            SunderRpcDescriptorParser.TryGetReferenceName(reference.GetString(), out var name);
+            return 1 + GetDefinitionHeight(name, definitions, heights, referenceStack);
+        }
+
+        var maximumChildHeight = 0;
+        if (schema.TryGetProperty("oneOf", out var oneOf))
+        {
+            foreach (var variant in oneOf.EnumerateArray())
+            {
+                maximumChildHeight = Math.Max(
+                    maximumChildHeight,
+                    GetSchemaHeight(variant, definitions, heights, referenceStack));
+            }
+        }
+        if (schema.TryGetProperty("properties", out var properties))
+        {
+            foreach (var property in properties.EnumerateObject())
+            {
+                maximumChildHeight = Math.Max(
+                    maximumChildHeight,
+                    GetSchemaHeight(property.Value, definitions, heights, referenceStack));
+            }
+        }
+        if (schema.TryGetProperty("items", out var items))
+        {
+            maximumChildHeight = Math.Max(
+                maximumChildHeight,
+                GetSchemaHeight(items, definitions, heights, referenceStack));
+        }
+        if (schema.TryGetProperty("propertyNames", out var propertyNames))
+        {
+            maximumChildHeight = Math.Max(
+                maximumChildHeight,
+                GetSchemaHeight(propertyNames, definitions, heights, referenceStack));
+        }
+        if (schema.TryGetProperty("additionalProperties", out var additional)
+            && additional.ValueKind == JsonValueKind.Object)
+        {
+            maximumChildHeight = Math.Max(
+                maximumChildHeight,
+                GetSchemaHeight(additional, definitions, heights, referenceStack));
+        }
+        return 1 + maximumChildHeight;
     }
 
     private static bool IsClosedObjectSchema(JsonElement schema)
@@ -504,7 +808,7 @@ internal static class SunderRpcSchemaProfile
            && schema.TryGetProperty("additionalProperties", out var additional)
            && additional.ValueKind == JsonValueKind.False;
 
-    private static void ValidateEnumAndConst(JsonElement schema, string path, string type)
+    private static void ValidateEnumAndConst(JsonElement schema, string path, string type, bool isV2)
     {
         var hasEnum = schema.TryGetProperty("enum", out var enumElement);
         var hasConst = schema.TryGetProperty("const", out var constElement);
@@ -523,7 +827,7 @@ internal static class SunderRpcSchemaProfile
             foreach (var item in enumElement.EnumerateArray())
             {
                 ValidateLiteralType(item, type, path + ".enum");
-                if (!values.Add(item.GetRawText()))
+                if (!values.Add(isV2 ? GetPrimitiveLiteralKey(item) : item.GetRawText()))
                 {
                     throw Error($"{path}.enum contains a duplicate value.");
                 }
@@ -534,6 +838,17 @@ internal static class SunderRpcSchemaProfile
             ValidateLiteralType(constElement, type, path + ".const");
         }
     }
+
+    private static string GetPrimitiveLiteralKey(JsonElement value)
+        => value.ValueKind switch
+        {
+            JsonValueKind.String => "s:" + value.GetString(),
+            JsonValueKind.Number => "n:" + value.GetInt64().ToString(CultureInfo.InvariantCulture),
+            JsonValueKind.True => "b:true",
+            JsonValueKind.False => "b:false",
+            JsonValueKind.Null => "null",
+            _ => value.GetRawText(),
+        };
 
     private static void ValidateLiteralType(JsonElement value, string type, string path)
     {
@@ -557,7 +872,8 @@ internal static class SunderRpcSchemaProfile
         foreach (var annotation in AnnotationProperties)
         {
             if (!schema.TryGetProperty(annotation, out var value)) continue;
-            if (value.ValueKind != JsonValueKind.String || value.GetString()!.Length > 2048)
+            if (value.ValueKind != JsonValueKind.String
+                || SunderRpcDescriptorParser.CountUnicodeScalars(value.GetString()!) > 2048)
             {
                 throw Error($"{path}.{annotation} must be a string of at most 2048 characters.");
             }
@@ -612,9 +928,9 @@ internal static class SunderRpcSchemaProfile
         int depth,
         out string? error)
     {
-        if (depth > MaximumSchemaDepth || ++state.Nodes > 100_000)
+        if (depth > MaximumSchemaDepth)
         {
-            error = $"{path} exceeds the RPC payload depth or value-count limit.";
+            error = $"{path} exceeds the RPC payload depth limit.";
             return false;
         }
         if (schema.TryGetProperty("$ref", out var reference))
@@ -629,11 +945,9 @@ internal static class SunderRpcSchemaProfile
             string? lastError = null;
             foreach (var variant in oneOf.EnumerateArray())
             {
-                var branchState = state.Fork();
-                if (ValidateInstance(variant, value, path, branchState, depth + 1, out var branchError))
+                if (ValidateInstance(variant, value, path, state, depth + 1, out var branchError))
                 {
                     matches++;
-                    state.Nodes = Math.Max(state.Nodes, branchState.Nodes);
                 }
                 else
                 {
@@ -650,18 +964,28 @@ internal static class SunderRpcSchemaProfile
         }
 
         var type = schema.GetProperty("type").GetString()!;
-        if (!MatchesType(value, type))
+        if (state.IsV2 && schema.TryGetProperty("logicalType", out var logicalType))
+        {
+            return ValidateLogicalInstance(logicalType.GetString()!, value, path, state, out error);
+        }
+        if (!MatchesType(value, type, state.IsV2))
         {
             error = $"{path} must be of type '{type}'.";
             return false;
         }
-        if (schema.TryGetProperty("const", out var constant) && !LiteralEquals(value, constant))
+        string? scalarText = null;
+        if (type == "string" && !TryGetScalarString(value, out scalarText))
+        {
+            error = $"{path} must contain Unicode scalar values.";
+            return false;
+        }
+        if (schema.TryGetProperty("const", out var constant) && !LiteralEquals(value, constant, state.IsV2))
         {
             error = $"{path} does not match its const value.";
             return false;
         }
         if (schema.TryGetProperty("enum", out var enumElement)
-            && !enumElement.EnumerateArray().Any(item => LiteralEquals(value, item)))
+            && !enumElement.EnumerateArray().Any(item => LiteralEquals(value, item, state.IsV2)))
         {
             error = $"{path} is not an allowed enum value.";
             return false;
@@ -674,7 +998,7 @@ internal static class SunderRpcSchemaProfile
             case "array":
                 return ValidateArrayInstance(schema, value, path, state, depth, out error);
             case "string":
-                var length = value.GetString()!.EnumerateRunes().Count();
+                var length = scalarText!.EnumerateRunes().Count();
                 var minLength = schema.GetProperty("minLength").GetInt32();
                 var maxLength = schema.GetProperty("maxLength").GetInt32();
                 if (length < minLength || length > maxLength)
@@ -685,7 +1009,7 @@ internal static class SunderRpcSchemaProfile
                 break;
             case "integer":
             case "number":
-                if (!ValidateNumberInstance(schema, value, path, out error)) return false;
+                if (!ValidateNumberInstance(schema, value, path, state.IsV2, out error)) return false;
                 break;
         }
         error = null;
@@ -701,15 +1025,9 @@ internal static class SunderRpcSchemaProfile
         out string? error)
     {
         var properties = value.EnumerateObject().ToArray();
-        var exact = new HashSet<string>(StringComparer.Ordinal);
-        var caseInsensitive = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in properties)
+        if (!ValidateObjectPropertyNames(properties, path, state.IsV2, out error))
         {
-            if (!exact.Add(property.Name) || !caseInsensitive.Add(property.Name))
-            {
-                error = $"{path} contains duplicate or case-colliding property '{property.Name}'.";
-                return false;
-            }
+            return false;
         }
         var minimum = schema.TryGetProperty("minProperties", out var minElement) ? minElement.GetInt32() : 0;
         var maximum = schema.TryGetProperty("maxProperties", out var maxElement)
@@ -792,8 +1110,353 @@ internal static class SunderRpcSchemaProfile
         return true;
     }
 
-    private static bool ValidateNumberInstance(JsonElement schema, JsonElement value, string path, out string? error)
+    private static bool ValidateLogicalInstance(
+        string logicalType,
+        JsonElement value,
+        string path,
+        InstanceValidationState state,
+        out string? error)
     {
+        switch (logicalType)
+        {
+            case "uuid":
+                if (TryGetScalarString(value, out var uuid) && IsUuid(uuid))
+                {
+                    error = null;
+                    return true;
+                }
+                error = $"{path} must be a canonical lowercase UUID.";
+                return false;
+            case "utc-date-time":
+                if (TryGetScalarString(value, out var instant) && IsUtcDateTime(instant))
+                {
+                    error = null;
+                    return true;
+                }
+                error = $"{path} must be a canonical UTC date-time.";
+                return false;
+            case "content-reference":
+                return ValidateContentReference(value, path, state.IsV2, out error);
+            default:
+                error = $"{path} uses an unsupported logical type.";
+                return false;
+        }
+    }
+
+    private static bool ValidateContentReference(
+        JsonElement value,
+        string path,
+        bool isV2,
+        out string? error)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            error = $"{path} must be a content-reference object.";
+            return false;
+        }
+        var properties = value.EnumerateObject().ToArray();
+        if (!ValidateObjectPropertyNames(properties, path, isV2, out error))
+        {
+            return false;
+        }
+        if (properties.Length != 7
+            || !value.TryGetProperty("id", out var idElement)
+            || !value.TryGetProperty("length", out var lengthElement)
+            || !value.TryGetProperty("sha256", out var sha256Element)
+            || !value.TryGetProperty("mediaType", out var mediaTypeElement)
+            || !value.TryGetProperty("fileName", out var fileNameElement)
+            || !value.TryGetProperty("expiresAtUtc", out var expiresAtElement)
+            || !value.TryGetProperty("repeatability", out var repeatabilityElement))
+        {
+            error = $"{path} must contain exactly the seven content-reference members.";
+            return false;
+        }
+        if (!TryGetScalarString(idElement, out var id)
+            || id.Length == 0
+            || id.EnumerateRunes().Count() > 256)
+        {
+            error = $"{path}.id must contain 1 through 256 characters.";
+            return false;
+        }
+        if (!TryGetSafeInteger(lengthElement, out var length) || length < 0)
+        {
+            error = $"{path}.length must be a non-negative safe integer.";
+            return false;
+        }
+        if (!TryGetScalarString(sha256Element, out var sha256)
+            || sha256.Length != 64
+            || sha256.Any(static character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+        {
+            error = $"{path}.sha256 must be 64 lowercase hexadecimal characters.";
+            return false;
+        }
+        if (!TryGetScalarString(mediaTypeElement, out var mediaType)
+            || mediaType.Length is 0 or > 256
+            || mediaType.Any(static character => character > 0x7f))
+        {
+            error = $"{path}.mediaType must contain 1 through 256 ASCII characters.";
+            return false;
+        }
+        if (!TryGetScalarString(fileNameElement, out var fileName)
+            || fileName.EnumerateRunes().Count() > 1024)
+        {
+            error = $"{path}.fileName may contain at most 1024 characters.";
+            return false;
+        }
+        if (!TryGetScalarString(expiresAtElement, out var expiresAt) || !IsUtcDateTime(expiresAt))
+        {
+            error = $"{path}.expiresAtUtc must be a canonical UTC date-time.";
+            return false;
+        }
+        if (!TryGetScalarString(repeatabilityElement, out var repeatability)
+            || repeatability is not ("single-use" or "repeatable"))
+        {
+            error = $"{path}.repeatability must be 'single-use' or 'repeatable'.";
+            return false;
+        }
+        error = null;
+        return true;
+    }
+
+    private static bool ValidateObjectPropertyNames(
+        IReadOnlyList<JsonProperty> properties,
+        string path,
+        bool isV2,
+        out string? error)
+    {
+        var exact = new HashSet<string>(StringComparer.Ordinal);
+        var caseInsensitive = new HashSet<string>(
+            isV2 ? AsciiCaseInsensitiveComparer.Instance : StringComparer.OrdinalIgnoreCase);
+        foreach (var property in properties)
+        {
+            if (!HasOnlyUnicodeScalars(property.Name)
+                || !exact.Add(property.Name)
+                || !caseInsensitive.Add(property.Name))
+            {
+                error = $"{path} contains an invalid, duplicate, or case-colliding property '{property.Name}'.";
+                return false;
+            }
+        }
+        error = null;
+        return true;
+    }
+
+    private static bool TryGetScalarString(JsonElement value, out string text)
+    {
+        text = string.Empty;
+        if (value.ValueKind != JsonValueKind.String) return false;
+        try
+        {
+            text = value.GetString()!;
+            return HasOnlyUnicodeScalars(text);
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasOnlyUnicodeScalars(string value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!char.IsSurrogate(value[index])) continue;
+            if (!char.IsHighSurrogate(value[index])
+                || index + 1 >= value.Length
+                || !char.IsLowSurrogate(value[++index]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    internal static bool IsUuid(string value)
+    {
+        if (value.Length != 36) return false;
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (index is 8 or 13 or 18 or 23)
+            {
+                if (value[index] != '-') return false;
+            }
+            else if (value[index] is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    internal static bool IsUtcDateTime(string value)
+    {
+        if (value.Length < 20
+            || value[4] != '-'
+            || value[7] != '-'
+            || value[10] != 'T'
+            || value[13] != ':'
+            || value[16] != ':'
+            || !TryReadDigits(value, 0, 4, out var year)
+            || !TryReadDigits(value, 5, 2, out var month)
+            || !TryReadDigits(value, 8, 2, out var day)
+            || !TryReadDigits(value, 11, 2, out var hour)
+            || !TryReadDigits(value, 14, 2, out var minute)
+            || !TryReadDigits(value, 17, 2, out var second)
+            || year is < 1 or > 9999
+            || month is < 1 or > 12
+            || day < 1
+            || day > DateTime.DaysInMonth(year, month)
+            || hour > 23
+            || minute > 59
+            || second > 59)
+        {
+            return false;
+        }
+        if (value.Length == 20) return value[19] == 'Z';
+        var fractionLength = value.Length - 21;
+        return fractionLength is >= 1 and <= 9
+               && value[19] == '.'
+               && value[^1] == 'Z'
+               && value[^2] != '0'
+               && value.AsSpan(20, fractionLength).IndexOfAnyExceptInRange('0', '9') < 0;
+    }
+
+    private static bool TryReadDigits(string value, int offset, int length, out int result)
+    {
+        result = 0;
+        for (var index = offset; index < offset + length; index++)
+        {
+            if (value[index] is not (>= '0' and <= '9')) return false;
+            result = result * 10 + value[index] - '0';
+        }
+        return true;
+    }
+
+    private static bool TryGetFiniteDouble(JsonElement value, out double result)
+    {
+        result = default;
+        return value.ValueKind == JsonValueKind.Number
+               && double.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out result)
+               && double.IsFinite(result);
+    }
+
+    private static bool TryGetSafeInteger(JsonElement value, out long result)
+    {
+        result = default;
+        if (value.ValueKind != JsonValueKind.Number) return false;
+
+        var text = value.GetRawText().AsSpan();
+        var offset = 0;
+        var negative = text[0] == '-';
+        if (negative) offset++;
+        var exponentOffset = text[offset..].IndexOfAny('e', 'E');
+        if (exponentOffset >= 0) exponentOffset += offset;
+        var mantissaEnd = exponentOffset >= 0 ? exponentOffset : text.Length;
+        var decimalOffset = text[offset..mantissaEnd].IndexOf('.');
+        if (decimalOffset >= 0) decimalOffset += offset;
+        var fractionDigits = decimalOffset >= 0 ? mantissaEnd - decimalOffset - 1 : 0;
+
+        var coefficient = new char[mantissaEnd - offset - (decimalOffset >= 0 ? 1 : 0)];
+        var coefficientLength = 0;
+        for (var index = offset; index < mantissaEnd; index++)
+        {
+            if (text[index] != '.') coefficient[coefficientLength++] = text[index];
+        }
+
+        long exponent = 0;
+        if (exponentOffset >= 0)
+        {
+            var exponentIndex = exponentOffset + 1;
+            var exponentNegative = text[exponentIndex] == '-';
+            if (text[exponentIndex] is '+' or '-') exponentIndex++;
+            var exponentLimit = (long)text.Length + 32;
+            for (; exponentIndex < text.Length; exponentIndex++)
+            {
+                exponent = Math.Min(exponentLimit, exponent * 10 + text[exponentIndex] - '0');
+            }
+            if (exponentNegative) exponent = -exponent;
+        }
+
+        var firstNonZero = 0;
+        while (firstNonZero < coefficientLength && coefficient[firstNonZero] == '0') firstNonZero++;
+        if (firstNonZero == coefficientLength)
+        {
+            result = 0;
+            return true;
+        }
+
+        var scale = fractionDigits - exponent;
+        var coefficientEnd = coefficientLength;
+        long appendedZeroes = 0;
+        if (scale > 0)
+        {
+            if (scale > coefficientLength) return false;
+            coefficientEnd -= (int)scale;
+            for (var index = coefficientEnd; index < coefficientLength; index++)
+            {
+                if (coefficient[index] != '0') return false;
+            }
+        }
+        else
+        {
+            appendedZeroes = -scale;
+        }
+
+        while (firstNonZero < coefficientEnd && coefficient[firstNonZero] == '0') firstNonZero++;
+        if (firstNonZero == coefficientEnd)
+        {
+            result = 0;
+            return true;
+        }
+        if ((long)coefficientEnd - firstNonZero + appendedZeroes > 16) return false;
+
+        long magnitude = 0;
+        for (var index = firstNonZero; index < coefficientEnd; index++)
+        {
+            magnitude = checked(magnitude * 10 + coefficient[index] - '0');
+            if (magnitude > 9_007_199_254_740_991) return false;
+        }
+        for (long index = 0; index < appendedZeroes; index++)
+        {
+            magnitude = checked(magnitude * 10);
+            if (magnitude > 9_007_199_254_740_991) return false;
+        }
+        result = negative ? -magnitude : magnitude;
+        return true;
+    }
+
+    private static bool ValidateNumberInstance(
+        JsonElement schema,
+        JsonElement value,
+        string path,
+        bool isV2,
+        out string? error)
+    {
+        if (isV2)
+        {
+            if (!TryGetFiniteDouble(value, out var binary64))
+            {
+                error = $"{path} is not a finite IEEE-754 binary64 value.";
+                return false;
+            }
+            if (schema.GetProperty("type").GetString() == "integer"
+                && !TryGetSafeInteger(value, out _))
+            {
+                error = $"{path} must be a safe mathematical integer.";
+                return false;
+            }
+            if (schema.TryGetProperty("minimum", out var binaryMinimum) && binary64 < binaryMinimum.GetDouble()
+                || schema.TryGetProperty("exclusiveMinimum", out var binaryExclusiveMinimum) && binary64 <= binaryExclusiveMinimum.GetDouble()
+                || schema.TryGetProperty("maximum", out var binaryMaximum) && binary64 > binaryMaximum.GetDouble()
+                || schema.TryGetProperty("exclusiveMaximum", out var binaryExclusiveMaximum) && binary64 >= binaryExclusiveMaximum.GetDouble())
+            {
+                error = $"{path} is outside its numeric bounds.";
+                return false;
+            }
+            error = null;
+            return true;
+        }
+
         if (!decimal.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
         {
             error = $"{path} is outside the supported RPC numeric range.";
@@ -816,23 +1479,34 @@ internal static class SunderRpcSchemaProfile
         return true;
     }
 
-    private static bool MatchesType(JsonElement value, string type)
+    private static bool MatchesType(JsonElement value, string type, bool isV2)
         => type switch
         {
             "object" => value.ValueKind == JsonValueKind.Object,
             "array" => value.ValueKind == JsonValueKind.Array,
             "string" => value.ValueKind == JsonValueKind.String,
             "integer" => value.ValueKind == JsonValueKind.Number
-                         && decimal.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var integer)
-                         && decimal.Truncate(integer) == integer,
-            "number" => value.ValueKind == JsonValueKind.Number,
+                          && (isV2
+                              ? TryGetSafeInteger(value, out _)
+                              : decimal.TryParse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var integer)
+                                && decimal.Truncate(integer) == integer),
+            "number" => value.ValueKind == JsonValueKind.Number
+                        && (!isV2 || TryGetFiniteDouble(value, out _)),
             "boolean" => value.ValueKind is JsonValueKind.True or JsonValueKind.False,
             "null" => value.ValueKind == JsonValueKind.Null,
             _ => false,
         };
 
-    private static bool LiteralEquals(JsonElement left, JsonElement right)
+    private static bool LiteralEquals(JsonElement left, JsonElement right, bool isV2)
     {
+        if (isV2
+            && left.ValueKind == JsonValueKind.Number
+            && right.ValueKind == JsonValueKind.Number
+            && TryGetFiniteDouble(left, out var leftBinary64)
+            && TryGetFiniteDouble(right, out var rightBinary64))
+        {
+            return leftBinary64 == rightBinary64;
+        }
         if (left.ValueKind == JsonValueKind.Number && right.ValueKind == JsonValueKind.Number
             && decimal.TryParse(left.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var leftNumber)
             && decimal.TryParse(right.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNumber))
@@ -842,11 +1516,35 @@ internal static class SunderRpcSchemaProfile
         return JsonElement.DeepEquals(left, right);
     }
 
+    private sealed class AsciiCaseInsensitiveComparer : IEqualityComparer<string>
+    {
+        public static AsciiCaseInsensitiveComparer Instance { get; } = new();
+
+        public bool Equals(string? left, string? right)
+        {
+            if (ReferenceEquals(left, right)) return true;
+            if (left is null || right is null || left.Length != right.Length) return false;
+            for (var index = 0; index < left.Length; index++)
+            {
+                if (Fold(left[index]) != Fold(right[index])) return false;
+            }
+            return true;
+        }
+
+        public int GetHashCode(string value)
+        {
+            var hash = new HashCode();
+            foreach (var character in value) hash.Add(Fold(character));
+            return hash.ToHashCode();
+        }
+
+        private static char Fold(char value)
+            => value is >= 'A' and <= 'Z' ? (char)(value + ('a' - 'A')) : value;
+    }
+
     private sealed class InstanceValidationState(SunderRpcContractDescriptor descriptor)
     {
         public SunderRpcContractDescriptor Descriptor { get; } = descriptor;
-        public int Nodes { get; set; }
-
-        public InstanceValidationState Fork() => new(Descriptor) { Nodes = Nodes };
+        public bool IsV2 { get; } = descriptor.DescriptorVersion == SunderRpcProtocol.DescriptorVersionV2;
     }
 }

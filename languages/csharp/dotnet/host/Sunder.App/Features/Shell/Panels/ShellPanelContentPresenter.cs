@@ -26,13 +26,7 @@ internal sealed class ShellPanelContentPresenter(
             return;
         }
 
-        panel.Title = packageView.Title.ToUpperInvariant();
-        panel.SetDockVisible(true);
-        panel.Subtitle = $"{packageView.PackageDisplayName} · {packageView.PackageId} · v{packageView.PackageVersion}";
-        panel.Summary = packageView.Readiness == Sunder.Runtime.Contracts.PackageReadinessState.Ready
-            ? $"{ShellPlacementCatalog.ToDisplayName(placement).ToUpperInvariant()} PACKAGE ACTIVE"
-            : $"PACKAGE {packageView.Readiness.ToString().ToUpperInvariant()}";
-        AddCommonViewLines(panel.Lines, packageView);
+        ApplyPackageMetadata(panel, placement, packageView);
         if (!createHostedView)
         {
             panel.SetActiveView(viewId, hostedView: null);
@@ -53,6 +47,23 @@ internal sealed class ShellPanelContentPresenter(
         }
 
         AddStartupLines(panel.Lines, noIssuesMessage: "Runtime composition completed without package load warnings.");
+    }
+
+    public void RefreshMetadata(
+        ShellPanelViewModel panel,
+        RailPlacement placement,
+        ShellPackageView packageView)
+    {
+        panel.Lines.Clear();
+        ApplyPackageMetadata(panel, placement, packageView);
+        if (panel.HostedView is null)
+        {
+            panel.Lines.Add("Package view is preparing.");
+        }
+        else if (placement == RailPlacement.Middle)
+        {
+            AddStartupLines(panel.Lines, noIssuesMessage: "Runtime composition completed without package load warnings.");
+        }
     }
 
     private void ApplyEmptyPanelState(RailPlacement placement, ShellPanelViewModel panel, int middleBarItemCount)
@@ -110,5 +121,19 @@ internal sealed class ShellPanelContentPresenter(
         lines.Add($"Version: {packageView.PackageVersion}");
         lines.Add($"Placement: {ShellPlacementCatalog.ToDisplayName(packageView.Placement)}");
         lines.Add($"Readiness: {ShellPlacementCatalog.ToReadinessDisplay(packageView.Readiness)}");
+    }
+
+    private static void ApplyPackageMetadata(
+        ShellPanelViewModel panel,
+        RailPlacement placement,
+        ShellPackageView packageView)
+    {
+        panel.Title = packageView.Title.ToUpperInvariant();
+        panel.SetDockVisible(true);
+        panel.Subtitle = $"{packageView.PackageDisplayName} · {packageView.PackageId} · v{packageView.PackageVersion}";
+        panel.Summary = packageView.Readiness == Sunder.Runtime.Contracts.PackageReadinessState.Ready
+            ? $"{ShellPlacementCatalog.ToDisplayName(placement).ToUpperInvariant()} PACKAGE ACTIVE"
+            : $"PACKAGE {packageView.Readiness.ToString().ToUpperInvariant()}";
+        AddCommonViewLines(panel.Lines, packageView);
     }
 }

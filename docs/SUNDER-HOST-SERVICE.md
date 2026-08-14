@@ -26,7 +26,7 @@ When the bundled Host version changes, the App:
 2. Authenticates to and stops the previous Host Supervisor.
 3. Starts the staged Host Supervisor and waits for a compatible ready Runtime worker.
 4. Commits the new active descriptor and removes old payloads.
-5. Restarts the previous payload when activation fails.
+5. Restores the previous payload only when typed pre-launch evidence proves that the candidate was not submitted. After candidate submission, activation is forward-only: the App preserves the candidate and failure evidence for a later retry instead of rolling back.
 
 Durable Host and Runtime state are not stored with executable payloads and survive payload replacement.
 
@@ -34,7 +34,7 @@ Durable Host and Runtime state are not stored with executable payloads and survi
 
 - Windows launches the staged Host Supervisor as an independent current-user process.
 - Linux uses a transient `systemd-run --user` service with restart-on-failure and falls back to `setsid` when no user systemd manager is available.
-- macOS submits a transient `launchctl` job in the current login session. It does not install a LaunchAgent and removes the legacy `dev.sunder.runtime` LaunchAgent when encountered.
+- macOS submits a `launchctl` job in the current login session from an app-private definition. It does not install a login-start LaunchAgent.
 
 These launchers keep the Host independent from the App UI without registering login-start or machine-wide services.
 

@@ -3,24 +3,25 @@ using Sunder.Sdk.Worker.Internal;
 
 namespace Sunder.Sdk.Worker;
 
-/// <summary>Runs a standalone .NET worker over the Sunder worker V1 process protocol.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+/// <summary>Runs a standalone .NET worker over the canonical Sunder Worker V3 process protocol.</summary>
 public static class SunderWorker
 {
     private const int MaximumDiagnosticCharacters = 4096;
     private static readonly object DiagnosticGate = new();
 
-    /// <summary>Runs the worker over standard input and standard output until the Host shuts it down.</summary>
-    /// <remarks>Standard output is reserved exclusively for worker protocol frames.</remarks>
+    /// <summary>Configures and runs a canonical Worker V3 activation until the Host shuts it down.</summary>
+    /// <remarks>Configuration runs once before the immutable contribution catalog is advertised. Standard output is reserved exclusively for worker protocol frames.</remarks>
+    [SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+    [SunderSdkCapability(SunderWorkerCapabilities.ProtocolV3)]
     public static async Task RunAsync(
-        SunderWorkerOptions options,
+        Func<SunderWorkerContext, SunderWorkerOptions> configure,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(configure);
         try
         {
             await RunAsync(
-                options,
+                configure,
                 Console.OpenStandardInput(),
                 Console.OpenStandardOutput(),
                 Console.Error,
@@ -48,7 +49,7 @@ public static class SunderWorker
     }
 
     internal static Task RunAsync(
-        SunderWorkerOptions options,
+        Func<SunderWorkerContext, SunderWorkerOptions> configure,
         Stream input,
         Stream output,
         TextWriter diagnostics,
@@ -56,19 +57,24 @@ public static class SunderWorker
         WorkerLimits limits,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(configure);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(getEnvironmentVariable);
         ArgumentNullException.ThrowIfNull(limits);
         return new SunderWorkerRuntime(
-            _ => WorkerRuntimeConfiguration.FromV1(options),
-            WorkerProtocol.V1,
+            client =>
+            {
+                var context = new SunderWorkerContext(client);
+                var options = configure(context)
+                              ?? throw new InvalidOperationException("Worker V3 configuration returned null options.");
+                return WorkerRuntimeConfiguration.FromOptions(options, context);
+            },
             input,
             output,
             new WorkerDiagnosticSink(diagnostics, limits.MaximumDiagnosticCharacters),
-            WorkerEnvironment.Capture(getEnvironmentVariable, WorkerProtocol.V1),
+            WorkerEnvironment.Capture(getEnvironmentVariable),
             limits.Validate()).RunAsync(cancellationToken);
     }
 }

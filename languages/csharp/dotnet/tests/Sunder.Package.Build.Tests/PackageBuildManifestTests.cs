@@ -2,8 +2,8 @@ using System.Collections;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Diagnostics;
 using System.Text.Json;
 using Avalonia.Controls;
@@ -19,7 +19,6 @@ using Sunder.Sdk.Callbacks;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Notifications;
 using Sunder.Sdk.Packaging;
-using Sunder.Sdk.Runtime;
 using Sunder.Sdk.Settings;
 using Sunder.Sdk.Stacks;
 using Sunder.Sdk.Storage;
@@ -56,17 +55,15 @@ public sealed class PackageBuildManifestTests
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("archiveFormatVersion").GetInt32());
-        Assert.Equal(1, root.GetProperty("manifestVersion").GetInt32());
+        Assert.Equal(3, root.GetProperty("manifestVersion").GetInt32());
         var targets = root.GetProperty("targets").EnumerateArray().ToArray();
-        Assert.Equal(12, targets.Length);
-        Assert.Equal(
-            ["app", "runtime"],
-            targets.Select(static target => target.GetProperty("role").GetString()!).Distinct().ToArray());
+        Assert.Equal(6, targets.Length);
+        Assert.All(targets, target => Assert.Equal("app", target.GetProperty("role").GetString()));
         Assert.All(targets, target =>
         {
             var role = target.GetProperty("role").GetString();
             Assert.Contains(target.GetProperty("rid").GetString(), SunderPackageFormat.SupportedRuntimeIdentifiers);
-            Assert.Equal(role == "app" ? "avalonia" : "dotnet", target.GetProperty("kind").GetString());
+            Assert.Equal("avalonia", target.GetProperty("kind").GetString());
             Assert.Equal($"lib/{Path.GetFileName(Assembly.GetExecutingAssembly().Location)}", target.GetProperty("entryPoint").GetString());
             Assert.Equal("net10.0", target.GetProperty("targetFramework").GetString());
             Assert.False(string.IsNullOrWhiteSpace(target.GetProperty("sdkVersion").GetString()));
@@ -90,8 +87,6 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.ContributionsV1,
             SunderSdkCapabilities.ViewsV1,
             SunderSdkCapabilities.SettingsViewsV1,
-            SunderSdkCapabilities.BackgroundServicesV1,
-            SunderSdkCapabilities.RuntimeGenerationsV1,
             SunderSdkCapabilities.SettingsSchemaV1,
             SunderSdkCapabilities.SettingsV1,
             SunderSdkCapabilities.StorageV1,
@@ -106,8 +101,6 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.AuthV1,
             SunderSdkCapabilities.StacksV1,
             SunderSdkCapabilities.StacksRpcV1,
-            SunderSdkCapabilities.RuntimeOperationsV1,
-            SunderSdkCapabilities.RuntimeInvocationErrorsV1,
             SunderSdkCapabilities.ThemingV1,
         }.Order(StringComparer.OrdinalIgnoreCase), capabilities.Order(StringComparer.OrdinalIgnoreCase));
     }
@@ -119,7 +112,11 @@ public sealed class PackageBuildManifestTests
         var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
         var buildEngine = new TestBuildEngine();
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
-        task.SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)];
+        task.SdkCapabilities =
+        [
+            new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1),
+            new MSBuildTaskItem("worker-protocol.v3"),
+        ];
         task.ReferencePaths =
         [
             new MSBuildTaskItem(typeof(SunderPackageAttribute).Assembly.Location),
@@ -193,7 +190,7 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public void GenerateManifest_ExplicitTargetDeclarationsOverrideInferredMatrix()
+    public void GenerateManifest_RejectsManagedRuntimeTargetAuthoring()
     {
         var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
         var buildEngine = new TestBuildEngine();
@@ -205,13 +202,10 @@ public sealed class PackageBuildManifestTests
         target.SetMetadata("EntryPoint", "lib/custom-entry.dll");
         task.PackageTargets = [target];
 
-        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
-        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
-        var generated = Assert.Single(document.RootElement.GetProperty("targets").EnumerateArray());
-        Assert.Equal("runtime", generated.GetProperty("role").GetString());
-        Assert.Equal("linux-arm64", generated.GetProperty("rid").GetString());
-        Assert.Equal("dotnet", generated.GetProperty("kind").GetString());
-        Assert.Equal("lib/custom-entry.dll", generated.GetProperty("entryPoint").GetString());
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("unsupported Runtime target kind 'dotnet'", StringComparison.Ordinal)
+            && error.Contains("must use 'worker'", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -227,6 +221,7 @@ public sealed class PackageBuildManifestTests
         task.OutputType = "Exe";
         task.SelfContained = true;
         task.UseAppHost = true;
+        task.SdkCapabilities = [new MSBuildTaskItem("worker-protocol.v3")];
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         Assert.True(task.HasWorkerTarget);
@@ -234,6 +229,43 @@ public sealed class PackageBuildManifestTests
         var generated = Assert.Single(document.RootElement.GetProperty("targets").EnumerateArray());
         Assert.Equal(SunderPackageFormat.WorkerTargetKind, generated.GetProperty("kind").GetString());
         Assert.Equal("lib/Sunder.Package.Build.Tests", generated.GetProperty("entryPoint").GetString());
+        Assert.Equal("Sunder.Package.Build.Tests", task.WorkerEntryPointRelativePath);
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsCustomCSharpWorkerAppHostName()
+    {
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        var target = new MSBuildTaskItem("runtime/linux-x64");
+        target.SetMetadata("EntryPoint", "lib/custom-worker");
+        ConfigureWorkerTask(task, "linux-x64", target);
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("official self-contained apphost 'lib/Sunder.Package.Build.Tests'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsWorkerV1Capability()
+    {
+        var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        ConfigureWorkerTask(task, "linux-x64");
+        task.SdkCapabilities =
+        [
+            new MSBuildTaskItem("worker-protocol.v3"),
+            new MSBuildTaskItem("worker-protocol.v1"),
+        ];
+
+        Assert.False(task.Execute());
+        Assert.Contains(
+            buildEngine.Errors,
+            error => error.Contains(
+                "cannot use unsupported worker protocol capability 'worker-protocol.v1'",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -260,17 +292,17 @@ public sealed class PackageBuildManifestTests
         var buildEngine = new TestBuildEngine();
         var task = CreateTask(manifestPath, buildEngine);
         var target = new MSBuildTaskItem("runtime/linux-x64");
-        target.SetMetadata("Kind", SunderPackageFormat.ProcessTargetKind);
+        target.SetMetadata("Kind", "process");
         task.PackageTargets = [target];
 
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error =>
-            error.Contains("legacy target kind 'process'", StringComparison.Ordinal)
+            error.Contains("unsupported Runtime target kind 'process'", StringComparison.Ordinal)
             && error.Contains("must use 'worker'", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task WorkerExecutableFixture_EmitsSelfContainedExactRidLeaf()
+    public async Task WorkerV3ExecutableFixture_InfersExactProtocolCapability()
     {
         var root = Path.Combine(
             FindRepositoryRoot(),
@@ -279,39 +311,7 @@ public sealed class PackageBuildManifestTests
             "dotnet",
             "tests",
             "Sunder.Package.Build.TestFixtures",
-            "WorkerExecutable",
-            "bin",
-            ResolveConfiguration(),
-            "net10.0",
-            System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier,
-            "sunder-dev");
-
-        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(root);
-
-        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
-        var target = Assert.Single(validation.Manifest!.Targets!)!;
-        Assert.Equal(SunderPackageFormat.RuntimeHostRole, target.Role);
-        Assert.Equal(System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier, target.Rid);
-        Assert.Equal(SunderPackageFormat.WorkerTargetKind, target.Kind);
-        Assert.DoesNotContain("worker-protocol.v2", target.RequiredHostCapabilities ?? []);
-        var executableName = OperatingSystem.IsWindows() ? "WorkerExecutable.exe" : "WorkerExecutable";
-        Assert.Equal($"lib/{executableName}", target.EntryPoint);
-        Assert.True(File.Exists(Path.Combine(root, "payload", "runtime", target.Rid!, "lib", executableName)));
-        Assert.True(File.Exists(Path.Combine(root, "payload", "runtime", target.Rid!, "lib", "Sunder.Sdk.Worker.dll")));
-        Assert.True(File.Exists(Path.Combine(root, "payload", "runtime", target.Rid!, "lib", "Sunder.Sdk.dll")));
-    }
-
-    [Fact]
-    public async Task WorkerV2ExecutableFixture_InfersExactProtocolCapability()
-    {
-        var root = Path.Combine(
-            FindRepositoryRoot(),
-            "languages",
-            "csharp",
-            "dotnet",
-            "tests",
-            "Sunder.Package.Build.TestFixtures",
-            "WorkerV2Executable",
+            "WorkerV3Executable",
             "bin",
             ResolveConfiguration(),
             "net10.0",
@@ -325,20 +325,25 @@ public sealed class PackageBuildManifestTests
         Assert.Equal(SunderPackageFormat.WorkerTargetKind, target.Kind);
         Assert.Equal(
             [
+                SunderSdkCapabilities.AuthV1,
+                SunderSdkCapabilities.BackgroundServicesV1,
+                SunderSdkCapabilities.CallbacksV1,
                 SunderSdkCapabilities.ContributionsV1,
                 SunderSdkCapabilities.CoreV1,
                 SunderSdkCapabilities.LoggingV1,
                 SunderSdkCapabilities.PackagingV1,
-                SunderSdkCapabilities.RpcV1,
+                SunderSdkCapabilities.RpcV2,
+                SunderSdkCapabilities.RuntimeGenerationsV1,
                 SunderSdkCapabilities.Baseline11V1,
                 SunderSdkCapabilities.SecretsV1,
                 SunderSdkCapabilities.SettingsSchemaV1,
                 SunderSdkCapabilities.SettingsV1,
+                SunderSdkCapabilities.StorageKeyMigrationV1,
                 SunderSdkCapabilities.StorageV1,
-                "worker-protocol.v2",
+                "worker-protocol.v3",
             ],
             target.RequiredHostCapabilities);
-        var executableName = OperatingSystem.IsWindows() ? "WorkerV2Executable.exe" : "WorkerV2Executable";
+        var executableName = OperatingSystem.IsWindows() ? "WorkerV3Executable.exe" : "WorkerV3Executable";
         Assert.Equal($"lib/{executableName}", target.EntryPoint);
         Assert.True(File.Exists(Path.Combine(root, "payload", "runtime", target.Rid!, "lib", executableName)));
     }
@@ -348,68 +353,78 @@ public sealed class PackageBuildManifestTests
     {
         var root = CreateTempDirectory();
         var descriptorPath = Path.Combine(root, "chat.rpc.json");
-        File.WriteAllText(descriptorPath, """
-            {
-              "descriptorVersion": 1,
-              "contractId": "test.agent.chat",
-              "version": "1.0.0",
-              "services": [{
-                "serviceId": "chat-provider",
-                "methods": [{
-                  "methodId": "describe",
-                  "kind": "unary",
-                  "requestSchema": { "$ref": "#/$defs/Empty" },
-                  "responseSchema": { "$ref": "#/$defs/Description" }
-                }]
-              }],
-              "$defs": {
-                "Empty": { "type": "object", "properties": {}, "required": [], "additionalProperties": false },
-                "Description": {
-                  "type": "object",
-                  "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 128 } },
-                  "required": ["name"],
-                  "additionalProperties": false
-                }
-              }
-            }
-            """);
+        File.WriteAllText(descriptorPath, MinimalV2Descriptor);
         var manifestPath = Path.Combine(root, "sunder-package.json");
         var buildEngine = new TestBuildEngine();
         var task = CreateTask(manifestPath, buildEngine);
+        ConfigureWorkerTask(task, "linux-x64");
         var bundle = new MSBuildTaskItem(descriptorPath);
-        bundle.SetMetadata("ContractId", "test.agent.chat");
-        bundle.SetMetadata("Version", "1.0.0");
+        bundle.SetMetadata("ContractId", "example.rpc.v2.minimal");
+        bundle.SetMetadata("Version", "2.0.0");
         bundle.SetMetadata("DescriptorPath", "contracts/chat.rpc.json");
-        var use = new MSBuildTaskItem("test.agent.chat");
-        use.SetMetadata("VersionRange", ">=1.0.0 <2.0.0");
+        bundle.SetMetadata("Exposure", "public");
+        var use = new MSBuildTaskItem("example.rpc.v2.minimal");
+        use.SetMetadata("Role", "runtime");
+        use.SetMetadata("ContractVersion", "2.0.0");
         use.SetMetadata("Required", "false");
         use.SetMetadata("Actions", "discover;invoke");
         var provider = new MSBuildTaskItem("test.package.chat");
-        provider.SetMetadata("ContractId", "test.agent.chat");
-        provider.SetMetadata("ContractVersion", "1.0.0");
+        provider.SetMetadata("ContractId", "example.rpc.v2.minimal");
+        provider.SetMetadata("ContractVersion", "2.0.0");
         provider.SetMetadata("Role", "runtime");
+        provider.SetMetadata("Audience", "public");
         task.ContractBundles = [bundle];
         task.UsesContracts = [use];
         task.RpcProviders = [provider];
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        Assert.Equal(1, document.RootElement.GetProperty("archiveFormatVersion").GetInt32());
+        Assert.Equal(3, document.RootElement.GetProperty("manifestVersion").GetInt32());
         var generatedBundle = Assert.Single(document.RootElement.GetProperty("contractBundles").EnumerateArray());
+        Assert.Equal("example.rpc.v2.minimal", generatedBundle.GetProperty("contractId").GetString());
+        Assert.Equal("2.0.0", generatedBundle.GetProperty("version").GetString());
         Assert.Equal("contracts/chat.rpc.json", generatedBundle.GetProperty("descriptorPath").GetString());
-        Assert.Equal(64, generatedBundle.GetProperty("sha256").GetString()!.Length);
+        Assert.Equal(MinimalV2DescriptorSha256, generatedBundle.GetProperty("descriptorSha256").GetString());
+        Assert.Equal(MinimalV2AbiSha256, generatedBundle.GetProperty("abiSha256").GetString());
+        Assert.Equal("public", generatedBundle.GetProperty("exposure").GetString());
+        Assert.False(generatedBundle.TryGetProperty("sha256", out _));
         var generatedUse = Assert.Single(document.RootElement.GetProperty("usesContracts").EnumerateArray());
+        Assert.Equal("runtime", generatedUse.GetProperty("role").GetString());
+        Assert.Equal("example.rpc.v2.minimal", generatedUse.GetProperty("contractId").GetString());
+        Assert.Equal("2.0.0", generatedUse.GetProperty("contractVersion").GetString());
+        Assert.Equal(MinimalV2AbiSha256, generatedUse.GetProperty("abiSha256").GetString());
         Assert.False(generatedUse.GetProperty("required").GetBoolean());
         Assert.Equal(
             ["discover", "invoke"],
             generatedUse.GetProperty("actions").EnumerateArray().Select(static value => value.GetString()!).ToArray());
+        Assert.False(generatedUse.TryGetProperty("versionRange", out _));
         var generatedProvider = Assert.Single(document.RootElement.GetProperty("provides").EnumerateArray());
-        Assert.Equal(generatedBundle.GetProperty("sha256").GetString(), generatedProvider.GetProperty("contractSha256").GetString());
+        Assert.Equal("test.package.chat", generatedProvider.GetProperty("providerId").GetString());
+        Assert.Equal("runtime", generatedProvider.GetProperty("role").GetString());
+        Assert.Equal("example.rpc.v2.minimal", generatedProvider.GetProperty("contractId").GetString());
+        Assert.Equal("2.0.0", generatedProvider.GetProperty("contractVersion").GetString());
+        Assert.Equal(MinimalV2DescriptorSha256, generatedProvider.GetProperty("descriptorSha256").GetString());
+        Assert.Equal(MinimalV2AbiSha256, generatedProvider.GetProperty("abiSha256").GetString());
+        Assert.Equal("public", generatedProvider.GetProperty("audience").GetString());
+        Assert.False(generatedProvider.TryGetProperty("contractSha256", out _));
+        Assert.All(document.RootElement.GetProperty("targets").EnumerateArray(), target =>
+        {
+            var capabilities = target.GetProperty("requiredHostCapabilities")
+                .EnumerateArray()
+                .Select(static value => value.GetString()!)
+                .ToArray();
+            Assert.Contains("rpc.v2", capabilities);
+            Assert.DoesNotContain("rpc.v1", capabilities);
+        });
 
         var targetDirectory = Path.Combine(root, "target");
         var devPackage = Path.Combine(root, "sunder-dev");
         Directory.CreateDirectory(targetDirectory);
         var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
         File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+        var executablePath = Path.Combine(targetDirectory, Path.GetFileNameWithoutExtension(assemblyPath));
+        File.WriteAllText(executablePath, "worker");
         var emitEngine = new TestBuildEngine();
         Assert.True(new EmitSunderDevOutputTask
         {
@@ -418,12 +433,105 @@ public sealed class PackageBuildManifestTests
             DevPackagePath = devPackage,
             DiscoveryRoot = root,
             TargetDirectory = targetDirectory,
-            ManagedFiles = [new MSBuildTaskItem(assemblyPath)],
+            WorkerFiles = [new MSBuildTaskItem(executablePath)],
             ContractFiles = task.ResolvedContractFiles,
         }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
         Assert.True(File.Exists(Path.Combine(devPackage, "payload", "shared", "contracts", "chat.rpc.json")));
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+    }
+
+    [Fact]
+    public void GenerateManifest_UsesTheCanonicalBindingSnapshotWhenTheSourceChanges()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = Path.Combine(root, "snapshot.rpc.json");
+        WriteSnapshotDescriptor(descriptorPath, "original");
+        var binding = new MSBuildTaskItem(descriptorPath);
+        binding.SetMetadata("Namespace", "Test.Snapshot.Generated");
+        var bindingEngine = new TestBuildEngine();
+        var bindingTask = new GenerateSunderRpcBindingsTask
+        {
+            BuildEngine = bindingEngine,
+            Bindings = [binding],
+            ProjectDirectory = root,
+            IntermediateOutputPath = Path.Combine(root, "obj"),
+        };
+        Assert.True(bindingTask.Execute(), string.Join(Environment.NewLine, bindingEngine.Errors));
+        var snapshot = Assert.Single(bindingTask.BindingSnapshots);
+        var snapshotHash = snapshot.GetMetadata("DescriptorSha256");
+        var snapshotAbiHash = snapshot.GetMetadata("AbiSha256");
+        Assert.Equal("2", snapshot.GetMetadata("DescriptorVersion"));
+        Assert.Equal(64, snapshotAbiHash.Length);
+
+        WriteSnapshotDescriptor(descriptorPath, "changed");
+        Assert.NotEqual(File.ReadAllBytes(snapshot.ItemSpec), File.ReadAllBytes(descriptorPath));
+
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        task.ProjectDirectory = root;
+        var bundle = new MSBuildTaskItem(descriptorPath);
+        bundle.SetMetadata("ContractId", "test.snapshot");
+        bundle.SetMetadata("Version", "1.0.0");
+        bundle.SetMetadata("Exposure", "package");
+        task.ContractBundles = [bundle];
+        task.BindingSnapshots = bindingTask.BindingSnapshots;
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using var manifest = JsonDocument.Parse(File.ReadAllBytes(manifestPath));
+        Assert.Equal(
+            snapshotHash,
+            Assert.Single(manifest.RootElement.GetProperty("contractBundles").EnumerateArray())
+                .GetProperty("descriptorSha256")
+                .GetString());
+        Assert.Equal(
+            snapshotAbiHash,
+            Assert.Single(manifest.RootElement.GetProperty("contractBundles").EnumerateArray())
+                .GetProperty("abiSha256")
+                .GetString());
+        Assert.Equal(File.ReadAllBytes(snapshot.ItemSpec), File.ReadAllBytes(Assert.Single(task.ResolvedContractFiles).ItemSpec));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsV1RpcContractDescriptor()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = Path.Combine(root, "contract.rpc.json");
+        File.WriteAllText(descriptorPath, """
+            {
+              "descriptorVersion": 1,
+              "contractId": "test.contract",
+              "version": "1.0.0",
+              "services": [{
+                "serviceId": "example",
+                "methods": [{
+                  "methodId": "invoke",
+                  "kind": "unary",
+                  "requestSchema": { "$ref": "#/$defs/Empty" },
+                  "responseSchema": { "$ref": "#/$defs/Empty" }
+                }]
+              }],
+              "$defs": {
+                "Empty": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+              }
+            }
+            """);
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        task.ProjectDirectory = root;
+        var bundle = new MSBuildTaskItem(descriptorPath);
+        bundle.SetMetadata("ContractId", "test.contract");
+        bundle.SetMetadata("Version", "1.0.0");
+        bundle.SetMetadata("Exposure", "package");
+        task.ContractBundles = [bundle];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("descriptorVersion 2", StringComparison.Ordinal)
+            && error.Contains("does not accept V1 RPC descriptors", StringComparison.Ordinal));
+        Assert.False(File.Exists(manifestPath));
     }
 
     [Fact]
@@ -439,6 +547,250 @@ public sealed class PackageBuildManifestTests
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error => error.Contains("requires 'ContractId'", StringComparison.Ordinal));
         Assert.Contains(buildEngine.Errors, error => error.Contains("requires 'Version'", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("requires 'Exposure'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsLegacyAndAuthoredHashMetadata()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        var bundle = ContractBundle(descriptorPath);
+        bundle.SetMetadata("DescriptorSha256", new string('0', 64));
+        var use = ContractUse("app");
+        use.SetMetadata("VersionRange", ">=2.0.0 <3.0.0");
+        use.SetMetadata("AbiSha256", new string('1', 64));
+        var provider = RpcProvider("runtime");
+        provider.SetMetadata("ContractSha256", new string('2', 64));
+        task.ContractBundles = [bundle];
+        task.UsesContracts = [use];
+        task.RpcProviders = [provider];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("'DescriptorSha256' metadata", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("'VersionRange' metadata", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("'AbiSha256' metadata", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("'ContractSha256' metadata", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RequiresRoleAndAudienceMetadata()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        var use = ContractUse("app");
+        use.RemoveMetadata("Role");
+        var provider = RpcProvider("runtime");
+        provider.RemoveMetadata("Audience");
+        task.ContractBundles = [ContractBundle(descriptorPath)];
+        task.UsesContracts = [use];
+        task.RpcProviders = [provider];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("SunderUsesContract", StringComparison.Ordinal)
+                                                    && error.Contains("requires 'Role'", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("SunderRpcProvider", StringComparison.Ordinal)
+                                                    && error.Contains("requires 'Audience'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsUnsupportedAppRoleProvider()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        task.ContractBundles = [ContractBundle(descriptorPath)];
+        task.RpcProviders = [RpcProvider("app")];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("App-role providers are not supported", StringComparison.Ordinal)
+            && error.Contains("registration and serving are not available", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsRpcRolesWithoutTargets()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        task.PackageTargets = [new MSBuildTaskItem("app/win-x64")];
+        task.ContractBundles = [ContractBundle(descriptorPath)];
+        task.UsesContracts = [ContractUse("runtime")];
+        task.RpcProviders = [RpcProvider("runtime")];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("SunderUsesContract", StringComparison.Ordinal)
+                                                    && error.Contains("existing app or runtime target", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("SunderRpcProvider", StringComparison.Ordinal)
+                                                    && error.Contains("target Role", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsDuplicateRoleScopedRpcDeclarations()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        ConfigureWorkerTask(task, "linux-x64");
+        task.ContractBundles = [ContractBundle(descriptorPath)];
+        task.UsesContracts = [ContractUse("runtime"), ContractUse("runtime")];
+        task.RpcProviders = [RpcProvider("runtime"), RpcProvider("runtime")];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("SunderUsesContract", StringComparison.Ordinal)
+                                                     && error.Contains("more than once for Role 'runtime'", StringComparison.Ordinal));
+        Assert.Contains(buildEngine.Errors, error => error.Contains("SunderRpcProvider", StringComparison.Ordinal)
+                                                    && error.Contains("more than once for Role 'runtime'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsPublicProviderForPackageExposedContract()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        ConfigureWorkerTask(task, "linux-x64");
+        task.ContractBundles = [ContractBundle(descriptorPath, exposure: "package")];
+        task.RpcProviders = [RpcProvider("runtime", audience: "public")];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("public Audience", StringComparison.Ordinal)
+                                                    && error.Contains("package exposure permits only owner", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_PreservesAndBindsExactSemVerBuildMetadata()
+    {
+        const string version = "2.0.0+build.7";
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root, version);
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(manifestPath, buildEngine);
+        task.ProjectDirectory = root;
+        task.SdkCapabilities =
+        [
+            new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1),
+            new MSBuildTaskItem(SunderSdkCapabilities.RpcV2),
+        ];
+        ConfigureWorkerTask(task, "linux-x64");
+        task.ContractBundles = [ContractBundle(descriptorPath, version: version)];
+        task.UsesContracts = [ContractUse("runtime", version: version)];
+        task.RpcProviders = [RpcProvider("runtime", version: version)];
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        using (var manifest = JsonDocument.Parse(File.ReadAllBytes(manifestPath)))
+        {
+            Assert.Equal(version, Assert.Single(manifest.RootElement.GetProperty("contractBundles").EnumerateArray())
+                .GetProperty("version").GetString());
+            Assert.Equal(version, Assert.Single(manifest.RootElement.GetProperty("usesContracts").EnumerateArray())
+                .GetProperty("contractVersion").GetString());
+            Assert.Equal(version, Assert.Single(manifest.RootElement.GetProperty("provides").EnumerateArray())
+                .GetProperty("contractVersion").GetString());
+            Assert.All(manifest.RootElement.GetProperty("targets").EnumerateArray(), target =>
+            {
+                var capabilities = target.GetProperty("requiredHostCapabilities").EnumerateArray()
+                    .Select(static value => value.GetString()!)
+                    .ToArray();
+                Assert.Contains(SunderSdkCapabilities.CallbacksV1, capabilities);
+                Assert.Contains(SunderSdkCapabilities.RpcV2, capabilities);
+                if (target.GetProperty("role").GetString() == "runtime")
+                {
+                    Assert.Contains("rpc.v2", capabilities);
+                }
+                else
+                {
+                    Assert.DoesNotContain("rpc.v2", capabilities);
+                }
+            });
+        }
+
+        var mismatchEngine = new TestBuildEngine();
+        var mismatch = CreateTask(Path.Combine(root, "mismatch.json"), mismatchEngine);
+        mismatch.ProjectDirectory = root;
+        ConfigureWorkerTask(mismatch, "linux-x64");
+        mismatch.ContractBundles = [ContractBundle(descriptorPath, version: version)];
+        mismatch.UsesContracts = [ContractUse("runtime", version: "2.0.0+build.8")];
+
+        Assert.False(mismatch.Execute());
+        Assert.Contains(mismatchEngine.Errors, error => error.Contains("exact matching local", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsTamperedBindingSnapshotAbiMetadata()
+    {
+        var root = CreateTempDirectory();
+        var descriptorPath = WriteMinimalV2Descriptor(root);
+        var bindingEngine = new TestBuildEngine();
+        var binding = new MSBuildTaskItem(descriptorPath);
+        binding.SetMetadata("Namespace", "Test.Snapshot.Generated");
+        var bindingTask = new GenerateSunderRpcBindingsTask
+        {
+            BuildEngine = bindingEngine,
+            Bindings = [binding],
+            ProjectDirectory = root,
+            IntermediateOutputPath = Path.Combine(root, "obj"),
+        };
+        Assert.True(bindingTask.Execute(), string.Join(Environment.NewLine, bindingEngine.Errors));
+        Assert.Single(bindingTask.BindingSnapshots).SetMetadata("AbiSha256", new string('0', 64));
+
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = root;
+        task.ContractBundles = [ContractBundle(descriptorPath)];
+        task.BindingSnapshots = bindingTask.BindingSnapshots;
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("immutable binding snapshot metadata", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GenerateManifest_RejectsBundleDescriptorWithUnsafeAncestorOutsideProjectDirectory()
+    {
+        var root = CreateTempDirectory();
+        var projectDirectory = Path.Combine(root, "project");
+        var realDirectory = Path.Combine(root, "outside-real");
+        var linkDirectory = Path.Combine(root, "outside-link");
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(realDirectory);
+        var descriptorPath = Path.Combine(realDirectory, "snapshot.rpc.json");
+        WriteSnapshotDescriptor(descriptorPath, "value");
+        try
+        {
+            Directory.CreateSymbolicLink(linkDirectory, realDirectory);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
+        {
+            return;
+        }
+        var buildEngine = new TestBuildEngine();
+        var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
+        task.ProjectDirectory = projectDirectory;
+        var bundle = new MSBuildTaskItem(Path.Combine(linkDirectory, "snapshot.rpc.json"));
+        bundle.SetMetadata("ContractId", "test.snapshot");
+        bundle.SetMetadata("Version", "1.0.0");
+        bundle.SetMetadata("Exposure", "package");
+        task.ContractBundles = [bundle];
+
+        Assert.False(task.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("outside-link", StringComparison.Ordinal)
+            && error.Contains("symbolic link or reparse point", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -449,6 +801,8 @@ public sealed class PackageBuildManifestTests
         var buildEngine = new TestBuildEngine();
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
         task.ReferencePaths = SdkReferencePaths();
+        task.PackageTargets = [];
+        task.SdkCapabilities = [];
 
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error =>
@@ -465,7 +819,11 @@ public sealed class PackageBuildManifestTests
         var buildEngine = new TestBuildEngine();
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
         task.ReferencePaths = SdkReferencePaths();
-        task.SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)];
+        task.SdkCapabilities =
+        [
+            new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1),
+            new MSBuildTaskItem("worker-protocol.v3"),
+        ];
         task.DynamicAccessAcknowledgements = DynamicAccessAcknowledgements();
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
@@ -481,7 +839,11 @@ public sealed class PackageBuildManifestTests
         var buildEngine = new TestBuildEngine();
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
         task.ReferencePaths = SdkReferencePaths();
-        task.SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)];
+        task.SdkCapabilities =
+        [
+            new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1),
+            new MSBuildTaskItem("worker-protocol.v3"),
+        ];
         task.DynamicAccessAcknowledgements = [DynamicAccessAcknowledgements()[0]];
 
         Assert.False(task.Execute());
@@ -498,6 +860,8 @@ public sealed class PackageBuildManifestTests
         var buildEngine = new TestBuildEngine();
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);
         task.ReferencePaths = SdkReferencePaths(includeAvalonia: true);
+        task.PackageTargets = [];
+        task.SdkCapabilities = [];
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         Assert.Empty(buildEngine.Errors);
@@ -706,9 +1070,7 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.StorageV1,
             SunderSdkCapabilities.StorageKeyMigrationV1,
             SunderSdkCapabilities.ShellViewV1,
-            SunderSdkCapabilities.ViewNavigationPreparationV1,
-            SunderSdkCapabilities.RuntimeOperationsV1,
-            SunderSdkCapabilities.RuntimeInvocationErrorsV1);
+            SunderSdkCapabilities.ViewNavigationPreparationV1);
     }
 
     [Theory]
@@ -878,7 +1240,7 @@ public sealed class PackageBuildManifestTests
     }
 
     [Fact]
-    public async Task PackPackage_IndexesAssetNamedContentIndexJson()
+    public async Task PackPackage_PreservesIndexedAssetNamedContentIndexJson()
     {
         var root = CreateTempDirectory();
         var project = Path.Combine(root, "project");
@@ -887,6 +1249,7 @@ public sealed class PackageBuildManifestTests
         CreateValidDevPackage(devPackage, manifestEngine);
         Directory.CreateDirectory(Path.Combine(devPackage, "payload", "shared", "assets"));
         File.WriteAllText(Path.Combine(devPackage, "payload", "shared", "assets", "content-index.json"), "asset");
+        PackageContentIndexer.Write(devPackage);
         var output = Path.Combine(project, "bin", "package.sunderpkg");
         var buildEngine = new TestBuildEngine();
 
@@ -913,6 +1276,37 @@ public sealed class PackageBuildManifestTests
         var validation = await SunderPackageArchiveInspector
             .ExtractAndValidateAsync(output, Path.Combine(root, "validated"));
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+    }
+
+    [Fact]
+    public void PackPackage_RejectsContentChangedAfterIndexing()
+    {
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var devPackage = Path.Combine(root, "sunder-dev");
+        CreateValidDevPackage(devPackage, new TestBuildEngine());
+        var assemblyPath = Path.Combine(
+            devPackage,
+            "payload",
+            "shared",
+            "lib",
+            Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+        File.AppendAllText(assemblyPath, "tampered-after-signing-and-indexing");
+        var output = Path.Combine(project, "bin", "package.sunderpkg");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new PackSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            DevPackagePath = devPackage,
+            DevPackageDiscoveryRoot = root,
+            PackageOutputPath = output,
+            ProjectDirectory = project,
+        }.Execute());
+
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("SHA-256 mismatch", StringComparison.Ordinal));
+        Assert.False(File.Exists(output));
     }
 
     [Fact]
@@ -954,6 +1348,7 @@ public sealed class PackageBuildManifestTests
         Directory.CreateDirectory(Path.Combine(devPackage, "payload", "shared", "lib"));
         File.WriteAllText(Path.Combine(devPackage, "manifest", "sunder-package.json"), "{}");
         File.WriteAllText(Path.Combine(devPackage, "payload", "shared", "lib", "Package.dll"), "assembly");
+        PackageContentIndexer.Write(devPackage);
         var output = Path.Combine(project, "bin", "package.sunderpkg");
         var buildEngine = new TestBuildEngine();
 
@@ -1071,9 +1466,10 @@ public sealed class PackageBuildManifestTests
         var manifestEngine = new TestBuildEngine();
         var manifestTask = CreateTask(manifestPath, manifestEngine);
         var target = new MSBuildTaskItem("runtime/win-x64");
-        target.SetMetadata("Role", "runtime");
-        target.SetMetadata("Rid", "win-x64");
-        manifestTask.PackageTargets = [target];
+        var workerName = CSharpAppHostName("win-x64");
+        var workerPath = Path.Combine(targetDirectory, workerName);
+        File.WriteAllText(workerPath, "worker");
+        ConfigureWorkerTask(manifestTask, "win-x64", target);
         Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
 
         var emitEngine = new TestBuildEngine();
@@ -1084,19 +1480,148 @@ public sealed class PackageBuildManifestTests
             DevPackagePath = devPackage,
             DiscoveryRoot = root,
             TargetDirectory = targetDirectory,
-            ManagedFiles = [new MSBuildTaskItem(assemblyPath)],
-            NativeRuntimeFiles = [new MSBuildTaskItem(winNative), new MSBuildTaskItem(linuxNative)],
+            WorkerFiles = [new MSBuildTaskItem(workerPath), new MSBuildTaskItem(winNative)],
         }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
 
         Assert.True(File.Exists(Path.Combine(devPackage, "manifest", "sunder-package.json")));
         Assert.True(File.Exists(Path.Combine(devPackage, "manifest", "content-index.json")));
-        Assert.True(File.Exists(Path.Combine(devPackage, "payload", "shared", "lib", Path.GetFileName(assemblyPath))));
+        Assert.True(File.Exists(Path.Combine(devPackage, "payload", "runtime", "win-x64", "lib", workerName)));
         Assert.True(File.Exists(Path.Combine(devPackage, "payload", "runtime", "win-x64", "lib", "runtimes", "win-x64", "native", "fixture.bin")));
         Assert.False(Directory.Exists(Path.Combine(devPackage, "payload", "runtime", "linux-x64")));
         Assert.False(Directory.Exists(Path.Combine(devPackage, "lib")));
         Assert.False(Directory.Exists(Path.Combine(devPackage, "assets")));
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+    }
+
+    [Fact]
+    public async Task EmitDevOutput_IndexesPostSigningWorkerBytesAndDetectsLaterTampering()
+    {
+        var root = CreateTempDirectory();
+        var targetDirectory = Path.Combine(root, "target");
+        var devPackage = Path.Combine(root, "sunder-dev");
+        Directory.CreateDirectory(targetDirectory);
+        var rid = RuntimeInformation.RuntimeIdentifier;
+        var appHostName = CSharpAppHostName(rid);
+        var appHostPath = Path.Combine(targetDirectory, appHostName);
+        await File.WriteAllBytesAsync(appHostPath, "apphost::platform-signature"u8.ToArray());
+        var manifestPath = Path.Combine(root, "sunder-package.json");
+        var manifestEngine = new TestBuildEngine();
+        var manifestTask = CreateTask(manifestPath, manifestEngine);
+        ConfigureWorkerTask(manifestTask, rid);
+        Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
+
+        var emitEngine = new TestBuildEngine();
+        Assert.True(new EmitSunderDevOutputTask
+        {
+            BuildEngine = emitEngine,
+            ManifestPath = manifestPath,
+            DevPackagePath = devPackage,
+            DiscoveryRoot = root,
+            TargetDirectory = targetDirectory,
+            WorkerFiles = [new MSBuildTaskItem(appHostPath)],
+        }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
+
+        var packagedAppHost = Path.Combine(devPackage, "payload", "runtime", rid, "lib", appHostName);
+        var index = JsonSerializer.Deserialize<SunderPackageContentIndex>(await File.ReadAllTextAsync(
+            Path.Combine(devPackage, "manifest", "content-index.json")))!;
+        var entry = Assert.Single(index.Files!, item => item!.Path == $"payload/runtime/{rid}/lib/{appHostName}")!;
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(appHostPath))).ToLowerInvariant(),
+            entry.Sha256);
+
+        await File.AppendAllTextAsync(packagedAppHost, "::tampered");
+        var tampered = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
+        Assert.False(tampered.Success);
+        Assert.Contains(tampered.Errors, error =>
+            error.Contains($"payload/runtime/{rid}/lib/{appHostName}", StringComparison.Ordinal)
+            && error.Contains("mismatch", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PackageTargets_ExposeWorkerSigningExtensionAfterPublishCollectionAndBeforeIndexing()
+    {
+        var targets = File.ReadAllText(Path.Combine(
+            FindTaskDirectory(),
+            "..",
+            "build",
+            "Sunder.Package.Build.targets"));
+
+        Assert.Contains("SunderPackageWorkerSigningTargets", targets, StringComparison.Ordinal);
+        Assert.Contains("<_SunderWorkerSourceFile Include=\"@(ResolvedFileToPublish)\"", targets, StringComparison.Ordinal);
+        Assert.Contains("sunder-worker-signing", targets, StringComparison.Ordinal);
+        Assert.Contains("<RemoveDir Directories=\"$(_SunderPackageWorkerSigningDirectory)\"", targets, StringComparison.Ordinal);
+        Assert.Contains("DestinationFiles=\"@(_SunderWorkerSourceFile->'$(_SunderPackageWorkerSigningDirectory)%(RelativePath)')\"", targets, StringComparison.Ordinal);
+        Assert.Contains("SunderPackageWorkerSigningFile Include=\"@(_SunderWorkerFile)\"", targets, StringComparison.Ordinal);
+        Assert.Contains("DependsOnTargets=\"_CollectSunderWorkerFiles;$(SunderPackageWorkerSigningTargets)\"", targets, StringComparison.Ordinal);
+        Assert.Contains("GenerateSunderPackageManifest;_RunSunderPackageWorkerSigning;_ValidateSunderDevOutputPath", targets, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PackageTargets_WorkerSigningMutatesPrivateClosureWithoutChangingSources()
+    {
+        var root = CreateTempDirectory();
+        var project = Path.Combine(root, "project");
+        var cache = Path.Combine(root, "cache");
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(cache);
+        var appHost = Path.Combine(cache, "Worker");
+        var runtimeLibrary = Path.Combine(cache, "libSystem.Native.dylib");
+        await File.WriteAllTextAsync(appHost, "source-apphost");
+        await File.WriteAllTextAsync(runtimeLibrary, "source-runtime");
+        var targetsPath = Path.GetFullPath(Path.Combine(
+            FindTaskDirectory(),
+            "..",
+            "build",
+            "Sunder.Package.Build.targets"));
+        var projectFile = Path.Combine(project, "Signing.proj");
+        await File.WriteAllTextAsync(projectFile, $$"""
+            <Project>
+              <PropertyGroup>
+                <IntermediateOutputPath>obj/</IntermediateOutputPath>
+                <_SunderHasWorkerTarget>true</_SunderHasWorkerTarget>
+                <SunderPackageWorkerSigningTargets>TestSignWorker</SunderPackageWorkerSigningTargets>
+                <SunderPackageBuildProject>{{Path.Combine(root, "missing.csproj")}}</SunderPackageBuildProject>
+                <SunderPackageBuildTaskAssembly>{{typeof(PackSunderPackageTask).Assembly.Location}}</SunderPackageBuildTaskAssembly>
+              </PropertyGroup>
+              <Target Name="ComputeFilesToPublish">
+                <ItemGroup>
+                  <ResolvedFileToPublish Include="{{appHost}}" RelativePath="Worker" />
+                  <ResolvedFileToPublish Include="{{runtimeLibrary}}" RelativePath="runtimes/osx-arm64/native/libSystem.Native.dylib" />
+                </ItemGroup>
+              </Target>
+              <Target Name="TestSignWorker">
+                <WriteLinesToFile File="%(SunderPackageWorkerSigningFile.Identity)"
+                                  Lines="signed"
+                                  Overwrite="false"
+                                  Encoding="UTF-8" />
+              </Target>
+              <Target Name="Run" DependsOnTargets="_RunSunderPackageWorkerSigning" />
+              <Import Project="{{targetsPath}}" />
+            </Project>
+            """);
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = project,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList = { "msbuild", projectFile, "-t:Run", "-nologo" },
+        })!;
+        var output = await process.StandardOutput.ReadToEndAsync();
+        var error = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        Assert.True(process.ExitCode == 0, output + error);
+        Assert.Equal("source-apphost", await File.ReadAllTextAsync(appHost));
+        Assert.Equal("source-runtime", await File.ReadAllTextAsync(runtimeLibrary));
+        var signingRoot = Path.Combine(project, "obj", "sunder-worker-signing");
+        Assert.EndsWith("signed" + Environment.NewLine, await File.ReadAllTextAsync(Path.Combine(signingRoot, "Worker")), StringComparison.Ordinal);
+        Assert.EndsWith(
+            "signed" + Environment.NewLine,
+            await File.ReadAllTextAsync(Path.Combine(signingRoot, "runtimes", "osx-arm64", "native", "libSystem.Native.dylib")),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1116,7 +1641,7 @@ public sealed class PackageBuildManifestTests
             DevPackagePath = devPackage,
             DiscoveryRoot = root,
             TargetDirectory = Path.Combine(leafRoot, "target"),
-            ManagedFiles = [new MSBuildTaskItem(Path.Combine(leafRoot, "target", "missing.dll"))],
+            WorkerFiles = [new MSBuildTaskItem(Path.Combine(leafRoot, "target", "missing-worker"))],
         }.Execute());
 
         Assert.Equal(priorIndex, await File.ReadAllBytesAsync(Path.Combine(devPackage, "manifest", "content-index.json")));
@@ -1408,7 +1933,14 @@ public sealed class PackageBuildManifestTests
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         var firstIndex = await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json"));
-        Assert.True(File.Exists(Path.Combine(output, "payload", "shared", "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location))));
+        Assert.True(File.Exists(Path.Combine(output, "payload", "app", "shared", "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location))));
+        Assert.True(File.Exists(Path.Combine(
+            output,
+            "payload",
+            "runtime",
+            "win-x64",
+            "lib",
+            CSharpAppHostName("win-x64"))));
         Assert.True(File.Exists(Path.Combine(output, "payload", "app", "shared", "lib", "runtimes", "win-x64", "native", "fixture.bin")));
         Assert.True(File.Exists(Path.Combine(output, "payload", "runtime", "shared", "lib", "runtimes", "win-x64", "native", "fixture.bin")));
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(output);
@@ -1417,6 +1949,137 @@ public sealed class PackageBuildManifestTests
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         Assert.Equal(firstIndex, await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json")));
+    }
+
+    [Fact]
+    public async Task AggregateTask_UnionsRoleScopedRpcDeclarationsAndDeduplicatesRidLeaves()
+    {
+        var root = CreateTempDirectory();
+        var appWin = CreateRpcLeaf(root, "app", "win-x64", required: false, includeProvider: false);
+        var appLinux = CreateRpcLeaf(root, "app", "linux-x64", required: false, includeProvider: false);
+        var runtime = CreateRpcLeaf(root, "runtime", "linux-arm64", required: true);
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        var buildEngine = new TestBuildEngine();
+        var task = new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(runtime), TargetLeafItem(appLinux), TargetLeafItem(appWin)],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        };
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(output);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        Assert.Single(validation.Manifest!.ContractBundles!);
+        var uses = validation.Manifest.UsesContracts!;
+        Assert.Equal(
+            ["app", "runtime"],
+            uses.Select(static use => use!.Role!).ToArray());
+        Assert.False(uses[0]!.Required ?? true);
+        Assert.True(uses[1]!.Required == true);
+        Assert.Equal("runtime", Assert.Single(validation.Manifest.Provides!)!.Role);
+        Assert.All(validation.Manifest.Targets!, targetManifest =>
+        {
+            Assert.Contains("rpc.v2", targetManifest!.RequiredHostCapabilities!);
+            Assert.Contains(SunderSdkCapabilities.CallbacksV1, targetManifest.RequiredHostCapabilities!);
+            Assert.DoesNotContain("rpc.v1", targetManifest.RequiredHostCapabilities!);
+        });
+        Assert.True(File.Exists(Path.Combine(output, "payload", "shared", "contracts", "minimal.rpc.json")));
+    }
+
+    [Theory]
+    [InlineData("use")]
+    [InlineData("provider")]
+    public void AggregateTask_RejectsConflictingRoleScopedRpcDeclarations(string declaration)
+    {
+        var root = CreateTempDirectory();
+        var first = declaration == "use"
+            ? CreateRpcLeaf(root, "runtime", "linux-x64", required: true)
+            : CreateRpcLeaf(root, "runtime", "linux-x64", audience: "owner");
+        var second = declaration == "use"
+            ? CreateRpcLeaf(root, "runtime", "linux-arm64", required: false)
+            : CreateRpcLeaf(root, "runtime", "linux-arm64", audience: "public");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(first), TargetLeafItem(second)],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        }.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains($"conflicting {(declaration == "use" ? "contract use" : "provider")}", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Theory]
+    [InlineData("use")]
+    [InlineData("provider")]
+    public void AggregateTask_RejectsSameRoleRidRpcDeclarationOmissions(string declaration)
+    {
+        var root = CreateTempDirectory();
+        var complete = CreateRpcLeaf(root, "runtime", "linux-x64");
+        var omitted = CreateRpcLeaf(
+            root,
+            "runtime",
+            "linux-arm64",
+            includeUse: declaration != "use",
+            includeProvider: declaration != "provider");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(complete), TargetLeafItem(omitted)],
+            OutputPath = output,
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        }.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains(
+            $"identical {(declaration == "use" ? "contract use" : "provider")} sets for role 'runtime'",
+            StringComparison.Ordinal));
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact]
+    public void AggregateTask_RequiresIdenticalPackageWideContractBundles()
+    {
+        var root = CreateTempDirectory();
+        var app = CreateRpcLeaf(root, "app", "win-x64", exposure: "public", includeProvider: false);
+        var runtime = CreateRpcLeaf(root, "runtime", "linux-x64", exposure: "package");
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(app), TargetLeafItem(runtime)],
+            OutputPath = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.2.3",
+        }.Execute());
+        Assert.Contains(buildEngine.Errors, error => error.Contains("package-wide manifest metadata", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1647,14 +2310,12 @@ public sealed class PackageBuildManifestTests
         Assert.Contains(buildEngine.Errors, error => error.Contains("more than once", StringComparison.Ordinal));
     }
 
-    [Theory]
-    [InlineData("worker")]
-    [InlineData("process")]
-    public async Task AggregateTask_PreservesWorkerAndLegacyProcessTargetLeavesWithoutForeignRidLeakage(string kind)
+    [Fact]
+    public async Task AggregateTask_PreservesWorkerTargetLeavesWithoutForeignRidLeakage()
     {
         var root = CreateTempDirectory();
-        var first = CreateProcessLeaf(root, "linux-x64", "linux-sea", kind);
-        var second = CreateProcessLeaf(root, "osx-arm64", "mac-sea", kind);
+        var first = CreateProcessLeaf(root, "linux-x64", "linux-sea", "worker");
+        var second = CreateProcessLeaf(root, "osx-arm64", "mac-sea", "worker");
         var project = Path.Combine(root, "aggregate-project");
         var target = Path.Combine(project, "bin", "Debug", "net10.0");
         var output = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName);
@@ -1673,13 +2334,75 @@ public sealed class PackageBuildManifestTests
 
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(output);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
-        Assert.All(validation.Manifest!.Targets!, target => Assert.Equal(kind, target!.Kind));
+        Assert.All(validation.Manifest!.Targets!, target => Assert.Equal("worker", target!.Kind));
         var linux = SunderPackageTargetResolver.CreateProjectionPlan(
             validation.Manifest,
             validation.ContentIndex!,
             new SunderPackageTargetKey("runtime", "linux-x64"));
         Assert.Contains(linux.Files, file => file.LogicalPath.ToString() == "bin/worker");
         Assert.DoesNotContain(linux.Files, file => file.PhysicalPath.ToString().Contains("osx-arm64", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AggregateTask_RejectsLegacyProcessTargetLeaf()
+    {
+        var root = CreateTempDirectory();
+        var leaf = CreateProcessLeaf(root, "linux-x64", "legacy", "process", validate: false);
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(leaf)],
+            OutputPath = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.0.0",
+        }.Execute());
+        Assert.Contains(buildEngine.Errors, error =>
+            error.Contains("kind 'process'", StringComparison.Ordinal)
+            && error.Contains("invalid for role 'runtime'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AggregateTask_RejectsWorkerV1CapabilityLeaf()
+    {
+        var root = CreateTempDirectory();
+        var leaf = CreateProcessLeaf(
+            root,
+            "linux-x64",
+            "legacy",
+            "worker",
+            validate: false,
+            requiredHostCapabilities:
+            [
+                "rpc.v2",
+                "sdk-baseline-1-1.v1",
+                "worker-protocol.v1",
+                "worker-protocol.v3",
+            ]);
+        var project = Path.Combine(root, "aggregate-project");
+        var target = Path.Combine(project, "bin", "Debug", "net10.0");
+        var buildEngine = new TestBuildEngine();
+
+        Assert.False(new AggregateSunderPackageTask
+        {
+            BuildEngine = buildEngine,
+            TargetLeaves = [TargetLeafItem(leaf)],
+            OutputPath = Path.Combine(target, ValidateSunderDevOutputPathTask.GeneratedDirectoryName),
+            OutputDiscoveryRoot = target,
+            ProjectDirectory = project,
+            TargetDirectory = target,
+            ExpectedPackageVersion = "1.0.0",
+        }.Execute());
+        Assert.Contains(
+            buildEngine.Errors,
+            error => error.Contains(
+                "cannot require unsupported worker protocol capability 'worker-protocol.v1'",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1768,12 +2491,21 @@ public sealed class PackageBuildManifestTests
             "PackageContractBuilder.cs",
         };
 
-        Assert.True(File.ReadLines(taskPath).Count() < 170);
+        Assert.True(File.ReadLines(taskPath).Count() < 180);
         Assert.False(File.Exists(Path.Combine(taskDirectory, "GenerateSunderPackageManifestTaskAdapter.cs")));
         Assert.DoesNotContain("SdkApiVersion { get; set; }", taskSource, StringComparison.Ordinal);
         Assert.DoesNotContain("SdkVersion { get; set; }", taskSource, StringComparison.Ordinal);
         Assert.Contains(
             "GlobalPropertiesToRemove=\"Version;VersionPrefix;VersionSuffix;PackageVersion;InformationalVersion\"",
+            targetsSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("'@(SunderRpcBinding)' != ''", targetsSource, StringComparison.Ordinal);
+        Assert.Contains(
+            "<Output TaskParameter=\"BindingSnapshots\" ItemName=\"_SunderRpcBindingSnapshot\" />",
+            targetsSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BindingSnapshots=\"@(_SunderRpcBindingSnapshot)\"",
             targetsSource,
             StringComparison.Ordinal);
         foreach (var file in expectedFiles)
@@ -1950,6 +2682,7 @@ public sealed class PackageBuildManifestTests
         File.Copy(
             Assembly.GetExecutingAssembly().Location,
             Path.Combine(devPackage, "payload", "shared", "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location)));
+        PackageContentIndexer.Write(devPackage);
     }
 
     private static string CreateCanonicalLeaf(string root, string role, string rid, string nativeContent)
@@ -1970,6 +2703,16 @@ public sealed class PackageBuildManifestTests
         target.SetMetadata("Role", role);
         target.SetMetadata("Rid", rid);
         manifestTask.PackageTargets = [target];
+        MSBuildTaskItem[] workerFiles = [];
+        if (role == SunderPackageFormat.RuntimeHostRole)
+        {
+            var executableName = CSharpAppHostName(rid);
+            var executablePath = Path.Combine(targetDirectory, executableName);
+            File.WriteAllText(executablePath, "worker");
+            target.SetMetadata("Kind", SunderPackageFormat.WorkerTargetKind);
+            ConfigureWorkerTask(manifestTask, rid, target);
+            workerFiles = [new MSBuildTaskItem(executablePath), new MSBuildTaskItem(nativePath)];
+        }
         Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
         var emitEngine = new TestBuildEngine();
         Assert.True(new EmitSunderDevOutputTask
@@ -1979,8 +2722,61 @@ public sealed class PackageBuildManifestTests
             DevPackagePath = devPackage,
             DiscoveryRoot = leafRoot,
             TargetDirectory = targetDirectory,
-            ManagedFiles = [new MSBuildTaskItem(assemblyPath)],
-            NativeRuntimeFiles = [new MSBuildTaskItem(nativePath)],
+            ManagedFiles = role == SunderPackageFormat.AppHostRole ? [new MSBuildTaskItem(assemblyPath)] : [],
+            NativeRuntimeFiles = role == SunderPackageFormat.AppHostRole ? [new MSBuildTaskItem(nativePath)] : [],
+            WorkerFiles = workerFiles,
+        }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
+        return devPackage;
+    }
+
+    private static string CreateRpcLeaf(
+        string root,
+        string role,
+        string rid,
+        bool required = true,
+        string audience = "owner",
+        string exposure = "public",
+        bool includeUse = true,
+        bool includeProvider = true)
+    {
+        var leafRoot = Path.Combine(root, $"rpc-{role}-{rid}-leaf");
+        var targetDirectory = Path.Combine(leafRoot, "target");
+        var devPackage = Path.Combine(leafRoot, "sunder-dev");
+        Directory.CreateDirectory(targetDirectory);
+        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+        File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+        var descriptorPath = WriteMinimalV2Descriptor(leafRoot);
+        var manifestPath = Path.Combine(leafRoot, "sunder-package.json");
+        var manifestEngine = new TestBuildEngine();
+        var manifestTask = CreateTask(manifestPath, manifestEngine);
+        manifestTask.ProjectDirectory = leafRoot;
+        var target = new MSBuildTaskItem(role + "/" + rid);
+        manifestTask.PackageTargets = [target];
+        MSBuildTaskItem[] workerFiles = [];
+        if (role == SunderPackageFormat.RuntimeHostRole)
+        {
+            var executableName = CSharpAppHostName(rid);
+            var executablePath = Path.Combine(targetDirectory, executableName);
+            File.WriteAllText(executablePath, "worker");
+            target.SetMetadata("Kind", SunderPackageFormat.WorkerTargetKind);
+            ConfigureWorkerTask(manifestTask, rid, target);
+            workerFiles = [new MSBuildTaskItem(executablePath)];
+        }
+        manifestTask.ContractBundles = [ContractBundle(descriptorPath, exposure)];
+        manifestTask.UsesContracts = includeUse ? [ContractUse(role, required: required)] : [];
+        manifestTask.RpcProviders = includeProvider ? [RpcProvider(role, audience: audience)] : [];
+        Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
+        var emitEngine = new TestBuildEngine();
+        Assert.True(new EmitSunderDevOutputTask
+        {
+            BuildEngine = emitEngine,
+            ManifestPath = manifestPath,
+            DevPackagePath = devPackage,
+            DiscoveryRoot = leafRoot,
+            TargetDirectory = targetDirectory,
+            ManagedFiles = role == SunderPackageFormat.AppHostRole ? [new MSBuildTaskItem(assemblyPath)] : [],
+            WorkerFiles = workerFiles,
+            ContractFiles = manifestTask.ResolvedContractFiles,
         }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
         return devPackage;
     }
@@ -1993,7 +2789,13 @@ public sealed class PackageBuildManifestTests
         return item;
     }
 
-    private static string CreateProcessLeaf(string root, string rid, string executableContent, string kind = "process")
+    private static string CreateProcessLeaf(
+        string root,
+        string rid,
+        string executableContent,
+        string kind,
+        bool validate = true,
+        IReadOnlyList<string?>? requiredHostCapabilities = null)
     {
         var leaf = Path.Combine(root, "process-" + rid);
         var manifestPath = Path.Combine(leaf, "manifest", "sunder-package.json");
@@ -2004,7 +2806,7 @@ public sealed class PackageBuildManifestTests
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(new SunderPackageManifest
         {
             ArchiveFormatVersion = 1,
-            ManifestVersion = 1,
+            ManifestVersion = 3,
             Id = "test.process",
             Name = "Test Process",
             Version = "1.0.0",
@@ -2019,22 +2821,20 @@ public sealed class PackageBuildManifestTests
                     EntryPoint = "bin/worker",
                     TargetFramework = "node24",
                     SdkVersion = "1.1.0",
-                    RequiredHostCapabilities = ["rpc.v1", "sdk-baseline-1-1.v1"],
+                    RequiredHostCapabilities = requiredHostCapabilities
+                        ?? ["rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"],
                 },
             ],
             ContractBundles = [],
             UsesContracts = [],
             Provides = [],
         }));
-        var buildEngine = new TestBuildEngine();
-        Assert.True(new PackSunderPackageTask
+        PackageContentIndexer.Write(leaf);
+        if (validate)
         {
-            BuildEngine = buildEngine,
-            DevPackagePath = leaf,
-            DevPackageDiscoveryRoot = root,
-            PackageOutputPath = Path.Combine(root, $"process-{rid}.sunderpkg"),
-            ProjectDirectory = leaf,
-        }.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
+            var validation = SunderPackageArchiveInspector.ValidateExtractedPackageAsync(leaf).GetAwaiter().GetResult();
+            Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        }
         return leaf;
     }
 
@@ -2042,7 +2842,8 @@ public sealed class PackageBuildManifestTests
         string assemblyPath,
         string manifestPath,
         IBuildEngine buildEngine)
-        => new()
+    {
+        var task = new GenerateSunderPackageManifestTask
         {
             BuildEngine = buildEngine,
             TargetAssemblyPath = assemblyPath,
@@ -2052,6 +2853,32 @@ public sealed class PackageBuildManifestTests
             ProjectDirectory = Path.GetDirectoryName(assemblyPath)!,
             TargetFramework = "net10.0",
         };
+        ConfigureWorkerTask(task, "linux-x64");
+        return task;
+    }
+
+    private static void ConfigureWorkerTask(
+        GenerateSunderPackageManifestTask task,
+        string rid,
+        MSBuildTaskItem? target = null)
+    {
+        target ??= new MSBuildTaskItem("runtime/" + rid);
+        target.SetMetadata("Role", SunderPackageFormat.RuntimeHostRole);
+        target.SetMetadata("Rid", rid);
+        target.SetMetadata("Kind", SunderPackageFormat.WorkerTargetKind);
+        task.PackageTargets = [target];
+        task.RuntimeIdentifier = rid;
+        task.OutputType = "Exe";
+        task.SelfContained = true;
+        task.UseAppHost = true;
+        task.SdkCapabilities = task.SdkCapabilities
+            .Append(new MSBuildTaskItem("worker-protocol.v3"))
+            .ToArray();
+    }
+
+    private static string CSharpAppHostName(string rid)
+        => Path.GetFileNameWithoutExtension(Assembly.GetExecutingAssembly().Location)
+           + (rid.StartsWith("win-", StringComparison.Ordinal) ? ".exe" : string.Empty);
 
     private static MSBuildTaskItem[] SdkReferencePaths(bool includeAvalonia = false)
         => (includeAvalonia
@@ -2145,9 +2972,114 @@ public sealed class PackageBuildManifestTests
         }
     }
 
+    private static string WriteMinimalV2Descriptor(string root, string version = "2.0.0")
+    {
+        var path = Path.Combine(root, "minimal.rpc.json");
+        File.WriteAllText(
+            path,
+            MinimalV2Descriptor.Replace(
+                "\"version\": \"2.0.0\"",
+                $"\"version\": \"{version}\"",
+                StringComparison.Ordinal));
+        return path;
+    }
+
+    private static MSBuildTaskItem ContractBundle(
+        string descriptorPath,
+        string exposure = "public",
+        string version = "2.0.0")
+    {
+        var item = new MSBuildTaskItem(descriptorPath);
+        item.SetMetadata("ContractId", "example.rpc.v2.minimal");
+        item.SetMetadata("Version", version);
+        item.SetMetadata("DescriptorPath", "contracts/minimal.rpc.json");
+        item.SetMetadata("Exposure", exposure);
+        return item;
+    }
+
+    private static MSBuildTaskItem ContractUse(
+        string role,
+        string version = "2.0.0",
+        bool required = true)
+    {
+        var item = new MSBuildTaskItem("example.rpc.v2.minimal");
+        item.SetMetadata("Role", role);
+        item.SetMetadata("ContractVersion", version);
+        item.SetMetadata("Required", required ? "true" : "false");
+        item.SetMetadata("Actions", "discover;invoke");
+        return item;
+    }
+
+    private static MSBuildTaskItem RpcProvider(
+        string role,
+        string version = "2.0.0",
+        string audience = "owner")
+    {
+        var item = new MSBuildTaskItem("test.rpc.provider");
+        item.SetMetadata("Role", role);
+        item.SetMetadata("ContractId", "example.rpc.v2.minimal");
+        item.SetMetadata("ContractVersion", version);
+        item.SetMetadata("Audience", audience);
+        return item;
+    }
+
+    private static void WriteSnapshotDescriptor(string path, string propertyName)
+        => File.WriteAllText(path, """
+            {
+              "descriptorVersion":2,
+              "contractId":"test.snapshot",
+              "version":"1.0.0",
+              "errors":{},
+              "services":{"snapshot":{"methods":{"read":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Empty"},"responseSchema":{"$ref":"#/$defs/Payload"}}}}},
+              "$defs":{
+                "Empty":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Payload":{"type":"object","properties":{"PROPERTY_NAME":{"type":"boolean"}},"required":["PROPERTY_NAME"],"additionalProperties":false}
+              }
+            }
+            """.Replace("PROPERTY_NAME", propertyName, StringComparison.Ordinal));
+
+    private const string MinimalV2DescriptorSha256 = "9d593e62790998a4367b5d1ffb4c07dbe834aa7978507293a4078c1fcdd31016";
+    private const string MinimalV2AbiSha256 = "45788031fe686da6d7f608d1b68b978b43f6ab0b51d8aa9461b012ad4f2a8544";
+    private const string MinimalV2Descriptor = """
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "descriptorVersion": 2,
+          "contractId": "example.rpc.v2.minimal",
+          "version": "2.0.0",
+          "errors": {},
+          "services": {
+            "example": {
+              "methods": {
+                "ping": {
+                  "kind": "unary",
+                  "idempotency": "idempotent",
+                  "errors": [],
+                  "requestSchema": { "$ref": "#/$defs/Empty" },
+                  "responseSchema": { "$ref": "#/$defs/Empty" }
+                }
+              }
+            }
+          },
+          "$defs": {
+            "Empty": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false,
+              "title": "Empty value"
+            }
+          }
+        }
+        """;
+
     private static string CreateTempDirectory()
     {
-        var path = Path.Combine(Path.GetTempPath(), "sunder-package-build-tests", Guid.NewGuid().ToString("N"));
+        var tempRoot = Path.GetFullPath(Path.GetTempPath());
+        if (OperatingSystem.IsMacOS() && tempRoot.StartsWith("/var/", StringComparison.Ordinal))
+        {
+            tempRoot = "/private" + tempRoot;
+        }
+        var path = Path.Combine(tempRoot, "sunder-package-build-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }
@@ -2220,9 +3152,9 @@ public sealed class PackageBuildManifestTests
     private sealed record ProcessResult(int ExitCode, string Output);
 }
 
-public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderAppPackageModule
+public sealed class FixturePackageModule : ISunderAppPackageModule
 {
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
         _ = context.Settings;
         _ = context.Storage.State;
@@ -2232,88 +3164,26 @@ public sealed class FixturePackageModule : ISunderRuntimePackageModule, ISunderA
         services.AddSingleton<IPackageAuthHandler, FixtureAuthHandler>();
         services.AddSingleton<IPackageNotificationService, NullPackageNotificationService>();
         services.AddSingleton<FixtureStackContributor>();
-        services.AddSingleton<FixtureRuntimeOperationHandler>();
-        services.AddSingleton<FixtureRuntimeStreamHandler>();
-    }
-
-    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
-    {
-        registry.RegisterBackgroundService<FixtureBackgroundService>();
-        var stackContributor = services.GetRequiredService<FixtureStackContributor>();
-        registry.RegisterStackContributor("fixture.stack", stackContributor, services);
-        registry.RegisterSettingsSchema(new PackageSettingsSchema(
+        services.AddSingleton(new PackageSettingsSchema(
             null,
             [new PackageSettingsSection(
                 "general",
                 "General",
                 null,
                 [new PackageSettingsField("enabled", "Enabled", PackageSettingsFieldKind.Boolean)])]));
-        registry.RegisterRuntimeOperation(
-            new PackageRuntimeOperation<FixtureRuntimeRequest, FixtureRuntimeResponse>("fixture.run"),
-            services.GetRequiredService<FixtureRuntimeOperationHandler>());
-        registry.RegisterRuntimeStream(
-            new PackageRuntimeStream<FixtureRuntimeRequest, FixtureRuntimeResponse>("fixture.events"),
-            services.GetRequiredService<FixtureRuntimeStreamHandler>());
-    }
-
-    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
-    {
-        _ = Type.GetType("Sunder.Sdk.Callbacks.PackageCallbackStartContext, Sunder.Sdk");
     }
 
     public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
+        _ = Type.GetType("Sunder.Sdk.Callbacks.PackageCallbackStartContext, Sunder.Sdk");
         registry.RegisterPackageView<FixtureView>(new PackageViewRegistration("fixture.view", "Fixture View"));
         registry.RegisterSettingsView<FixtureSettingsView>();
-    }
-}
-
-public sealed record FixtureRuntimeRequest(string Value);
-
-public sealed record FixtureRuntimeResponse(string Value);
-
-public sealed class FixtureRuntimeOperationHandler
-    : IPackageRuntimeOperationHandler<FixtureRuntimeRequest, FixtureRuntimeResponse>
-{
-    public ValueTask<FixtureRuntimeResponse> HandleAsync(
-        FixtureRuntimeRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(new FixtureRuntimeResponse(request.Value));
-    }
-}
-
-public sealed class FixtureRuntimeStreamHandler
-    : IPackageRuntimeStreamHandler<FixtureRuntimeRequest, FixtureRuntimeResponse>
-{
-    public async IAsyncEnumerable<FixtureRuntimeResponse> SubscribeAsync(
-        FixtureRuntimeRequest request,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        await Task.Yield();
-        yield return new FixtureRuntimeResponse(request.Value);
     }
 }
 
 public sealed class FixtureView : UserControl;
 
 public sealed class FixtureSettingsView : UserControl;
-
-public sealed class FixtureBackgroundService : IPackageRuntimeGenerationParticipant
-{
-    public Task StartAsync(CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
-
-    public Task StopAsync(CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
-
-    public Task CommitGenerationAsync(
-        PackageRuntimeGeneration generation,
-        CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
-}
 
 public sealed class FixtureStackContributor : IPackageStackExporter, IPackageStackImporter
 {
@@ -2404,6 +3274,4 @@ public sealed class FixtureNewSdkCapabilities(IPackageStorageKeyMigrator storage
     public PackageStorageKeyMigration StorageMigration { get; }
         = PackageStorageKeyMigration.Exact("legacy", "fixture.v1.key");
 
-    public PackageRuntimeInvocationException RuntimeFailure { get; }
-        = new("runtime.v1.fixture", isTransient: false);
 }

@@ -1,12 +1,12 @@
 {
   "protocolIdentity": "dev.sunder.runtime",
-  "protocolRevision": 5,
-  "minimumSupportedRevision": 5,
-  "maximumSupportedRevision": 5,
+  "protocolRevision": 8,
+  "minimumSupportedRevision": 8,
+  "maximumSupportedRevision": 8,
   "runtimeInstanceId": "11111111-1111-1111-1111-111111111111",
   "supportedFeatures": [
     "api.v1",
-    "package-runtime-stream-envelopes.v1"
+    "schema-first-rpc.v2"
   ],
   "product": {
     "productName": "Sunder.Runtime.Host",

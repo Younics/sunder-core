@@ -84,4 +84,25 @@ internal sealed class ShellPackageLifecycleRefreshCoordinator(
         }
     }
 
+    public async Task ApplyPackageMetadataAsync(
+        IReadOnlyList<ActivePackageDescriptor> activePackages,
+        CancellationToken cancellationToken = default)
+    {
+        using var lifecycle = await _packageLifecycleGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (isDisposed())
+        {
+            return;
+        }
+        if (uiDispatcher.CheckAccess())
+        {
+            packageLifecyclePresenter.ApplyPackageMetadata(activePackages);
+        }
+        else
+        {
+            await uiDispatcher.InvokeAsync(() => packageLifecyclePresenter.ApplyPackageMetadata(activePackages))
+                .ConfigureAwait(false);
+        }
+    }
+
 }

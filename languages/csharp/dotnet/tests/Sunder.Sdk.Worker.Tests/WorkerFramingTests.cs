@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Sunder.Sdk.Worker.Internal;
 using Sunder.Sdk.Worker.Tests.TestSupport;
 
@@ -56,6 +57,38 @@ public sealed class WorkerFramingTests
 
         await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
             await reader.ReadAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Reader_UsesAsciiOnlyCollisionFoldingForNestedRpcValues()
+    {
+        using var stream = new AsyncByteStream();
+        var reader = new WorkerFrameReader(stream, WorkerLimits.Default);
+        var body = "{\"type\":\"host.result\",\"id\":\"unicode1\",\"value\":{\"k\":true,\"\u212a\":false,\"\u00e9\":1,\"\u00c9\":2}}"u8.ToArray();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n"));
+        await stream.WriteAsync(body);
+
+        using var document = await reader.ReadAsync(CancellationToken.None);
+
+        var value = document.RootElement.GetProperty("value");
+        Assert.Equal(4, value.EnumerateObject().Count());
+        Assert.True(value.GetProperty("k").GetBoolean());
+        Assert.False(value.GetProperty("\u212a").GetBoolean());
+    }
+
+    [Fact]
+    public void Writer_UsesAsciiOnlyCollisionFoldingForNestedRpcValues()
+    {
+        using var source = JsonDocument.Parse("{\"k\":true,\"\u212a\":false,\"\u00e9\":1,\"\u00c9\":2}");
+
+        var body = WorkerJson.Serialize(
+            WorkerLimits.Default,
+            writer => WorkerJson.WriteJsonValue(writer, source.RootElement));
+        using var output = JsonDocument.Parse(body);
+
+        Assert.Equal(4, output.RootElement.EnumerateObject().Count());
+        Assert.True(output.RootElement.GetProperty("k").GetBoolean());
+        Assert.False(output.RootElement.GetProperty("\u212a").GetBoolean());
     }
 
     [Fact]

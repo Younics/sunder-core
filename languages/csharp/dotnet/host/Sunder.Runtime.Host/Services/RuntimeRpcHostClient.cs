@@ -28,8 +28,10 @@ internal sealed class RuntimeRpcHostCallerActivation : IRuntimeRpcCallerActivati
         [
             new SunderPackageContractUseManifest
             {
+                Role = SunderPackageFormat.RuntimeHostRole,
                 ContractId = descriptor.ContractId,
-                VersionRange = descriptor.Version,
+                ContractVersion = descriptor.Version,
+                AbiSha256 = descriptor.AbiSha256,
                 Required = true,
                 Actions = [SunderRpcProtocol.DiscoverAction, SunderRpcProtocol.InvokeAction],
             },
@@ -39,6 +41,7 @@ internal sealed class RuntimeRpcHostCallerActivation : IRuntimeRpcCallerActivati
 
     public string PackageId => StackPrincipalId;
     public string PackageVersion => "1.0.0";
+    public string Role => SunderPackageFormat.RuntimeHostRole;
     public string ManifestSha256 { get; }
     public PackageSourceKind? SourceKind => null;
     public IReadOnlyDictionary<string, SunderRpcContractDescriptor> RpcContracts { get; }

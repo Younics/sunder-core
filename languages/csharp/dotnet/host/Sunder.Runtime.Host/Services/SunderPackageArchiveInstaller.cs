@@ -12,7 +12,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
         string packagePath,
         bool isEnabled,
         CancellationToken cancellationToken = default,
-        InstalledPackageProvenanceRecord? provenance = null)
+        InstalledPackageProvenanceRecord? provenance = null,
+        string? consentManifestSha256 = null)
     {
         if (string.IsNullOrWhiteSpace(packagePath))
         {
@@ -34,15 +35,19 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
             await ComputeFileHashAsync(packagePath, cancellationToken));
 
         Directory.CreateDirectory(paths.StagingRootPath);
+        var sourceStagingPath = paths.CreateStagingPath();
         var stagingPath = paths.CreateStagingPath();
         try
         {
-            var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            var sourceValidation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
                 packagePath,
-                stagingPath,
+                sourceStagingPath,
                 cancellationToken);
-            if (!validation.Success || validation.Manifest is null || validation.ContentIndex is null)
+            if (!sourceValidation.Success
+                || sourceValidation.Manifest is null
+                || sourceValidation.ContentIndex is null)
             {
+                TryDeleteDirectory(sourceStagingPath);
                 TryDeleteDirectory(stagingPath);
                 return new PackageArchiveMutationPreparationResult(
                     null,
@@ -51,15 +56,32 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                         "Package validation failed.",
                         RuntimeSessionApplied: false,
                         RequiresAppRestart: false,
-                        validation.Warnings,
-                        validation.Errors));
+                        sourceValidation.Warnings,
+                        sourceValidation.Errors));
             }
 
-            var manifest = validation.Manifest;
+            var validation = await PackageProjectionMaterializer.MaterializeCurrentRidInstallPackageAsync(
+                sourceStagingPath,
+                stagingPath,
+                sourceValidation.Manifest,
+                sourceValidation.ContentIndex,
+                PackageTargetSelection.GetCurrentRuntimeIdentifier(),
+                cancellationToken);
+            TryDeleteDirectory(sourceStagingPath);
+            var manifest = validation.Manifest!;
+            var sourceManifestSha256 = PackageSensitiveCapabilityPolicy.GetManifestSha256(
+                sourceValidation.ContentIndex);
+            consentManifestSha256 ??= sourceManifestSha256;
+            if (!PackageSensitiveCapabilityPolicy.IsSha256(consentManifestSha256))
+            {
+                throw new InvalidDataException("Package consent manifest identity is not a lowercase SHA-256 hash.");
+            }
+            var activeManifestSha256 = PackageSensitiveCapabilityPolicy.GetManifestSha256(
+                validation.ContentIndex!);
             var installedPath = Path.GetFullPath(paths.GetInstalledPackagePath(manifest.Id!, manifest.Version!));
             var installedRecord = CreateInstalledPackageRecord(
                 manifest,
-                validation.ContentIndex,
+                validation.ContentIndex!,
                 stagingPath,
                 installedPath,
                 isEnabled,
@@ -68,16 +90,21 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 new PreparedPackageArchiveMutation(
                     stagingPath,
                     installedPath,
-                    installedRecord),
+                    installedRecord,
+                    consentManifestSha256,
+                    activeManifestSha256,
+                    PackageSensitiveCapabilityPolicy.GetRequiredCapabilities(manifest)),
                 null);
         }
         catch (OperationCanceledException)
         {
+            TryDeleteDirectory(sourceStagingPath);
             TryDeleteDirectory(stagingPath);
             throw;
         }
         catch (Exception ex)
         {
+            TryDeleteDirectory(sourceStagingPath);
             TryDeleteDirectory(stagingPath);
             return PreparationFailure($"Failed to prepare package '{packagePath}': {ex.Message}");
         }
@@ -108,7 +135,8 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 .ToArray(),
             isEnabled,
             DateTimeOffset.UtcNow,
-            provenance);
+            provenance,
+            []);
 
     private static async Task<string> ComputeFileHashAsync(string path, CancellationToken cancellationToken)
     {

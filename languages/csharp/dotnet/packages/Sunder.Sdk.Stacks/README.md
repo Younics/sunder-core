@@ -12,7 +12,17 @@ dotnet add package Sunder.Sdk.Stacks
 
 The package preserves the `Sunder.Sdk.Stacks` namespace while using its own assembly and NuGet package identity. Packages that do not use Stack contracts only need `Sunder.Sdk`.
 
-The package bundles the authoritative `sunder.stack.contributor` v1.0.0 descriptor and a local-interface adapter. Exporter, importer, and applied-handler contracts derive from `IPackageStackContributor`, and `RegisterStackContributor` accepts that typed common contract. Runtime invokes exact RPC endpoints and moves payload bytes through Host-fenced content references rather than cross-package CLR objects.
+The package bundles the authoritative descriptorVersion 2 `sunder.stack.contributor` v2.0.0 contract with public exposure and a local-interface adapter. Stack providers use public audience because Runtime Stack orchestration invokes them as a synthetic Host caller rather than as the provider-owning package. Exporter, importer, and applied-handler contracts derive from `IPackageStackContributor`, and `RegisterStackContributor` accepts that typed common contract. Runtime invokes exact role- and version-bound RPC endpoints and moves payload bytes through Host-fenced content references rather than cross-package CLR objects.
+
+`Sunder.Sdk.Stacks` supplies the public contract bundle transitively. Declare each Runtime provider with an exact role, contract version, and public audience; RPC `VersionRange` metadata is not valid:
+
+```xml
+<SunderRpcProvider Include="my.package.stack"
+                   Role="runtime"
+                   ContractId="sunder.stack.contributor"
+                   ContractVersion="2.0.0"
+                   Audience="public" />
+```
 
 `StackContributorRpcClient` requires a caller-owned `ISunderRpcCallScope`. Dispose the scope after the related calls and content transfers complete; a typed client never retains unscoped RPC authority.
 

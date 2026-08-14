@@ -261,18 +261,15 @@ public sealed class DevPackageOwnerLeaseTests
             "dev",
             "generation.cancelling.package",
             "1.0.0").InstallPath;
-        var commitStartedPath = Path.Combine(fixture.Paths.RootPath, "generation-commit-started");
-        var previousCommitStartedPath = Environment.GetEnvironmentVariable(
-            CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable);
-        var previousTriggerVersion = Environment.GetEnvironmentVariable(
-            CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable);
+        var workspacePath = Path.Combine(
+            fixture.Paths.PackageDataRootPath,
+            "generation.cancelling.package",
+            "workspace");
+        var commitStartedPath = Path.Combine(workspacePath, "generation-commit-started");
+        var triggerPath = Path.Combine(workspacePath, "cancel-generation-version.txt");
         using var cancellation = new CancellationTokenSource();
-        Environment.SetEnvironmentVariable(
-            CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
-            commitStartedPath);
-        Environment.SetEnvironmentVariable(
-            CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
-            "1.0.0");
+        Directory.CreateDirectory(workspacePath);
+        File.WriteAllText(triggerPath, "1.0.0");
         try
         {
             await AddInstalledPackageAsync(fixture.Store, installed);
@@ -303,12 +300,6 @@ public sealed class DevPackageOwnerLeaseTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
-                previousCommitStartedPath);
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
-                previousTriggerVersion);
             await fixture.DisposeAsync();
         }
     }
@@ -330,18 +321,16 @@ public sealed class DevPackageOwnerLeaseTests
             "dev",
             "generation.cancelling.package",
             "2.0.0").InstallPath;
-        var commitStartedPath = Path.Combine(fixture.Paths.RootPath, "release-generation-commit-started");
-        var previousCommitStartedPath = Environment.GetEnvironmentVariable(
-            CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable);
-        var previousTriggerVersion = Environment.GetEnvironmentVariable(
-            CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable);
+        var workspacePath = Path.Combine(
+            fixture.Paths.PackageDataRootPath,
+            "generation.cancelling.package",
+            "workspace");
+        var commitStartedPath = Path.Combine(workspacePath, "generation-commit-started");
+        var triggerPath = Path.Combine(workspacePath, "cancel-generation-version.txt");
         const string token = "owner-token-release-cancel-release";
         using var cancellation = new CancellationTokenSource();
         try
         {
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
-                null);
             await AddInstalledPackageAsync(fixture.Store, installed);
             Assert.True((await fixture.Host.LoadInstalledPackagesAsync()).Success);
             await fixture.Host.ReplaceDevPackageOwnerAsync(
@@ -355,12 +344,7 @@ public sealed class DevPackageOwnerLeaseTests
                     watch: false));
             Assert.Equal("2.0.0", Assert.Single(fixture.Host.GetActivePackages()).Version);
 
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
-                commitStartedPath);
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
-                "1.0.0");
+            File.WriteAllText(triggerPath, "1.0.0");
             var release = fixture.Host.ReleaseDevPackageOwnerAsync(
                 "owner-a",
                 new DevPackageOwnerReleaseRequest(fixture.Host.RuntimeInstanceId, token),
@@ -379,12 +363,6 @@ public sealed class DevPackageOwnerLeaseTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.CommitStartedPathEnvironmentVariable,
-                previousCommitStartedPath);
-            Environment.SetEnvironmentVariable(
-                CancellableGenerationActivationBackgroundService.TriggerVersionEnvironmentVariable,
-                previousTriggerVersion);
             await fixture.DisposeAsync();
         }
     }

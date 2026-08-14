@@ -44,6 +44,25 @@ public sealed class PackageStorageKeyMigration
     /// <summary>Gets whether this rule performs collision-tolerant dynamic cleanup.</summary>
     public bool IsDynamicCleanup => _cleanupResolver is not null;
 
+    internal PackageStorageKeyMigrationDescriptor Descriptor
+        => new(
+            _cleanupResolver is not null
+                ? PackageStorageKeyMigrationDescriptorKind.DynamicCleanup
+                : _destinationKey is not null
+                    ? PackageStorageKeyMigrationDescriptorKind.Exact
+                    : _jsonIdentityProperty is null
+                        ? PackageStorageKeyMigrationDescriptorKind.OpaqueId
+                        : _canonicalizeIdentityCase
+                            ? PackageStorageKeyMigrationDescriptorKind.OpaqueIdWithCaseInsensitiveJsonIdentity
+                            : PackageStorageKeyMigrationDescriptorKind.OpaqueIdWithJsonIdentity,
+            LegacyPrefix,
+            LegacySuffix,
+            _destinationKey,
+            _destinationPrefix,
+            _destinationVersion,
+            _jsonIdentityProperty,
+            _cleanupResolver);
+
     /// <summary>
     /// Creates a key-only cleanup rule for recognized crash remnants whose complete physical shape must be parsed
     /// dynamically.
@@ -312,4 +331,23 @@ public sealed class PackageStorageKeyMigration
             throw new ArgumentException("Legacy package storage key components must contain bounded valid Unicode.", parameterName);
         }
     }
+}
+
+internal sealed record PackageStorageKeyMigrationDescriptor(
+    PackageStorageKeyMigrationDescriptorKind Kind,
+    string LegacyPrefix,
+    string LegacySuffix,
+    string? DestinationKey,
+    string? DestinationPrefix,
+    int DestinationVersion,
+    string? JsonIdentityProperty,
+    Func<string, PackageStorageKeyMigrationAction>? CleanupResolver);
+
+internal enum PackageStorageKeyMigrationDescriptorKind
+{
+    Exact,
+    OpaqueId,
+    OpaqueIdWithJsonIdentity,
+    OpaqueIdWithCaseInsensitiveJsonIdentity,
+    DynamicCleanup,
 }

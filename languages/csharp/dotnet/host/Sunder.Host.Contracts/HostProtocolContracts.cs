@@ -15,6 +15,7 @@ public static class HostProtocolFeatures
     public const string RuntimeGatewayV1 = "runtime-gateway.v1";
     public const string RuntimeLifecycleV1 = "runtime-lifecycle.v1";
     public const string DurableOperationsV1 = "durable-operations.v1";
+    public const string RuntimeStartupDiagnosticsV1 = "runtime-startup-diagnostics.v1";
 }
 
 public static class HostDeploymentIdentity

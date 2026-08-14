@@ -102,7 +102,6 @@ public sealed class PackageLoadPlannerTests
             SourceFolder: "/source/" + packageId,
             Source: new RuntimePackageSource(packageId, PackageSourceKind.Dev, "/source/" + packageId),
             ShadowFolder: "/shadow/" + packageId,
-            LibraryFolder: "/shadow/" + packageId + "/lib",
             packageId,
             Version: version,
             HostRoles: PackageHostRoles.Runtime,

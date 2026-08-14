@@ -31,6 +31,7 @@ public sealed class RuntimeEventSubscriptionService(
     private TaskCompletionSource? _presentationsDrained;
     private TaskCompletionSource _appliedStampChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task>? _writePresentationAsync;
+    private Func<RuntimePackageSnapshot, CancellationToken, Task>? _writeMetadataAsync;
     private RuntimePackageSnapshot? _appliedSnapshot;
     private IReadOnlyList<PackageUiSnapshotDescriptor> _appliedPackageSources = [];
     private RuntimePackageSnapshot? _latestSnapshot;
@@ -70,13 +71,15 @@ public sealed class RuntimeEventSubscriptionService(
             initialSnapshot,
             initialPackageSources,
             windowLauncher.ApplyPackageLifecycleSnapshotAsync,
-            cancellationToken);
+            cancellationToken,
+            windowLauncher.ApplyPackageMetadataSnapshotAsync);
 
     internal async Task StartAsync(
         RuntimePackageSnapshot initialSnapshot,
         IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
         Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<RuntimePackageSnapshot, CancellationToken, Task>? writeMetadataAsync = null)
     {
         ArgumentNullException.ThrowIfNull(writePresentationAsync);
         ValidateInitialSnapshot(initialSnapshot);
@@ -89,7 +92,11 @@ public sealed class RuntimeEventSubscriptionService(
                 return;
             }
 
-            InitializePresentationCore(initialSnapshot, initialPackageSources, writePresentationAsync);
+            InitializePresentationCore(
+                initialSnapshot,
+                initialPackageSources,
+                writePresentationAsync,
+                writeMetadataAsync);
             _started = true;
         }
 
@@ -208,7 +215,8 @@ public sealed class RuntimeEventSubscriptionService(
     internal void InitializePresentation(
         RuntimePackageSnapshot initialSnapshot,
         IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
-        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync)
+        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync,
+        Func<RuntimePackageSnapshot, CancellationToken, Task>? writeMetadataAsync = null)
     {
         ArgumentNullException.ThrowIfNull(writePresentationAsync);
         ValidateInitialSnapshot(initialSnapshot);
@@ -216,7 +224,11 @@ public sealed class RuntimeEventSubscriptionService(
         lock (_syncRoot)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
-            InitializePresentationCore(initialSnapshot, initialPackageSources, writePresentationAsync);
+            InitializePresentationCore(
+                initialSnapshot,
+                initialPackageSources,
+                writePresentationAsync,
+                writeMetadataAsync);
         }
     }
 
@@ -239,22 +251,16 @@ public sealed class RuntimeEventSubscriptionService(
 
         CancellationTokenSource supersededPresentation;
         ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+        if (await TryApplySameGenerationMetadataAsync(snapshot, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
         Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync;
         lock (_syncRoot)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             writePresentationAsync = _writePresentationAsync
                 ?? throw new InvalidOperationException("The Runtime presentation writer has not been initialized.");
-            if (_latestSnapshot is { } tracked
-                && tracked.RuntimeInstanceId == snapshot.RuntimeInstanceId
-                && snapshot.SessionGeneration == tracked.SessionGeneration)
-            {
-                if (snapshot.EventSequence > tracked.EventSequence)
-                {
-                    _latestSnapshot = snapshot;
-                }
-                return;
-            }
             if (!ShouldAcceptSnapshot(snapshot))
             {
                 return;
@@ -392,6 +398,7 @@ public sealed class RuntimeEventSubscriptionService(
             lock (_syncRoot)
             {
                 _writePresentationAsync = null;
+                _writeMetadataAsync = null;
                 _supersededPresentation?.Dispose();
                 _supersededPresentation = null;
             }
@@ -403,7 +410,8 @@ public sealed class RuntimeEventSubscriptionService(
     private void InitializePresentationCore(
         RuntimePackageSnapshot initialSnapshot,
         IReadOnlyList<PackageUiSnapshotDescriptor> initialPackageSources,
-        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync)
+        Func<RuntimePackageSnapshot, IReadOnlyList<PackageUiSnapshotDescriptor>, IReadOnlyCollection<string>?, CancellationToken, Task> writePresentationAsync,
+        Func<RuntimePackageSnapshot, CancellationToken, Task>? writeMetadataAsync)
     {
         if (_writePresentationAsync is not null)
         {
@@ -412,6 +420,7 @@ public sealed class RuntimeEventSubscriptionService(
 
         ShellStartupCoordinator.ValidatePackageSourceGeneration(initialSnapshot, initialPackageSources);
         _writePresentationAsync = writePresentationAsync;
+        _writeMetadataAsync = writeMetadataAsync;
         _appliedSnapshot = initialSnapshot;
         _appliedPackageSources = initialPackageSources.ToArray();
         _latestSnapshot = initialSnapshot;
@@ -421,6 +430,7 @@ public sealed class RuntimeEventSubscriptionService(
     {
         _started = false;
         _writePresentationAsync = null;
+        _writeMetadataAsync = null;
         _appliedSnapshot = null;
         _appliedPackageSources = [];
         _latestSnapshot = null;
@@ -479,6 +489,13 @@ public sealed class RuntimeEventSubscriptionService(
                             snapshot.SessionGeneration,
                             GetCatchUpRetryPackageIds(snapshot));
                     }
+                    else if (HasSnapshotMetadataChange(snapshot))
+                    {
+                        QueuePresentationRefresh(
+                            snapshot.RuntimeInstanceId,
+                            snapshot.SessionGeneration,
+                            explicitRetryPackageIds: null);
+                    }
                 }
 
                 await foreach (var runtimeEvent in client.StreamRuntimeEventsAsync(sequenceId, cancellationToken).ConfigureAwait(false))
@@ -496,7 +513,8 @@ public sealed class RuntimeEventSubscriptionService(
                     sequenceId = runtimeEvent.SequenceId;
                     if (runtimeEvent.Kind is RuntimeEventKind.Snapshot
                         or RuntimeEventKind.SessionGenerationChanged
-                        or RuntimeEventKind.BootstrapStateChanged)
+                        or RuntimeEventKind.BootstrapStateChanged
+                        or RuntimeEventKind.SnapshotMetadataChanged)
                     {
                         QueuePresentationRefresh(
                             runtimeEvent.RuntimeInstanceId,
@@ -631,6 +649,77 @@ public sealed class RuntimeEventSubscriptionService(
                && snapshot.EventSequence >= latest.EventSequence;
     }
 
+    private async Task<bool> TryApplySameGenerationMetadataAsync(
+        RuntimePackageSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        Func<RuntimePackageSnapshot, CancellationToken, Task>? writeMetadataAsync;
+        lock (_syncRoot)
+        {
+            if (_latestSnapshot is not { } tracked
+                || tracked.RuntimeInstanceId != snapshot.RuntimeInstanceId
+                || tracked.SessionGeneration != snapshot.SessionGeneration)
+            {
+                return false;
+            }
+            if (snapshot.EventSequence <= tracked.EventSequence)
+            {
+                return true;
+            }
+
+            _latestSnapshot = snapshot;
+            writeMetadataAsync = _writeMetadataAsync;
+            if (writeMetadataAsync is null)
+            {
+                if (_appliedSnapshot is { } applied
+                    && applied.RuntimeInstanceId == snapshot.RuntimeInstanceId
+                    && applied.SessionGeneration == snapshot.SessionGeneration)
+                {
+                    _appliedSnapshot = snapshot;
+                }
+                return true;
+            }
+        }
+
+        try
+        {
+            await _presentationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await writeMetadataAsync(snapshot, cancellationToken).ConfigureAwait(false);
+                lock (_syncRoot)
+                {
+                    if (_latestSnapshot is { } latest
+                        && latest.RuntimeInstanceId == snapshot.RuntimeInstanceId
+                        && latest.SessionGeneration == snapshot.SessionGeneration
+                        && latest.EventSequence == snapshot.EventSequence)
+                    {
+                        _appliedSnapshot = snapshot;
+                    }
+                }
+            }
+            finally
+            {
+                _presentationGate.Release();
+            }
+        }
+        catch
+        {
+            lock (_syncRoot)
+            {
+                if (_latestSnapshot is { } latest
+                    && latest.RuntimeInstanceId == snapshot.RuntimeInstanceId
+                    && latest.SessionGeneration == snapshot.SessionGeneration
+                    && latest.EventSequence == snapshot.EventSequence)
+                {
+                    _latestSnapshot = _appliedSnapshot;
+                }
+            }
+            throw;
+        }
+        return true;
+    }
+
     private bool IsNewPresentationStamp(Guid runtimeInstanceId, long generation)
     {
         lock (_syncRoot)
@@ -688,6 +777,12 @@ public sealed class RuntimeEventSubscriptionService(
             .ToArray();
         return packageIds.Length == 0 ? null : packageIds;
     }
+
+    private static bool HasSnapshotMetadataChange(RuntimeEventSnapshot snapshot)
+        => snapshot.Events.Any(runtimeEvent =>
+            runtimeEvent.Kind == RuntimeEventKind.SnapshotMetadataChanged
+            && runtimeEvent.RuntimeInstanceId == snapshot.RuntimeInstanceId
+            && runtimeEvent.SessionGeneration == snapshot.SessionGeneration);
 
     private void RecordTerminalFailure(Guid runtimeInstanceId, long sessionGeneration, Exception exception)
     {

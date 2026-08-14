@@ -27,5 +27,8 @@
 
   <ItemGroup>
     <None Include="PublicApi\*.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\rpc\v2\conformance\**\*.json"
+          Link="RpcV2Conformance\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

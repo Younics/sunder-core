@@ -19,7 +19,13 @@ internal sealed record InstalledPackageRecord(
     [property: JsonPropertyName("dependsOn")] IReadOnlyList<InstalledPackageDependencyRecord> DependsOn,
     [property: JsonPropertyName("isEnabled")] bool IsEnabled,
     [property: JsonPropertyName("installedAtUtc")] DateTimeOffset InstalledAtUtc,
-    [property: JsonPropertyName("provenance")] InstalledPackageProvenanceRecord? Provenance = null);
+    [property: JsonPropertyName("provenance")] InstalledPackageProvenanceRecord Provenance,
+    [property: JsonPropertyName("capabilityGrants")] IReadOnlyList<InstalledPackageCapabilityGrant> CapabilityGrants);
+
+internal sealed record InstalledPackageCapabilityGrant(
+    [property: JsonPropertyName("capability")] string Capability,
+    [property: JsonPropertyName("packageVersion")] string PackageVersion,
+    [property: JsonPropertyName("manifestSha256")] string ManifestSha256);
 
 internal sealed record InstalledPackageProvenanceRecord(
     [property: JsonPropertyName("sourceKind")] InstalledPackageSourceKind SourceKind,
@@ -65,7 +71,10 @@ internal sealed record InstalledPackageDependencyRecord(
 internal sealed record PreparedPackageArchiveMutation(
     string StagingPath,
     string InstalledPath,
-    InstalledPackageRecord InstalledRecord);
+    InstalledPackageRecord InstalledRecord,
+    string ConsentManifestSha256,
+    string ActiveManifestSha256,
+    IReadOnlyList<string> SensitiveCapabilities);
 
 internal sealed record PackageArchiveMutationPreparationResult(
     PreparedPackageArchiveMutation? Mutation,

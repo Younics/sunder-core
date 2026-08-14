@@ -1,0 +1,27 @@
+{
+  "descriptorVersion": 2,
+  "contractId": "example.rpc.v2.openrecord",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "read": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/Open" },
+          "responseSchema": { "$ref": "#/$defs/Open" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Open": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    }
+  }
+}

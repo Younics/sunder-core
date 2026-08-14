@@ -67,8 +67,14 @@ internal sealed class AppPackageSourcePreparer(string? sessionFolder)
                 return null;
             }
 
+            var files = await AppPackageContentIndexer.IndexAsync(shadowFolder, cancellationToken)
+                .ConfigureAwait(false);
             prepared = true;
-            return new AppPreparedPackageSource(manifest.Id, shadowFolder, manifest);
+            return new AppPreparedPackageSource(
+                manifest.Id,
+                shadowFolder,
+                manifest,
+                AppPackageContentIndexer.ToContentIndex(files));
         }
         finally
         {

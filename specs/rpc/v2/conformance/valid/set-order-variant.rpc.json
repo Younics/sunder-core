@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "descriptorVersion": 2,
+  "contractId": "example.rpc.v2.conformance",
+  "version": "2.1.0",
+  "errors": {
+    "example.not-found": {
+      "description": "The requested item does not exist."
+    },
+    "example.conflict": {
+      "description": "The request conflicts with current state."
+    }
+  },
+  "services": {
+    "items": {
+      "methods": {
+        "submit": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": ["example.conflict", "example.not-found"],
+          "requestSchema": { "$ref": "#/$defs/Request" },
+          "responseSchema": { "$ref": "#/$defs/Result" }
+        },
+        "watch": {
+          "kind": "server-stream",
+          "idempotency": "none",
+          "errors": ["example.not-found"],
+          "requestSchema": { "$ref": "#/$defs/Request" },
+          "eventSchema": { "$ref": "#/$defs/Event" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "logicalType": "uuid",
+      "description": "Canonical lowercase UUID."
+    },
+    "Instant": {
+      "type": "string",
+      "logicalType": "utc-date-time"
+    },
+    "Content": {
+      "type": "object",
+      "logicalType": "content-reference"
+    },
+    "Text": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 4096
+    },
+    "SafeCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "Ratio": {
+      "type": "number",
+      "minimum": -1000,
+      "maximum": 1000
+    },
+    "Priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2,
+      "enum": [1, 2, 0]
+    },
+    "NullableText": {
+      "oneOf": [
+        { "$ref": "#/$defs/Text" },
+        { "type": "null" }
+      ]
+    },
+    "Tags": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Text" },
+      "minItems": 0,
+      "maxItems": 32
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/Text" },
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "minProperties": 0,
+      "maxProperties": 16
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "correlationId": { "$ref": "#/$defs/Uuid" },
+        "observedAt": { "$ref": "#/$defs/Instant" },
+        "content": { "$ref": "#/$defs/Content" },
+        "count": { "$ref": "#/$defs/SafeCount" },
+        "priority": { "$ref": "#/$defs/Priority" },
+        "ratio": { "$ref": "#/$defs/Ratio" },
+        "note": { "$ref": "#/$defs/NullableText" },
+        "optionalLabel": { "$ref": "#/$defs/Text" },
+        "optionalNote": { "$ref": "#/$defs/NullableText" },
+        "tags": { "$ref": "#/$defs/Tags" },
+        "metadata": { "$ref": "#/$defs/Metadata" }
+      },
+      "required": [
+        "tags",
+        "note",
+        "ratio",
+        "priority",
+        "count",
+        "content",
+        "observedAt",
+        "correlationId"
+      ],
+      "additionalProperties": false
+    },
+    "Result": {
+      "type": "object",
+      "properties": {
+        "itemId": { "$ref": "#/$defs/Uuid" },
+        "accepted": { "type": "boolean" },
+        "completedAt": { "$ref": "#/$defs/Instant" },
+        "diagnostic": { "$ref": "#/$defs/Text" }
+      },
+      "required": ["completedAt", "accepted", "itemId"],
+      "additionalProperties": false
+    },
+    "ProgressEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 8,
+          "const": "progress"
+        },
+        "sequence": { "$ref": "#/$defs/SafeCount" },
+        "ratio": { "$ref": "#/$defs/Ratio" }
+      },
+      "required": ["sequence", "ratio", "kind"],
+      "additionalProperties": false
+    },
+    "FinishedEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 8,
+          "const": "finished"
+        },
+        "result": { "$ref": "#/$defs/Result" }
+      },
+      "required": ["result", "kind"],
+      "additionalProperties": false
+    },
+    "Event": {
+      "oneOf": [
+        { "$ref": "#/$defs/FinishedEvent" },
+        { "$ref": "#/$defs/ProgressEvent" }
+      ],
+      "title": "Item stream event"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -6,12 +7,15 @@ using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Sdk.Rpc;
 
-/// <summary>Defines stable Sunder RPC V1 protocol values.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+/// <summary>Defines stable Sunder RPC protocol values.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public static class SunderRpcProtocol
 {
-    /// <summary>The supported contract descriptor version.</summary>
+    /// <summary>The original contract descriptor version retained for compatibility.</summary>
     public const int DescriptorVersion = 1;
+
+    /// <summary>The Sunder RPC V2 contract descriptor version.</summary>
+    public const int DescriptorVersionV2 = 2;
 
     /// <summary>The Draft 2020-12 metaschema URI accepted on descriptors.</summary>
     public const string JsonSchemaDialect = "https://json-schema.org/draft/2020-12/schema";
@@ -30,7 +34,7 @@ public static class SunderRpcProtocol
 }
 
 /// <summary>Identifies the invocation shape of an RPC method.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public enum SunderRpcMethodKind
 {
     /// <summary>One request produces one response.</summary>
@@ -40,20 +44,37 @@ public enum SunderRpcMethodKind
     ServerStream,
 }
 
+/// <summary>Identifies whether repeating a completed RPC method has the same externally visible effect.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public enum SunderRpcMethodIdempotency
+{
+    /// <summary>Repeating a dispatched call may repeat effects.</summary>
+    None,
+
+    /// <summary>Repeating a completed call has the same externally visible effect as one invocation.</summary>
+    Idempotent,
+}
+
 /// <summary>Describes one method in a schema-first RPC service.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcMethodDescriptor
 {
+    private readonly IReadOnlyList<string> _errors;
+
     internal SunderRpcMethodDescriptor(
         string methodId,
         SunderRpcMethodKind kind,
         string requestSchemaReference,
-        string outputSchemaReference)
+        string outputSchemaReference,
+        SunderRpcMethodIdempotency idempotency,
+        IEnumerable<string> errors)
     {
         MethodId = methodId;
         Kind = kind;
         RequestSchemaReference = requestSchemaReference;
         OutputSchemaReference = outputSchemaReference;
+        Idempotency = idempotency;
+        _errors = Array.AsReadOnly(errors.ToArray());
     }
 
     /// <summary>Gets the stable service-local method identifier.</summary>
@@ -67,10 +88,16 @@ public sealed class SunderRpcMethodDescriptor
 
     /// <summary>Gets the local response or event schema reference.</summary>
     public string OutputSchemaReference { get; }
+
+    /// <summary>Gets the method's declared idempotency semantics.</summary>
+    public SunderRpcMethodIdempotency Idempotency { get; }
+
+    /// <summary>Gets the immutable list of domain error codes declared by the method.</summary>
+    public IReadOnlyList<string> Errors => _errors;
 }
 
 /// <summary>Describes one service in a schema-first RPC contract.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcServiceDescriptor
 {
     private readonly IReadOnlyList<SunderRpcMethodDescriptor> _methods;
@@ -96,42 +123,53 @@ public sealed class SunderRpcServiceDescriptor
         => methodId is not null && _methodMap.TryGetValue(methodId, out var method) ? method : null;
 }
 
-/// <summary>Represents a validated, immutable Sunder RPC V1 contract descriptor.</summary>
+/// <summary>Represents a validated, immutable Sunder RPC contract descriptor.</summary>
 /// <remarks>
 /// Descriptor numeric tokens are restricted to canonical safe integers in the range
 /// -9007199254740991 through 9007199254740991. This makes canonical hashing deterministic across
 /// implementations. A schema whose type is <c>number</c> may still validate fractional instance values.
 /// </remarks>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcContractDescriptor
 {
     private readonly IReadOnlyList<SunderRpcServiceDescriptor> _services;
     private readonly IReadOnlyDictionary<string, SunderRpcServiceDescriptor> _serviceMap;
+    private readonly IReadOnlyDictionary<string, string?> _errors;
     private readonly IReadOnlyDictionary<string, JsonElement> _definitions;
     private readonly byte[] _canonicalUtf8;
+    private readonly byte[]? _canonicalAbiProjectionUtf8;
 
     internal SunderRpcContractDescriptor(
+        int descriptorVersion,
         string contractId,
         string version,
+        IEnumerable<KeyValuePair<string, string?>> errors,
         IEnumerable<SunderRpcServiceDescriptor> services,
         IEnumerable<KeyValuePair<string, JsonElement>> definitions,
         byte[] canonicalUtf8,
-        string sha256)
+        string sha256,
+        byte[]? canonicalAbiProjectionUtf8,
+        string? abiSha256)
     {
+        DescriptorVersion = descriptorVersion;
         ContractId = contractId;
         Version = version;
         var serviceSnapshot = services.ToArray();
         _services = Array.AsReadOnly(serviceSnapshot);
         _serviceMap = new ReadOnlyDictionary<string, SunderRpcServiceDescriptor>(
             serviceSnapshot.ToDictionary(static service => service.ServiceId, StringComparer.Ordinal));
+        _errors = new ReadOnlyDictionary<string, string?>(
+            errors.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal));
         _definitions = new ReadOnlyDictionary<string, JsonElement>(
             definitions.ToDictionary(static pair => pair.Key, static pair => pair.Value.Clone(), StringComparer.Ordinal));
         _canonicalUtf8 = canonicalUtf8.ToArray();
+        _canonicalAbiProjectionUtf8 = canonicalAbiProjectionUtf8?.ToArray();
         Sha256 = sha256;
+        AbiSha256 = abiSha256;
     }
 
-    /// <summary>Gets descriptor version 1.</summary>
-    public int DescriptorVersion => SunderRpcProtocol.DescriptorVersion;
+    /// <summary>Gets the parsed descriptor version.</summary>
+    public int DescriptorVersion { get; }
 
     /// <summary>Gets the stable contract identifier.</summary>
     public string ContractId { get; }
@@ -142,8 +180,14 @@ public sealed class SunderRpcContractDescriptor
     /// <summary>Gets the canonical descriptor SHA-256 as lowercase hexadecimal.</summary>
     public string Sha256 { get; }
 
+    /// <summary>Gets the domain-separated V2 ABI SHA-256, or <see langword="null"/> for V1.</summary>
+    public string? AbiSha256 { get; }
+
     /// <summary>Gets the immutable service list in descriptor order.</summary>
     public IReadOnlyList<SunderRpcServiceDescriptor> Services => _services;
+
+    /// <summary>Gets V2 domain error descriptions keyed by code; V1 descriptors return an empty map.</summary>
+    public IReadOnlyDictionary<string, string?> Errors => _errors;
 
     /// <summary>Gets immutable clones of the validated schemas keyed by definition name.</summary>
     public IReadOnlyDictionary<string, JsonElement> Definitions => _definitions;
@@ -155,6 +199,9 @@ public sealed class SunderRpcContractDescriptor
 
     /// <summary>Returns the deterministic JCS-compatible canonical descriptor bytes.</summary>
     public byte[] GetCanonicalUtf8() => _canonicalUtf8.ToArray();
+
+    /// <summary>Returns the normalized canonical V2 ABI projection bytes, or <see langword="null"/> for V1.</summary>
+    public byte[]? GetCanonicalAbiProjectionUtf8() => _canonicalAbiProjectionUtf8?.ToArray();
 
     /// <summary>Gets a service by its case-sensitive identifier.</summary>
     public SunderRpcServiceDescriptor? FindService(string serviceId)
@@ -169,7 +216,7 @@ public sealed class SunderRpcContractDescriptor
 }
 
 /// <summary>Reports an invalid contract descriptor or unsupported schema construct.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcDescriptorException : FormatException
 {
     /// <summary>Creates a descriptor validation exception.</summary>
@@ -186,7 +233,7 @@ public sealed class SunderRpcDescriptorException : FormatException
 }
 
 /// <summary>An opaque reference to one exact provider activation.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcEndpointReference
 {
     /// <summary>Creates an endpoint reference from a host-issued opaque value.</summary>
@@ -205,7 +252,7 @@ public sealed record SunderRpcEndpointReference
 }
 
 /// <summary>Identifies the lifecycle state of a provider snapshot.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public enum SunderRpcProviderState
 {
     /// <summary>The provider is callable.</summary>
@@ -219,14 +266,15 @@ public enum SunderRpcProviderState
 }
 
 /// <summary>Describes one host-stamped exact provider activation.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcProviderSnapshot(
     string PackageId,
     string PackageVersion,
     string ProviderId,
     string ContractId,
     string ContractVersion,
-    string ContractSha256,
+    string DescriptorSha256,
+    string? AbiSha256,
     Guid ActivationId,
     long ActivationEpoch,
     long SessionGeneration,
@@ -236,7 +284,7 @@ public sealed record SunderRpcProviderSnapshot(
     string? FaultCode = null);
 
 /// <summary>Represents an immutable provider catalog view.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcCatalogSnapshot
 {
     private readonly IReadOnlyList<SunderRpcProviderSnapshot> _providers;
@@ -269,7 +317,7 @@ public sealed class SunderRpcCatalogSnapshot
 }
 
 /// <summary>Identifies a provider catalog transition.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public enum SunderRpcCatalogEventKind
 {
     /// <summary>A provider identity entered the catalog.</summary>
@@ -292,7 +340,7 @@ public enum SunderRpcCatalogEventKind
 }
 
 /// <summary>Describes one ordered provider catalog transition.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcCatalogEvent(
     long Revision,
     long Sequence,
@@ -300,7 +348,7 @@ public sealed record SunderRpcCatalogEvent(
     SunderRpcProviderSnapshot? Provider);
 
 /// <summary>Classifies safe RPC call failures.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public enum SunderRpcErrorKind
 {
     /// <summary>The provider rejected a valid request with a domain error.</summary>
@@ -327,12 +375,37 @@ public enum SunderRpcErrorKind
     Protocol,
 }
 
+/// <summary>Describes whether provider handler entry may have occurred before an RPC failure.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public enum SunderRpcDispatchState
+{
+    /// <summary>The host rejected the call before entering the provider handler.</summary>
+    NotDispatched,
+    /// <summary>The provider handler may have observed the request.</summary>
+    PossiblyDispatched,
+}
+
+/// <summary>Classifies whether retrying a failed call can duplicate externally visible effects.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public enum SunderRpcRetrySafety
+{
+    /// <summary>Retrying cannot duplicate externally visible effects under the V2 rules.</summary>
+    Safe,
+    /// <summary>Retrying may duplicate effects or replay stream events.</summary>
+    Unsafe,
+}
+
 /// <summary>Contains a sanitized typed RPC failure safe to return across package boundaries.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
-public sealed record SunderRpcError(SunderRpcErrorKind Kind, string Code, string Message);
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public sealed record SunderRpcError(
+    SunderRpcErrorKind Kind,
+    string Code,
+    string Message,
+    SunderRpcDispatchState DispatchState = SunderRpcDispatchState.NotDispatched,
+    SunderRpcRetrySafety RetrySafety = SunderRpcRetrySafety.Safe);
 
 /// <summary>Represents a typed RPC failure.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcException : Exception
 {
     private readonly bool _hostAuthenticated;
@@ -355,6 +428,15 @@ public sealed class SunderRpcException : Exception
 
     internal bool IsHostAuthenticated => _hostAuthenticated;
 
+    internal SunderRpcException WithDispatchMetadata(
+        SunderRpcDispatchState dispatchState,
+        SunderRpcRetrySafety retrySafety)
+        => Error.DispatchState == dispatchState && Error.RetrySafety == retrySafety
+            ? this
+            : new SunderRpcException(
+                Error with { DispatchState = dispatchState, RetrySafety = retrySafety },
+                _hostAuthenticated);
+
     internal static SunderRpcException Infrastructure(
         SunderRpcErrorKind kind,
         string code,
@@ -363,7 +445,7 @@ public sealed class SunderRpcException : Exception
 }
 
 /// <summary>Controls whether a content reference can be acquired once or repeatedly.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public enum SunderRpcContentRepeatability
 {
     /// <summary>The content may be acquired once.</summary>
@@ -373,7 +455,7 @@ public enum SunderRpcContentRepeatability
 }
 
 /// <summary>Describes host-mediated content without exposing a stream or filesystem path.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcContentReference(
     string Id,
     long Length,
@@ -381,7 +463,12 @@ public sealed record SunderRpcContentReference(
     string MediaType,
     string FileName,
     DateTimeOffset ExpiresAtUtc,
-    SunderRpcContentRepeatability Repeatability);
+    SunderRpcContentRepeatability Repeatability)
+{
+    internal string ExactExpiresAtUtcText { get; init; } = ExpiresAtUtc.ToUniversalTime().ToString(
+        "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'",
+        CultureInfo.InvariantCulture);
+}
 
 /// <summary>Controls registration of bounded Host-mediated RPC content.</summary>
 /// <param name="MediaType">The content media type.</param>
@@ -390,7 +477,7 @@ public sealed record SunderRpcContentReference(
 /// <param name="ExpiresAtUtc">An optional expiry no later than the invocation deadline and Host policy limit.</param>
 /// <param name="Repeatability">Whether the content can be acquired once or repeatedly.</param>
 /// <param name="MaximumUses">The bounded acquisition count.</param>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcContentRegistrationOptions(
     string MediaType,
     string FileName,
@@ -405,7 +492,7 @@ public sealed record SunderRpcContentRegistrationOptions(
 /// Retaining a context never extends an invocation. Returned streams are local conveniences and
 /// never cross the RPC boundary.
 /// </remarks>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed class SunderRpcInvocationContext
 {
     private readonly ISunderRpcInvocationAuthority _authority;
@@ -529,12 +616,12 @@ internal sealed class UnavailableSunderRpcInvocationAuthority : ISunderRpcInvoca
 }
 
 /// <summary>Supplies an optional earlier deadline for an RPC call.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public sealed record SunderRpcCallOptions(DateTimeOffset? DeadlineUtc = null);
 
 /// <summary>Handles validated JSON RPC requests for one declared provider.</summary>
 /// <remarks>Handlers are activation-scoped and may be called concurrently. They must observe cancellation.</remarks>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public interface ISunderRpcServiceHandler
 {
     /// <summary>Handles one unary request and returns one non-disposed JSON response.</summary>
@@ -554,8 +641,16 @@ public interface ISunderRpcServiceHandler
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Exposes the immutable domain-error declarations implemented by a generated RPC provider adapter.</summary>
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
+public interface ISunderRpcDeclaredErrorMetadata
+{
+    /// <summary>Gets error codes keyed by exact service id and method id.</summary>
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> DeclaredErrors { get; }
+}
+
 /// <summary>Discovers and invokes providers visible to the current host-stamped package activation.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public interface ISunderRpcClient
 {
     /// <summary>Creates caller-owned authority for calls and Host-mediated request or response content.</summary>
@@ -613,7 +708,7 @@ public interface ISunderRpcClient
 /// response content is readable only when it was produced for this scope. Disposal cancels active
 /// work and revokes every unconsumed content reference owned by the scope.
 /// </remarks>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public interface ISunderRpcCallScope : ISunderRpcClient, IAsyncDisposable
 {
     /// <summary>Gets the Host-clamped deadline shared by work started through this scope.</summary>
@@ -640,12 +735,17 @@ public interface ISunderRpcCallScope : ISunderRpcClient, IAsyncDisposable
 }
 
 /// <summary>Provides generated-binding-friendly typed JSON adapters.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
+[SunderSdkCapability(SunderSdkCapabilities.RpcV2)]
 public static class SunderRpcClientExtensions
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+    private static readonly JsonSerializerOptions V2JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new SunderRpcV2JsonConverterFactory() },
     };
 
     /// <summary>Serializes a typed request and deserializes a typed unary response.</summary>
@@ -677,6 +777,44 @@ public static class SunderRpcClientExtensions
                    "The RPC response could not be deserialized as the generated response type.");
     }
 
+    /// <summary>Serializes and deserializes typed unary values using schema-derived root nullability.</summary>
+    public static async ValueTask<TResponse> InvokeAsync<TRequest, TResponse>(
+        this ISunderRpcClient client,
+        SunderRpcEndpointReference endpoint,
+        string serviceId,
+        string methodId,
+        TRequest request,
+        bool requestAllowsNull,
+        bool responseAllowsNull,
+        bool useV2WireFormat = false,
+        SunderRpcCallOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        if (request is null && !requestAllowsNull)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+        var jsonOptions = useV2WireFormat ? V2JsonOptions : JsonOptions;
+        var requestElement = JsonSerializer.SerializeToElement(request, jsonOptions);
+        var response = await client.InvokeAsync(
+            endpoint,
+            serviceId,
+            methodId,
+            requestElement,
+            options,
+            cancellationToken).ConfigureAwait(false);
+        var result = response.Deserialize<TResponse>(jsonOptions);
+        if (result is null && !responseAllowsNull)
+        {
+            throw SunderRpcException.Infrastructure(
+                SunderRpcErrorKind.Protocol,
+                "rpc.binding.null-response",
+                "The RPC response could not be deserialized as the generated response type.");
+        }
+        return result!;
+    }
+
     /// <summary>Serializes a typed request and deserializes typed server-stream events.</summary>
     public static async IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(
         this ISunderRpcClient client,
@@ -705,6 +843,46 @@ public static class SunderRpcClientExtensions
                              SunderRpcErrorKind.Protocol,
                              "rpc.binding.null-event",
                              "An RPC event could not be deserialized as the generated event type.");
+        }
+    }
+
+    /// <summary>Serializes and deserializes typed stream values using schema-derived root nullability.</summary>
+    public static async IAsyncEnumerable<TEvent> SubscribeAsync<TRequest, TEvent>(
+        this ISunderRpcClient client,
+        SunderRpcEndpointReference endpoint,
+        string serviceId,
+        string methodId,
+        TRequest request,
+        bool requestAllowsNull,
+        bool eventAllowsNull,
+        bool useV2WireFormat = false,
+        SunderRpcCallOptions? options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        if (request is null && !requestAllowsNull)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+        var jsonOptions = useV2WireFormat ? V2JsonOptions : JsonOptions;
+        var requestElement = JsonSerializer.SerializeToElement(request, jsonOptions);
+        await foreach (var item in client.SubscribeAsync(
+                           endpoint,
+                           serviceId,
+                           methodId,
+                           requestElement,
+                           options,
+                           cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            var result = item.Deserialize<TEvent>(jsonOptions);
+            if (result is null && !eventAllowsNull)
+            {
+                throw SunderRpcException.Infrastructure(
+                    SunderRpcErrorKind.Protocol,
+                    "rpc.binding.null-event",
+                    "An RPC event could not be deserialized as the generated event type.");
+            }
+            yield return result!;
         }
     }
 }

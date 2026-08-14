@@ -16,7 +16,6 @@ internal sealed partial class ProcessRuntimeWorker
     {
         if (!IsWorkerLogging(type)) return false;
 
-        RequireV2WorkerCall(type);
         if (type == "worker.provider-fault-diagnostic")
         {
             await RunWorkerProviderFaultDiagnosticAsync(root, call).ConfigureAwait(false);
@@ -53,7 +52,7 @@ internal sealed partial class ProcessRuntimeWorker
                     throw new SunderWorkerProtocolException(
                         "Structured worker log events require an event name and cannot specify a logger category or event id.");
                 }
-                await _packageContext.Logging.Events.WriteAsync(
+                await _packageData.Logging.Events.WriteAsync(
                     level,
                     eventName,
                     message,
@@ -67,7 +66,7 @@ internal sealed partial class ProcessRuntimeWorker
                     throw new SunderWorkerProtocolException(
                         "Conventional worker log entries require a logger category.");
                 }
-                var logger = _packageContext.Logging.LoggerFactory.CreateLogger(category);
+                var logger = _packageData.Logging.LoggerFactory.CreateLogger(category);
                 var state = new WorkerLogState(message, attributes);
                 logger.Log(
                     ToMicrosoftLogLevel(level),
@@ -164,7 +163,7 @@ internal sealed partial class ProcessRuntimeWorker
             var context = invocation.Context;
             try
             {
-                await _packageContext.Logging.Events.WriteAsync(
+                await _packageData.Logging.Events.WriteAsync(
                     PackageLogLevel.Error,
                     "runtime.rpc.provider-fault",
                     "A process RPC provider handler faulted.",

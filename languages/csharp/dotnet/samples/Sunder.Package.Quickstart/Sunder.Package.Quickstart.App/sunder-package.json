@@ -1,0 +1,55 @@
+{
+  "archiveFormatVersion": 1,
+  "manifestVersion": 3,
+  "id": "docs.sunder.quickstart",
+  "name": "Sunder Quickstart",
+  "summary": "Compiles the package-development guide's primary SDK examples.",
+  "version": "1.0.0",
+  "dependsOn": [],
+  "targets": [
+    {
+      "role": "app",
+      "rid": "osx-arm64",
+      "kind": "avalonia",
+      "entryPoint": "lib/Sunder.Package.Quickstart.App.dll",
+      "targetFramework": "net10.0",
+      "sdkVersion": "1.1.0",
+      "requiredHostCapabilities": [
+        "contributions.v1",
+        "core.v1",
+        "packaging.v1",
+        "rpc.v2",
+        "sdk-baseline-1-1.v1",
+        "settings.v1",
+        "shell-view.v1",
+        "theming.v1",
+        "views.v1"
+      ],
+      "views": []
+    }
+  ],
+  "contractBundles": [
+    {
+      "contractId": "docs.sunder.quickstart.greeting",
+      "version": "2.0.0",
+      "descriptorPath": "contracts/greeting.rpc.json",
+      "descriptorSha256": "44a84acd4c920dc7fcd79eae635982fa69b74e73882eaaff06b502163b76fbb5",
+      "abiSha256": "a7c26658461e54591aa56e433ba05d1b91542ac7d7013320094772f1f716284d",
+      "exposure": "package"
+    }
+  ],
+  "usesContracts": [
+    {
+      "role": "app",
+      "contractId": "docs.sunder.quickstart.greeting",
+      "contractVersion": "2.0.0",
+      "abiSha256": "a7c26658461e54591aa56e433ba05d1b91542ac7d7013320094772f1f716284d",
+      "required": true,
+      "actions": [
+        "discover",
+        "invoke"
+      ]
+    }
+  ],
+  "provides": []
+}

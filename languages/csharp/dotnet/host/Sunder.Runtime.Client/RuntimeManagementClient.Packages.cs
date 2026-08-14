@@ -16,6 +16,21 @@ public sealed partial class RuntimeManagementClient
         bool allowDowngrade,
         bool reinstall,
         CancellationToken token = default)
+        => await ApplyLocalPackageAsync(
+            packagePath,
+            packageId,
+            allowDowngrade,
+            reinstall,
+            capabilityConsent: null,
+            token).ConfigureAwait(false);
+
+    public async Task<PackageOperationResult> ApplyLocalPackageAsync(
+        string packagePath,
+        string packageId,
+        bool allowDowngrade,
+        bool reinstall,
+        PackageCapabilityConsent? capabilityConsent,
+        CancellationToken token = default)
     {
         var installed = await GetInstalledPackagesAsync(token).ConfigureAwait(false);
         var kind = installed.Any(item => string.Equals(item.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
@@ -24,7 +39,13 @@ public sealed partial class RuntimeManagementClient
         var upload = await UploadAsync(packagePath, "uploads/packages", "application/vnd.sunder.package", token).ConfigureAwait(false);
         using var stageResponse = await _httpClient.PostAsJsonAsync(
             CreateUri("packages/store/stage"),
-            new PackageStoreStageRequest([new PackageStoreMutationRequest(kind, kind == PackageStoreMutationKind.Upgrade ? packageId : null, upload.UploadId, allowDowngrade, reinstall)]),
+            new PackageStoreStageRequest([new PackageStoreMutationRequest(
+                kind,
+                kind == PackageStoreMutationKind.Upgrade ? packageId : null,
+                upload.UploadId,
+                allowDowngrade,
+                reinstall,
+                CapabilityConsent: capabilityConsent)]),
             token).ConfigureAwait(false);
         var stage = await _responses.ReadRequiredJsonAsync<PackageStoreStageResult>(stageResponse, token).ConfigureAwait(false);
         if (!stage.Success || stage.StageId is null)

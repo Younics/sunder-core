@@ -150,6 +150,26 @@ internal sealed class ShellRailCollectionPresenter(
         }
     }
 
+    public void RefreshPackageMetadata(
+        IReadOnlyList<ShellPlacementSlot> slots,
+        IReadOnlySet<string> impactedPackageIds)
+    {
+        foreach (var slot in slots)
+        {
+            var selectedViewId = ShellSelectionState.GetSelectedViewId(shellState, slot.Placement);
+            if (string.IsNullOrWhiteSpace(selectedViewId)
+                || !viewsById.TryGetValue(selectedViewId, out var packageView)
+                || !impactedPackageIds.Contains(packageView.PackageId))
+            {
+                continue;
+            }
+            panelContentPresenter.RefreshMetadata(
+                slot.Panel,
+                slot.Placement,
+                packageView);
+        }
+    }
+
     private IReadOnlyList<ShellItemViewModel> CreateItemsForPlacement(RailPlacement placement, Action<ShellItemViewModel> onSelect)
     {
         return ShellViewOrdering.GetOrderedViewsForPlacement(viewsById.Values, shellState, placement)

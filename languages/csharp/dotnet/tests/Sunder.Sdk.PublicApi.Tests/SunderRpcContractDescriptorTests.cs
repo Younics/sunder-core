@@ -1,3 +1,7 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
@@ -93,13 +97,18 @@ public sealed class SunderRpcContractDescriptorTests
         var second = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
 
         Assert.Equal(first, second);
-        Assert.Contains("using System.Collections.Generic;", first, StringComparison.Ordinal);
-        Assert.Contains("using System.Threading.Tasks;", first, StringComparison.Ordinal);
+        Assert.Contains("using global::System.Threading.Tasks;", first, StringComparison.Ordinal);
+        Assert.Contains("public static class SunderRpcContractIdentity_", first, StringComparison.Ordinal);
+        Assert.Contains("public const int DescriptorVersion = 1;", first, StringComparison.Ordinal);
+        Assert.Contains("public const string ContractId = \"example.messages\";", first, StringComparison.Ordinal);
+        Assert.Contains("public const string ContractVersion = \"1.2.3\";", first, StringComparison.Ordinal);
+        Assert.Contains($"public const string DescriptorSha256 = \"{descriptor.Sha256}\";", first, StringComparison.Ordinal);
+        Assert.Contains("public const string? AbiSha256 = null;", first, StringComparison.Ordinal);
         Assert.Contains("public sealed class Request", first, StringComparison.Ordinal);
         Assert.Contains("public interface IMessagesProvider", first, StringComparison.Ordinal);
         Assert.Contains("public sealed class MessagesClient", first, StringComparison.Ordinal);
-        Assert.Contains("SunderRpcInvocationContext context", first, StringComparison.Ordinal);
-        Assert.Contains("ISunderRpcCallScope scope", first, StringComparison.Ordinal);
+        Assert.Contains("global::Sunder.Sdk.Rpc.SunderRpcInvocationContext context", first, StringComparison.Ordinal);
+        Assert.Contains("global::Sunder.Sdk.Rpc.ISunderRpcCallScope scope", first, StringComparison.Ordinal);
         Assert.Contains("public sealed class ExampleMessagesRpcHandler", first, StringComparison.Ordinal);
 
         var taggedUnion = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
@@ -118,10 +127,32 @@ public sealed class SunderRpcContractDescriptorTests
             """));
         var taggedUnionSource = SunderRpcCSharpGenerator.Generate(taggedUnion, "Example.Generated");
         Assert.Contains(
-            "ValueTask<Response> ReadAsync(JsonElement request",
+            "global::System.Threading.Tasks.ValueTask<Response> ReadAsync(global::System.Text.Json.JsonElement request",
             taggedUnionSource,
             StringComparison.Ordinal);
         Assert.DoesNotContain("class Command", taggedUnionSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CSharpGenerator_IdentityTypeNamesDoNotCollideAcrossContractsInOneNamespace()
+    {
+        var first = SunderRpcContractDescriptor.Parse(Descriptor());
+        var second = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":1,
+              "contractId":"example.other",
+              "version":"1.0.0",
+              "services":[{"serviceId":"other","methods":[{"methodId":"read","kind":"unary","requestSchema":{"$ref":"#/$defs/OtherRequest"},"responseSchema":{"$ref":"#/$defs/OtherResponse"}}]}],
+              "$defs":{
+                "OtherRequest":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "OtherResponse":{"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"],"additionalProperties":false}
+              }
+            }
+            """));
+
+        _ = CompileAndLoad(
+            SunderRpcCSharpGenerator.Generate(first, "Example.Shared"),
+            SunderRpcCSharpGenerator.Generate(second, "Example.Shared"));
     }
 
     [Fact]
@@ -156,6 +187,174 @@ public sealed class SunderRpcContractDescriptorTests
     }
 
     [Fact]
+    public void CSharpGenerator_CompilesWhenDescriptorSymbolsShadowInfrastructureAndGeneratedSymbols()
+    {
+        const string contractId = "example.collisions";
+        const string version = "2.0.0";
+        var identityHash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(contractId + "\0" + version))).ToLowerInvariant();
+        var identityName = "SunderRpcContractIdentity_" + identityHash;
+        var descriptorJson = """
+            {
+              "descriptorVersion":2,
+              "contractId":"CONTRACT_ID",
+              "version":"CONTRACT_VERSION",
+              "errors":{},
+              "services":{
+                "value-task":{"methods":{"invoke":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/ValueTask"},"responseSchema":{"$ref":"#/$defs/Task"}}}},
+                "task":{"methods":{"invoke":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Guid"},"responseSchema":{"$ref":"#/$defs/DateTimeOffset"}}}},
+                "json-element":{"methods":{"invoke":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/JsonElement"},"responseSchema":{"$ref":"#/$defs/SunderRpcOptional"}}}}
+              },
+              "$defs":{
+                "ValueTask":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Task":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Guid":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "DateTimeOffset":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "JsonElement":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "SunderRpcOptional":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "Exception":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "CancellationToken":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "IAsyncEnumerable":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "JsonSerializer":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "SunderRpcV2JsonConverterFactory":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "SunderRpcClientExtensions":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "IValueTaskProvider":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "ExampleCollisionsRpcHandler":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+                "IDENTITY_NAME":{"type":"object","properties":{},"required":[],"additionalProperties":false}
+              }
+            }
+            """
+            .Replace("CONTRACT_ID", contractId, StringComparison.Ordinal)
+            .Replace("CONTRACT_VERSION", version, StringComparison.Ordinal)
+            .Replace("IDENTITY_NAME", identityName, StringComparison.Ordinal);
+        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes(descriptorJson));
+
+        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated.Collisions");
+
+        Assert.Contains($"public static class {identityName}", source, StringComparison.Ordinal);
+        Assert.Contains("public sealed class IValueTaskProvider2", source, StringComparison.Ordinal);
+        Assert.Contains("public sealed class ExampleCollisionsRpcHandler2", source, StringComparison.Ordinal);
+        Assert.Contains("public sealed class ExampleCollisionsRpcHandler", source, StringComparison.Ordinal);
+        AssertCompiles(source);
+    }
+
+    [Fact]
+    public void CSharpGenerator_CompilesCompleteV2FixtureWithLogicalAndBinary64Types()
+    {
+        var fixturePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "RpcV2Conformance",
+            "valid",
+            "complete.rpc.json");
+        var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(fixturePath));
+
+        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
+
+        Assert.Contains("public required global::System.Guid CorrelationId", source, StringComparison.Ordinal);
+        Assert.Contains("public required string ObservedAt", source, StringComparison.Ordinal);
+        Assert.Contains("public required global::Sunder.Sdk.Rpc.SunderRpcContentReference Content", source, StringComparison.Ordinal);
+        Assert.Contains("public required double Ratio", source, StringComparison.Ordinal);
+        Assert.Contains("public global::Sunder.Sdk.Rpc.SunderRpcOptional<string?> OptionalNote", source, StringComparison.Ordinal);
+        Assert.Contains("Converters = { new global::Sunder.Sdk.Rpc.SunderRpcV2JsonConverterFactory() }", source, StringComparison.Ordinal);
+        Assert.Contains($"public const string AbiSha256 = \"{descriptor.AbiSha256}\";", source, StringComparison.Ordinal);
+        Assert.Contains("useV2WireFormat: true", source, StringComparison.Ordinal);
+        Assert.Contains("ISunderRpcDeclaredErrorMetadata", source, StringComparison.Ordinal);
+        var assembly = CompileAndLoad(source);
+        var handlerType = Assert.Single(
+            assembly.GetTypes(),
+            static type => typeof(ISunderRpcDeclaredErrorMetadata).IsAssignableFrom(type));
+        var metadata = Assert.IsAssignableFrom<ISunderRpcDeclaredErrorMetadata>(
+            RuntimeHelpers.GetUninitializedObject(handlerType));
+        foreach (var service in descriptor.Services)
+        {
+            Assert.True(metadata.DeclaredErrors.TryGetValue(service.ServiceId, out var methods));
+            foreach (var method in service.Methods)
+            {
+                Assert.Equal(method.Errors, methods[method.MethodId]);
+            }
+        }
+    }
+
+    [Fact]
+    public void V2JsonConverters_PreserveExactLogicalWireForms()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new SunderRpcV2JsonConverterFactory() },
+        };
+        var uuid = Guid.Parse("0192c4f0-8d3c-7a61-9b3f-6a9b89f4b8d2");
+        var expiresAt = new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.FromHours(2));
+        var content = new SunderRpcContentReference(
+            "opaque",
+            42,
+            new string('a', 64),
+            "application/octet-stream",
+            "display-name.bin",
+            expiresAt,
+            SunderRpcContentRepeatability.SingleUse);
+
+        Assert.Equal(
+            "\"0192c4f0-8d3c-7a61-9b3f-6a9b89f4b8d2\"",
+            JsonSerializer.Serialize(uuid, options));
+        Assert.Equal("\"2030-01-02T01:04:05Z\"", JsonSerializer.Serialize(expiresAt, options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<Guid>(
+            "\"0192C4F0-8D3C-7A61-9B3F-6A9B89F4B8D2\"",
+            options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<DateTimeOffset>(
+            "\"2030-01-02T01:04:05+00:00\"",
+            options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<DateTimeOffset>(
+            "\"2030-01-02T01:04:05.123456789Z\"",
+            options));
+
+        var contentJson = JsonSerializer.SerializeToElement(content, options);
+        Assert.Equal(7, contentJson.GetPropertyCount());
+        Assert.Equal("2030-01-02T01:04:05Z", contentJson.GetProperty("expiresAtUtc").GetString());
+        Assert.Equal("single-use", contentJson.GetProperty("repeatability").GetString());
+        Assert.Equal(content, contentJson.Deserialize<SunderRpcContentReference>(options));
+
+        const string exactExpiry = "2030-01-02T01:04:05.123456789Z";
+        var exactContent = JsonSerializer.Deserialize<SunderRpcContentReference>(
+            $$$"""
+              {"id":"opaque","length":42,"sha256":"{{{new string('a', 64)}}}","mediaType":"application/octet-stream","fileName":"display-name.bin","expiresAtUtc":"{{{exactExpiry}}}","repeatability":"single-use"}
+              """,
+            options)!;
+        var exactContentJson = JsonSerializer.SerializeToElement(exactContent, options);
+        Assert.Equal(exactExpiry, exactContentJson.GetProperty("expiresAtUtc").GetString());
+    }
+
+    [Fact]
+    public void CSharpGenerator_V2UtcDateTimeStringRoundTripsNineFractionalDigits()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":2,
+              "contractId":"example.rpc.v2.instant",
+              "version":"2.0.0",
+              "errors":{},
+              "services":{"instant":{"methods":{"echo":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}}}}},
+              "$defs":{
+                "Instant":{"type":"string","logicalType":"utc-date-time"},
+                "Payload":{"type":"object","properties":{"observedAt":{"$ref":"#/$defs/Instant"}},"required":["observedAt"],"additionalProperties":false}
+              }
+            }
+            """));
+        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated.Instant");
+        var assembly = CompileAndLoad(source);
+        var payloadType = assembly.GetType("Example.Generated.Instant.Payload", throwOnError: true)!;
+        var observedAt = payloadType.GetProperty("ObservedAt")!;
+        const string exact = "2000-02-29T23:59:59.123456789Z";
+        var payload = Activator.CreateInstance(payloadType)!;
+        observedAt.SetValue(payload, exact);
+
+        var json = JsonSerializer.Serialize(payload, payloadType);
+        var roundTrip = JsonSerializer.Deserialize(json, payloadType)!;
+
+        Assert.Equal(exact, JsonDocument.Parse(json).RootElement.GetProperty("observedAt").GetString());
+        Assert.Equal(exact, observedAt.GetValue(roundTrip));
+    }
+
+    [Fact]
     public void RestrictedProfile_ValidatesTaggedUnionMapsArraysNumbersBooleanAndNull()
     {
         var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
@@ -179,6 +378,10 @@ public sealed class SunderRpcContractDescriptorTests
         Assert.True(descriptor.IsValid("#/$defs/Command", command.RootElement, out var commandError), commandError);
         Assert.True(descriptor.IsValid("#/$defs/Details", details.RootElement, out var detailsError), detailsError);
         Assert.False(descriptor.IsValid("#/$defs/Command", wrongTag.RootElement, out _));
+        Assert.Contains(
+            "public required decimal Score",
+            SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated"),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -207,21 +410,261 @@ public sealed class SunderRpcContractDescriptorTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void CSharpGenerator_V2OptionalNullableMembersRoundTripAllPresenceStates()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":2,
+              "contractId":"example.rpc.v2.optional",
+              "version":"2.0.0",
+              "errors":{},
+              "services":{"optional":{"methods":{"echo":{"kind":"unary","idempotency":"idempotent","errors":[],"requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}}}}},
+              "$defs":{
+                "NullableText":{"oneOf":[{"type":"null"},{"type":"string","minLength":0,"maxLength":32}]},
+                "Payload":{"type":"object","properties":{"value":{"$ref":"#/$defs/NullableText"}},"required":[],"additionalProperties":false}
+              }
+            }
+            """));
+        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated.Optional");
+
+        Assert.Contains(
+            "[global::System.Text.Json.Serialization.JsonIgnore(Condition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]\n    public global::Sunder.Sdk.Rpc.SunderRpcOptional<string?> Value",
+            source,
+            StringComparison.Ordinal);
+        var assembly = CompileAndLoad(source);
+        var payloadType = assembly.GetType("Example.Generated.Optional.Payload", throwOnError: true)!;
+        var valueProperty = payloadType.GetProperty("Value")!;
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var absent = Activator.CreateInstance(payloadType)!;
+        var explicitNull = Activator.CreateInstance(payloadType)!;
+        valueProperty.SetValue(explicitNull, new SunderRpcOptional<string?>(null));
+        var presentValue = Activator.CreateInstance(payloadType)!;
+        valueProperty.SetValue(presentValue, new SunderRpcOptional<string?>("text"));
+
+        var absentJson = JsonSerializer.Serialize(absent, payloadType, options);
+        var explicitNullJson = JsonSerializer.Serialize(explicitNull, payloadType, options);
+        var presentValueJson = JsonSerializer.Serialize(presentValue, payloadType, options);
+        Assert.Equal("{}", absentJson);
+        Assert.Equal("{\"value\":null}", explicitNullJson);
+        Assert.Equal("{\"value\":\"text\"}", presentValueJson);
+
+        var absentRoundTrip = JsonSerializer.Deserialize(absentJson, payloadType, options)!;
+        var nullRoundTrip = JsonSerializer.Deserialize(explicitNullJson, payloadType, options)!;
+        var valueRoundTrip = JsonSerializer.Deserialize(presentValueJson, payloadType, options)!;
+        var absentState = (SunderRpcOptional<string?>)valueProperty.GetValue(absentRoundTrip)!;
+        var nullState = (SunderRpcOptional<string?>)valueProperty.GetValue(nullRoundTrip)!;
+        var valueState = (SunderRpcOptional<string?>)valueProperty.GetValue(valueRoundTrip)!;
+
+        Assert.False(absentState.IsPresent);
+        Assert.Throws<InvalidOperationException>(() => absentState.Value);
+        Assert.True(nullState.IsPresent);
+        Assert.Null(nullState.Value);
+        Assert.True(valueState.IsPresent);
+        Assert.Equal("text", valueState.Value);
+    }
+
+    [Fact]
+    public async Task CSharpGenerator_CompilesAndRoundTripsExplicitNullWithoutEmittingOptionalFields()
+    {
+        var descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes("""
+            {
+              "descriptorVersion":1,
+              "contractId":"example.nullable",
+              "version":"1.0.0",
+              "services":[{"serviceId":"nullable","methods":[
+                {"methodId":"bad-response","kind":"unary","requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}},
+                {"methodId":"echo","kind":"unary","requestSchema":{"$ref":"#/$defs/Payload"},"responseSchema":{"$ref":"#/$defs/Payload"}},
+                {"methodId":"echo-root","kind":"unary","requestSchema":{"$ref":"#/$defs/NullableText"},"responseSchema":{"$ref":"#/$defs/NullableText"}},
+                {"methodId":"echo-stream","kind":"server-stream","requestSchema":{"$ref":"#/$defs/NullableText"},"eventSchema":{"$ref":"#/$defs/NullableText"}}
+              ]}],
+              "$defs":{
+                "Null":{"type":"null"},
+                "NullableText":{"oneOf":[{"$ref":"#/$defs/Null"},{"type":"string","minLength":0,"maxLength":20}]},
+                "Payload":{"type":"object","properties":{"requiredValue":{"$ref":"#/$defs/NullableText"},"optionalValue":{"$ref":"#/$defs/NullableText"}},"required":["requiredValue"],"additionalProperties":false}
+              }
+            }
+            """));
+        var source = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");
+
+        Assert.Contains(
+            "[global::System.Text.Json.Serialization.JsonIgnore(Condition = global::System.Text.Json.Serialization.JsonIgnoreCondition.Never)]\n    public required string? RequiredValue",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[global::System.Text.Json.Serialization.JsonIgnore(Condition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]\n    public string? OptionalValue",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("requestAllowsNull: true", source, StringComparison.Ordinal);
+        Assert.Contains("responseAllowsNull: true", source, StringComparison.Ordinal);
+        Assert.Contains("eventAllowsNull: true", source, StringComparison.Ordinal);
+        Assert.Contains("Deserialize<string?>(request, allowsNull: true)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SunderRpcOptional", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("useV2WireFormat", source, StringComparison.Ordinal);
+
+        var assembly = CompileAndLoad(source, """
+            #nullable enable
+            using System;
+            using System.Collections.Generic;
+            using System.Runtime.CompilerServices;
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Rpc;
+
+            namespace Example.Generated;
+
+            public sealed class RoundTripProvider : INullableProvider
+            {
+                public ValueTask<Payload> BadResponseAsync(
+                    SunderRpcInvocationContext context,
+                    Payload request,
+                    CancellationToken cancellationToken = default)
+                    => ValueTask.FromResult<Payload>(null!);
+
+                public ValueTask<Payload> EchoAsync(
+                    SunderRpcInvocationContext context,
+                    Payload request,
+                    CancellationToken cancellationToken = default)
+                    => ValueTask.FromResult(request);
+
+                public ValueTask<string?> EchoRootAsync(
+                    SunderRpcInvocationContext context,
+                    string? request,
+                    CancellationToken cancellationToken = default)
+                    => ValueTask.FromResult(request);
+
+                public async IAsyncEnumerable<string?> EchoStreamAsync(
+                    SunderRpcInvocationContext context,
+                    string? request,
+                    [EnumeratorCancellation] CancellationToken cancellationToken = default)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.CompletedTask;
+                    yield return request;
+                }
+            }
+
+            public static class RoundTripHarness
+            {
+                public static ISunderRpcServiceHandler CreateHandler()
+                    => new ExampleNullableRpcHandler(new RoundTripProvider());
+
+                public static async Task<bool> RunAsync(ISunderRpcCallScope scope)
+                {
+                    var client = new NullableClient(scope, new SunderRpcEndpointReference("loopback"));
+                    var payload = await client.EchoAsync(new Payload { RequiredValue = null });
+                    var root = await client.EchoRootAsync(null);
+                    var eventCount = 0;
+                    var eventWasNull = false;
+                    await foreach (var item in client.EchoStreamAsync(null))
+                    {
+                        eventCount++;
+                        eventWasNull = item is null;
+                    }
+
+                    var rejectedNullRequest = false;
+                    try
+                    {
+                        _ = await client.EchoAsync(null!);
+                    }
+                    catch (ArgumentNullException)
+                    {
+                        rejectedNullRequest = true;
+                    }
+
+                    var rejectedNullResponse = false;
+                    try
+                    {
+                        _ = await client.BadResponseAsync(new Payload { RequiredValue = null });
+                    }
+                    catch (SunderRpcException exception) when (exception.Error.Code == "rpc.binding.null-response")
+                    {
+                        rejectedNullResponse = true;
+                    }
+
+                    return payload.RequiredValue is null
+                           && payload.OptionalValue is null
+                           && root is null
+                           && eventCount == 1
+                           && eventWasNull
+                           && rejectedNullRequest
+                           && rejectedNullResponse;
+                }
+            }
+            """);
+        var harness = assembly.GetType("Example.Generated.RoundTripHarness", throwOnError: true)!;
+        var handler = (ISunderRpcServiceHandler)harness.GetMethod("CreateHandler")!.Invoke(null, null)!;
+        var scope = new LoopbackRpcCallScope(handler);
+
+        var result = (Task<bool>)harness.GetMethod("RunAsync")!.Invoke(null, [scope])!;
+        Assert.True(await result);
+
+        var payloadRequest = Assert.Single(scope.Requests, static item => item.MethodId == "echo").Value;
+        var payloadResponse = Assert.Single(scope.Responses, static item => item.MethodId == "echo").Value;
+        AssertExplicitNullWithOptionalOmitted(payloadRequest);
+        AssertExplicitNullWithOptionalOmitted(payloadResponse);
+        Assert.Equal(
+            JsonValueKind.Null,
+            Assert.Single(scope.Requests, static item => item.MethodId == "echo-root").Value.ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            Assert.Single(scope.Responses, static item => item.MethodId == "echo-root").Value.ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            Assert.Single(scope.Requests, static item => item.MethodId == "echo-stream").Value.ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            Assert.Single(scope.Responses, static item => item.MethodId == "echo-stream").Value.ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            Assert.Single(scope.Responses, static item => item.MethodId == "bad-response").Value.ValueKind);
+        Assert.Equal(4, scope.Requests.Count);
+    }
+
     private static void AssertCompiles(string source)
+    {
+        var compilation = CreateCompilation([source]);
+        var errors = compilation.GetDiagnostics()
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(static error => error.ToString())));
+    }
+
+    private static Assembly CompileAndLoad(params string[] sources)
+    {
+        var compilation = CreateCompilation(sources, warningsAsErrors: true);
+        using var assemblyStream = new MemoryStream();
+        var result = compilation.Emit(assemblyStream);
+        Assert.True(
+            result.Success,
+            string.Join(Environment.NewLine, result.Diagnostics.Select(static diagnostic => diagnostic.ToString())));
+        assemblyStream.Position = 0;
+        return AssemblyLoadContext.Default.LoadFromStream(assemblyStream);
+    }
+
+    private static CSharpCompilation CreateCompilation(string[] sources, bool warningsAsErrors = false)
     {
         var trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
                                 ?? throw new InvalidOperationException("Trusted platform assemblies are unavailable.");
         var referencePaths = trustedAssemblies.Split(Path.PathSeparator).ToHashSet(StringComparer.Ordinal);
         referencePaths.Add(typeof(SunderRpcContractDescriptor).Assembly.Location);
-        var compilation = CSharpCompilation.Create(
-            "GeneratedRpcBindings",
-            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview))],
+        return CSharpCompilation.Create(
+            "GeneratedRpcBindings_" + Guid.NewGuid().ToString("N"),
+            sources.Select(source => CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview))),
             referencePaths.Select(static path => MetadataReference.CreateFromFile(path)),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
-        var errors = compilation.GetDiagnostics()
-            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-            .ToArray();
-        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(static error => error.ToString())));
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable,
+                generalDiagnosticOption: warningsAsErrors ? ReportDiagnostic.Error : ReportDiagnostic.Default));
+    }
+
+    private static void AssertExplicitNullWithOptionalOmitted(JsonElement value)
+    {
+        Assert.Equal(JsonValueKind.Object, value.ValueKind);
+        Assert.True(value.TryGetProperty("requiredValue", out var required));
+        Assert.Equal(JsonValueKind.Null, required.ValueKind);
+        Assert.False(value.TryGetProperty("optionalValue", out _));
     }
 
     private static void AssertRejected(string json)
@@ -239,4 +682,103 @@ public sealed class SunderRpcContractDescriptorTests
               """;
         return Encoding.UTF8.GetBytes(json);
     }
+
+    private sealed class LoopbackRpcCallScope(ISunderRpcServiceHandler handler) : ISunderRpcCallScope
+    {
+        public DateTimeOffset DeadlineUtc => DateTimeOffset.MaxValue;
+
+        public List<CapturedRpcValue> Requests { get; } = [];
+
+        public List<CapturedRpcValue> Responses { get; } = [];
+
+        public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
+            SunderRpcCallOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<ISunderRpcCallScope>(this);
+
+        public ValueTask<SunderRpcProviderSnapshot?> GetProviderAsync(
+            SunderRpcEndpointReference endpoint,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<SunderRpcProviderSnapshot?>(null);
+
+        public ValueTask<bool> TryReportInvariantViolationAsync(
+            SunderRpcEndpointReference endpoint,
+            Exception exception,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(false);
+
+        public ValueTask<SunderRpcCatalogSnapshot> DiscoverAsync(
+            string contractId,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public IAsyncEnumerable<SunderRpcCatalogEvent> WatchAsync(
+            long afterRevision,
+            long afterSequence,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public async ValueTask<JsonElement> InvokeAsync(
+            SunderRpcEndpointReference endpoint,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            SunderRpcCallOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(new CapturedRpcValue(methodId, request.Clone()));
+            var response = await handler.InvokeUnaryAsync(
+                null!,
+                serviceId,
+                methodId,
+                request,
+                cancellationToken).ConfigureAwait(false);
+            Responses.Add(new CapturedRpcValue(methodId, response.Clone()));
+            return response;
+        }
+
+        public async IAsyncEnumerable<JsonElement> SubscribeAsync(
+            SunderRpcEndpointReference endpoint,
+            string serviceId,
+            string methodId,
+            JsonElement request,
+            SunderRpcCallOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(new CapturedRpcValue(methodId, request.Clone()));
+            await foreach (var response in handler.InvokeServerStreamAsync(
+                               null!,
+                               serviceId,
+                               methodId,
+                               request,
+                               cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                Responses.Add(new CapturedRpcValue(methodId, response.Clone()));
+                yield return response;
+            }
+        }
+
+        public ValueTask<SunderRpcContentReference> RegisterContentAsync(
+            SunderRpcEndpointReference endpoint,
+            Stream source,
+            SunderRpcContentRegistrationOptions options,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public ValueTask<SunderRpcContentReference> RegisterContentFileAsync(
+            SunderRpcEndpointReference endpoint,
+            string filePath,
+            SunderRpcContentRegistrationOptions options,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public ValueTask<Stream> OpenContentAsync(
+            SunderRpcContentReference reference,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed record CapturedRpcValue(string MethodId, JsonElement Value);
 }

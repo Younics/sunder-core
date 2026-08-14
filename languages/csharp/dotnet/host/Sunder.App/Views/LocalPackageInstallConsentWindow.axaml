@@ -65,6 +65,18 @@
                        Text="Installing runs package code with your user account's operating-system access. Install only packages and sources you trust."
                        IsVisible="{Binding IsValid}"
                        TextWrapping="Wrap" />
+            <TextBlock Classes="muted"
+                       Text="This package requests your allowlisted Docker CLI connection environment. Installing consents to passing it to the Runtime worker."
+                       IsVisible="{Binding HasDockerEnvironmentAccess}"
+                       TextWrapping="Wrap" />
+            <TextBlock Classes="caption"
+                       Text="Manifest fence"
+                       IsVisible="{Binding HasDockerEnvironmentAccess}" />
+            <TextBlock Classes="caption"
+                       FontFamily="monospace"
+                       Text="{Binding SensitiveCapabilityManifestSha256}"
+                       IsVisible="{Binding HasDockerEnvironmentAccess}"
+                       TextWrapping="Wrap" />
             <TextBlock FontWeight="SemiBold"
                        Foreground="{DynamicResource Sunder.Brush.Danger}"
                        Text="Validation failed"
@@ -94,10 +106,13 @@
                   <DataTemplate x:DataType="vm:PackageRpcAccessItemViewModel">
                     <Border Classes="settings-note-card" Margin="0,0,0,8">
                       <StackPanel Spacing="4">
-                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                           <TextBlock FontWeight="SemiBold" Text="{Binding ContractId}" />
-                          <TextBlock Grid.Column="1" Classes="caption" Text="{Binding VersionRange}" />
-                          <TextBlock Grid.Column="2" Classes="caption" Text="{Binding RequirementText}" />
+                          <TextBlock Grid.Column="1" Classes="caption" Text="{Binding RequirementText}" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="8">
+                          <TextBlock Classes="caption" Text="{Binding CallerRoleText}" />
+                          <TextBlock Grid.Column="1" Classes="caption" Text="{Binding ContractVersionText}" />
                         </Grid>
                         <TextBlock Classes="muted" Text="{Binding ActionsText}" TextWrapping="Wrap" />
                       </StackPanel>

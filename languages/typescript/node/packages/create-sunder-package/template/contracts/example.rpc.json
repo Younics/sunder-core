@@ -1,26 +1,28 @@
 {
-  "descriptorVersion": 1,
+  "descriptorVersion": 2,
   "contractId": "example.messages",
-  "version": "1.0.0",
-  "services": [
-    {
-      "serviceId": "messages",
-      "methods": [
-        {
-          "methodId": "send",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "messages": {
+      "methods": {
+        "send": {
           "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
           "requestSchema": { "$ref": "#/$defs/Request" },
           "responseSchema": { "$ref": "#/$defs/Response" }
         },
-        {
-          "methodId": "watch",
+        "watch": {
           "kind": "server-stream",
+          "idempotency": "none",
+          "errors": [],
           "requestSchema": { "$ref": "#/$defs/Request" },
           "eventSchema": { "$ref": "#/$defs/Response" }
         }
-      ]
+      }
     }
-  ],
+  },
   "$defs": {
     "Request": {
       "type": "object",

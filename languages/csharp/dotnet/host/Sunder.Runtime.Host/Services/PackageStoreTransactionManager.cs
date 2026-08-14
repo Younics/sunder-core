@@ -16,6 +16,7 @@ internal sealed class PackageStoreTransactionManager(
         var transactionDirectory = Path.Combine(paths.TransactionRootPath, stage.StageId);
         var journalPath = Path.Combine(transactionDirectory, "journal.json");
         var journal = CreateJournal(stage, transactionDirectory);
+        string? catalogCommitWarning = null;
         try
         {
             ValidateCommitPaths(journal, transactionDirectory, journalPath);
@@ -59,9 +60,44 @@ internal sealed class PackageStoreTransactionManager(
         }
         catch (Exception exception)
         {
-            await RollBackAsync(journal, journalPath);
-            return PackageOperationResults.Failure(
-                $"Failed to commit package store transaction '{stage.StageId}': {exception.Message}");
+            if (journal.Phase == PackageStoreTransactionPhase.CatalogCommitting)
+            {
+                IReadOnlyList<InstalledPackageRecord> authoritativeCatalog;
+                try
+                {
+                    authoritativeCatalog = await store.ListAsync(CancellationToken.None);
+                }
+                catch (Exception readException)
+                {
+                    return PackageOperationResults.Failure(
+                        $"Failed to commit package store transaction '{stage.StageId}'; the authoritative catalog could not be verified after an ambiguous durable write: {readException.Message}");
+                }
+
+                if (PackageStorePolicy.CatalogsEqual(authoritativeCatalog, journal.DesiredPackages))
+                {
+                    catalogCommitWarning =
+                        $"The catalog write reported an error after the desired catalog became authoritative: {exception.Message}";
+                    journal = journal with { Phase = PackageStoreTransactionPhase.CatalogCommitted };
+                    await WriteJournalAsync(journalPath, journal);
+                }
+                else if (PackageStorePolicy.CatalogsEqual(authoritativeCatalog, journal.PreviousPackages))
+                {
+                    await RollBackAsync(journal, journalPath);
+                    return PackageOperationResults.Failure(
+                        $"Failed to commit package store transaction '{stage.StageId}': {exception.Message}");
+                }
+                else
+                {
+                    return PackageOperationResults.Failure(
+                        $"Failed to commit package store transaction '{stage.StageId}'; the authoritative catalog is indeterminate after an ambiguous durable write. Transaction evidence was preserved for recovery.");
+                }
+            }
+            else
+            {
+                await RollBackAsync(journal, journalPath);
+                return PackageOperationResults.Failure(
+                    $"Failed to commit package store transaction '{stage.StageId}': {exception.Message}");
+            }
         }
 
         try
@@ -71,15 +107,23 @@ internal sealed class PackageStoreTransactionManager(
             journal = journal with { Phase = PackageStoreTransactionPhase.Completed };
             await WriteJournalAsync(journalPath, journal);
             PackageStoreFileSystem.TryDeleteDirectory(transactionDirectory);
-            return stage.Result;
+            return catalogCommitWarning is null
+                ? stage.Result
+                : stage.Result with
+                {
+                    Warnings = stage.Result.Warnings.Append(catalogCommitWarning).ToArray(),
+                };
         }
         catch (Exception exception)
         {
             journal = journal with { Phase = PackageStoreTransactionPhase.CleanupPending };
             await WriteJournalAsync(journalPath, journal);
+            var warnings = catalogCommitWarning is null
+                ? stage.Result.Warnings
+                : stage.Result.Warnings.Append(catalogCommitWarning).ToArray();
             return stage.Result with
             {
-                Warnings = stage.Result.Warnings.Concat([
+                Warnings = warnings.Concat([
                     $"Package files were committed, but garbage collection will retry after cleanup failed: {exception.Message}",
                 ]).ToArray(),
             };

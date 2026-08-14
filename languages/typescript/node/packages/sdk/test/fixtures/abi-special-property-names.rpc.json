@@ -1,0 +1,44 @@
+{
+  "descriptorVersion": 2,
+  "contractId": "example.rpc.v2.specialkeys",
+  "version": "2.0.0",
+  "errors": {},
+  "services": {
+    "example": {
+      "methods": {
+        "roundtrip": {
+          "kind": "unary",
+          "idempotency": "idempotent",
+          "errors": [],
+          "requestSchema": { "$ref": "#/$defs/__proto__" },
+          "responseSchema": { "$ref": "#/$defs/__proto__" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "__proto__": {
+      "type": "object",
+      "properties": {
+        "__proto__": { "$ref": "#/$defs/constructor" },
+        "constructor": { "$ref": "#/$defs/prototype" },
+        "prototype": { "type": "boolean" }
+      },
+      "required": ["prototype", "__proto__", "constructor"],
+      "additionalProperties": false,
+      "title": "Special property names"
+    },
+    "constructor": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 8,
+      "description": "Constructor text"
+    },
+    "prototype": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
+    }
+  }
+}

@@ -25,7 +25,7 @@ internal static class PackageDataEndpoints
     }
 
     private static async Task<IResult> GetStateAsync(
-        string packageId, string key, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string key, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key))
         {
@@ -37,7 +37,7 @@ internal static class PackageDataEndpoints
     }
 
     private static async Task<IResult> ListStateAsync(
-        string packageId, string? prefix, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string? prefix, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId)
             || (prefix is not null && !PackageDataInputValidator.IsKeyPrefix(prefix)))
@@ -51,7 +51,7 @@ internal static class PackageDataEndpoints
 
     private static async Task<IResult> SetStateAsync(
         string packageId, string key, SetPackageDataValueRequest request,
-        RuntimePackageDataService service, CancellationToken cancellationToken)
+        PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key)
             || !PackageStorageValidation.IsValidValue(request.Value))
@@ -67,7 +67,7 @@ internal static class PackageDataEndpoints
     }
 
     private static async Task<IResult> DeleteStateAsync(
-        string packageId, string key, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string key, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key))
         {
@@ -82,11 +82,11 @@ internal static class PackageDataEndpoints
     }
 
     private static Task<IResult> GetSecretAsync(
-        string packageId, string key, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string key, PackageDataAccessService service, CancellationToken cancellationToken)
         => GetSecretCoreAsync(packageId, key, service, cancellationToken);
 
     private static async Task<IResult> GetSecretCoreAsync(
-        string packageId, string key, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string key, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key))
         {
@@ -99,7 +99,7 @@ internal static class PackageDataEndpoints
 
     private static async Task<IResult> SetSecretAsync(
         string packageId, string key, SetPackageDataValueRequest request,
-        RuntimePackageDataService service, CancellationToken cancellationToken)
+        PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key)
             || !PackageStorageValidation.IsValidValue(request.Value))
@@ -115,7 +115,7 @@ internal static class PackageDataEndpoints
     }
 
     private static async Task<IResult> DeleteSecretAsync(
-        string packageId, string key, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string key, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsKey(key))
         {
@@ -130,7 +130,7 @@ internal static class PackageDataEndpoints
     }
 
     private static async Task<IResult> ReadFileAsync(
-        string packageId, string relativePath, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string relativePath, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsRelativePath(relativePath))
         {
@@ -155,7 +155,7 @@ internal static class PackageDataEndpoints
 
     private static async Task<IResult> WriteFileAsync(
         string packageId, string relativePath, HttpRequest request,
-        RuntimePackageDataService service, CancellationToken cancellationToken)
+        PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsRelativePath(relativePath)
             || request.ContentLength is long contentLength
@@ -192,7 +192,7 @@ internal static class PackageDataEndpoints
     }
 
     private static async Task<IResult> DeleteFileAsync(
-        string packageId, string relativePath, RuntimePackageDataService service, CancellationToken cancellationToken)
+        string packageId, string relativePath, PackageDataAccessService service, CancellationToken cancellationToken)
     {
         if (!PackageDataInputValidator.IsPackageId(packageId) || !PackageDataInputValidator.IsRelativePath(relativePath))
         {

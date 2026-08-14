@@ -53,3 +53,21 @@ test("framing rejects excessive JSON depth and partial terminal frames", () => {
     /non-finite number/u,
   );
 });
+
+test("framing uses ASCII-only collision folding for nested RPC values", () => {
+  const value = {
+    type: "host.result",
+    id: "unicode1",
+    value: { k: true, "\u212a": false, "\u00e9": 1, "\u00c9": 2 },
+  };
+
+  assert.deepEqual(new FrameDecoder().push(encodeFrame(value)), [value]);
+  const asciiCollision = Buffer.from('{"type":"host.result","value":{"a":1,"A":2}}', "utf8");
+  assert.throws(
+    () => new FrameDecoder().push(Buffer.concat([
+      Buffer.from(`Content-Length: ${asciiCollision.length}\r\n\r\n`),
+      asciiCollision,
+    ])),
+    /duplicate or case-colliding/u,
+  );
+});

@@ -17,7 +17,7 @@ Runtime contains file-store paths beneath their package root and rejects symboli
 
 Avalonia view/settings contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`. Standalone .NET Runtime workers use the exact coordinated `Sunder.Sdk.Worker` package.
 
-Use this package for explicit Runtime/App lifecycle roles, background services, schema-first RPC, and package-scoped storage, settings, secrets, and logging. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
+Use this package for App lifecycle roles, shared package contracts, schema-first RPC, and package-scoped capability abstractions. Runtime executables use `Sunder.Sdk.Worker`, which depends on the exact coordinated `Sunder.Sdk` version. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
@@ -56,21 +56,22 @@ Decision summary:
 
 | Need | Package/tool |
 | --- | --- |
-| Any managed Runtime/App leaf | `Sunder.Sdk` |
+| Worker V3 Runtime leaf | `Sunder.Sdk.Worker` |
+| App or Protocol project | `Sunder.Sdk` |
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to that App leaf |
 | Stack contributor | Add `Sunder.Sdk.Stacks` to the implementing leaf |
-| Canonical managed build/archive | `Sunder.Package.Build` with `PrivateAssets="all"` |
-| New managed aggregate | Install `Sunder.Package.Templates` as a scaffold tool |
-| Node process or web App | Use the coordinated npm packages; `@sunder/sdk` is an RPC/process/browser subset, not this managed API surface |
+| Canonical C# build/archive | `Sunder.Package.Build` with `PrivateAssets="all"` |
+| New .NET aggregate | Install `Sunder.Package.Templates` as a scaffold tool |
+| Node worker or web App | Use the coordinated npm packages; `@sunder/sdk` is an RPC/worker/browser subset, not this .NET API surface |
 
 ## Package Shape
 
-A Sunder package is one universal archive with shared content and exact App/Runtime RID targets. A managed target declares package metadata and exposes at most one module for its role. A shared-only package may contain descriptor bundles without executable targets.
+A Sunder package is one universal archive with shared content and exact App/Runtime RID targets. An App target may expose one App module; a Runtime target is an independently executable exact-RID Worker V3 process. A shared-only package may contain descriptor bundles without executable targets.
 
 Typical package projects:
 
 - Target `net10.0`.
-- Reference `Sunder.Sdk`.
+- Reference `Sunder.Sdk.Worker` from Worker leaves and `Sunder.Sdk` from App or Protocol projects.
 - Reference `Sunder.Package.Build` with `PrivateAssets="all"`.
 - Reference `Sunder.Sdk.Avalonia` and Avalonia packages only when they register Avalonia UI behavior.
 - Do not reference `Sunder.App` or `Sunder.Runtime.Host`.
@@ -115,37 +116,40 @@ Package id rules:
 
 The package version comes from normal MSBuild properties such as `Version`, not from the metadata attributes.
 
-## Package Module
+## App Module
 
-A package may expose one public Runtime module and one public App module, or one class implementing both roles. Every module must be non-abstract and have a public parameterless constructor.
+An App target may expose one public `ISunderAppPackageModule`. It must be non-abstract and have a public parameterless constructor.
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Avalonia;
 
 namespace MyCompany.Package;
 
-public sealed class PackageModule : ISunderRuntimePackageModule
+public sealed class PackageModule : ISunderAppPackageModule
 {
-    public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
+    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
-        services.AddSingleton<MyRuntimeService>();
+        services.AddTransient<MyPackageViewModel>();
     }
 
-    public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services)
+    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
     {
-        registry.RegisterBackgroundService<MyRuntimeService>();
+        registry.RegisterPackageView<MyPackageView>(new PackageViewRegistration(
+            "my.company.package.main",
+            "My Package"));
     }
 }
 ```
 
-Runtime and App roles have separate module instances, service providers, and explicit `ConfigureRuntimeServices`/`ConfigureAppServices` and contribution methods. Each host constructs its module through the public parameterless constructor, configures and builds the role-specific provider, and then registers contributions; the module itself is not resolved from that provider. A host never invokes the other host's role.
+The App constructs the module through its public parameterless constructor, configures and builds the App-specific provider, and then registers contributions; the module itself is not resolved from that provider. Runtime workers own their process-local composition and immutable contribution catalog through `SunderWorkerOptions`; the worker-native `ISunderWorkerLifecycleService` contract lives in `Sunder.Sdk.Worker`. `Sunder.Sdk` does not expose a managed Runtime module, background-service, or generation-participant contract.
 
 `Sunder.Sdk.Packaging` owns the canonical `PackageId`, strict `SemanticVersion`, and `PackageVersionRange` primitives used by package authors, build tooling, Hosts, and Registry clients. Their `Parse`/`TryParse` methods are the V1 validators; do not implement a second package identity or version grammar.
 
 ## Contributions
 
-`ISunderRuntimeContributionRegistry` supports background services, package-scoped Runtime operations and streams, schema-first RPC providers, and host-stamped `PackageSettingsSchema` registration. `Sunder.Sdk.Avalonia` adds these App registrations to `ISunderAppContributionRegistry`:
+`Sunder.Sdk.Avalonia` adds these registrations to `ISunderAppContributionRegistry`:
 
 - `RegisterPackageView<TView>(PackageViewRegistration registration)`
 - `RegisterSettingsView<TView>()`
@@ -161,7 +165,7 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 
 ## Package Context
 
-`IPackageContext` gives your module access to host-provided package services:
+`IPackageContext` gives App modules and compatible Worker contexts access to host-provided package services:
 
 - `PackageId`
 - `Version` (the canonical SemVer 2.0 string from the package manifest)
@@ -221,71 +225,13 @@ Runtime applies the declared rewrites atomically under the document lock, retain
 
 `Storage.RoleLocalWorkspace` provides paths for APIs such as SQLite, process working directories, and atomic directory trees. It belongs to the current package activation and host role. App and Runtime workspaces are separate, the host owns their lifecycle, and package code must not dispose the capability.
 
-## Package Runtime Operations
+## Owner And Cross-Package RPC
 
-Use package Runtime operations when App UI needs to query or command package-owned Runtime services. The operation channel is scoped to the current package: App code cannot invoke another package's handlers. Define coarse-grained package DTOs and a stable lowercase operation id, register the handler from the Runtime module, and inject `IPackageRuntimeClient` into App services.
+Use `Sunder.Sdk.Rpc` for App-to-Worker owner calls and cross-package Runtime calls. A package bundles every contract descriptor it provides or imports under `payload/shared`, declares the descriptor identity and hashes in `contractBundles`, declares maximum requested `discover`, `invoke`, and `subscribe` actions in `usesContracts`, and declares each provider in `provides`. Worker V3 registers the same manifest-declared provider identity through `SunderWorkerProviderRegistration`. Consumers receive a caller-scoped `ISunderRpcClient`; endpoint references identify one exact activation and never retarget a replacement.
 
-```csharp
-using Sunder.Sdk.Runtime;
+Descriptors are strict UTF-8 JSON with `descriptorVersion: 2`, strict SemVer contract versions, keyed services and methods, declared errors, and local `#/$defs/...` schema references. The supported Draft 2020-12 profile is deliberately closed: bounded strings, arrays, and maps; closed case-sensitive records; bounded numbers; boolean and null; enum and const; local references; and unambiguous object `oneOf` unions with one required string-const discriminator. Remote references, recursive references, unknown keywords, open records, unbounded values, duplicate or case-colliding names, and excessive descriptor depth/count/size are rejected during package validation.
 
-public sealed record ListItemsRequest(int Offset, int Limit);
-public sealed record ListItemsResponse(IReadOnlyList<string> Items);
-
-public static class PackageOperations
-{
-    public static PackageRuntimeOperation<ListItemsRequest, ListItemsResponse> ListItems { get; }
-        = new("items.list");
-}
-
-public sealed class ListItemsHandler
-    : IPackageRuntimeOperationHandler<ListItemsRequest, ListItemsResponse>
-{
-    public ValueTask<ListItemsResponse> HandleAsync(
-        ListItemsRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(new ListItemsResponse(["one", "two"]));
-    }
-}
-```
-
-Register the Runtime service and handler:
-
-```csharp
-public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context)
-    => services.AddSingleton<ListItemsHandler>();
-
-public void RegisterRuntimeContributions(
-    ISunderRuntimeContributionRegistry registry,
-    IServiceProvider services)
-    => registry.RegisterRuntimeOperation(
-        PackageOperations.ListItems,
-        services.GetRequiredService<ListItemsHandler>());
-```
-
-Invoke it from App-owned code:
-
-```csharp
-var response = await runtimeClient.InvokeAsync(
-    PackageOperations.ListItems,
-    new ListItemsRequest(Offset: 0, Limit: 100),
-    cancellationToken);
-```
-
-Runtime availability, transport, timeout, and Runtime-reported operation failures throw `PackageRuntimeInvocationException`. Its bounded `Code`, optional `StatusCode` and `CorrelationId`, and `IsTransient` classification are the complete package-visible failure contract. Host exceptions are logged internally and are never attached to the package-visible exception. Caller-requested cancellation remains `OperationCanceledException`.
-
-Requests may run concurrently and are cancelled when the caller disconnects, Runtime shuts down, or the package session generation begins retirement. A retiring generation stops admitting new leases and reload waits only for a bounded drain deadline. Handlers must promptly observe cancellation; a handler that ignores it causes reload to fail while the old generation remains loaded and undisposed. Keep operations coarse-grained, use paging for large collections, do not send local filesystem paths, and do not model the channel as remote SQL or a generic repository. Hosts enforce bounded request and response payloads.
-
-For ordered updates, define `PackageRuntimeStream<TRequest, TEvent>`, implement `IPackageRuntimeStreamHandler<TRequest, TEvent>`, register it with `RegisterRuntimeStream`, and consume it with `IPackageRuntimeClient.SubscribeAsync`. Each subscription is independent, retains its Runtime package activation until the stream completes, and must observe cancellation. The wire stream uses bounded newline-terminated `event`, `completed`, and `error` JSON envelopes. EOF without a terminal envelope and a trailing partial record are transport failures; reconnect and replay semantics remain package-defined.
-
-## Schema-first RPC V1
-
-Use `Sunder.Sdk.Rpc` for cross-package Runtime calls. A package bundles every contract descriptor it provides or imports under `payload/shared`, declares the descriptor identity and canonical SHA-256 in `contractBundles`, declares maximum requested `discover`, `invoke`, and `subscribe` actions in `usesContracts`, and declares each provider in `provides`. Runtime provider modules register only the manifest-declared provider id with `RegisterRpcProvider`. Consumers receive a caller-scoped `ISunderRpcClient`; endpoint references identify one exact activation and never retarget a replacement.
-
-Descriptors are strict UTF-8 JSON with `descriptorVersion: 1`, strict SemVer contract versions, services, methods, and local `#/$defs/...` schema references. The supported Draft 2020-12 profile is deliberately closed: bounded strings, arrays, and maps; closed case-sensitive records; bounded numbers; boolean and null; enum and const; local references; and unambiguous object `oneOf` unions with one required string-const discriminator. Remote references, recursive references, unknown keywords, open records, unbounded values, duplicate or case-colliding names, and excessive descriptor depth/count/size are rejected during package validation.
-
-Descriptor hashes use deterministic JCS-compatible canonical JSON. Descriptor numeric tokens, including schema bounds and counts, must be canonical integers in the IEEE-754 safe range `-9007199254740991` through `9007199254740991`; exponent, fractional, leading-zero, and negative-zero descriptor forms are rejected. A runtime instance covered by a schema of type `number` may still contain a fractional JSON number within those integer-authored bounds.
+Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI hashes use the domain-separated structural RPC V2 identity. Descriptor numeric tokens, including schema bounds and counts, must be canonical integers in the IEEE-754 safe range `-9007199254740991` through `9007199254740991`; exponent, fractional, leading-zero, and negative-zero descriptor forms are rejected. A runtime instance covered by a schema of type `number` may still contain a fractional JSON number within those integer-authored bounds.
 
 Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. Use `SunderRpcException` for bounded domain failures, `SunderRpcContentReference` for host-mediated large content, and the typed client extensions or `SunderRpcCSharpGenerator` for generated bindings.
 
@@ -344,7 +290,7 @@ Providers receive a Host-created `SunderRpcInvocationContext`. Use its content m
 
 The host owns the callback listener, redirect path, leases, expiry, duplicate completion, and unload/shutdown cancellation. Package callback handlers must not create listeners. Implement `CancelCallbackAsync` when a provider task or delegate can remain in flight after `StartCallbackAsync` returns. `IPackageAuthHandler` remains the auth-specific status/disconnect surface projected over generic sessions.
 
-Register generic callback handlers as `IPackageCallbackHandler` in `ConfigureRuntimeServices`. Register an auth implementation as `IPackageAuthHandler`; Runtime also exposes that handler through its reserved `auth` callback route.
+Assign generic callback handlers to `SunderWorkerOptions.CallbackHandlers` and an auth implementation to `SunderWorkerOptions.AuthHandler`; Runtime exposes the latter through its reserved `auth` callback route.
 
 ## Theme Resources
 
@@ -414,7 +360,7 @@ sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sund
 
 - Package author manual: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
 - Callbacks and auth: https://github.com/Younics/sunder-core/blob/main/docs/package-development/CALLBACKS-AND-AUTH.md
-- Runtime operations: https://github.com/Younics/sunder-core/blob/main/docs/package-development/RUNTIME-OPERATIONS.md
+- Owner RPC: https://github.com/Younics/sunder-core/blob/main/docs/package-development/RUNTIME-OPERATIONS.md
 - Data and logging: https://github.com/Younics/sunder-core/blob/main/docs/package-development/DATA-AND-LOGGING.md
 - Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
 - Sunder overview: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER.md

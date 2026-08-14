@@ -43,6 +43,8 @@
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
   <UsingTask TaskName="Sunder.Package.Build.Tasks.AggregateSunderPackageTask"
              AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
+  <UsingTask TaskName="Sunder.Package.Build.Tasks.GenerateSunderRpcBindingsTask"
+             AssemblyFile="$(SunderPackageBuildTaskShadowAssembly)" />
 
   <Target Name="_BuildSunderPackageBuildTasks"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and Exists('$(SunderPackageBuildProject)') and !Exists('$(SunderPackageBuildTaskAssembly)')">
@@ -66,9 +68,22 @@
           DestinationFiles="@(_SunderPackageBuildTaskDependencyFiles->'$(SunderPackageBuildTaskShadowDirectory)%(Filename)%(Extension)')" />
   </Target>
 
+  <Target Name="GenerateSunderRpcBindings"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+    <GenerateSunderRpcBindingsTask Bindings="@(SunderRpcBinding)"
+                                   ProjectDirectory="$(MSBuildProjectDirectory)"
+                                   IntermediateOutputPath="$(IntermediateOutputPath)">
+      <Output TaskParameter="CompileItems" ItemName="Compile" />
+      <Output TaskParameter="FileWrites" ItemName="FileWrites" />
+      <Output TaskParameter="BindingSnapshots" ItemName="_SunderRpcBindingSnapshot" />
+    </GenerateSunderRpcBindingsTask>
+  </Target>
+
   <Target Name="GenerateSunderPackageManifest"
-           DependsOnTargets="_PrepareSunderPackageBuildTasks"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true'">
+           DependsOnTargets="_PrepareSunderPackageBuildTasks;GenerateSunderRpcBindings"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <ItemGroup>
       <_SunderAuthoredAssembly Include="$(TargetPath)" />
       <_SunderAuthoredAssembly Include="@(ReferenceCopyLocalPaths)"
@@ -89,9 +104,10 @@
                                         DynamicAccessAcknowledgements="@(SunderSdkDynamicAccess)"
                                          RuntimeIdentifiers="@(_SunderPackageRuntimeIdentifier)"
                                          PackageTargets="@(SunderPackageTarget)"
-                                         PackageViews="@(SunderPackageView)"
-                                         ContractBundles="@(SunderContractBundle)"
-                                         UsesContracts="@(SunderUsesContract)"
+                                          PackageViews="@(SunderPackageView)"
+                                          ContractBundles="@(SunderContractBundle)"
+                                          BindingSnapshots="@(_SunderRpcBindingSnapshot)"
+                                          UsesContracts="@(SunderUsesContract)"
                                          RpcProviders="@(SunderRpcProvider)"
                                          RuntimeIdentifier="$(RuntimeIdentifier)"
                                          OutputType="$(OutputType)"
@@ -101,20 +117,44 @@
       <Output TaskParameter="ResolvedTargets" ItemName="_SunderResolvedPackageTarget" />
       <Output TaskParameter="ResolvedContractFiles" ItemName="_SunderResolvedContractFile" />
       <Output TaskParameter="HasWorkerTarget" PropertyName="_SunderHasWorkerTarget" />
+      <Output TaskParameter="WorkerEntryPointRelativePath" PropertyName="SunderPackageWorkerEntryPointRelativePath" />
     </GenerateSunderPackageManifestTask>
   </Target>
 
   <Target Name="_CollectSunderWorkerFiles"
           DependsOnTargets="ComputeFilesToPublish"
           Condition="'$(_SunderHasWorkerTarget)' == 'true'">
+    <PropertyGroup Condition="'$(SunderPackageWorkerSigningTargets)' != ''">
+      <_SunderPackageWorkerSigningDirectory>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'sunder-worker-signing'))))\</_SunderPackageWorkerSigningDirectory>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_SunderPackageWorkerSigningDirectory)"
+               Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
+    <MakeDir Directories="$(_SunderPackageWorkerSigningDirectory)"
+             Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
     <ItemGroup>
-      <_SunderWorkerFile Include="@(ResolvedFileToPublish)" />
+      <_SunderWorkerSourceFile Include="@(ResolvedFileToPublish)"
+                               Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
+      <_SunderWorkerFile Include="@(ResolvedFileToPublish)"
+                         Condition="'$(SunderPackageWorkerSigningTargets)' == ''" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_SunderWorkerSourceFile)"
+          DestinationFiles="@(_SunderWorkerSourceFile->'$(_SunderPackageWorkerSigningDirectory)%(RelativePath)')"
+          Condition="'$(SunderPackageWorkerSigningTargets)' != ''" />
+    <ItemGroup Condition="'$(SunderPackageWorkerSigningTargets)' != ''">
+      <_SunderWorkerFile Include="@(_SunderWorkerSourceFile->'$(_SunderPackageWorkerSigningDirectory)%(RelativePath)')">
+        <RelativePath>%(_SunderWorkerSourceFile.RelativePath)</RelativePath>
+      </_SunderWorkerFile>
+      <SunderPackageWorkerSigningFile Include="@(_SunderWorkerFile)" />
     </ItemGroup>
   </Target>
 
+  <Target Name="_RunSunderPackageWorkerSigning"
+          DependsOnTargets="_CollectSunderWorkerFiles;$(SunderPackageWorkerSigningTargets)"
+          Condition="'$(_SunderHasWorkerTarget)' == 'true'" />
+
   <Target Name="_ValidateSunderDevOutputPath"
            DependsOnTargets="_PrepareSunderPackageBuildTasks"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true'">
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <SunderDevOutputPath Condition="'$(SunderDevOutputPath)' == ''">$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))</SunderDevOutputPath>
       <SunderDevOutputDiscoveryRoot Condition="'$(SunderDevOutputDiscoveryRoot)' == ''">$(TargetDir)</SunderDevOutputDiscoveryRoot>
@@ -131,8 +171,8 @@
 
   <Target Name="EmitSunderDevOutput"
             AfterTargets="Build"
-            DependsOnTargets="GenerateSunderPackageManifest;_CollectSunderWorkerFiles;_ValidateSunderDevOutputPath"
-           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true'">
+            DependsOnTargets="GenerateSunderPackageManifest;_RunSunderPackageWorkerSigning;_ValidateSunderDevOutputPath"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageAggregateProject)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <ItemGroup>
       <_SunderRuntimeFiles Include="$(TargetDir)*.dll" />
       <_SunderRuntimeFiles Include="$(TargetDir)*.pdb" />
@@ -213,8 +253,8 @@
   </Target>
 
   <Target Name="PackSunderPackage"
-           DependsOnTargets="Build;$(_SunderPackagePreparationTarget)"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+            DependsOnTargets="Build;$(_SunderPackagePreparationTarget)"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
       <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
@@ -229,9 +269,9 @@
   </Target>
 
   <Target Name="PackSunderPackageOnPublish"
-           AfterTargets="Publish"
-           DependsOnTargets="$(_SunderPackagePreparationTarget)"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+            AfterTargets="Publish"
+            DependsOnTargets="$(_SunderPackagePreparationTarget)"
+           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
       <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
 
 Start with the first failing boundary: build, archive validation, Runtime activation, App activation, or a leased call. Keep the correlation id from CLI/App errors and inspect Runtime package logs or the App session log without copying secrets into diagnostics.
 
@@ -13,11 +13,12 @@ Start with the first failing boundary: build, archive validation, Runtime activa
 - Look under the actual configuration/target-framework output: `bin/Debug/net10.0/sunder-dev`, the canonical pack output under `bin/Release/net10.0`, or the publish directory only when the pipeline explicitly used `dotnet publish`.
 - Do not add a source `sunder-package.json`; metadata must come from `[assembly: SunderPackage(...)]`.
 
-### Package Metadata Or Module Discovery Fails
+### Package Metadata, App Module, Or Worker Target Fails
 
 - Ensure the entry assembly has exactly one `SunderPackageAttribute` with a lowercase dot-separated package id.
 - Set `Version` to strict SemVer 2.0.
-- Declare at most one public, non-abstract implementation with a public parameterless constructor for each App/Runtime role.
+- Declare at most one public, non-abstract App module with a public parameterless constructor.
+- Give each Worker leaf exactly one explicit exact-RID `worker` target and set `OutputType=Exe`, `SelfContained=true`, `UseAppHost=true`, and `PublishSingleFile=false`.
 - Remove stale output and rebuild rather than editing generated manifest/role data.
 - Keep App-only Avalonia types out of Runtime-only dependency paths.
 
@@ -48,9 +49,9 @@ The Runtime validates and prepares a complete candidate before replacing the act
 
 ### Reload Times Out Or Old Code Remains Active
 
-An operation, stream, callback, Stack call, background service, timer, watcher, or child task is not observing cancellation. Runtime cancels generation leases and allows a 10-second drain; it refuses replacement rather than unloading code beneath running work.
+An RPC call/stream, callback, Stack call, lifecycle callback, timer, watcher, or child task is not observing cancellation. Runtime cancels generation leases and allows a bounded drain; it refuses replacement rather than terminating code beneath running work.
 
-Propagate cancellation, dispose async enumerators, stop child work in `StopAsync`/disposal, unsubscribe events, and remove static references to package types. Do not retry reload in a tight loop.
+Propagate cancellation, dispose RPC scopes and async enumerators, stop child work in `OnShutdown`, and unsubscribe events. Do not retry reload in a tight loop.
 
 ### Dependency Is Missing Or Incompatible
 
@@ -80,9 +81,9 @@ View construction, navigation, warmup, and presentation enter on the App dispatc
 
 ## Data And Services
 
-### App Data Or Runtime Client Is Unavailable
+### App Data Or Owner RPC Is Unavailable
 
-Runtime-backed state, files, settings, secrets, operations, and callbacks require an active Runtime role for the same package. They are also unavailable for mutation before the candidate App generation is published. Move work from module composition to navigation, a user action, an App background process, or a Runtime background service, and check `IsAvailable` where applicable.
+Runtime-backed state, files, settings, secrets, owner RPC, and callbacks require an active Runtime worker for the same package. They are also unavailable for mutation before the candidate App generation is published. Move work from module composition to navigation, a user action, an App background process, or a Worker lifecycle callback. Handle RPC unavailability and check callback availability where applicable.
 
 ### Storage Write Is Rejected
 
@@ -90,21 +91,21 @@ Check the portable key/path/value/file limits in [Data And Logging](DATA-AND-LOG
 
 ### Settings Write Is Rejected
 
-Register the complete Runtime settings schema before publication. Writes must target a declared non-secret field and satisfy its type/options/required rules. Secret fields use `IPackageSecrets`, not `IPackageSettings`. `GetValueAsync` includes schema defaults; `GetStoredValueAsync` does not.
+Assign the complete settings schema to `SunderWorkerOptions.SettingsSchema` before `worker.ready`. Writes must target a declared non-secret field and satisfy its type/options/required rules. Secret fields use `IPackageSecrets`, not `IPackageSettings`. `GetValueAsync` includes schema defaults; `GetStoredValueAsync` does not.
 
 ### DI Activation Fails
 
-Do not build a nested provider, register reserved host services, resolve App services in Runtime, or assume the module itself comes from DI. Register owned services in `Configure*Services`; resolve contribution instances from the provider passed to `Register*Contributions`.
+In App code, do not build a nested provider, register reserved host services, or assume the module itself comes from DI. Register owned services in `ConfigureAppServices`; resolve contribution instances from the provider passed to `RegisterAppContributions`. Worker code owns its local composition and receives Host capabilities through `SunderWorkerContext`.
 
-## Operations And Callbacks
+## RPC And Callbacks
 
-### Operation Or Stream Is Not Found
+### Owner Provider Or Method Is Not Found
 
-Confirm the lowercase package-scoped id matches exactly, the handler is registered in the current Runtime generation, and the App client belongs to the same package. A package cannot invoke another package's operation. Duplicate ids fail activation rather than choosing one handler.
+Confirm the provider id and contract version match the manifest, the Worker registered the exact descriptor and ABI hashes, the endpoint is active, and the App declared `discover` plus the required call action. Owner providers are visible only to the same package. Duplicate provider ids fail activation rather than choosing one handler.
 
 ### Request, Response, Or Event Is Rejected
 
-Measure serialized UTF-8 JSON, not in-memory object size. Requests are limited to 1 MiB, responses to 4 MiB, and events to 1 MiB. Page collections and keep DTOs concrete/non-polymorphic. Every handler response/event must be non-null, and every stream must terminate normally or with an error frame.
+Validate the value against the bundled RPC V2 descriptor, including closed record members, required/null presence, bounded strings/collections/numbers, and safe integers. Page collections and use Host-mediated content references for large bytes. Every response/event must match its schema, and every server stream must terminate normally or with an authenticated error.
 
 ### Callback Does Not Complete
 

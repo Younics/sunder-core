@@ -20,16 +20,20 @@ import { Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createDeflateRaw } from "node:zlib";
 import {
+  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  canonicalRpcAbiProjectionBytes,
+  canonicalRpcDescriptorBytes,
   canonicalizeDescriptor,
   isArchiveRelativePath,
-  isVersionInRange,
+  isPackageId,
+  isSemanticVersion,
   parseRpcContractDescriptor,
-  type JsonValue,
 } from "@sunder/sdk";
-import type { BuildOptions, Metafile, Plugin as EsbuildPlugin } from "esbuild";
+import type { BuildOptions, Metafile } from "esbuild";
 import { build as buildEsbuild, context, type BuildContext } from "esbuild";
 import type { Plugin as VitePlugin } from "vite" with { "resolution-mode": "import" };
 import { packageToolCompatibility } from "./compatibility";
+import { readProjectDescriptorFile } from "./descriptor-files";
 import {
   asJsonValue,
   currentRid,
@@ -39,12 +43,19 @@ import {
   SUPPORTED_RIDS,
   type AppConfig,
   type AppViewConfig,
+  type ContractExposure,
   type LoadedContract,
   type LoadedProject,
+  type PackageRole,
+  type ProviderAudience,
   type SunderNodePackageConfig,
   type SunderRid,
 } from "./model";
 import { renderBundledDependencyNotice } from "./notices";
+import {
+  generateRpcBindingsForLoadedProjectLocked,
+  withRpcBindingsOutputLock,
+} from "./rpc-bindings";
 import {
   assertReplaceableGeneratedDirectory,
   assertReplaceableGeneratedFile,
@@ -58,6 +69,9 @@ import {
 
 const MANIFEST_PATH = "manifest/sunder-package.json";
 const INDEX_PATH = "manifest/content-index.json";
+const ARCHIVE_FORMAT_VERSION = 1;
+const PACKAGE_MANIFEST_VERSION = 3;
+const CONTENT_INDEX_SCHEMA_VERSION = 1;
 const DEFAULT_MAX_EXECUTABLE_BYTES = 160 * 1024 * 1024;
 const DEFAULT_MAX_PACKAGE_BYTES = MAXIMUM_COMPRESSED_PACKAGE_BYTES;
 const MAXIMUM_ARCHIVE_ENTRIES = 4096;
@@ -83,9 +97,8 @@ interface DevWatchSession {
   readonly workRoot: string;
   readonly bundlePath: string;
   readonly workerNoticePath: string;
-  readonly watchers: FSWatcher[];
   webRoot?: string;
-  buildContext?: BuildContext;
+  readonly buildContext: BuildContext;
   superseded: boolean;
 }
 
@@ -110,8 +123,16 @@ export async function prepareProject(projectPath: string): Promise<PreparedProje
   const descriptorPaths = new Map<string, string>();
   for (const configured of project.config.contracts) {
     const sourcePath = resolveInside(project.root, configured.path, "contract path");
-    const descriptor = parseRpcContractDescriptor(await readFile(sourcePath));
-    const canonical = canonicalizeDescriptor(descriptor as unknown as JsonValue);
+    const descriptor = parseRpcContractDescriptor(await readProjectDescriptorFile(
+      project.root,
+      sourcePath,
+      `Contract descriptor '${configured.path}'`,
+    ));
+    if (descriptor.descriptorVersion !== 2) {
+      throw new Error(`Contract descriptor '${configured.path}' uses descriptorVersion ${descriptor.descriptorVersion}; Package Manifest V3 requires RPC descriptorVersion 2.`);
+    }
+    const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
+    const canonical = canonicalBytes.toString("utf8");
     const identity = `${descriptor.contractId}\0${descriptor.version}`;
     if (!identities.add(identity)) throw new Error(`Contract '${descriptor.contractId}' version '${descriptor.version}' is configured more than once.`);
     const descriptorPath = normalizeLogicalPath(configured.descriptorPath ?? `contracts/${basename(configured.path)}`);
@@ -124,67 +145,71 @@ export async function prepareProject(projectPath: string): Promise<PreparedProje
       sourcePath,
       descriptorPath,
       descriptor,
+      canonicalBytes,
       canonical,
-      sha256: sha256(Buffer.from(canonical, "utf8")),
+      descriptorSha256: sha256(canonicalBytes),
+      abiSha256: rpcAbiSha256(descriptor),
+      exposure: configured.exposure,
     });
   }
   for (const provider of project.config.providers) {
-    if (!contracts.some((contract) => contract.descriptor.contractId === provider.contractId && contract.descriptor.version === provider.contractVersion)) {
+    const contract = contracts.find((candidate) => candidate.descriptor.contractId === provider.contractId
+      && candidate.descriptor.version === provider.contractVersion);
+    if (contract === undefined) {
       throw new Error(`Provider '${provider.providerId}' has no exact configured local contract descriptor.`);
+    }
+    if (provider.audience === "public" && contract.exposure !== "public") {
+      throw new Error(`Provider '${provider.providerId}' has audience 'public', but contract '${provider.contractId}' is exposed only to its package owner.`);
     }
   }
   for (const use of project.config.usesContracts ?? []) {
     if (!contracts.some((contract) => contract.descriptor.contractId === use.contractId
-      && isVersionInRange(contract.descriptor.version, use.versionRange))) {
-      throw new Error(`Contract use '${use.contractId}' range '${use.versionRange}' has no matching configured local contract descriptor.`);
+      && contract.descriptor.version === use.contractVersion)) {
+      throw new Error(`Contract use '${use.role}/${use.contractId}' version '${use.contractVersion}' has no exact configured local contract descriptor.`);
     }
   }
   return { ...project, contracts };
 }
 
 export async function buildDevPackage(options: DevBuildOptions): Promise<void> {
-  const project = await prepareProject(options.projectPath);
   const rid = currentRid();
-  const workRoot = resolve(project.outputRoot, ".sunder-dev-work");
   if (options.watch) {
-    await withOutputLocks([workRoot], async () => {
-      const sessionRoot = `${workRoot}.stage-${randomUUID()}`;
-      await rm(sessionRoot, { recursive: true, force: true });
-      await mkdir(sessionRoot, { recursive: true });
-      try {
-        await watchDevPackage(project, rid, sessionRoot);
-      } finally {
-        await rm(sessionRoot, { recursive: true, force: true });
-      }
-    });
+    await watchDevPackage(resolve(options.projectPath), rid);
     return;
   }
-  await withOutputLocks([workRoot], async () => {
-    await assertReplaceableGeneratedDirectory(workRoot, true);
-    const staged = await stageGeneratedDirectory(
-      workRoot,
-      "Sunder Node dev work output v1\n",
-      async (stagingRoot) => {
-        const bundlePath = resolve(stagingRoot, "worker.cjs");
-        const webRoot = project.config.app === undefined
-          ? undefined
-          : await buildWebAssets(project, resolve(stagingRoot, "web"));
-        const result = await buildEsbuild(devBuildOptions(project, bundlePath));
-        const workerNoticePath = await writeWorkerNotice(project, bundlePath, result.metafile);
-        await emitDevTree(project, rid, bundlePath, workerNoticePath, webRoot);
-      },
-    );
-    const stagedOutputs = [staged.output, staged.marker];
-    try {
-      await commitStagedOutputs(stagedOutputs);
-    } finally {
-      await cleanupStagedOutputs(stagedOutputs);
-    }
+  await withRpcBindingsOutputLock(options.projectPath, async () => {
+    const project = await prepareProject(options.projectPath);
+    await generateRpcBindingsForLoadedProjectLocked(project);
+    const workRoot = resolve(project.outputRoot, ".sunder-dev-work");
+    await withOutputLocks([workRoot], async () => {
+      await assertReplaceableGeneratedDirectory(workRoot, true);
+      const staged = await stageGeneratedDirectory(
+        workRoot,
+        "Sunder Node dev work output v1\n",
+        async (stagingRoot) => {
+          const bundlePath = resolve(stagingRoot, "worker.cjs");
+          let webRoot: string | undefined;
+          if (project.config.app !== undefined) {
+            webRoot = resolve(stagingRoot, "web");
+            await buildWebAssetsLocked(project, webRoot);
+          }
+          const result = await buildEsbuild(devBuildOptions(project, bundlePath));
+          const workerNoticePath = await writeWorkerNotice(project, bundlePath, result.metafile);
+          await emitDevTree(project, rid, bundlePath, workerNoticePath, webRoot);
+        },
+      );
+      const stagedOutputs = [staged.output, staged.marker];
+      try {
+        await commitStagedOutputs(stagedOutputs);
+      } finally {
+        await cleanupStagedOutputs(stagedOutputs);
+      }
+    });
+    process.stdout.write(`Sunder dev package: ${resolve(project.outputRoot, "sunder-dev")}\n`);
   });
-  process.stdout.write(`Sunder dev package: ${resolve(project.outputRoot, "sunder-dev")}\n`);
 }
 
-function devBuildOptions(project: PreparedProject, bundlePath: string, plugins: readonly EsbuildPlugin[] = []): BuildOptions {
+function devBuildOptions(project: PreparedProject, bundlePath: string): BuildOptions {
   return {
     absWorkingDir: project.root,
     entryPoints: [resolveInside(project.root, project.config.entry, "entry")],
@@ -197,15 +222,16 @@ function devBuildOptions(project: PreparedProject, bundlePath: string, plugins: 
     metafile: true,
     logLevel: "info",
     alias: { "@sunder/sdk": require.resolve("@sunder/sdk") },
-    plugins: [contractIdentityPlugin(project), ...plugins],
   };
 }
 
-async function watchDevPackage(initialProject: PreparedProject, rid: SunderRid, workRoot: string): Promise<void> {
+async function watchDevPackage(projectRoot: string, rid: SunderRid): Promise<void> {
   let activeSession: DevWatchSession | undefined;
   let operationTail = Promise.resolve();
-  let restartTimer: NodeJS.Timeout | undefined;
+  let operationTimer: NodeJS.Timeout | undefined;
+  let pendingRestart = false;
   let stopping = false;
+  const knownOutputRoots = new Set<string>();
 
   const report = (error: unknown): void => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -218,132 +244,125 @@ async function watchDevPackage(initialProject: PreparedProject, rid: SunderRid, 
   const disposeSession = async (session: DevWatchSession | undefined): Promise<void> => {
     if (session === undefined) return;
     session.superseded = true;
-    for (const watcher of session.watchers) watcher.close();
-    await session.buildContext?.dispose();
+    try {
+      await session.buildContext.dispose();
+    } finally {
+      await rm(session.workRoot, { recursive: true, force: true });
+    }
   };
-  const emit = (session: DevWatchSession, rebuildWeb: boolean): Promise<void> => {
-    if (session.superseded || stopping) return Promise.resolve();
-    return enqueue(async () => {
+  const buildSessionLocked = async (session: DevWatchSession, rebuildWeb: boolean): Promise<void> => {
+    if (session.superseded || activeSession !== session || stopping) return;
+    const result = await session.buildContext.rebuild();
+    await writeWorkerNotice(session.project, session.bundlePath, result.metafile);
+    if (session.superseded || activeSession !== session || stopping) return;
+    if (session.project.config.app !== undefined && (rebuildWeb || session.webRoot === undefined)) {
+      session.webRoot = resolve(session.workRoot, "web");
+      await buildWebAssetsLocked(session.project, session.webRoot);
+    }
+    if (session.superseded || activeSession !== session || stopping) return;
+    await emitDevTree(session.project, rid, session.bundlePath, session.workerNoticePath, session.webRoot);
+    process.stdout.write(`Sunder dev package: ${resolve(session.project.outputRoot, "sunder-dev")}\n`);
+  };
+  const rebuildSession = async (session: DevWatchSession): Promise<void> => {
+    await withRpcBindingsOutputLock(projectRoot, async () => {
       if (session.superseded || activeSession !== session || stopping) return;
-      if (rebuildWeb && session.project.config.app !== undefined) {
-        session.webRoot = await buildWebAssets(session.project, resolve(session.workRoot, "web"));
-      }
-      if (session.superseded || activeSession !== session || stopping) return;
-      await emitDevTree(session.project, rid, session.bundlePath, session.workerNoticePath, session.webRoot);
-      process.stdout.write(`Sunder dev package: ${resolve(session.project.outputRoot, "sunder-dev")}\n`);
+      await generateRpcBindingsForLoadedProjectLocked(session.project);
+      await buildSessionLocked(session, true);
     });
   };
-  const scheduleRestart = (): void => {
-    if (stopping) return;
-    if (activeSession !== undefined) activeSession.superseded = true;
-    if (restartTimer !== undefined) clearTimeout(restartTimer);
-    restartTimer = setTimeout(() => {
-      restartTimer = undefined;
-      void enqueue(async () => {
-        const previous = activeSession;
-        const project = await prepareProject(initialProject.root);
-        activeSession = undefined;
-        await disposeSession(previous);
-        activeSession = await createSession(project);
-      }).catch(() => undefined);
-    }, 100);
-  };
-  const createSession = async (project: PreparedProject): Promise<DevWatchSession> => {
+  const createSessionLocked = async (project: PreparedProject): Promise<DevWatchSession> => {
+    const workRoot = resolve(project.outputRoot, `.sunder-dev-work.stage-${randomUUID()}`);
+    await rm(workRoot, { recursive: true, force: true });
     await mkdir(workRoot, { recursive: true });
+    const bundlePath = resolve(workRoot, "worker.cjs");
+    let buildContext: BuildContext;
+    try {
+      buildContext = await context(devBuildOptions(project, bundlePath));
+    } catch (error) {
+      await rm(workRoot, { recursive: true, force: true });
+      throw error;
+    }
     const session: DevWatchSession = {
       project,
       workRoot,
-      bundlePath: resolve(workRoot, "worker.cjs"),
-      workerNoticePath: resolve(workRoot, "worker.cjs.third-party-notices.txt"),
-      webRoot: project.config.app === undefined
-        ? undefined
-        : await buildWebAssets(project, resolve(workRoot, "web")),
-      watchers: [],
+      bundlePath,
+      workerNoticePath: `${bundlePath}.third-party-notices.txt`,
+      buildContext,
       superseded: false,
     };
-    try {
-      const contractPaths = new Map<string, Set<string>>();
-      for (const contract of project.contracts) {
-        const directory = dirname(contract.sourcePath);
-        const names = contractPaths.get(directory) ?? new Set<string>();
-        names.add(basename(contract.sourcePath));
-        contractPaths.set(directory, names);
-      }
-      for (const [directory, names] of contractPaths) {
-        const watcher = watchFiles(directory, (_event, fileName) => {
-          if (fileName === null || names.has(fileName.toString())) scheduleRestart();
-        });
-        watcher.on("error", report);
-        session.watchers.push(watcher);
-      }
-      if (project.config.app !== undefined) {
-        const appRoot = resolveAppRoot(project);
-        const structuralFiles = new Set(
-          [project.configPath, ...project.contracts.map((contract) => contract.sourcePath)]
-            .map((path) => resolve(path)),
-        );
-        let appTimer: NodeJS.Timeout | undefined;
-        const watcher = watchFiles(appRoot, { recursive: true }, (_event, fileName) => {
-          if (fileName !== null) {
-            const relativeName = fileName.toString().replaceAll("\\", "/");
-            const changedPath = resolve(appRoot, relativeName);
-            if (relativeName.split("/").some((segment) => segment.startsWith(".sunder-vite-"))
-              || structuralFiles.has(changedPath)
-              || changedPath === project.outputRoot
-              || isInside(project.outputRoot, changedPath)) return;
-          }
-          if (appTimer !== undefined) clearTimeout(appTimer);
-          appTimer = setTimeout(() => void emit(session, true).catch(() => undefined), 100);
-        });
-        watcher.on("error", report);
-        watcher.on("close", () => {
-          if (appTimer !== undefined) clearTimeout(appTimer);
-        });
-        session.watchers.push(watcher);
-      }
-      const outputPlugin: EsbuildPlugin = {
-        name: "sunder-dev-output",
-        setup(pluginBuild) {
-          pluginBuild.onEnd(async (result) => {
-            if (result.errors.length !== 0) return;
-            await writeWorkerNotice(project, session.bundlePath, result.metafile);
-            await emit(session, false);
-          });
-        },
-      };
+    knownOutputRoots.add(pathIdentity(project.outputRoot));
+    return session;
+  };
+  const restartSession = async (): Promise<void> => {
+    const previous = activeSession;
+    activeSession = undefined;
+    await disposeSession(previous);
+    if (stopping) return;
+    await withRpcBindingsOutputLock(projectRoot, async () => {
+      const project = await prepareProject(projectRoot);
+      await generateRpcBindingsForLoadedProjectLocked(project);
+      const session = await createSessionLocked(project);
       activeSession = session;
-      session.buildContext = await context(devBuildOptions(project, session.bundlePath, [outputPlugin]));
-      await session.buildContext.watch();
-      return session;
-    } catch (error) {
-      await disposeSession(session);
-      if (activeSession === session) activeSession = undefined;
-      throw error;
+      try {
+        await buildSessionLocked(session, true);
+      } catch (error) {
+        activeSession = undefined;
+        await disposeSession(session);
+        throw error;
+      }
+    });
+  };
+  const scheduleOperation = (restart: boolean): void => {
+    if (stopping) return;
+    if (restart) {
+      pendingRestart = true;
+      if (activeSession !== undefined) activeSession.superseded = true;
     }
+    if (operationTimer !== undefined) clearTimeout(operationTimer);
+    operationTimer = setTimeout(() => {
+      operationTimer = undefined;
+      const shouldRestart = pendingRestart;
+      pendingRestart = false;
+      void enqueue(async () => {
+        if (stopping) return;
+        const session = activeSession;
+        if (shouldRestart || session === undefined || session.superseded) await restartSession();
+        else await rebuildSession(session);
+      }).catch(() => undefined);
+    }, 100);
   };
 
-  const configWatcher = watchFiles(initialProject.root, { recursive: true }, (_event, fileName) => {
+  const projectWatcher: FSWatcher = watchFiles(projectRoot, { recursive: true }, (_event, fileName) => {
     if (fileName === null) {
-      if (activeSession === undefined || activeSession.superseded) scheduleRestart();
+      scheduleOperation(true);
       return;
     }
     const relativeName = fileName.toString().replaceAll("\\", "/");
-    if (relativeName === basename(initialProject.configPath)) {
-      scheduleRestart();
+    const segments = relativeName.split("/");
+    if (segments.some((segment) => segment === "node_modules"
+      || segment === ".git"
+      || segment === ".sunder"
+      || segment.startsWith(".sunder-"))) return;
+    const changedPath = resolve(projectRoot, relativeName);
+    const changedIdentity = pathIdentity(changedPath);
+    if ([...knownOutputRoots].some((root) => root === changedIdentity || isInside(root, changedIdentity))) return;
+    const session = activeSession;
+    if (session === undefined || session.superseded) {
+      scheduleOperation(true);
       return;
     }
-    if (activeSession !== undefined && !activeSession.superseded) return;
-    const changedPath = resolve(initialProject.root, relativeName);
-    if (relativeName.split("/").some((segment) => segment === "node_modules"
-      || segment === ".git"
-      || segment.startsWith(".sunder-"))
-      || changedPath === initialProject.outputRoot
-      || isInside(initialProject.outputRoot, changedPath)) return;
-    scheduleRestart();
+    const structuralPaths = new Set([
+      session.project.configPath,
+      ...session.project.contracts.map((contract) => contract.sourcePath),
+      ...(session.project.config.rpcBindings ?? []).map((binding, index) => (
+        resolveInside(session.project.root, binding.path, `rpcBindings[${index}].path`)
+      )),
+    ].map(pathIdentity));
+    scheduleOperation([...structuralPaths].some((path) => path === changedIdentity || isInside(changedIdentity, path)));
   });
-  configWatcher.on("error", report);
+  projectWatcher.on("error", report);
   try {
-    activeSession = await createSession(initialProject);
+    await enqueue(restartSession);
     process.stdout.write("Watching package sources. Sunder will drain and restart the exact package activation after each canonical dev output change.\n");
     await new Promise<void>((resolvePromise) => {
       const stop = (): void => {
@@ -351,8 +370,8 @@ async function watchDevPackage(initialProject: PreparedProject, rid: SunderRid, 
         stopping = true;
         process.off("SIGINT", stop);
         process.off("SIGTERM", stop);
-        if (restartTimer !== undefined) clearTimeout(restartTimer);
-        configWatcher.close();
+        if (operationTimer !== undefined) clearTimeout(operationTimer);
+        projectWatcher.close();
         const session = activeSession;
         activeSession = undefined;
         void enqueue(() => disposeSession(session)).finally(resolvePromise);
@@ -361,13 +380,20 @@ async function watchDevPackage(initialProject: PreparedProject, rid: SunderRid, 
       process.once("SIGTERM", stop);
     });
   } finally {
-    configWatcher.close();
+    projectWatcher.close();
     await disposeSession(activeSession);
     await operationTail;
   }
 }
 
 export async function bundleProduction(project: PreparedProject, rid: SunderRid, outputPath: string): Promise<string> {
+  return await withRpcBindingsOutputLock(project.root, async () => {
+    await generateRpcBindingsForLoadedProjectLocked(project);
+    return await bundleProductionWithGeneratedRpcBindings(project, rid, outputPath);
+  });
+}
+
+export async function bundleProductionWithGeneratedRpcBindings(project: PreparedProject, rid: SunderRid, outputPath: string): Promise<string> {
   await mkdir(dirname(outputPath), { recursive: true });
   const result = await buildEsbuild({
     absWorkingDir: project.root,
@@ -383,25 +409,27 @@ export async function bundleProduction(project: PreparedProject, rid: SunderRid,
     legalComments: "none",
     logLevel: "info",
     alias: { "@sunder/sdk": require.resolve("@sunder/sdk") },
-    plugins: [contractIdentityPlugin(project)],
   });
   return await writeWorkerNotice(project, outputPath, result.metafile);
 }
 
 export async function buildWebTarget(projectPath: string, configuredRid?: SunderRid): Promise<string | null> {
-  const project = await prepareProject(projectPath);
-  if (project.config.app === undefined) return null;
-  const rid = configuredRid ?? currentRid();
-  const webRoot = resolve(project.outputRoot, ".sunder-web-work", rid);
-  const leafRoot = resolve(project.outputRoot, "targets", `app-${rid}`);
-  const discoveryRoot = requireDiscoveryRoot(resolve(project.outputRoot, "targets"), leafRoot);
-  await withOutputLocks([targetLeafDiscoveryKey(discoveryRoot)], async () => {
-    await withOutputLocks([webRoot, leafRoot], async () => {
-      await buildWebAssetsLocked(project, webRoot);
-      await writeWebTargetLeafLocked(project, rid, webRoot, leafRoot);
+  return await withRpcBindingsOutputLock(projectPath, async () => {
+    const project = await prepareProject(projectPath);
+    if (project.config.app === undefined) return null;
+    await generateRpcBindingsForLoadedProjectLocked(project);
+    const rid = configuredRid ?? currentRid();
+    const webRoot = resolve(project.outputRoot, ".sunder-web-work", rid);
+    const leafRoot = resolve(project.outputRoot, "targets", `app-${rid}`);
+    const discoveryRoot = requireDiscoveryRoot(resolve(project.outputRoot, "targets"), leafRoot);
+    await withOutputLocks([targetLeafDiscoveryKey(discoveryRoot)], async () => {
+      await withOutputLocks([webRoot, leafRoot], async () => {
+        await buildWebAssetsLocked(project, webRoot);
+        await writeWebTargetLeafLocked(project, rid, webRoot, leafRoot);
+      });
     });
+    return leafRoot;
   });
-  return leafRoot;
 }
 
 export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {
@@ -419,7 +447,7 @@ export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {
     entryPoint: logicalEntryPoint,
     targetFramework: "node24",
     sdkVersion: compatibility.sdkVersion,
-    requiredHostCapabilities: ["rpc.v1", compatibility.sdkBaselineCapability],
+    requiredHostCapabilities: workerTargetCapabilities(input.project.config),
   }]);
   await replaceGeneratedDirectory(
     leafRoot,
@@ -501,7 +529,7 @@ export async function aggregateAndPack(
     const leafRoots = [...new Map(discovered.map((path) => [pathIdentity(path), path])).values()];
     if (leafRoots.length === 0) throw new Error("No canonical package target leaves were found.");
     return await withOutputLocks([...leafRoots, packageRoot, archivePath], async () => {
-      const leaves = await Promise.all(leafRoots.map(readLeaf));
+      const leaves = await Promise.all(leafRoots.map((root) => readLeaf(root, project.config)));
       if (leaves.length > 12) throw new Error("A universal Sunder package may contain at most 12 exact targets.");
       const targetKeys = new Set<string>();
       for (const leaf of leaves) {
@@ -521,6 +549,26 @@ export async function aggregateAndPack(
       await assertReplaceableGeneratedDirectory(packageRoot);
       await assertReplaceableGeneratedFile(archivePath, "package archive");
       const targets = leaves.flatMap((leaf) => leaf.manifest.targets).sort(compareTargets);
+      const declarations: RpcManifestDeclarations = {
+        usesContracts: unionDeclarations(
+          leaves.flatMap((leaf) => leaf.manifest.usesContracts),
+          (use) => `${use.role}\0${use.contractId}`,
+          "contract use",
+          compareContractUses,
+        ),
+        provides: unionDeclarations(
+          leaves.flatMap((leaf) => leaf.manifest.provides),
+          (provider) => `${provider.role}\0${provider.providerId}`,
+          "provider",
+          compareProviders,
+        ),
+      };
+      assertRoleScopedDeclarationSets(leaves);
+      const aggregateManifest = createManifest(project, targets, declarations);
+      const configuredManifest = createManifest(project, targets);
+      if (rpcDeclarationsFingerprint(aggregateManifest) !== rpcDeclarationsFingerprint(configuredManifest)) {
+        throw new Error("Aggregate target leaves do not exactly match the configured role-scoped RPC uses and providers.");
+      }
       const stagedPackage = await stageGeneratedDirectory(
         packageRoot,
         "Sunder package aggregate generated output v1\n",
@@ -552,7 +600,7 @@ export async function aggregateAndPack(
               await copyLeafFile(leaf, logicalPath, resolve(stagingRoot, "payload", target.role, target.rid, ...logicalPath.split("/")));
             }
           }
-          await writeCanonicalPackageMetadata(stagingRoot, createManifest(project, targets));
+          await writeCanonicalPackageMetadata(stagingRoot, aggregateManifest);
         },
       );
       const stagedArchive: StagedOutput = {
@@ -577,6 +625,16 @@ export function maximumExecutableBytes(config: SunderNodePackageConfig): number 
   return config.maximumExecutableBytes ?? DEFAULT_MAX_EXECUTABLE_BYTES;
 }
 
+function workerTargetCapabilities(config: SunderNodePackageConfig): readonly string[] {
+  const compatibility = packageToolCompatibility();
+  return [
+    "rpc.v2",
+    compatibility.sdkBaselineCapability,
+    "worker-protocol.v3",
+    ...config.workerCapabilities,
+  ].sort(ordinal);
+}
+
 async function emitDevTree(
   project: PreparedProject,
   rid: SunderRid,
@@ -595,7 +653,7 @@ async function emitDevTree(
     entryPoint: logicalEntryPoint,
     targetFramework: `node${process.versions.node.split(".")[0]}`,
     sdkVersion: compatibility.sdkVersion,
-    requiredHostCapabilities: ["rpc.v1", compatibility.sdkBaselineCapability],
+    requiredHostCapabilities: workerTargetCapabilities(project.config),
   }];
   if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid));
   const manifest = createManifest(project, targets);
@@ -644,45 +702,85 @@ async function emitDevTree(
   });
 }
 
-function createManifest(project: PreparedProject, targets: readonly TargetManifest[]): PackageManifest {
-  const contracts = project.contracts.map((contract) => ({
+function createManifest(
+  project: PreparedProject,
+  targets: readonly TargetManifest[],
+  declarations?: RpcManifestDeclarations,
+): PackageManifest {
+  const contractBundles = project.contracts.map((contract) => ({
     contractId: contract.descriptor.contractId,
     version: contract.descriptor.version,
     descriptorPath: contract.descriptorPath,
-    sha256: contract.sha256,
+    descriptorSha256: contract.descriptorSha256,
+    abiSha256: contract.abiSha256,
+    exposure: contract.exposure,
   })).sort((left, right) => ordinal(`${left.contractId}\0${left.version}`, `${right.contractId}\0${right.version}`));
-  const targetRoles = new Set(targets.map((target) => target.role));
-  const providers = project.config.providers.filter(() => targetRoles.has("runtime")).map((provider) => {
-    const contract = project.contracts.find((candidate) => candidate.descriptor.contractId === provider.contractId && candidate.descriptor.version === provider.contractVersion);
-    if (contract === undefined) throw new Error(`Provider '${provider.providerId}' contract was not loaded.`);
-    return {
-      providerId: provider.providerId,
-      contractId: provider.contractId,
-      contractVersion: provider.contractVersion,
-      contractSha256: contract.sha256,
-      role: "runtime",
-    };
-  }).sort((left, right) => ordinal(left.providerId, right.providerId));
-  return {
-    archiveFormatVersion: 1,
-    manifestVersion: 1,
+  const targetRoles = new Set<PackageRole>(targets.map((target) => target.role));
+  const configuredDeclarations = configuredRpcDeclarations(project, targetRoles);
+  const selectedDeclarations = declarations ?? configuredDeclarations;
+  const manifest: PackageManifest = {
+    archiveFormatVersion: ARCHIVE_FORMAT_VERSION,
+    manifestVersion: PACKAGE_MANIFEST_VERSION,
     id: project.config.id,
     name: project.config.name,
     ...(project.config.summary === undefined ? {} : { summary: project.config.summary }),
     version: project.config.version,
     dependsOn: [...(project.config.dependencies ?? [])],
     targets: [...targets].sort(compareTargets),
-    contractBundles: contracts,
-    usesContracts: [...(project.config.usesContracts ?? [])].sort((left, right) => ordinal(left.contractId, right.contractId)),
-    provides: providers,
+    contractBundles,
+    usesContracts: [...selectedDeclarations.usesContracts].sort(compareContractUses),
+    provides: [...selectedDeclarations.provides].sort(compareProviders),
   };
+  validateRpcManifestMetadata(manifest, targetRoles, "Generated package manifest");
+  return manifest;
+}
+
+function configuredRpcDeclarations(
+  project: PreparedProject,
+  targetRoles: ReadonlySet<PackageRole>,
+): RpcManifestDeclarations {
+  const usesContracts = (project.config.usesContracts ?? [])
+    .filter((use) => targetRoles.has(use.role))
+    .map((use): ContractUseManifest => {
+      const contract = exactContract(project, use.contractId, use.contractVersion);
+      return {
+        role: use.role,
+        contractId: use.contractId,
+        contractVersion: use.contractVersion,
+        abiSha256: contract.abiSha256,
+        required: use.required,
+        actions: [...use.actions],
+      };
+    });
+  const provides = project.config.providers
+    .filter((provider) => targetRoles.has(provider.role))
+    .map((provider): ProviderManifest => {
+      const contract = exactContract(project, provider.contractId, provider.contractVersion);
+      return {
+        providerId: provider.providerId,
+        role: provider.role,
+        contractId: provider.contractId,
+        contractVersion: provider.contractVersion,
+        descriptorSha256: contract.descriptorSha256,
+        abiSha256: contract.abiSha256,
+        audience: provider.audience,
+      };
+    });
+  return { usesContracts, provides };
+}
+
+function exactContract(project: PreparedProject, contractId: string, contractVersion: string): LoadedContract {
+  const contract = project.contracts.find((candidate) => candidate.descriptor.contractId === contractId
+    && candidate.descriptor.version === contractVersion);
+  if (contract === undefined) throw new Error(`Contract '${contractId}' version '${contractVersion}' was not loaded.`);
+  return contract;
 }
 
 async function copyContracts(project: PreparedProject, packageRoot: string): Promise<void> {
   for (const contract of project.contracts) {
     const path = resolve(packageRoot, "payload", "shared", ...contract.descriptorPath.split("/"));
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, contract.canonical, "utf8");
+    await writeFile(path, contract.canonicalBytes);
   }
 }
 
@@ -705,13 +803,6 @@ async function writeWorkerNotice(
     "utf8",
   );
   return noticePath;
-}
-
-async function buildWebAssets(project: PreparedProject, outputRoot: string): Promise<string> {
-  await withOutputLocks([outputRoot], async () => {
-    await buildWebAssetsLocked(project, outputRoot);
-  });
-  return outputRoot;
 }
 
 async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string): Promise<void> {
@@ -819,7 +910,7 @@ function webTarget(app: AppConfig, rid: SunderRid): TargetManifest {
     entryPoint: app.entryPoint,
     targetFramework: "web",
     sdkVersion: compatibility.sdkVersion,
-    requiredHostCapabilities: ["rpc.v1", compatibility.sdkBaselineCapability, "views.v1"],
+    requiredHostCapabilities: ["rpc.v2", compatibility.sdkBaselineCapability, "views.v1"],
     views: app.views.map((view) => ({ ...view })),
   };
 }
@@ -841,7 +932,7 @@ async function writeCanonicalPackageMetadata(root: string, manifest: PackageMani
   }
   files.sort((left, right) => ordinal(left.path, right.path));
   const indexPath = resolve(root, ...INDEX_PATH.split("/"));
-  await writeJson(indexPath, { schemaVersion: 1, files });
+  await writeJson(indexPath, { schemaVersion: CONTENT_INDEX_SCHEMA_VERSION, files });
   if ((await stat(indexPath)).size > MAXIMUM_METADATA_BYTES) throw new Error("Package content index exceeds the 1 MiB metadata limit.");
   const contentIdentity = sha256(Buffer.concat([
     Buffer.from(await hashFile(manifestPath), "hex"),
@@ -868,7 +959,7 @@ async function enumerateCanonicalFiles(root: string): Promise<string[]> {
   return paths;
 }
 
-async function readLeaf(root: string): Promise<Leaf> {
+async function readLeaf(root: string, config: SunderNodePackageConfig): Promise<Leaf> {
   const rootEntry = await lstat(root);
   if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) throw new Error(`Target leaf '${root}' must be a regular directory.`);
   const manifestPath = resolve(root, ...MANIFEST_PATH.split("/"));
@@ -880,12 +971,23 @@ async function readLeaf(root: string): Promise<Leaf> {
   }
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as PackageManifest;
   const index = JSON.parse(await readFile(indexPath, "utf8")) as ContentIndex;
-  if (manifest.archiveFormatVersion !== 1 || manifest.manifestVersion !== 1 || !Array.isArray(manifest.targets) || manifest.targets.length !== 1 || index.schemaVersion !== 1 || !Array.isArray(index.files)) {
+  if (manifest.archiveFormatVersion !== ARCHIVE_FORMAT_VERSION) {
+    throw new Error(`Target leaf '${root}' must declare archiveFormatVersion ${ARCHIVE_FORMAT_VERSION}.`);
+  }
+  if (manifest.manifestVersion !== PACKAGE_MANIFEST_VERSION) {
+    throw new Error(`Target leaf '${root}' must declare manifestVersion ${PACKAGE_MANIFEST_VERSION}.`);
+  }
+  if (!Array.isArray(manifest.targets)
+    || manifest.targets.length !== 1
+    || index.schemaVersion !== CONTENT_INDEX_SCHEMA_VERSION
+    || !Array.isArray(index.files)) {
     throw new Error(`Target leaf '${root}' is not a canonical Sunder package leaf.`);
   }
   if (index.files.length > MAXIMUM_ARCHIVE_ENTRIES) throw new Error(`Target leaf '${root}' contains too many indexed files.`);
   const target = manifest.targets[0]!;
-  validateTarget(target, root);
+  validateTarget(target, manifest.id, root, config);
+  validateRpcManifestMetadata(manifest, new Set([target.role]), `Target leaf '${root}'`);
+  const bundledDescriptorPaths = new Set(manifest.contractBundles.map((bundle) => bundle.descriptorPath));
   const files = new Map<string, LeafFile>();
   const indexedPaths = new Set<string>();
   let indexedBytes = 0;
@@ -906,6 +1008,9 @@ async function readLeaf(root: string): Promise<Leaf> {
     if (rawLogical === null) continue;
     const logical = normalizeLogicalPath(rawLogical);
     if (logical !== rawLogical) throw new Error(`Target leaf '${root}' contains non-canonical logical path '${rawLogical}'.`);
+    if (bundledDescriptorPaths.has(logical) && archivePath !== `payload/shared/${logical}`) {
+      throw new Error(`Target leaf '${root}' must store bundled contract descriptor '${logical}' in payload/shared.`);
+    }
     if (files.has(logical)) throw new Error(`Target leaf '${root}' has a logical payload collision at '${logical}'.`);
     files.set(logical, { fullPath, sha256: item.sha256, size: item.size });
   }
@@ -916,22 +1021,215 @@ async function readLeaf(root: string): Promise<Leaf> {
   if (!files.has(normalizeLogicalPath(target.entryPoint))) {
     throw new Error(`Target leaf '${root}' does not contain its declared entry point '${target.entryPoint}'.`);
   }
+  await validateBundledDescriptorFiles(manifest.contractBundles, files, root);
   return { root, manifest, files };
 }
 
-function validateTarget(target: TargetManifest, root: string): void {
+function validateRpcManifestMetadata(
+  manifest: PackageManifest,
+  targetRoles: ReadonlySet<PackageRole>,
+  label: string,
+): void {
+  if (!Array.isArray(manifest.contractBundles)
+    || !Array.isArray(manifest.usesContracts)
+    || !Array.isArray(manifest.provides)) {
+    throw new Error(`${label} RPC metadata must contain contractBundles, usesContracts, and provides arrays.`);
+  }
+  if (manifest.contractBundles.length > 128 || manifest.usesContracts.length > 128 || manifest.provides.length > 128) {
+    throw new Error(`${label} RPC metadata exceeds the 128-entry per-section limit.`);
+  }
+
+  const bundles = new Map<string, ContractBundleManifest>();
+  const descriptorPaths = new Map<string, string>();
+  for (const [index, item] of manifest.contractBundles.entries()) {
+    const value = manifestRecord(item, `${label} contractBundles[${index}]`);
+    manifestOnly(value, `${label} contractBundles[${index}]`, "contractId", "version", "descriptorPath", "descriptorSha256", "abiSha256", "exposure");
+    const bundle = item as ContractBundleManifest;
+    if (typeof bundle.contractId !== "string" || !isPackageId(bundle.contractId)
+      || typeof bundle.version !== "string" || !isSemanticVersion(bundle.version)
+      || typeof bundle.descriptorPath !== "string" || normalizeLogicalPath(bundle.descriptorPath) !== bundle.descriptorPath
+      || !isSha256(bundle.descriptorSha256)
+      || !isSha256(bundle.abiSha256)
+      || bundle.exposure !== "package" && bundle.exposure !== "public") {
+      throw new Error(`${label} contractBundles[${index}] is not a canonical RPC V2 contract bundle.`);
+    }
+    const identity = `${bundle.contractId}\0${bundle.version}`;
+    if (bundles.has(identity)) {
+      throw new Error(`${label} declares contract bundle '${bundle.contractId}' version '${bundle.version}' more than once.`);
+    }
+    bundles.set(identity, bundle);
+    const foldedPath = bundle.descriptorPath.toLowerCase();
+    const existingPath = descriptorPaths.get(foldedPath);
+    if (existingPath !== undefined) {
+      throw new Error(`${label} contract descriptor paths '${existingPath}' and '${bundle.descriptorPath}' collide.`);
+    }
+    descriptorPaths.set(foldedPath, bundle.descriptorPath);
+  }
+
+  const uses = new Set<string>();
+  for (const [index, item] of manifest.usesContracts.entries()) {
+    const value = manifestRecord(item, `${label} usesContracts[${index}]`);
+    manifestOnly(value, `${label} usesContracts[${index}]`, "role", "contractId", "contractVersion", "abiSha256", "required", "actions");
+    const use = item as ContractUseManifest;
+    if (use.role !== "app" && use.role !== "runtime"
+      || typeof use.contractId !== "string" || !isPackageId(use.contractId)
+      || typeof use.contractVersion !== "string" || !isSemanticVersion(use.contractVersion)
+      || !isSha256(use.abiSha256)
+      || typeof use.required !== "boolean"
+      || !Array.isArray(use.actions)
+      || use.actions.length === 0
+      || use.actions.length > 3
+      || new Set(use.actions).size !== use.actions.length
+      || use.actions.some((action) => action !== "discover" && action !== "invoke" && action !== "subscribe")) {
+      throw new Error(`${label} usesContracts[${index}] is not a canonical exact RPC V2 contract use.`);
+    }
+    if (!targetRoles.has(use.role)) {
+      throw new Error(`${label} contract use '${use.role}/${use.contractId}' has no target for role '${use.role}'.`);
+    }
+    const identity = `${use.role}\0${use.contractId}`;
+    if (uses.has(identity)) {
+      throw new Error(`${label} declares contract use '${use.role}/${use.contractId}' more than once.`);
+    }
+    uses.add(identity);
+    const bundle = bundles.get(`${use.contractId}\0${use.contractVersion}`);
+    if (bundle === undefined || bundle.abiSha256 !== use.abiSha256) {
+      throw new Error(`${label} contract use '${use.role}/${use.contractId}' does not exactly match one local bundle version and ABI hash.`);
+    }
+  }
+
+  const providers = new Set<string>();
+  for (const [index, item] of manifest.provides.entries()) {
+    const value = manifestRecord(item, `${label} provides[${index}]`);
+    manifestOnly(value, `${label} provides[${index}]`, "providerId", "role", "contractId", "contractVersion", "descriptorSha256", "abiSha256", "audience");
+    const provider = item as ProviderManifest;
+    if (typeof provider.providerId !== "string" || !isPackageId(provider.providerId)
+      || provider.role !== "app" && provider.role !== "runtime"
+      || typeof provider.contractId !== "string" || !isPackageId(provider.contractId)
+      || typeof provider.contractVersion !== "string" || !isSemanticVersion(provider.contractVersion)
+      || !isSha256(provider.descriptorSha256)
+      || !isSha256(provider.abiSha256)
+      || provider.audience !== "owner" && provider.audience !== "public") {
+      throw new Error(`${label} provides[${index}] is not a canonical RPC V2 provider.`);
+    }
+    if (provider.role === "app") {
+      throw new Error(`${label} provider 'app/${provider.providerId}' is invalid. App-role providers are not supported because App provider registration and serving are not available.`);
+    }
+    if (!targetRoles.has(provider.role)) {
+      throw new Error(`${label} provider '${provider.role}/${provider.providerId}' has no target for role '${provider.role}'.`);
+    }
+    const identity = `${provider.role}\0${provider.providerId}`;
+    if (providers.has(identity)) {
+      throw new Error(`${label} declares provider '${provider.role}/${provider.providerId}' more than once.`);
+    }
+    providers.add(identity);
+    const bundle = bundles.get(`${provider.contractId}\0${provider.contractVersion}`);
+    if (bundle === undefined
+      || bundle.descriptorSha256 !== provider.descriptorSha256
+      || bundle.abiSha256 !== provider.abiSha256) {
+      throw new Error(`${label} provider '${provider.role}/${provider.providerId}' does not exactly match one local bundle version and both hashes.`);
+    }
+    if (provider.audience === "public" && bundle.exposure !== "public") {
+      throw new Error(`${label} provider '${provider.role}/${provider.providerId}' cannot have public audience for package-only contract '${provider.contractId}'.`);
+    }
+  }
+}
+
+async function validateBundledDescriptorFiles(
+  bundles: readonly ContractBundleManifest[],
+  files: ReadonlyMap<string, LeafFile>,
+  root: string,
+): Promise<void> {
+  for (const bundle of bundles) {
+    const file = files.get(bundle.descriptorPath);
+    if (file === undefined) {
+      throw new Error(`Target leaf '${root}' is missing bundled contract descriptor '${bundle.descriptorPath}'.`);
+    }
+    const bytes = await readFile(file.fullPath);
+    let descriptor;
+    try {
+      descriptor = parseRpcContractDescriptor(bytes);
+    } catch (error) {
+      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' is invalid.`, { cause: error });
+    }
+    if (descriptor.descriptorVersion !== 2) {
+      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' must use descriptorVersion 2.`);
+    }
+    const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
+    if (!bytes.equals(canonicalBytes)) {
+      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' is not the canonical immutable descriptor snapshot.`);
+    }
+    if (descriptor.contractId !== bundle.contractId
+      || descriptor.version !== bundle.version
+      || sha256(canonicalBytes) !== bundle.descriptorSha256
+      || file.sha256 !== bundle.descriptorSha256
+      || rpcAbiSha256(descriptor) !== bundle.abiSha256) {
+      throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' does not match its exact V2 bundle identity and hashes.`);
+    }
+  }
+}
+
+function manifestRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function manifestOnly(value: Readonly<Record<string, unknown>>, label: string, ...allowed: readonly string[]): void {
+  const names = new Set(allowed);
+  for (const name of Object.keys(value)) {
+    if (!names.has(name)) throw new Error(`${label} contains unknown property '${name}'.`);
+  }
+  if (Object.keys(value).length !== allowed.length || allowed.some((name) => !(name in value))) {
+    throw new Error(`${label} must contain exactly ${allowed.join(", ")}.`);
+  }
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function validateTarget(
+  target: TargetManifest,
+  packageId: string,
+  root: string,
+  config: SunderNodePackageConfig,
+): void {
+  const value = manifestRecord(target, `Target leaf '${root}' target`);
+  const commonProperties = [
+    "role",
+    "rid",
+    "kind",
+    "entryPoint",
+    "targetFramework",
+    "sdkVersion",
+    "requiredHostCapabilities",
+  ] as const;
+  const allowedProperties = new Set([...commonProperties, "views"]);
+  for (const name of Object.keys(value)) {
+    if (!allowedProperties.has(name as typeof commonProperties[number] | "views")) {
+      throw new Error(`Target leaf '${root}' target contains unknown property '${name}'.`);
+    }
+  }
+  if (target.role === "runtime" && target.kind !== "worker") {
+    throw new Error(`Target leaf '${root}' Runtime target kind '${target.kind}' is invalid; Manifest V3 Runtime targets must use 'worker'.`);
+  }
   const compatibility = packageToolCompatibility();
   const expectedCapabilities = target.role === "app"
-    ? ["rpc.v1", compatibility.sdkBaselineCapability, "views.v1"]
-    : ["rpc.v1", compatibility.sdkBaselineCapability];
+    ? ["rpc.v2", compatibility.sdkBaselineCapability, "views.v1"]
+    : workerTargetCapabilities(config);
+  const capabilitiesMatch = Array.isArray(target.requiredHostCapabilities)
+    && target.requiredHostCapabilities.length === expectedCapabilities.length
+    && target.requiredHostCapabilities.every((capability, index) => capability === expectedCapabilities[index]);
+  if (target.role === "runtime" && !capabilitiesMatch) {
+    throw new Error(`Target leaf '${root}' Runtime target requiredHostCapabilities must exactly match [${expectedCapabilities.join(", ")}].`);
+  }
   const common = SUPPORTED_RIDS.includes(target.rid as SunderRid)
     && target.sdkVersion === compatibility.sdkVersion
-    && Array.isArray(target.requiredHostCapabilities)
-    && target.requiredHostCapabilities.length === expectedCapabilities.length
-    && target.requiredHostCapabilities.every((value, index) => value === expectedCapabilities[index])
+    && capabilitiesMatch
     && normalizeLogicalPath(target.entryPoint) === target.entryPoint;
   const workerTarget = target.role === "runtime"
-    && (target.kind === "worker" || target.kind === "process")
+    && target.kind === "worker"
     && target.targetFramework === "node24"
     && target.views === undefined;
   const webTarget = target.role === "app"
@@ -942,6 +1240,53 @@ function validateTarget(target: TargetManifest, root: string): void {
   if (!common || !workerTarget && !webTarget) {
     throw new Error(`Target leaf '${root}' does not declare one canonical supported worker or web target.`);
   }
+  if (workerTarget) {
+    manifestOnly(value, `Target leaf '${root}' target`, ...commonProperties);
+  } else {
+    manifestOnly(value, `Target leaf '${root}' target`, ...commonProperties, "views");
+    validateTargetViews(target.views!, packageId, root);
+  }
+}
+
+function validateTargetViews(views: readonly AppViewConfig[], packageId: string, root: string): void {
+  if (views.length > 32 || !isPackageId(packageId)) {
+    throw new Error(`Target leaf '${root}' does not declare canonical web views.`);
+  }
+  const ids = new Set<string>();
+  const routes = new Set<string>();
+  for (const [index, view] of views.entries()) {
+    const label = `Target leaf '${root}' target views[${index}]`;
+    const value = manifestRecord(view, label);
+    const properties = ["viewId", "displayName", "route", "defaultPlacement", "showInHotbar"] as const;
+    if (Object.hasOwn(value, "icon")) manifestOnly(value, label, ...properties, "icon");
+    else manifestOnly(value, label, ...properties);
+    if (typeof view.viewId !== "string"
+      || !isPackageId(view.viewId)
+      || !view.viewId.startsWith(`${packageId}.`)
+      || typeof view.displayName !== "string"
+      || view.displayName.length === 0
+      || view.displayName.length > 128
+      || view.displayName.trim() !== view.displayName
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(view.displayName)
+      || typeof view.route !== "string"
+      || !canonicalWebRoute(view.route)
+      || view.icon !== undefined
+        && (typeof view.icon !== "string" || normalizeLogicalPath(view.icon) !== view.icon)
+      || !["leftTop", "middle", "rightTop", "leftBottom", "rightBottom"].includes(view.defaultPlacement)
+      || typeof view.showInHotbar !== "boolean") {
+      throw new Error(`${label} is not canonical.`);
+    }
+    const foldedId = view.viewId.toLowerCase();
+    const foldedRoute = view.route.toLowerCase();
+    if (!ids.add(foldedId)) throw new Error(`${label} has a duplicate or case-colliding viewId.`);
+    if (!routes.add(foldedRoute)) throw new Error(`${label} has a duplicate or case-colliding route.`);
+  }
+}
+
+function canonicalWebRoute(value: string): boolean {
+  if (value === "/") return true;
+  if (!value.startsWith("/") || value.endsWith("/") || value.includes("\\") || value.includes("?") || value.includes("#") || value.includes("%")) return false;
+  return value.slice(1).split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".." && /^[A-Za-z0-9._~-]+$/u.test(segment));
 }
 
 function canonicalArchivePath(value: unknown): string {
@@ -1061,6 +1406,13 @@ function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function rpcAbiSha256(descriptor: LoadedContract["descriptor"]): string {
+  return createHash("sha256")
+    .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
+    .update(canonicalRpcAbiProjectionBytes(descriptor))
+    .digest("hex");
+}
+
 function normalizeLogicalPath(path: string): string {
   if (!isArchiveRelativePath(path, 200, 24)) {
     throw new Error(`Logical package path '${path}' is invalid.`);
@@ -1095,12 +1447,69 @@ function safeFileName(packageId: string): string {
 
 function packageMetadataFingerprint(manifest: PackageManifest | undefined): string {
   if (manifest === undefined) throw new Error("Aggregate input manifest is missing.");
-  return canonicalizeDescriptor(asJsonValue({ ...manifest, targets: [], provides: [] }));
+  return canonicalizeDescriptor(asJsonValue({ ...manifest, targets: [], usesContracts: [], provides: [] }));
+}
+
+function rpcDeclarationsFingerprint(manifest: PackageManifest): string {
+  return canonicalizeDescriptor(asJsonValue({
+    usesContracts: manifest.usesContracts,
+    provides: manifest.provides,
+  }));
+}
+
+function unionDeclarations<T>(
+  declarations: readonly T[],
+  key: (declaration: T) => string,
+  label: string,
+  compare: (left: T, right: T) => number,
+): T[] {
+  const values = new Map<string, { readonly declaration: T; readonly canonical: string }>();
+  for (const declaration of declarations) {
+    const identity = key(declaration);
+    const canonical = canonicalizeDescriptor(asJsonValue(declaration));
+    const existing = values.get(identity);
+    if (existing !== undefined && existing.canonical !== canonical) {
+      throw new Error(`Aggregate target leaves declare conflicting ${label} metadata for '${identity.replace("\0", "/")}'.`);
+    }
+    if (existing === undefined) values.set(identity, { declaration, canonical });
+  }
+  return [...values.values()].map((item) => item.declaration).sort(compare);
+}
+
+function assertRoleScopedDeclarationSets(leaves: readonly Leaf[]): void {
+  for (const role of ["app", "runtime"] as const) {
+    const roleLeaves = leaves.filter((leaf) => single(
+      leaf.manifest.targets,
+      "Target leaf must contain one exact target for aggregation.",
+    ).role === role);
+    if (roleLeaves.length < 2) continue;
+
+    const expectedUses = roleLeaves[0]!.manifest.usesContracts.map((use) => use.contractId).sort(ordinal);
+    const expectedProviders = roleLeaves[0]!.manifest.provides.map((provider) => provider.providerId).sort(ordinal);
+    for (const leaf of roleLeaves.slice(1)) {
+      const uses = leaf.manifest.usesContracts.map((use) => use.contractId).sort(ordinal);
+      const providers = leaf.manifest.provides.map((provider) => provider.providerId).sort(ordinal);
+      if (canonicalizeDescriptor(asJsonValue(uses)) !== canonicalizeDescriptor(asJsonValue(expectedUses))) {
+        throw new Error(`Aggregate target leaves must declare identical contract use sets for role '${role}'; declarations cannot be omitted from individual RID leaves.`);
+      }
+      if (canonicalizeDescriptor(asJsonValue(providers)) !== canonicalizeDescriptor(asJsonValue(expectedProviders))) {
+        throw new Error(`Aggregate target leaves must declare identical provider sets for role '${role}'; declarations cannot be omitted from individual RID leaves.`);
+      }
+    }
+  }
 }
 
 function compareTargets(left: TargetManifest, right: TargetManifest): number {
   const order = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"];
   return ordinal(left.role, right.role) || order.indexOf(left.rid) - order.indexOf(right.rid);
+}
+
+function compareContractUses(left: ContractUseManifest, right: ContractUseManifest): number {
+  return ordinal(left.role, right.role) || ordinal(left.contractId, right.contractId);
+}
+
+function compareProviders(left: ProviderManifest, right: ProviderManifest): number {
+  return ordinal(left.role, right.role) || ordinal(left.providerId, right.providerId);
 }
 
 function ordinal(left: string, right: string): number {
@@ -1119,35 +1528,6 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function contractIdentityPlugin(project: PreparedProject): EsbuildPlugin {
-  return {
-    name: "sunder-contract-identities",
-    setup(build) {
-      build.onResolve({ filter: /^sunder:contracts$/ }, () => ({ path: "identities", namespace: "sunder-contracts" }));
-      build.onLoad({ filter: /^identities$/, namespace: "sunder-contracts" }, () => {
-        const identities = Object.fromEntries(project.contracts.map((contract) => [contract.configuredPath, {
-          contractId: contract.descriptor.contractId,
-          contractVersion: contract.descriptor.version,
-          contractSha256: contract.sha256,
-        }]));
-        return {
-          loader: "js",
-          contents: `
-          const identities = Object.freeze(Object.fromEntries(
-            Object.entries(${JSON.stringify(identities)}).map(([path, identity]) => [path, Object.freeze(identity)]),
-          ));
-          export function contractIdentity(path) {
-            const identity = identities[path];
-            if (identity === undefined) throw new Error(\`Unknown configured Sunder contract descriptor '\${path}'.\`);
-            return identity;
-          }
-          `,
-        };
-      });
-    },
-  };
 }
 
 async function writeDeterministicZip(root: string, outputPath: string, maximumBytes: number): Promise<number> {
@@ -1294,7 +1674,7 @@ class BoundedFileWriter {
 }
 
 interface TargetManifest {
-  readonly role: string;
+  readonly role: PackageRole;
   readonly rid: string;
   readonly kind: string;
   readonly entryPoint: string;
@@ -1302,6 +1682,39 @@ interface TargetManifest {
   readonly sdkVersion: string;
   readonly requiredHostCapabilities: readonly string[];
   readonly views?: readonly AppViewConfig[];
+}
+
+interface ContractBundleManifest {
+  readonly contractId: string;
+  readonly version: string;
+  readonly descriptorPath: string;
+  readonly descriptorSha256: string;
+  readonly abiSha256: string;
+  readonly exposure: ContractExposure;
+}
+
+interface ContractUseManifest {
+  readonly role: PackageRole;
+  readonly contractId: string;
+  readonly contractVersion: string;
+  readonly abiSha256: string;
+  readonly required: boolean;
+  readonly actions: readonly ("discover" | "invoke" | "subscribe")[];
+}
+
+interface ProviderManifest {
+  readonly providerId: string;
+  readonly role: PackageRole;
+  readonly contractId: string;
+  readonly contractVersion: string;
+  readonly descriptorSha256: string;
+  readonly abiSha256: string;
+  readonly audience: ProviderAudience;
+}
+
+interface RpcManifestDeclarations {
+  readonly usesContracts: readonly ContractUseManifest[];
+  readonly provides: readonly ProviderManifest[];
 }
 
 interface PackageManifest {
@@ -1313,9 +1726,9 @@ interface PackageManifest {
   readonly version: string;
   readonly dependsOn: readonly unknown[];
   readonly targets: readonly TargetManifest[];
-  readonly contractBundles: readonly unknown[];
-  readonly usesContracts: readonly unknown[];
-  readonly provides: readonly unknown[];
+  readonly contractBundles: readonly ContractBundleManifest[];
+  readonly usesContracts: readonly ContractUseManifest[];
+  readonly provides: readonly ProviderManifest[];
 }
 
 interface ContentIndexEntry {

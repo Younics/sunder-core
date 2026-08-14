@@ -377,6 +377,7 @@ public sealed class RuntimeStackContractMapperTests
             SunderStackContributorRpc.ContractId,
             SunderStackContributorRpc.ContractVersion,
             SunderStackContributorRpc.Descriptor.Sha256,
+            SunderStackContributorRpc.Descriptor.AbiSha256,
             Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
             1,
             generation,

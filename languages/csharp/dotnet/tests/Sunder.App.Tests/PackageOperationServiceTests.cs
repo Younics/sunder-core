@@ -50,6 +50,40 @@ public sealed class PackageOperationServiceTests
     }
 
     [Fact]
+    public async Task EnqueueRegistrySourceAdoption_ConfirmsLatestAgainstConfiguredRegistry()
+    {
+        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var runtimeClient = new FakeRuntimeApiClient();
+        var lifecycleApplications = new List<RuntimePackageStamp>();
+        var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
+        using var service = new PackageOperationService(
+            queue,
+            new FakeRuntimeApiClientFactory(runtimeClient),
+            (stamp, _) =>
+            {
+                lifecycleApplications.Add(stamp);
+                return Task.CompletedTask;
+            },
+            notificationCenter);
+
+        var operation = service.EnqueueRegistrySourceAdoption(
+            "sunder.package.agent",
+            "Sunder Agent",
+            new Uri("https://registry.example/"));
+
+        await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
+
+        var request = Assert.IsType<RuntimeRegistrySourceAdoptionRequest>(runtimeClient.LastSourceAdoptionRequest);
+        Assert.Equal("sunder.package.agent", request.PackageId);
+        Assert.Equal("https://registry.example/", request.RegistryOrigin);
+        Assert.Equal("latest", request.Tag);
+        Assert.Null(request.Version);
+        Assert.True(request.Confirm);
+        Assert.False(request.DryRun);
+        Assert.Single(lifecycleApplications);
+    }
+
+    [Fact]
     public async Task EnqueueLocalInstall_WhenArchiveChangedAfterReview_DoesNotStageInstall()
     {
         var queue = new BackgroundProcessQueueService(maxParallelism: 1);
@@ -787,6 +821,8 @@ public sealed class PackageOperationServiceTests
 
         public List<RuntimeRegistryUpdateRequest> UpdateRequests { get; } = [];
 
+        public RuntimeRegistrySourceAdoptionRequest? LastSourceAdoptionRequest { get; private set; }
+
         public PackageUninstallPlan UninstallPlan { get; init; } = CreateUninstallPlan("agent");
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
@@ -844,6 +880,12 @@ public sealed class PackageOperationServiceTests
         {
             UpdateRequests.Add(request);
             return Task.FromResult(RegistryChangeResult([]));
+        }
+
+        public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken cancellationToken = default)
+        {
+            LastSourceAdoptionRequest = request;
+            return Task.FromResult(RegistryChangeResult([request.PackageId]));
         }
 
         public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)

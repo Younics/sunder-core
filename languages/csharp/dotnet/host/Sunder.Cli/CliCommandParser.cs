@@ -188,12 +188,16 @@ internal sealed partial class CliCommandParser
         var tag = ValueOption("--tag", "Install a Registry dist tag. Defaults to latest.", "tag");
         var allowDowngrade = Flag("--allow-downgrade", "Allow replacing a newer installed version.");
         var reinstall = Flag("--reinstall", "Allow reinstalling the same version.");
+        var approveSensitiveCapabilities = Flag(
+            "--approve-sensitive-capabilities",
+            "Explicitly approve exact sensitive worker capabilities shown by Runtime preflight.");
         install.Arguments.Add(packageId);
         install.Options.Add(file);
         install.Options.Add(version);
         install.Options.Add(tag);
         install.Options.Add(allowDowngrade);
         install.Options.Add(reinstall);
+        install.Options.Add(approveSensitiveCapabilities);
         install.Validators.Add(result =>
         {
             var id = result.GetResult(packageId)?.Tokens.FirstOrDefault()?.Value;
@@ -211,14 +215,19 @@ internal sealed partial class CliCommandParser
         {
             var path = result.GetValue(file);
             if (path is not null)
-                return new InstallLocalPackageCommand(path, result.GetValue(allowDowngrade), result.GetValue(reinstall));
+                return new InstallLocalPackageCommand(
+                    path,
+                    result.GetValue(allowDowngrade),
+                    result.GetValue(reinstall),
+                    result.GetValue(approveSensitiveCapabilities));
             var exactVersion = result.GetValue(version);
             return new InstallRegistryPackageCommand(
                 result.GetRequiredValue(packageId),
                 exactVersion,
                 exactVersion is null ? result.GetValue(tag) ?? "latest" : null,
                 result.GetValue(allowDowngrade),
-                result.GetValue(reinstall));
+                result.GetValue(reinstall),
+                result.GetValue(approveSensitiveCapabilities));
         });
     }
 

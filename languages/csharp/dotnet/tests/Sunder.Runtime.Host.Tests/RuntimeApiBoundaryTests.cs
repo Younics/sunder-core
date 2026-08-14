@@ -20,7 +20,7 @@ public sealed class RuntimeApiBoundaryTests
             RuntimeProtocol.MinimumSupportedRevision,
             RuntimeProtocol.MaximumSupportedRevision,
             Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.PackageRuntimeStreamEnvelopesV1],
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.SchemaFirstRpcV2],
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.2.3", "1.2.3+test"));
         var actual = JsonSerializer.SerializeToNode(handshake, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "RuntimeProtocolContracts.golden.json");

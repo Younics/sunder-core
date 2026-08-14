@@ -9,12 +9,18 @@ public enum RuntimeRpcPermissionState
     Denied,
 }
 
-public sealed record RuntimeRpcPermissionDescriptor(
+public sealed record RuntimeRpcPermissionKey(
     string CallerPackageId,
     string CallerPackageVersion,
     string ManifestSha256,
+    string CallerRole,
     string ContractId,
-    string Action,
+    string ContractVersion,
+    string AbiSha256,
+    string Action);
+
+public sealed record RuntimeRpcPermissionDescriptor(
+    RuntimeRpcPermissionKey Key,
     bool Requested,
     RuntimeRpcPermissionState State,
     bool Effective,
@@ -34,10 +40,7 @@ public sealed record RuntimeRpcPermissionSnapshot(
     }
 }
 
-public sealed record RuntimeRpcPermissionUpdateRequest(
-    string CallerPackageId,
-    string ContractId,
-    string Action);
+public sealed record RuntimeRpcPermissionUpdateRequest(RuntimeRpcPermissionKey Key);
 
 public enum RuntimeRpcProviderState
 {
@@ -52,7 +55,8 @@ public sealed record RuntimeRpcProviderDescriptor(
     string ProviderId,
     string ContractId,
     string ContractVersion,
-    string ContractSha256,
+    string DescriptorSha256,
+    string AbiSha256,
     Guid ActivationId,
     long ActivationEpoch,
     long SessionGeneration,
@@ -208,10 +212,24 @@ public enum RuntimeRpcErrorKind
     Protocol,
 }
 
+public enum RuntimeRpcDispatchState
+{
+    NotDispatched,
+    PossiblyDispatched,
+}
+
+public enum RuntimeRpcRetrySafety
+{
+    Safe,
+    Unsafe,
+}
+
 public sealed record RuntimeRpcErrorDescriptor(
     RuntimeRpcErrorKind Kind,
     string Code,
-    string Message);
+    string Message,
+    RuntimeRpcDispatchState DispatchState = RuntimeRpcDispatchState.NotDispatched,
+    RuntimeRpcRetrySafety RetrySafety = RuntimeRpcRetrySafety.Safe);
 
 public sealed record RuntimeRpcAppDiscoverResponse(
     RuntimeRpcCatalogSnapshot? Snapshot,

@@ -238,6 +238,8 @@ public sealed partial class PackagesWindowViewModel
         OnPropertyChanged(nameof(CanUninstallSelectedPackage));
         OnPropertyChanged(nameof(CanUpdateSelectedInstalledPackage));
         OnPropertyChanged(nameof(ShowUpdateSelectedInstalledPackage));
+        OnPropertyChanged(nameof(CanAdoptSelectedInstalledPackageSource));
+        OnPropertyChanged(nameof(ShowAdoptSelectedInstalledPackageSource));
         OnPropertyChanged(nameof(IsSelectedMarketplacePackageInstalled));
         OnPropertyChanged(nameof(ShowMarketplaceInstallAction));
         OnPropertyChanged(nameof(ShowMarketplaceInstalledActions));
@@ -256,6 +258,7 @@ public sealed partial class PackagesWindowViewModel
         UninstallSelectedPackageCommand.NotifyCanExecuteChanged();
         InstallSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();
         UpdateSelectedInstalledPackageCommand.NotifyCanExecuteChanged();
+        AdoptSelectedInstalledPackageSourceCommand.NotifyCanExecuteChanged();
         UpdateSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();
         ToggleSelectedMarketplacePackageStarCommand.NotifyCanExecuteChanged();
         UninstallSelectedMarketplacePackageCommand.NotifyCanExecuteChanged();

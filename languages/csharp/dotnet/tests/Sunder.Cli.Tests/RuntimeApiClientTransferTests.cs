@@ -262,6 +262,26 @@ public sealed class RuntimeApiClientTransferTests
     }
 
     [Fact]
+    public async Task Registry_version_details_remain_historical_without_compatibility_query()
+    {
+        Uri? requestedUri = null;
+        var handler = new DelegateHandler(request =>
+        {
+            requestedUri = request.RequestUri;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        });
+        using var client = new RegistryClient(new Uri("https://registry.test/"), handler);
+
+        var result = await client.GetVersionAsync("demo.package", "1.2.3", default);
+
+        Assert.Null(result);
+        Assert.Equal(
+            new Uri("https://registry.test/api/v1/packages/demo.package/versions/1.2.3"),
+            requestedUri);
+        Assert.Equal(string.Empty, requestedUri?.Query);
+    }
+
+    [Fact]
     public async Task Runtime_client_rejects_oversized_json_response()
     {
         var handler = new DelegateHandler(request => Task.FromResult(

@@ -35,6 +35,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private readonly TimeSpan _marketplaceDetailSpinnerDelay;
     private readonly IUiDispatcher _uiDispatcher;
     private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindowViewModel));
+    private readonly SemaphoreSlim _installedPackageGate = new(1, 1);
+    private RuntimePackageSnapshot? _latestPackageSnapshot;
     private int _marketplaceSearchVersion;
     private CancellationTokenSource? _marketplacePackageDetailsSpinnerCancellation;
     private bool _disposed;
@@ -246,6 +248,14 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public bool CanUpdateSelectedInstalledPackage => !Operations.IsBusy && IsInstalledMode && GetSelectedInstalledPackageUpdate() is not null && !Operations.SelectedPackageHasActiveOperation;
 
     public bool ShowUpdateSelectedInstalledPackage => IsInstalledMode && GetSelectedInstalledPackageUpdate() is not null;
+
+    public bool CanAdoptSelectedInstalledPackageSource => !Operations.IsBusy
+        && IsInstalledMode
+        && Installed.SelectedPackage?.CanAdoptRegistrySource == true
+        && !Operations.SelectedPackageHasActiveOperation;
+
+    public bool ShowAdoptSelectedInstalledPackageSource => IsInstalledMode
+        && Installed.SelectedPackage?.CanAdoptRegistrySource == true;
 
     public bool IsSelectedMarketplacePackageInstalled => Marketplace.SelectedPackage?.InstalledVersion is not null;
 

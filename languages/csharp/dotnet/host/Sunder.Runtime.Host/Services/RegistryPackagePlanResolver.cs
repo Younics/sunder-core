@@ -80,6 +80,7 @@ internal sealed class RegistryPackagePlanResolver(
                 Content = JsonContent.Create(new RegistryResolvePackageChangesRequest(
                     RuntimeRegistryContractMapper.ToRegistry(request.Packages),
                     installed,
+                    RuntimeRegistryContractMapper.CompatibilityProfile,
                     request.IncludePrerelease,
                     request.AllowDowngrade,
                     request.Reinstall)),

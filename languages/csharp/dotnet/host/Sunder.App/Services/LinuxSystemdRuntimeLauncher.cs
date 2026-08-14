@@ -80,6 +80,7 @@ internal sealed class LinuxSystemdRuntimeLauncher : RuntimePersistentLauncherBas
         }
 
         var existingServiceDisplaced = false;
+        var candidateLaunchSubmitted = false;
         try
         {
             var existing = await ReadUnitStateAsync(cancellationToken).ConfigureAwait(false);
@@ -147,6 +148,7 @@ internal sealed class LinuxSystemdRuntimeLauncher : RuntimePersistentLauncherBas
             HostServiceCommandResult launch;
             try
             {
+                candidateLaunchSubmitted = true;
                 launch = await _runAsync("systemd-run", arguments, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -213,7 +215,9 @@ internal sealed class LinuxSystemdRuntimeLauncher : RuntimePersistentLauncherBas
             }
         }
         catch (Exception exception) when (
-            existingServiceDisplaced && exception is not IHostServiceReplacementFailure)
+            existingServiceDisplaced
+            && !candidateLaunchSubmitted
+            && exception is not IHostServiceReplacementFailure)
         {
             throw HostServiceReplacementFailure.Wrap(exception);
         }
@@ -552,6 +556,7 @@ internal sealed class UnixDetachedRuntimeLauncher : RuntimePersistentLauncherBas
         cancellationToken.ThrowIfCancellationRequested();
         using var reconciliationLock = await AcquireLockAsync(cancellationToken).ConfigureAwait(false);
         var existingServiceDisplaced = false;
+        var candidateLaunchSubmitted = false;
         try
         {
             var existing = ReadMarker();
@@ -616,6 +621,7 @@ internal sealed class UnixDetachedRuntimeLauncher : RuntimePersistentLauncherBas
                 detached.ArgumentList.Add(argument);
             }
 
+            candidateLaunchSubmitted = true;
             var process = Process.Start(detached)
                 ?? throw new InvalidOperationException("setsid did not start the detached Host process.");
             var tracked = false;
@@ -659,7 +665,9 @@ internal sealed class UnixDetachedRuntimeLauncher : RuntimePersistentLauncherBas
             }
         }
         catch (Exception exception) when (
-            existingServiceDisplaced && exception is not IHostServiceReplacementFailure)
+            existingServiceDisplaced
+            && !candidateLaunchSubmitted
+            && exception is not IHostServiceReplacementFailure)
         {
             throw HostServiceReplacementFailure.Wrap(exception);
         }

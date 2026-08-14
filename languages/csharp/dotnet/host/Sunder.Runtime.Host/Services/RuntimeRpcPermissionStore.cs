@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Packaging;
@@ -18,8 +19,8 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
-    private readonly Dictionary<PermissionKey, RuntimeRpcPermissionRecord> _records = [];
-    private readonly Dictionary<PermissionKey, CancellationTokenSource> _effectiveLifetimes = [];
+    private readonly Dictionary<RuntimeRpcPermissionKey, RuntimeRpcPermissionRecord> _records = [];
+    private readonly Dictionary<RuntimeRpcPermissionKey, CancellationTokenSource> _effectiveLifetimes = [];
     private CancellationTokenSource _changes = new();
     private long _revision;
     private bool _disposed;
@@ -51,22 +52,13 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         }
     }
 
-    public bool TryAcquire(
-        string callerPackageId,
-        string callerPackageVersion,
-        string manifestSha256,
-        string contractId,
-        string action,
-        out RuntimeRpcPermissionLease? lease)
+    public bool TryAcquire(RuntimeRpcPermissionKey key, out RuntimeRpcPermissionLease? lease)
     {
         lock (_gate)
         {
             ThrowIfDisposed();
-            var key = new PermissionKey(callerPackageId, contractId, action);
             if (!_records.TryGetValue(key, out var record)
-                || record.State != RuntimeRpcPermissionState.Granted
-                || !string.Equals(record.CallerPackageVersion, callerPackageVersion, StringComparison.Ordinal)
-                || !string.Equals(record.ManifestSha256, manifestSha256, StringComparison.Ordinal))
+                || record.State != RuntimeRpcPermissionState.Granted)
             {
                 lease = null;
                 return false;
@@ -81,28 +73,32 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         }
     }
 
+    public bool IsGranted(RuntimeRpcPermissionKey key)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return _records.TryGetValue(key, out var record)
+                   && record.State == RuntimeRpcPermissionState.Granted;
+        }
+    }
+
     public async Task SetAsync(
-        string callerPackageId,
-        string callerPackageVersion,
-        string manifestSha256,
-        string contractId,
-        string action,
+        RuntimeRpcPermissionKey key,
         RuntimeRpcPermissionState state,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(key);
         if (state == RuntimeRpcPermissionState.Pending)
         {
             throw new ArgumentException("Pending is computed and cannot be persisted.", nameof(state));
         }
-        if (!PackageId.TryParse(callerPackageId, out _)
-            || !SemanticVersion.TryParse(callerPackageVersion, out _)
-            || !IsHash(manifestSha256)
-            || !PackageId.TryParse(contractId, out _)
-            || !IsAction(action))
+        if (!IsValidKey(key))
         {
             throw new ArgumentException("The RPC permission identity or fence is invalid.");
         }
-        var key = new PermissionKey(callerPackageId, contractId, action);
+        CancellationTokenSource? revoked = null;
+        CancellationTokenSource? changed = null;
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -110,24 +106,14 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
             lock (_gate)
             {
                 ThrowIfDisposed();
-                var records = new Dictionary<PermissionKey, RuntimeRpcPermissionRecord>(_records)
+                var records = new Dictionary<RuntimeRpcPermissionKey, RuntimeRpcPermissionRecord>(_records)
                 {
                     [key] = new RuntimeRpcPermissionRecord(
-                        callerPackageId,
-                        callerPackageVersion,
-                        manifestSha256,
-                        contractId,
-                        action,
+                        key,
                         state,
                         _timeProvider.GetUtcNow()),
                 };
-                next = new RuntimeRpcPermissionStateFile(
-                    1,
-                    checked(_revision + 1),
-                    records.Values.OrderBy(static item => item.CallerPackageId, StringComparer.Ordinal)
-                        .ThenBy(static item => item.ContractId, StringComparer.Ordinal)
-                        .ThenBy(static item => item.Action, StringComparer.Ordinal)
-                        .ToArray());
+                next = CreateStateFile(checked(_revision + 1), records.Values);
             }
 
             Directory.CreateDirectory(_paths.CatalogRootPath);
@@ -136,15 +122,10 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                 next,
                 JsonOptions,
                 cancellationToken).ConfigureAwait(false);
-            CancellationTokenSource? revoked = null;
-            CancellationTokenSource changed;
             lock (_gate)
             {
                 ThrowIfDisposed();
-                var record = next.Permissions.Single(item =>
-                    string.Equals(item.CallerPackageId, callerPackageId, StringComparison.Ordinal)
-                    && string.Equals(item.ContractId, contractId, StringComparison.Ordinal)
-                    && string.Equals(item.Action, action, StringComparison.Ordinal));
+                var record = next.Permissions.Single(item => item.Key == key);
                 _records[key] = record;
                 _revision = next.Revision;
                 if (state == RuntimeRpcPermissionState.Granted)
@@ -158,47 +139,56 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                 }
                 changed = PublishChangeLocked();
             }
-            CancelAndDispose(revoked);
-            CancelAndDispose(changed);
         }
         finally
         {
             _writeGate.Release();
         }
+        CancelAndDispose(revoked);
+        CancelAndDispose(changed);
     }
 
     public async Task GrantDeclaredInstalledActionsAsync(
         IEnumerable<RuntimeRpcPermissionSubject> packages,
         CancellationToken cancellationToken)
     {
-        var now = _timeProvider.GetUtcNow();
-        var grants = packages
+        var installedPackages = packages
             .Where(static package => package.SourceKind == PackageSourceKind.Installed)
+            .ToArray();
+        foreach (var package in installedPackages)
+        {
+            if (!PackageId.TryParse(package.PackageId, out _)
+                || !SemanticVersion.TryParse(package.PackageVersion, out _)
+                || !IsHash(package.ManifestSha256))
+            {
+                throw new ArgumentException(
+                    "The declared RPC permission package fence is invalid.",
+                    nameof(packages));
+            }
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var grants = installedPackages
             .SelectMany(package => package.ContractUses.SelectMany(use =>
                 (use.Actions ?? [])
                     .Where(static action => action is not null)
                     .Select(action => new RuntimeRpcPermissionRecord(
-                        package.PackageId,
-                        package.PackageVersion,
-                        package.ManifestSha256,
-                        use.ContractId!,
-                        action!,
+                        new RuntimeRpcPermissionKey(
+                            package.PackageId,
+                            package.PackageVersion,
+                            package.ManifestSha256,
+                            use.Role!,
+                            use.ContractId!,
+                            use.ContractVersion!,
+                            use.AbiSha256!,
+                            action!),
                         RuntimeRpcPermissionState.Granted,
                         now))))
-            .ToDictionary(
-                static record => new PermissionKey(record.CallerPackageId, record.ContractId, record.Action),
-                static record => record);
-        if (grants.Count == 0)
-        {
-            return;
-        }
+            .GroupBy(static record => record.Key)
+            .ToDictionary(static group => group.Key, static group => group.First());
         foreach (var record in grants.Values)
         {
-            if (!PackageId.TryParse(record.CallerPackageId, out _)
-                || !SemanticVersion.TryParse(record.CallerPackageVersion, out _)
-                || !IsHash(record.ManifestSha256)
-                || !PackageId.TryParse(record.ContractId, out _)
-                || !IsAction(record.Action))
+            if (!IsValidKey(record.Key))
             {
                 throw new ArgumentException(
                     "The declared RPC permission identity or fence is invalid.",
@@ -206,32 +196,42 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
             }
         }
 
+        var revoked = new List<CancellationTokenSource>();
+        CancellationTokenSource? changed = null;
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             RuntimeRpcPermissionStateFile? next = null;
-            PermissionKey[] changedKeys;
+            RuntimeRpcPermissionKey[] addedKeys;
+            RuntimeRpcPermissionKey[] removedKeys;
             lock (_gate)
             {
                 ThrowIfDisposed();
-                changedKeys = grants
-                    .Where(pair => !_records.TryGetValue(pair.Key, out var current)
-                                   || !string.Equals(
-                                       current.CallerPackageVersion,
-                                       pair.Value.CallerPackageVersion,
-                                       StringComparison.Ordinal)
-                                   || !string.Equals(
-                                       current.ManifestSha256,
-                                       pair.Value.ManifestSha256,
-                                       StringComparison.Ordinal))
+                var activeFences = installedPackages
+                    .GroupBy(static package => package.PackageId, StringComparer.Ordinal)
+                    .ToDictionary(
+                        static group => group.Key,
+                        static group => (group.First().PackageVersion, group.First().ManifestSha256),
+                        StringComparer.Ordinal);
+                removedKeys = _records.Keys
+                    .Where(key => activeFences.TryGetValue(key.CallerPackageId, out var fence)
+                                  && (!string.Equals(key.CallerPackageVersion, fence.PackageVersion, StringComparison.Ordinal)
+                                      || !string.Equals(key.ManifestSha256, fence.ManifestSha256, StringComparison.Ordinal)))
+                    .ToArray();
+                addedKeys = grants
+                    .Where(pair => !_records.ContainsKey(pair.Key))
                     .Select(static pair => pair.Key)
                     .ToArray();
-                if (changedKeys.Length > 0)
+                if (addedKeys.Length > 0 || removedKeys.Length > 0)
                 {
-                    var records = new Dictionary<PermissionKey, RuntimeRpcPermissionRecord>(_records);
-                    foreach (var key in changedKeys)
+                    var records = new Dictionary<RuntimeRpcPermissionKey, RuntimeRpcPermissionRecord>(_records);
+                    foreach (var key in removedKeys)
                     {
-                        records[key] = grants[key];
+                        records.Remove(key);
+                    }
+                    foreach (var key in addedKeys)
+                    {
+                        records.Add(key, grants[key]);
                     }
                     next = CreateStateFile(checked(_revision + 1), records.Values);
                 }
@@ -247,12 +247,18 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                 next,
                 JsonOptions,
                 cancellationToken).ConfigureAwait(false);
-            var revoked = new List<CancellationTokenSource>();
-            CancellationTokenSource changed;
             lock (_gate)
             {
                 ThrowIfDisposed();
-                foreach (var key in changedKeys)
+                foreach (var key in removedKeys)
+                {
+                    _records.Remove(key);
+                    if (_effectiveLifetimes.Remove(key, out var previous))
+                    {
+                        revoked.Add(previous);
+                    }
+                }
+                foreach (var key in addedKeys)
                 {
                     _records[key] = grants[key];
                     if (_effectiveLifetimes.Remove(key, out var previous))
@@ -264,16 +270,16 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                 _revision = next.Revision;
                 changed = PublishChangeLocked();
             }
-            foreach (var lifetime in revoked)
-            {
-                CancelAndDispose(lifetime);
-            }
-            CancelAndDispose(changed);
         }
         finally
         {
             _writeGate.Release();
         }
+        foreach (var lifetime in revoked)
+        {
+            CancelAndDispose(lifetime);
+        }
+        CancelAndDispose(changed);
     }
 
     public RuntimeRpcPermissionSnapshot GetSnapshot(IEnumerable<RuntimeRpcPermissionSubject> packages)
@@ -283,30 +289,34 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         {
             ThrowIfDisposed();
             var output = new List<RuntimeRpcPermissionDescriptor>();
-            var currentKeys = new HashSet<PermissionKey>();
+            var currentKeys = new HashSet<RuntimeRpcPermissionKey>();
             foreach (var package in packageSnapshot.OrderBy(
                          static package => package.PackageId,
                          StringComparer.Ordinal))
             {
-                foreach (var use in package.ContractUses.OrderBy(static use => use.ContractId, StringComparer.Ordinal))
+                foreach (var use in package.ContractUses
+                             .OrderBy(static use => use.Role, StringComparer.Ordinal)
+                             .ThenBy(static use => use.ContractId, StringComparer.Ordinal))
                 {
                     foreach (var action in (use.Actions ?? []).Where(static action => action is not null).Order(StringComparer.Ordinal))
                     {
-                        var key = new PermissionKey(package.PackageId, use.ContractId!, action!);
+                        var key = new RuntimeRpcPermissionKey(
+                            package.PackageId,
+                            package.PackageVersion,
+                            package.ManifestSha256,
+                            use.Role!,
+                            use.ContractId!,
+                            use.ContractVersion!,
+                            use.AbiSha256!,
+                            action!);
                         currentKeys.Add(key);
-                        var hasExactRecord = _records.TryGetValue(key, out var record)
-                                              && string.Equals(record.CallerPackageVersion, package.PackageVersion, StringComparison.Ordinal)
-                                              && string.Equals(record.ManifestSha256, package.ManifestSha256, StringComparison.Ordinal);
+                        var hasExactRecord = _records.TryGetValue(key, out var record);
                         var developmentGrant = package.SourceKind == PackageSourceKind.Dev;
                         var state = developmentGrant
                             ? RuntimeRpcPermissionState.Granted
                             : hasExactRecord ? record!.State : RuntimeRpcPermissionState.Pending;
                         output.Add(new RuntimeRpcPermissionDescriptor(
-                            package.PackageId,
-                            package.PackageVersion,
-                            package.ManifestSha256,
-                            use.ContractId!,
-                            action!,
+                            key,
                             Requested: true,
                             state,
                             Effective: state == RuntimeRpcPermissionState.Granted,
@@ -317,11 +327,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
             foreach (var (key, record) in _records.Where(pair => !currentKeys.Contains(pair.Key)))
             {
                 output.Add(new RuntimeRpcPermissionDescriptor(
-                    record.CallerPackageId,
-                    record.CallerPackageVersion,
-                    record.ManifestSha256,
-                    record.ContractId,
-                    record.Action,
+                    record.Key,
                     Requested: false,
                     record.State,
                     Effective: false,
@@ -329,9 +335,12 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
             }
             return new RuntimeRpcPermissionSnapshot(
                 _revision,
-                output.OrderBy(static item => item.CallerPackageId, StringComparer.Ordinal)
-                    .ThenBy(static item => item.ContractId, StringComparer.Ordinal)
-                    .ThenBy(static item => item.Action, StringComparer.Ordinal)
+                output.OrderBy(static item => item.Key.CallerPackageId, StringComparer.Ordinal)
+                    .ThenBy(static item => item.Key.CallerRole, StringComparer.Ordinal)
+                    .ThenBy(static item => item.Key.ContractId, StringComparer.Ordinal)
+                    .ThenBy(static item => item.Key.ContractVersion, StringComparer.Ordinal)
+                    .ThenBy(static item => item.Key.AbiSha256, StringComparer.Ordinal)
+                    .ThenBy(static item => item.Key.Action, StringComparer.Ordinal)
                     .ToArray());
         }
     }
@@ -370,23 +379,20 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         {
             throw new InvalidDataException("The Runtime RPC permission store is invalid.", exception);
         }
-        if (state?.SchemaVersion != 1 || state.Revision < 0 || state.Permissions is null)
+        if (state?.SchemaVersion != 2 || state.Revision < 0 || state.Permissions is null)
         {
             throw new InvalidDataException("The Runtime RPC permission store has an unsupported schema.");
         }
         foreach (var record in state.Permissions)
         {
             if (record is null
-                || !PackageId.TryParse(record.CallerPackageId, out _)
-                || !SemanticVersion.TryParse(record.CallerPackageVersion, out _)
-                || !PackageId.TryParse(record.ContractId, out _)
-                || !IsAction(record.Action)
-                || record.State == RuntimeRpcPermissionState.Pending
-                || !IsHash(record.ManifestSha256))
+                || record.Key is null
+                || !IsValidKey(record.Key)
+                || record.State == RuntimeRpcPermissionState.Pending)
             {
                 throw new InvalidDataException("The Runtime RPC permission store contains an invalid permission.");
             }
-            var key = new PermissionKey(record.CallerPackageId, record.ContractId, record.Action);
+            var key = record.Key;
             if (!_records.TryAdd(key, record))
             {
                 throw new InvalidDataException("The Runtime RPC permission store contains a duplicate permission.");
@@ -403,6 +409,17 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         => action is SunderRpcProtocol.DiscoverAction
             or SunderRpcProtocol.InvokeAction
             or SunderRpcProtocol.SubscribeAction;
+
+    internal static bool IsValidKey(RuntimeRpcPermissionKey? key)
+        => key is not null
+           && PackageId.TryParse(key.CallerPackageId, out _)
+           && SemanticVersion.TryParse(key.CallerPackageVersion, out _)
+           && IsHash(key.ManifestSha256)
+           && key.CallerRole is SunderPackageFormat.AppHostRole or SunderPackageFormat.RuntimeHostRole
+           && PackageId.TryParse(key.ContractId, out _)
+           && SemanticVersion.TryParse(key.ContractVersion, out _)
+           && IsHash(key.AbiSha256)
+           && IsAction(key.Action);
 
     private static bool IsHash(string? value)
         => value is { Length: 64 }
@@ -434,11 +451,16 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         long revision,
         IEnumerable<RuntimeRpcPermissionRecord> records)
         => new(
-            1,
+            2,
             revision,
-            records.OrderBy(static item => item.CallerPackageId, StringComparer.Ordinal)
-                .ThenBy(static item => item.ContractId, StringComparer.Ordinal)
-                .ThenBy(static item => item.Action, StringComparer.Ordinal)
+            records.OrderBy(static item => item.Key.CallerPackageId, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.CallerPackageVersion, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.ManifestSha256, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.CallerRole, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.ContractId, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.ContractVersion, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.AbiSha256, StringComparer.Ordinal)
+                .ThenBy(static item => item.Key.Action, StringComparer.Ordinal)
                 .ToArray());
 
     private CancellationTokenSource PublishChangeLocked()
@@ -448,7 +470,6 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         return previous;
     }
 
-    private readonly record struct PermissionKey(string CallerPackageId, string ContractId, string Action);
 }
 
 internal sealed class RuntimeRpcPermissionLease(CancellationToken revocationToken) : IDisposable
@@ -461,11 +482,7 @@ internal sealed class RuntimeRpcPermissionLease(CancellationToken revocationToke
 }
 
 internal sealed record RuntimeRpcPermissionRecord(
-    string CallerPackageId,
-    string CallerPackageVersion,
-    string ManifestSha256,
-    string ContractId,
-    string Action,
+    RuntimeRpcPermissionKey Key,
     RuntimeRpcPermissionState State,
     DateTimeOffset UpdatedAtUtc);
 
@@ -476,7 +493,8 @@ internal sealed record RuntimeRpcPermissionStateFile(
 
 internal sealed class RuntimeRpcPermissionService(
     PackageSessionState sessions,
-    RuntimeRpcPermissionStore store)
+    RuntimeRpcPermissionStore store,
+    RuntimeSessionOwner? owner = null)
 {
     public RuntimeRpcPermissionSnapshot GetSnapshot()
     {
@@ -489,9 +507,8 @@ internal sealed class RuntimeRpcPermissionService(
         RuntimeRpcPermissionState state,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.CallerPackageId)
-            || string.IsNullOrWhiteSpace(request.ContractId)
-            || !RuntimeRpcPermissionStore.IsAction(request.Action))
+        if (request?.Key is not { } requestedKey
+            || !RuntimeRpcPermissionStore.IsValidKey(requestedKey))
         {
             throw new RuntimeValidationException("The RPC permission request is invalid.");
         }
@@ -499,15 +516,24 @@ internal sealed class RuntimeRpcPermissionService(
         using (var lease = sessions.AcquireLease())
         {
             var subject = GetSubjects(lease).FirstOrDefault(package =>
-                string.Equals(package.PackageId, request.CallerPackageId, StringComparison.OrdinalIgnoreCase))
-                          ?? throw new RuntimeNotFoundException($"Package '{request.CallerPackageId}' is not active.");
+                string.Equals(package.PackageId, requestedKey.CallerPackageId, StringComparison.OrdinalIgnoreCase))
+                          ?? throw new RuntimeNotFoundException($"Package '{requestedKey.CallerPackageId}' is not active.");
+            if (!string.Equals(subject.PackageVersion, requestedKey.CallerPackageVersion, StringComparison.Ordinal)
+                || !string.Equals(subject.ManifestSha256, requestedKey.ManifestSha256, StringComparison.Ordinal))
+            {
+                throw new RuntimeValidationException(
+                    $"The RPC permission request for package '{subject.PackageId}' is stale.");
+            }
             var requestedUse = subject.ContractUses.FirstOrDefault(use =>
-                string.Equals(use.ContractId, request.ContractId, StringComparison.Ordinal)
-                && (use.Actions ?? []).Contains(request.Action, StringComparer.Ordinal));
+                string.Equals(use.Role, requestedKey.CallerRole, StringComparison.Ordinal)
+                && string.Equals(use.ContractId, requestedKey.ContractId, StringComparison.Ordinal)
+                && string.Equals(use.ContractVersion, requestedKey.ContractVersion, StringComparison.Ordinal)
+                && string.Equals(use.AbiSha256, requestedKey.AbiSha256, StringComparison.Ordinal)
+                && (use.Actions ?? []).Contains(requestedKey.Action, StringComparer.Ordinal));
             if (requestedUse is null)
             {
                 throw new RuntimeValidationException(
-                    $"Package '{subject.PackageId}' did not request RPC action '{request.Action}' for contract '{request.ContractId}'.");
+                    $"Package '{subject.PackageId}' did not request the exact RPC permission '{requestedKey.Action}' for role '{requestedKey.CallerRole}' and contract '{requestedKey.ContractId}' version '{requestedKey.ContractVersion}'.");
             }
             if (subject.SourceKind == PackageSourceKind.Dev)
             {
@@ -516,14 +542,19 @@ internal sealed class RuntimeRpcPermissionService(
             }
 
             await store.SetAsync(
-                subject.PackageId,
-                subject.PackageVersion,
-                subject.ManifestSha256,
-                requestedUse.ContractId!,
-                request.Action,
+                new RuntimeRpcPermissionKey(
+                    subject.PackageId,
+                    subject.PackageVersion,
+                    subject.ManifestSha256,
+                    requestedUse.Role!,
+                    requestedUse.ContractId!,
+                    requestedUse.ContractVersion!,
+                    requestedUse.AbiSha256!,
+                    requestedKey.Action),
                 state,
                 cancellationToken).ConfigureAwait(false);
         }
+        owner?.RefreshRpcReadiness();
         return GetSnapshot();
     }
 

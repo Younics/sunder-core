@@ -28,7 +28,8 @@ internal sealed class PackagesOperationCommandCoordinator(
             operationExecutor.EnqueueLocalInstall(
                 selection.PackagePath,
                 selection.Sha256,
-                selection.DeleteAfterUse);
+                selection.DeleteAfterUse,
+                selection.CapabilityConsent);
         }
         catch
         {
@@ -89,6 +90,17 @@ internal sealed class PackagesOperationCommandCoordinator(
         RegistryPackageUpdate update,
         string displayName)
         => EnqueueMarketplaceUpdateAsync(update, displayName);
+
+    public Task AdoptRegistrySourceAsync(string packageId, string displayName)
+    {
+        if (TryResolveRegistryUrl(out var registryUrl))
+        {
+            operationExecutor.EnqueueRegistrySourceAdoption(packageId, displayName, registryUrl);
+            MarkQueued($"Queued Registry source adoption for {packageId}.");
+        }
+
+        return Task.CompletedTask;
+    }
 
     public Task UpdateAllPackagesAsync()
     {

@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.Package.Format;
-using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
@@ -487,8 +486,10 @@ public sealed class RuntimeStackImportPlanTests
                 ProviderId = providerId,
                 ContractId = descriptor.ContractId,
                 ContractVersion = descriptor.Version,
-                ContractSha256 = descriptor.Sha256,
+                DescriptorSha256 = descriptor.Sha256,
+                AbiSha256 = descriptor.AbiSha256,
                 Role = SunderPackageFormat.RuntimeHostRole,
+                Audience = SunderPackageFormat.PublicProviderAudience,
             };
             var manifest = new SunderPackageManifest
             {
@@ -502,7 +503,9 @@ public sealed class RuntimeStackImportPlanTests
                         ContractId = descriptor.ContractId,
                         Version = descriptor.Version,
                         DescriptorPath = "contracts/sunder.stack.contributor.rpc.json",
-                        Sha256 = descriptor.Sha256,
+                        DescriptorSha256 = descriptor.Sha256,
+                        AbiSha256 = descriptor.AbiSha256,
+                        Exposure = SunderPackageFormat.PublicContractExposure,
                     },
                 ],
                 Provides = [declaration],
@@ -530,12 +533,9 @@ public sealed class RuntimeStackImportPlanTests
                     null,
                     null,
                     new RestrictedFileMasterKeyProtection()),
-                AuthHandler: null,
-                CallbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
-                BackgroundServices: [],
-                new ServiceCollection().BuildServiceProvider(),
-                LoadContext: null,
-                EmptyTestPackageSettings.Instance)
+                new LocalPackageFileStore(Path.Combine(Paths.RootPath, contributor.PackageId + ".files")),
+                EmptyTestPackageSettings.Instance,
+                new TestRuntimePackageWorker())
             {
                 RuntimeActivationId = Guid.NewGuid(),
                 RpcProviders = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal)

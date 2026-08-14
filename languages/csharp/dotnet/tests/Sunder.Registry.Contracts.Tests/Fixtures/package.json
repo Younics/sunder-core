@@ -21,12 +21,15 @@
     {
       "role": "runtime",
       "rid": "win-x64",
-      "kind": "dotnet",
-      "entryPoint": "lib/Sample.dll",
+      "kind": "worker",
+      "entryPoint": "bin/sample-worker.exe",
       "targetFramework": "net10.0",
-      "sdkVersion": "0.8.0",
+      "sdkVersion": "1.1.0",
       "requiredHostCapabilities": [
-        "core.v1"
+        "core.v1",
+        "rpc.v2",
+        "sdk-baseline-1-1.v1",
+        "worker-protocol.v3"
       ],
       "views": []
     },
@@ -38,7 +41,9 @@
       "targetFramework": null,
       "sdkVersion": "1.1.0",
       "requiredHostCapabilities": [
-        "core.v1"
+        "core.v1",
+        "sdk-baseline-1-1.v1",
+        "views.v1"
       ],
       "views": [
         {
@@ -70,13 +75,17 @@
       "contractId": "sample.contract",
       "version": "1.0.0",
       "descriptorPath": "contracts/sample.json",
-      "sha256": "contract-sha"
+      "descriptorSha256": "descriptor-sha",
+      "abiSha256": "abi-sha",
+      "exposure": "public"
     }
   ],
   "usesContracts": [
     {
+      "role": "runtime",
       "contractId": "base.contract",
-      "versionRange": "\u003E=1.0.0",
+      "contractVersion": "1.4.2",
+      "abiSha256": "base-abi-sha",
       "required": true,
       "actions": [
         "discover",
@@ -87,13 +96,15 @@
   "providers": [
     {
       "providerId": "sample.provider",
+      "role": "runtime",
       "contractId": "sample.contract",
       "contractVersion": "1.0.0",
-      "contractSha256": "contract-sha",
-      "role": "runtime"
+      "descriptorSha256": "descriptor-sha",
+      "abiSha256": "abi-sha",
+      "audience": "public"
     }
   ],
-  "manifestFormatVersion": 1,
+  "manifestFormatVersion": 3,
   "archiveFormatVersion": 1,
   "publishedAtUtc": "2026-07-11T10:00:00+00:00",
   "trustedArtifactOrigins": [

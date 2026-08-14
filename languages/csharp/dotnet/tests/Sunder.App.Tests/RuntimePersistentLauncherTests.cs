@@ -39,7 +39,6 @@ public sealed class RuntimePersistentLauncherTests
                 return Task.FromResult(CommandResult(
                     standardOutput: command[0] == "kickstart" ? "4321\n" : string.Empty));
             },
-            Path.Combine(root, "legacy.plist"),
             Path.Combine(root, "launchd", "dev.sunder.host.plist"),
             userId: 501);
         var startInfo = CreateMacStartInfo(root);
@@ -81,7 +80,7 @@ public sealed class RuntimePersistentLauncherTests
 
     [Fact]
     [SupportedOSPlatform("macos")]
-    public async Task MacSessionLauncher_WhenReplacementBootstrapFails_RestoresPreviousDefinition()
+    public async Task MacSessionLauncher_WhenReplacementBootstrapFails_PreservesSubmittedCandidateDefinition()
     {
         if (!OperatingSystem.IsMacOS())
         {
@@ -120,7 +119,6 @@ public sealed class RuntimePersistentLauncherTests
                 return Task.FromResult(CommandResult(
                     standardOutput: command[0] == "kickstart" ? "4323" : string.Empty));
             },
-            Path.Combine(root, "legacy.plist"),
             definitionPath,
             userId: 501);
 
@@ -131,9 +129,9 @@ public sealed class RuntimePersistentLauncherTests
                 replaceExisting: true,
                 CancellationToken.None));
 
-            Assert.Equal(2, bootstrapCount);
-            Assert.True(loaded);
-            Assert.Equal(previousDefinition, await File.ReadAllTextAsync(definitionPath));
+            Assert.Equal(1, bootstrapCount);
+            Assert.False(loaded);
+            Assert.NotEqual(previousDefinition, await File.ReadAllTextAsync(definitionPath));
         }
         finally
         {
@@ -143,7 +141,7 @@ public sealed class RuntimePersistentLauncherTests
 
     [Fact]
     [SupportedOSPlatform("macos")]
-    public async Task MacSessionLauncher_WhenUnloadedBootstrapFails_PreservesPreviousDefinition()
+    public async Task MacSessionLauncher_WhenUnloadedBootstrapFails_PreservesSubmittedCandidateDefinition()
     {
         if (!OperatingSystem.IsMacOS())
         {
@@ -171,7 +169,6 @@ public sealed class RuntimePersistentLauncherTests
                 }
                 return Task.FromResult(CommandResult());
             },
-            Path.Combine(root, "legacy.plist"),
             definitionPath,
             userId: 501);
 
@@ -183,7 +180,7 @@ public sealed class RuntimePersistentLauncherTests
                 CancellationToken.None));
 
             Assert.Equal(1, bootstrapCount);
-            Assert.Equal(previousDefinition, await File.ReadAllTextAsync(definitionPath));
+            Assert.NotEqual(previousDefinition, await File.ReadAllTextAsync(definitionPath));
         }
         finally
         {
@@ -193,7 +190,7 @@ public sealed class RuntimePersistentLauncherTests
 
     [Fact]
     [SupportedOSPlatform("macos")]
-    public async Task MacSessionLauncher_WhenLoadedServiceHasNoDefinition_ReportsDisplacement()
+    public async Task MacSessionLauncher_WhenSubmittedReplacementFails_DoesNotReportPreLaunchDisplacement()
     {
         if (!OperatingSystem.IsMacOS())
         {
@@ -226,13 +223,12 @@ public sealed class RuntimePersistentLauncherTests
                 }
                 return Task.FromResult(CommandResult());
             },
-            Path.Combine(root, "legacy.plist"),
             definitionPath,
             userId: 501);
 
         try
         {
-            await Assert.ThrowsAsync<HostServiceReplacementException>(() => launcher.ReconcileAndLaunchAsync(
+            await Assert.ThrowsAsync<InvalidOperationException>(() => launcher.ReconcileAndLaunchAsync(
                 CreateMacStartInfo(root),
                 replaceExisting: true,
                 CancellationToken.None));
@@ -264,7 +260,6 @@ public sealed class RuntimePersistentLauncherTests
                 arguments[0] == "print"
                     ? CommandResult()
                     : CommandResult(standardOutput: listOutput)),
-            Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "legacy.plist"),
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "host.plist"),
             userId: 501);
 
@@ -290,7 +285,6 @@ public sealed class RuntimePersistentLauncherTests
         Directory.CreateDirectory(root);
         var label = $"dev.sunder.host.tests.{Guid.NewGuid():N}";
         var launcher = new MacOsSessionRuntimeLauncher(
-            legacyLaunchAgentPath: Path.Combine(root, "legacy.plist"),
             launchAgentPath: Path.Combine(root, "launchd", $"{label}.plist"),
             label: label);
         var startInfo = new ProcessStartInfo("/bin/sh")
@@ -368,7 +362,6 @@ public sealed class RuntimePersistentLauncherTests
                 return Task.FromResult(CommandResult(
                     standardOutput: command[0] == "kickstart" ? "4322" : string.Empty));
             },
-            Path.Combine(root, "legacy.plist"),
             Path.Combine(root, "launchd", "dev.sunder.host.plist"),
             userId: 501);
 
@@ -466,7 +459,7 @@ public sealed class RuntimePersistentLauncherTests
 
     [Fact]
     [SupportedOSPlatform("linux")]
-    public async Task LinuxSessionLauncher_WhenReplacementLaunchFails_ReportsDisplacedService()
+    public async Task LinuxSessionLauncher_WhenSubmittedReplacementFails_PreservesForwardOnlyFailure()
     {
         var unitLoaded = true;
         using var launcher = new LinuxSystemdRuntimeLauncher((fileName, arguments, _) =>
@@ -494,14 +487,13 @@ public sealed class RuntimePersistentLauncherTests
             return Task.FromResult(CommandResult());
         });
 
-        var exception = await Assert.ThrowsAsync<HostServiceReplacementException>(() =>
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             launcher.ReconcileAndLaunchAsync(
                 CreateLinuxStartInfo(),
                 replaceExisting: true,
                 CancellationToken.None));
 
-        Assert.Contains("displaced", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("launch rejected", exception.InnerException?.Message, StringComparison.Ordinal);
+        Assert.Contains("launch rejected", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -33,7 +33,6 @@ public sealed class RuntimeHostStartupIntegrationTests
         var runtimeUrl = new Uri($"http://127.0.0.1:{ReservePort()}/");
         var label = $"dev.sunder.host.tests.{Guid.NewGuid():N}";
         var launchd = new MacOsSessionRuntimeLauncher(
-            legacyLaunchAgentPath: Path.Combine(root, "legacy.plist"),
             launchAgentPath: Path.Combine(root, "launchd", $"{label}.plist"),
             label: label);
         var serviceManager = new EnvironmentInjectingHostServiceManager(

@@ -95,8 +95,8 @@ public interface IRuntimeRpcManagementClient : IRuntimeClient
     Task<RuntimeRpcCatalogSnapshot> GetRpcCatalogAsync(CancellationToken cancellationToken = default);
     Task<RuntimeRpcCatalogEventPage> GetRpcCatalogEventsAsync(long afterRevision, long afterSequence, CancellationToken cancellationToken = default);
     Task<RuntimeRpcPermissionSnapshot> GetRpcPermissionsAsync(CancellationToken cancellationToken = default);
-    Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(string callerPackageId, string contractId, string action, CancellationToken cancellationToken = default);
-    Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(string callerPackageId, string contractId, string action, CancellationToken cancellationToken = default);
+    Task<RuntimeRpcPermissionSnapshot> GrantRpcPermissionAsync(RuntimeRpcPermissionKey key, CancellationToken cancellationToken = default);
+    Task<RuntimeRpcPermissionSnapshot> RevokeRpcPermissionAsync(RuntimeRpcPermissionKey key, CancellationToken cancellationToken = default);
 }
 
 public interface IRuntimeStackClient : IRuntimeClient
@@ -121,6 +121,7 @@ public interface IRuntimeRegistryPackageClient : IRuntimeClient
     Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default);
     Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default);
+    Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken cancellationToken = default);
     Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default);
 }
 

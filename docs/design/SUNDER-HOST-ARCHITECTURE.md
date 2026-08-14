@@ -79,7 +79,7 @@ The Runtime root remains independently resettable. Resetting Runtime package dat
 
 ## Lifecycle
 
-The desktop App stages the bundled Supervisor and Runtime worker in a stable versioned directory under current-user application data. The staged payload is independent from AppImage mounts, macOS bundle movement, and Velopack version cleanup. It is activated only after authenticated readiness succeeds; failed activation restores the prior payload.
+The desktop App stages the bundled Supervisor and Runtime worker in a stable versioned directory under current-user application data. The staged payload is independent from AppImage mounts, macOS bundle movement, and Velopack version cleanup. It is activated only after authenticated readiness succeeds. A failure before candidate submission may restore the prior payload when typed evidence proves that is safe; after submission, recovery remains forward-only and preserves the candidate and failure evidence for retry.
 
 Opening the App starts the Supervisor for the current login session. Windows uses an independent user process, Linux prefers a transient `systemd --user` service and falls back to `setsid`, and macOS submits a transient `launchctl` job. No machine service, dedicated account, user enrollment handoff, or privileged companion package is installed. The fixed loopback origin means simultaneous Hosts in multiple logged-in user sessions are not yet supported.
 
@@ -95,7 +95,7 @@ Accepted and running operations are resumed with the same operation ID after Sup
 
 Deployment generation advances when a lifecycle mutation is accepted and when Supervisor recovery promotes a worker without a client mutation. Initial operation records are retained indefinitely so retry idempotency is not weakened by premature pruning. A future bounded retention design must preserve a durable mutation outcome index.
 
-The App updates the versioned Supervisor and Runtime worker payload together. It stages the new payload, stops the prior Supervisor, health-checks the replacement, and commits or rolls back without elevation. Stopping the Supervisor cannot be made remotely recoverable through the same Supervisor.
+The App updates the versioned Supervisor and Runtime worker payload together. It stages the new payload, stops the prior Supervisor, health-checks the replacement, and commits it after readiness without elevation. Once the operating-system service manager accepts the candidate, activation does not roll back to an older payload. Stopping the Supervisor cannot be made remotely recoverable through the same Supervisor.
 
 ## Client Model
 
@@ -123,7 +123,7 @@ Remote mode initially targets private LAN and VPN deployments. It is not an inte
 
 ## Package Targets
 
-Cross-machine operation requires package format v2 with independent App and Runtime target declarations. One package artifact may contain multiple exact role/RID projections. The Host stores the complete artifact, activates only its Runtime projection, and resolves App snapshots for each connecting App target.
+One canonical package artifact may contain multiple exact role/RID projections. Registry execution must deliver exactly `shared` plus one projection for every selected plan target, and every selected target must match the Runtime's current RID. Local archive installation validates the same universal format, then derives the same shared-plus-current-RID install tree. The Host stores that bounded tree, activates its Runtime target, and exposes its selected App target; foreign-RID payload is never materialized into installed state.
 
 The initial exact RIDs are:
 

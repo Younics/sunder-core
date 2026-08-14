@@ -215,6 +215,55 @@ public sealed class PackageStorageServicesTests
     }
 
     [Fact]
+    public async Task PackageStorageMigrationJournal_IsIdempotentAndAllowsSkippedPackageVersions()
+    {
+        var directory = CreateTempDirectory();
+        var journal = new PackageStorageMigrationJournal(Path.Combine(directory, "storage-migrations.json"));
+        var versionOne = new PackageStorageMigrationPlanIdentity(
+            "state",
+            "state:1.0.0",
+            new string('a', 64));
+        var versionThree = new PackageStorageMigrationPlanIdentity(
+            "state",
+            "state:3.0.0",
+            new string('c', 64));
+
+        await journal.CommitAsync([versionOne]);
+        await journal.CommitAsync([versionOne]);
+
+        Assert.True(await journal.IsCompletedAsync(versionOne));
+        Assert.False(await journal.IsCompletedAsync(versionThree));
+
+        await journal.CommitAsync([versionThree]);
+
+        Assert.True(await journal.IsCompletedAsync(versionOne));
+        Assert.True(await journal.IsCompletedAsync(versionThree));
+        using var document = JsonDocument.Parse(await File.ReadAllBytesAsync(
+            Path.Combine(directory, "storage-migrations.json")));
+        Assert.Equal(2, document.RootElement.GetProperty("revision").GetInt64());
+        Assert.Equal(2, document.RootElement.GetProperty("completions").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task PackageStorageMigrationJournal_RejectsChangedPlanForCompletedMigrationId()
+    {
+        var journal = new PackageStorageMigrationJournal(
+            Path.Combine(CreateTempDirectory(), "storage-migrations.json"));
+        var completed = new PackageStorageMigrationPlanIdentity(
+            "secrets",
+            "secrets:2.0.0",
+            new string('a', 64));
+        await journal.CommitAsync([completed]);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => journal.ValidateAsync([
+            completed with { PlanSha256 = new string('b', 64) },
+        ]));
+
+        Assert.Contains("different canonical plan", exception.Message, StringComparison.Ordinal);
+        Assert.True(await journal.IsCompletedAsync(completed));
+    }
+
+    [Fact]
     public async Task JsonPackageKeyValueStore_JsonIdentityMigrationUsesOnlyCaseEquivalentPayloadIdentity()
     {
         var directory = CreateTempDirectory();
@@ -452,6 +501,44 @@ public sealed class PackageStorageServicesTests
         Assert.Equal("canonical", result.Values[firstDestination]);
         Assert.Equal("current-second", result.Values[secondDestination]);
         Assert.Equal(2, result.Values.Count);
+    }
+
+    [Fact]
+    public async Task JsonPackageKeyValueStore_DynamicMigrationRejectsChangedPhysicalKeySnapshotWithoutMutation()
+    {
+        var store = new JsonPackageKeyValueStore(Path.Combine(CreateTempDirectory(), "state.json"));
+        await store.SetValueAsync("legacy.v1", "legacy-value");
+        var snapshot = await store.ListPhysicalKeysForMigrationAsync();
+        await store.SetValueAsync("concurrent.v1", "concurrent-value");
+        var migration = PackageStorageKeyMigration.DynamicCleanup(key => key == "legacy.v1"
+            ? PackageStorageKeyMigrationAction.Rewrite("current.v1")
+            : PackageStorageKeyMigrationAction.NoMatch);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.MigrateKeysAsync([migration], snapshot));
+
+        Assert.Equal("legacy-value", await store.GetValueAsync("legacy.v1"));
+        Assert.Equal("concurrent-value", await store.GetValueAsync("concurrent.v1"));
+        Assert.Null(await store.GetValueAsync("current.v1"));
+    }
+
+    [Fact]
+    public async Task JsonPackageSecretsStore_DynamicMigrationRejectsChangedPhysicalKeySnapshotWithoutMutation()
+    {
+        var store = new JsonPackageSecretsStore(Path.Combine(CreateTempDirectory(), "secrets.json"));
+        await store.SetSecretAsync("legacy.v1", "legacy-secret");
+        var snapshot = await store.ListPhysicalKeysForMigrationAsync();
+        await store.SetSecretAsync("concurrent.v1", "concurrent-secret");
+        var migration = PackageStorageKeyMigration.DynamicCleanup(key => key == "legacy.v1"
+            ? PackageStorageKeyMigrationAction.Rewrite("current.v1")
+            : PackageStorageKeyMigrationAction.NoMatch);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.MigrateKeysAsync([migration], snapshot));
+
+        Assert.Equal("legacy-secret", await store.GetSecretAsync("legacy.v1"));
+        Assert.Equal("concurrent-secret", await store.GetSecretAsync("concurrent.v1"));
+        Assert.Null(await store.GetSecretAsync("current.v1"));
     }
 
     [Fact]

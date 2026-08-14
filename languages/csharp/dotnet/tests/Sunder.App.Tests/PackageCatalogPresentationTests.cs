@@ -1,5 +1,6 @@
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
+using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Xunit;
@@ -8,6 +9,49 @@ namespace Sunder.App.Tests;
 
 public sealed class PackageCatalogPresentationTests
 {
+    [Fact]
+    public void RpcAccessProjection_GroupsByCallerRoleAndPresentsExactVersions()
+    {
+        var projected = PackageRpcAccessProjection.FromRuntime(
+        [
+            new PackageRpcContractUseDescriptor(
+                SunderPackageFormat.RuntimeHostRole,
+                "example.rpc",
+                "2.0.0+runtime",
+                new string('b', 64),
+                Required: false,
+                Actions: ["subscribe"]),
+            new PackageRpcContractUseDescriptor(
+                SunderPackageFormat.AppHostRole,
+                "example.rpc",
+                "1.0.0+app",
+                new string('a', 64),
+                Required: true,
+                Actions: ["invoke", "discover"]),
+        ]);
+
+        Assert.Collection(
+            projected,
+            access =>
+            {
+                Assert.Equal(SunderPackageFormat.AppHostRole, access.Role);
+                Assert.Equal("1.0.0+app", access.ContractVersion);
+                Assert.Equal("App caller", access.CallerRoleText);
+                Assert.Equal("Version 1.0.0+app", access.ContractVersionText);
+                Assert.Equal("Required", access.RequirementText);
+                Assert.Equal("discover | invoke", access.ActionsText);
+            },
+            access =>
+            {
+                Assert.Equal(SunderPackageFormat.RuntimeHostRole, access.Role);
+                Assert.Equal("2.0.0+runtime", access.ContractVersion);
+                Assert.Equal("Runtime caller", access.CallerRoleText);
+                Assert.Equal("Version 2.0.0+runtime", access.ContractVersionText);
+                Assert.Equal("Optional", access.RequirementText);
+                Assert.Equal("subscribe", access.ActionsText);
+            });
+    }
+
     [Fact]
     public void Projection_FiltersAcrossSharedFieldsAndSortsDeterministically()
     {
@@ -60,6 +104,42 @@ public sealed class PackageCatalogPresentationTests
         var failed = PresentationOperationState.Failed("unavailable");
         Assert.True(failed.HasError);
         Assert.Equal("unavailable", failed.ErrorMessage);
+    }
+
+    [Fact]
+    public void InstalledPackageProjector_OffersRegistrySourceAdoptionForUnknownProvenance()
+    {
+        var installed = new InstalledPackageDescriptor(
+            "agent",
+            "Agent",
+            "1.0.0",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
+            Summary: null,
+            Icon: null,
+            IsEnabled: true,
+            DependsOn: [],
+            DateTimeOffset.UtcNow,
+            StatusMessage: null);
+        var session = new SessionPackageDescriptor(
+            "agent",
+            "Agent",
+            "1.0.0",
+            PackageHostRoles.App | PackageHostRoles.Runtime,
+            Icon: null,
+            IsEnabled: true,
+            PackageReadinessState.Ready,
+            Views: [],
+            FailureOrigin: null,
+            LastError: null,
+            LastFailureAtUtc: null,
+            FailureCount: 0);
+
+        var state = PackageCatalogItemViewModel.CreateState(session, installed, update: null, iconUri: null);
+
+        Assert.Equal("Ready", state.StatusText);
+        Assert.True(state.CanDisable);
+        Assert.True(state.CanUninstall);
+        Assert.True(state.CanAdoptRegistrySource);
     }
 
     [Fact]

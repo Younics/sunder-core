@@ -8,6 +8,7 @@ using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 
 var startupPhaseStarted = Stopwatch.GetTimestamp();
+var startupDiagnostics = RuntimeStartupDiagnosticReporter.StartFromEnvironment();
 var startupOptions = RuntimeHostStartupOptions.Parse(args);
 var supervisorEndpoint = RuntimeSupervisedTransport.ReadFromEnvironment();
 var supervisorLifetimeHandle = Environment.GetEnvironmentVariable("SUNDER_RUNTIME_SUPERVISOR_PIPE");
@@ -86,7 +87,6 @@ try
         .MapPackageSessionEndpoints()
         .MapContentTransferEndpoints()
         .MapPackageDataEndpoints()
-        .MapPackageRuntimeOperationEndpoints()
         .MapPackageSettingsEndpoints()
         .MapPackageCallbackEndpoints()
         .MapPackageAuthEndpoints()
@@ -138,6 +138,7 @@ try
                 }
                 connectionInfo = new RuntimeConnectionInfo(runtimeUrl, bearerToken);
                 RuntimeConnectionInfoStore.Save(connectionInfo, connectionInfoPath);
+                startupDiagnostics?.Complete();
                 LogStartupPhase("listener bind and connection publication", ref startupPhaseStarted);
             });
         LogStartupPhase("package bootstrap", ref startupPhaseStarted);

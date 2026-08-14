@@ -21,6 +21,7 @@ public enum RuntimeRegistryErrorCode
     ArtifactVerificationFailed,
     Cancelled,
     InternalError,
+    ConsentRequired,
 }
 
 public sealed record RuntimeRegistryUser(
@@ -71,7 +72,8 @@ public sealed record RuntimeRegistryPackageRequest(
     bool Reinstall = false,
     string? VersionRange = null,
     bool Required = true,
-    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null);
+    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null,
+    IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null);
 
 public sealed record RuntimeRegistryPackageChangeRequest(
     string PackageId,
@@ -86,17 +88,22 @@ public sealed record RuntimeRegistryPackageBatchRequest(
     IReadOnlyList<RuntimeRegistryPackageChangeRequest> Packages,
     bool IncludePrerelease = false,
     bool AllowDowngrade = false,
-    bool Reinstall = false)
+    bool Reinstall = false,
+    IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null)
 {
     public IReadOnlyList<RuntimeRegistryPackageChangeRequest> Packages { get; }
         = Array.AsReadOnly(Packages.ToArray());
+    public IReadOnlyList<PackageCapabilityConsent> CapabilityConsents { get; init; }
+        = Array.AsReadOnly((CapabilityConsents ?? []).ToArray());
 }
 
 public sealed record RuntimeRegistryUpdateRequest(
     string? RegistryOrigin = null,
     string? PackageId = null,
     bool IncludePrerelease = false,
-    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null);
+    IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null,
+    bool DryRun = false,
+    IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null);
 
 public sealed record RuntimeRegistrySourceAdoptionRequest(
     string PackageId,
@@ -107,7 +114,8 @@ public sealed record RuntimeRegistrySourceAdoptionRequest(
     bool AllowDowngrade = false,
     IReadOnlyList<RuntimeRegistryPackageTargetRequest>? DesiredTargets = null,
     bool Confirm = false,
-    bool DryRun = false);
+    bool DryRun = false,
+    IReadOnlyList<PackageCapabilityConsent>? CapabilityConsents = null);
 
 public sealed record RuntimeRegistryPackageDependency(
     string PackageId,
@@ -188,7 +196,8 @@ public sealed record RuntimeRegistryResolveInstallPlanResponse(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<RuntimeRegistryPackageInstallPlanConflict> Conflicts,
-    IReadOnlyList<string> TrustedArtifactOrigins)
+    IReadOnlyList<string> TrustedArtifactOrigins,
+    IReadOnlyList<PackageCapabilityConsent>? RequiredCapabilityConsents = null)
 {
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> Items { get; }
         = Array.AsReadOnly(Items.ToArray());
@@ -198,6 +207,8 @@ public sealed record RuntimeRegistryResolveInstallPlanResponse(
         = Array.AsReadOnly(Conflicts.ToArray());
     public IReadOnlyList<string> TrustedArtifactOrigins { get; }
         = Array.AsReadOnly(TrustedArtifactOrigins.ToArray());
+    public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; init; }
+        = Array.AsReadOnly((RequiredCapabilityConsents ?? []).ToArray());
 }
 
 public sealed record RuntimeRegistryPackageChangeResult(
@@ -209,7 +220,8 @@ public sealed record RuntimeRegistryPackageChangeResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> ImpactedPackageIds,
-    IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems)
+    IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems,
+    IReadOnlyList<PackageCapabilityConsent>? RequiredCapabilityConsents = null)
 {
     private IReadOnlyList<string> _skippedPackageIds = Array.AsReadOnly(Array.Empty<string>());
 
@@ -219,6 +231,8 @@ public sealed record RuntimeRegistryPackageChangeResult(
         = Array.AsReadOnly(ImpactedPackageIds.ToArray());
     public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem> PlanItems { get; }
         = Array.AsReadOnly(PlanItems.ToArray());
+    public IReadOnlyList<PackageCapabilityConsent> RequiredCapabilityConsents { get; init; }
+        = Array.AsReadOnly((RequiredCapabilityConsents ?? []).ToArray());
     public RuntimePackageStamp? CommittedStamp { get; init; }
 
     public IReadOnlyList<string> SkippedPackageIds

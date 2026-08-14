@@ -1,4 +1,3 @@
-using Sunder.Sdk.Runtime;
 using Sunder.Sdk.Settings;
 using Sunder.Sdk.Storage;
 using Xunit;
@@ -154,25 +153,6 @@ public sealed class PackageStorageValidationTests
         Assert.Equal(PackageStorageKeyMigrationActionKind.NoMatch, migration.Resolve("unknown").Kind);
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             PackageStorageKeyMigrationAction.Rewrite(destination, precedence: -1));
-    }
-
-    [Fact]
-    public void RuntimeInvocationException_ExposesOnlyValidatedDiagnosticMetadata()
-    {
-        var exception = new PackageRuntimeInvocationException(
-            "runtime.v1.unavailable",
-            isTransient: true,
-            statusCode: 503,
-            correlationId: "correlation-42");
-
-        Assert.Equal("runtime.v1.unavailable", exception.Code);
-        Assert.True(exception.IsTransient);
-        Assert.Equal(503, exception.StatusCode);
-        Assert.Equal("correlation-42", exception.CorrelationId);
-        Assert.Null(exception.InnerException);
-        Assert.Throws<ArgumentException>(() => new PackageRuntimeInvocationException("Runtime BAD", false));
-        Assert.Throws<ArgumentException>(() => new PackageRuntimeInvocationException("runtime.v1.bad", false, correlationId: "unsafe id"));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new PackageRuntimeInvocationException("runtime.v1.bad", false, statusCode: 99));
     }
 
     [Fact]

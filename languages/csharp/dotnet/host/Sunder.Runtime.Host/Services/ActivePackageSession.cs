@@ -1,10 +1,9 @@
 using Microsoft.Extensions.Logging;
-using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Settings;
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Settings;
 using Sunder.Package.Format;
 
 namespace Sunder.Runtime.Host.Services;
@@ -15,22 +14,13 @@ internal sealed record ActiveLoadedPackage(
     PackageSettingsSchemaDescriptor? SettingsSchema,
     IPackageKeyValueStore StateStore,
     JsonPackageSecretsStore SecretsStore,
-    IPackageAuthHandler? AuthHandler,
-    IReadOnlyDictionary<string, IPackageCallbackHandler> CallbackHandlers,
-    IReadOnlyList<IPackageBackgroundService> BackgroundServices,
-    IServiceProvider ServiceProvider,
-    RuntimePackageLoadContext? LoadContext,
-    IPackageSettings Settings)
+    IPackageFileStore FileStore,
+    IPackageSettings Settings,
+    IRuntimePackageWorker Worker)
 {
     public Guid RuntimeActivationId { get; init; } = Guid.NewGuid();
 
     public PackageSettingsSchema? CanonicalSettingsSchema { get; init; }
-
-    public IReadOnlyDictionary<string, RuntimePackageOperationRegistration> RuntimeOperations { get; init; }
-        = new Dictionary<string, RuntimePackageOperationRegistration>(StringComparer.Ordinal);
-
-    public IReadOnlyDictionary<string, RuntimePackageStreamRegistration> RuntimeStreams { get; init; }
-        = new Dictionary<string, RuntimePackageStreamRegistration>(StringComparer.Ordinal);
 
     public IReadOnlyDictionary<string, RuntimeRpcProviderRegistration> RpcProviders { get; init; }
         = new Dictionary<string, RuntimeRpcProviderRegistration>(StringComparer.Ordinal);
@@ -42,8 +32,14 @@ internal sealed record ActiveLoadedPackage(
 
     public string RpcManifestSha256 { get; init; } = string.Empty;
 
+    public PackageStorageMigrationJournal? MigrationJournal { get; init; }
+
+    public Func<ActiveLoadedPackage>? RecoveryFactory { get; init; }
+
+    public IPackageAuthHandler? AuthHandler => Worker.AuthHandler;
+
     public IPackageCallbackHandler? GetCallbackHandler(string callbackHandlerId)
-        => CallbackHandlers.TryGetValue(callbackHandlerId, out var handler) ? handler : null;
+        => Worker.GetCallbackHandler(callbackHandlerId);
 }
 
 internal sealed class ActivePackageSession
@@ -55,16 +51,18 @@ internal sealed class ActivePackageSession
     private readonly object _lifecycleSync = new();
     private readonly List<Task> _lifecycleOperations = [];
     private readonly List<Task> _runtimeGenerationActivationOperations = [];
-    private readonly HashSet<IPackageRuntimeGenerationParticipant> _committedRuntimeGenerationParticipants =
+    private readonly HashSet<IRuntimePackageWorker> _committedRuntimeWorkers =
         new(ReferenceEqualityComparer.Instance);
+    private Exception? _runtimeGenerationFaultBeforePublication;
+    private PackageStorageActivationTransaction? _storageActivationTransaction;
     private Task? _disposalTask;
+    private Task _postDisposalCleanupTask = Task.CompletedTask;
 
     public ActivePackageSession(
         string? sessionFolder,
         IDictionary<string, ActiveLoadedPackage> loadedPackages,
         IDictionary<string, SessionPackageDescriptor> sessionPackages,
-        RuntimeSharedAssemblyRegistry? sharedAssemblyRegistry = null,
-        bool backgroundServicesStarted = true,
+        bool workersStarted = true,
         IEnumerable<RuntimePackageSource>? readySources = null)
     {
         SessionFolder = sessionFolder;
@@ -72,8 +70,7 @@ internal sealed class ActivePackageSession
         _sessionPackageMap = new Dictionary<string, SessionPackageDescriptor>(sessionPackages, StringComparer.OrdinalIgnoreCase);
         _packageSourceMap = (readySources ?? loadedPackages.Values.Select(static package => package.Source))
             .ToDictionary(static source => source.PackageId, StringComparer.OrdinalIgnoreCase);
-        SharedAssemblyRegistry = sharedAssemblyRegistry;
-        _backgroundServicesStarted = backgroundServicesStarted;
+        _workersStarted = workersStarted;
     }
 
     private ActivePackageSession()
@@ -85,7 +82,7 @@ internal sealed class ActivePackageSession
         IsEmpty = true;
     }
 
-    private bool _backgroundServicesStarted;
+    private bool _workersStarted;
     private bool _runtimeGenerationCommitted;
     private bool _runtimeGenerationMonitoringStarted;
     private long? _committedSessionGeneration;
@@ -96,60 +93,50 @@ internal sealed class ActivePackageSession
 
     public string? SessionFolder { get; }
 
-    private RuntimeSharedAssemblyRegistry? SharedAssemblyRegistry { get; }
-
-    public async Task StartBackgroundServicesAsync(
+    public async Task StartWorkersAsync(
         ILogger logger,
         TimeSpan startupTimeout,
         TimeSpan cleanupTimeout,
         CancellationToken cancellationToken = default)
     {
-        if (_backgroundServicesStarted)
+        if (_workersStarted)
         {
             return;
         }
 
-        var attemptedServices = new List<(string PackageId, IPackageBackgroundService Service)>();
-        using var startupTimeoutCancellation = new CancellationTokenSource(startupTimeout);
-        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            startupTimeoutCancellation.Token);
+        var attemptedWorkers = new List<(string PackageId, IRuntimePackageWorker Worker)>();
         Task? startTask = null;
         try
         {
             foreach (var package in _loadedPackageMap.Values)
             {
-                foreach (var backgroundService in package.BackgroundServices)
+                cancellationToken.ThrowIfCancellationRequested();
+                attemptedWorkers.Add((package.Descriptor.PackageId, package.Worker));
+                using var startupTimeoutCancellation = new CancellationTokenSource(startupTimeout);
+                using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    startupTimeoutCancellation.Token);
+                startTask = Task.Run(
+                    () => package.Worker.StartAsync(startupDeadline.Token),
+                    CancellationToken.None);
+                TrackLifecycleOperation(startTask);
+                try
                 {
-                    startupDeadline.Token.ThrowIfCancellationRequested();
-                    attemptedServices.Add((package.Descriptor.PackageId, backgroundService));
-                    startTask = Task.Run(
-                        () => backgroundService.StartAsync(startupDeadline.Token),
-                        CancellationToken.None);
-                    TrackLifecycleOperation(startTask);
                     await startTask.WaitAsync(startupDeadline.Token);
-                    startTask = null;
                 }
+                catch (OperationCanceledException exception) when (
+                    startupTimeoutCancellation.IsCancellationRequested
+                    && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"Package worker '{package.Descriptor.PackageId}' did not start within {startupTimeout.TotalSeconds:0.###} seconds.",
+                        exception);
+                }
+                startTask = null;
+                RefreshWorkerMetadata(package.Descriptor.PackageId, package);
             }
 
-            _backgroundServicesStarted = true;
-        }
-        catch (OperationCanceledException exception) when (
-            startupTimeoutCancellation.IsCancellationRequested
-            && !cancellationToken.IsCancellationRequested)
-        {
-            if (startTask is not null && !startTask.IsCompleted)
-            {
-                _ = ObserveAsync(startTask);
-            }
-            await PackageSessionLifecycle.StopBackgroundServicesAsync(
-                attemptedServices.AsEnumerable().Reverse().ToArray(),
-                logger,
-                cleanupTimeout,
-                operationStarted: TrackLifecycleOperation);
-            throw new TimeoutException(
-                $"Package background services did not start within {startupTimeout.TotalSeconds:0.###} seconds.",
-                exception);
+            _workersStarted = true;
         }
         catch
         {
@@ -157,8 +144,8 @@ internal sealed class ActivePackageSession
             {
                 _ = ObserveAsync(startTask);
             }
-            await PackageSessionLifecycle.StopBackgroundServicesAsync(
-                attemptedServices.AsEnumerable().Reverse().ToArray(),
+            await RuntimeWorkerLifecycle.StopWorkersStrictAsync(
+                attemptedWorkers.AsEnumerable().Reverse().ToArray(),
                 logger,
                 cleanupTimeout,
                 operationStarted: TrackLifecycleOperation);
@@ -168,52 +155,108 @@ internal sealed class ActivePackageSession
 
     public IReadOnlyDictionary<string, ActiveLoadedPackage> LoadedPackageMap => _loadedPackageMap;
 
+    public bool SharesPersistentWorkspaceWith(ActivePackageSession candidate)
+    {
+        var activeWorkspaces = _loadedPackageMap.Values
+            .Select(static package => package.Worker.WorkspaceRootPath)
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(static path => Path.GetFullPath(path!))
+            .ToHashSet(PathComparer);
+        return candidate._loadedPackageMap.Values
+            .Select(static package => package.Worker.WorkspaceRootPath)
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(static path => Path.GetFullPath(path!))
+            .Any(activeWorkspaces.Contains);
+    }
+
+    public async Task QuiesceWorkersAsync(
+        ILogger logger,
+        TimeSpan warningTimeout)
+    {
+        if (!_workersStarted)
+        {
+            return;
+        }
+
+        _workersStarted = false;
+        Task[] activationOperations;
+        lock (_lifecycleSync)
+        {
+            activationOperations = _runtimeGenerationActivationOperations.ToArray();
+        }
+        await Task.WhenAll(activationOperations.Select(ObserveAsync)).ConfigureAwait(false);
+        var workers = _loadedPackageMap.Values
+            .Reverse()
+            .Select(package => (package.Descriptor.PackageId, package.Worker))
+            .ToArray();
+        await RuntimeWorkerLifecycle.StopWorkersStrictAsync(
+            workers,
+            logger,
+            warningTimeout,
+            TrackLifecycleOperation).ConfigureAwait(false);
+        Task[] lifecycleOperations;
+        lock (_lifecycleSync)
+        {
+            lifecycleOperations = _lifecycleOperations.ToArray();
+        }
+        await Task.WhenAll(lifecycleOperations.Select(ObserveAsync)).ConfigureAwait(false);
+    }
+
+    public async Task BeginStorageActivationTransactionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_storageActivationTransaction is not null)
+        {
+            throw new InvalidOperationException("The package storage activation transaction is already active.");
+        }
+        _storageActivationTransaction = await PackageStorageActivationTransaction.BeginAsync(
+            _loadedPackageMap.Values.ToArray(),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task CommitRuntimeGenerationAsync(
         long sessionGeneration,
         CancellationToken cancellationToken = default)
     {
-        if (!_backgroundServicesStarted)
+        if (!_workersStarted)
         {
-            throw new InvalidOperationException("Package background services must start before their Runtime generation is committed.");
+            throw new InvalidOperationException("Package workers must start before their Runtime generation is committed.");
         }
         if (_runtimeGenerationCommitted)
         {
             if (_committedSessionGeneration != sessionGeneration)
             {
-                throw new InvalidOperationException("Package background services are already committed to another Runtime generation.");
+                throw new InvalidOperationException("Package workers are already committed to another Runtime generation.");
             }
             return;
         }
         if (_committedSessionGeneration is { } existingGeneration && existingGeneration != sessionGeneration)
         {
-            throw new InvalidOperationException("Package background-service generation commit cannot change session generations after it begins.");
+            throw new InvalidOperationException("Package worker generation commit cannot change session generations after it begins.");
         }
         _committedSessionGeneration = sessionGeneration;
 
         foreach (var package in _loadedPackageMap.Values.ToArray())
         {
-            var generation = new PackageRuntimeGeneration(package.RuntimeActivationId, sessionGeneration);
-            foreach (var participant in package.BackgroundServices.OfType<IPackageRuntimeGenerationParticipant>())
+            var generation = new RuntimePackageGeneration(package.RuntimeActivationId, sessionGeneration);
+            if (_committedRuntimeWorkers.Contains(package.Worker))
             {
-                if (_committedRuntimeGenerationParticipants.Contains(participant))
-                {
-                    continue;
-                }
-                cancellationToken.ThrowIfCancellationRequested();
-                var commitTask = Task.Run(
-                    () => participant.CommitGenerationAsync(generation, cancellationToken),
-                    CancellationToken.None);
-                TrackRuntimeGenerationActivation(commitTask);
-                await commitTask.WaitAsync(cancellationToken);
-                _committedRuntimeGenerationParticipants.Add(participant);
+                continue;
             }
+            cancellationToken.ThrowIfCancellationRequested();
+            var commitTask = Task.Run(
+                () => package.Worker.CommitGenerationAsync(generation, cancellationToken),
+                CancellationToken.None);
+            TrackRuntimeGenerationActivation(commitTask);
+            await commitTask.WaitAsync(cancellationToken);
+            _committedRuntimeWorkers.Add(package.Worker);
         }
 
         _runtimeGenerationCommitted = true;
     }
 
     public void StartRuntimeGenerationMonitoring(
-        Action<string, PackageRuntimeGeneration, Exception> generationFaulted)
+        Action<string, RuntimePackageGeneration, Exception> generationFaulted)
     {
         ArgumentNullException.ThrowIfNull(generationFaulted);
         if (!_runtimeGenerationCommitted || _committedSessionGeneration is not { } sessionGeneration)
@@ -228,43 +271,173 @@ internal sealed class ActivePackageSession
         _runtimeGenerationMonitoringStarted = true;
         foreach (var package in _loadedPackageMap.Values.ToArray())
         {
-            var generation = new PackageRuntimeGeneration(package.RuntimeActivationId, sessionGeneration);
-            foreach (var participant in package.BackgroundServices
-                         .OfType<IPackageRuntimeGenerationParticipant>()
-                         .Where(_committedRuntimeGenerationParticipants.Contains))
+            if (!_committedRuntimeWorkers.Contains(package.Worker))
             {
-                Task completion;
-                try
-                {
-                    completion = participant.GenerationCompletion
-                        ?? Task.FromException(new InvalidOperationException(
-                            "A package Runtime generation participant returned a null completion task."));
-                }
-                catch (Exception exception)
-                {
-                    completion = Task.FromException(exception);
-                }
-                var monitorTask = MonitorRuntimeGenerationAsync(
-                    completion,
-                    package.Descriptor.PackageId,
-                    generation,
-                    generationFaulted);
-                TrackLifecycleOperation(monitorTask);
+                continue;
             }
+            var generation = new RuntimePackageGeneration(package.RuntimeActivationId, sessionGeneration);
+            Task completion;
+            try
+            {
+                completion = package.Worker.GenerationCompletion
+                    ?? Task.FromException(new InvalidOperationException(
+                        "A package worker returned a null generation completion task."));
+            }
+            catch (Exception exception)
+            {
+                completion = Task.FromException(exception);
+            }
+            var monitorTask = MonitorRuntimeGenerationAsync(
+                completion,
+                package.Descriptor.PackageId,
+                generation,
+                generationFaulted);
+            TrackLifecycleOperation(monitorTask);
         }
     }
 
-    public void ActivateCommittedRuntimeGeneration()
+    public async Task ActivateCommittedRuntimeGenerationAsync(
+        CancellationToken cancellationToken = default)
     {
         if (!_runtimeGenerationCommitted)
         {
             throw new InvalidOperationException("The Runtime generation must be committed before process workers are activated.");
         }
-        foreach (var participant in _loadedPackageMap.Values
-                     .SelectMany(static package => package.BackgroundServices)
-                     .OfType<IProcessRuntimeGenerationParticipant>())
+        var sessionGeneration = _committedSessionGeneration
+                                ?? throw new InvalidOperationException(
+                                    "The committed Runtime session generation is unavailable.");
+        var workers = _loadedPackageMap.Values
+            .Select(package => (
+                package.Worker,
+                Generation: new RuntimePackageGeneration(
+                    package.RuntimeActivationId,
+                    sessionGeneration)))
+            .ToArray();
+        foreach (var worker in workers)
         {
-            participant.ActivateGeneration();
+            await worker.Worker.PrepareStorageMigrationsAsync(
+                    worker.Generation,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        _storageActivationTransaction ??= await PackageStorageActivationTransaction.BeginAsync(
+            _loadedPackageMap.Values.ToArray(),
+            cancellationToken).ConfigureAwait(false);
+        await _storageActivationTransaction.ValidateMigrationPlansAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await Task.WhenAll(workers.Select(
+                worker => worker.Worker.ActivateGenerationAsync(cancellationToken)))
+            .ConfigureAwait(false);
+        await _storageActivationTransaction.WriteCompletionsAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public void CompleteStorageMigrations()
+    {
+        var transaction = Interlocked.Exchange(ref _storageActivationTransaction, null);
+        transaction?.Complete();
+    }
+
+    public async Task RollbackStorageMigrationsAsync()
+    {
+        var transaction = Interlocked.Exchange(ref _storageActivationTransaction, null);
+        if (transaction is not null)
+        {
+            await transaction.RollbackAsync().ConfigureAwait(false);
+        }
+    }
+
+    public async Task ApplyDrainingFaultsAsync(
+        IReadOnlyList<DrainingPackageFault> faults,
+        ILogger logger,
+        TimeSpan cleanupTimeout)
+    {
+        foreach (var fault in faults)
+        {
+            if (!MarkPackageFailedInternal(
+                    fault.PackageId,
+                    fault.Origin,
+                    fault.Exception.Message,
+                    out var package)
+                || package is null)
+            {
+                continue;
+            }
+            await RuntimeWorkerLifecycle.StopWorkersStrictAsync(
+                [(fault.PackageId, package.Worker)],
+                logger,
+                cleanupTimeout,
+                TrackLifecycleOperation).ConfigureAwait(false);
+            await DisposeWorkerStrictAsync(
+                fault.PackageId,
+                package.Worker,
+                logger,
+                cleanupTimeout).ConfigureAwait(false);
+        }
+    }
+
+    public async Task RebuildQuiescedWorkersAsync(
+        ILogger logger,
+        TimeSpan cleanupTimeout)
+    {
+        foreach (var packageId in _loadedPackageMap.Keys.ToArray())
+        {
+            var current = _loadedPackageMap[packageId];
+            if (current.RecoveryFactory is null)
+            {
+                if (current.Worker.GenerationCompletion.IsFaulted
+                    || current.Worker.GenerationCompletion.IsCanceled)
+                {
+                    throw new InvalidOperationException(
+                        $"Package '{packageId}' has no recovery factory for its stopped or faulted worker.");
+                }
+                continue;
+            }
+
+            await DisposeWorkerStrictAsync(
+                packageId,
+                current.Worker,
+                logger,
+                cleanupTimeout).ConfigureAwait(false);
+            _loadedPackageMap[packageId] = current.RecoveryFactory();
+        }
+
+        lock (_lifecycleSync)
+        {
+            _lifecycleOperations.Clear();
+            _runtimeGenerationActivationOperations.Clear();
+            _committedRuntimeWorkers.Clear();
+            _runtimeGenerationFaultBeforePublication = null;
+            _runtimeGenerationMonitoringStarted = false;
+            _runtimeGenerationCommitted = false;
+            _committedSessionGeneration = null;
+        }
+        _workersStarted = false;
+        _storageActivationTransaction = null;
+    }
+
+    public void PublishCommittedRuntimeGeneration(Action publish)
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+        lock (_lifecycleSync)
+        {
+            if (_runtimeGenerationFaultBeforePublication is not null)
+            {
+                throw new InvalidOperationException(
+                    "A package Runtime generation faulted before publication.",
+                    _runtimeGenerationFaultBeforePublication);
+            }
+            foreach (var worker in _committedRuntimeWorkers)
+            {
+                var completion = worker.GenerationCompletion
+                                 ?? throw new InvalidOperationException(
+                                     "A package worker returned a null generation completion task.");
+                if (completion.IsFaulted || completion.IsCanceled)
+                {
+                    completion.GetAwaiter().GetResult();
+                }
+            }
+            publish();
         }
     }
 
@@ -275,16 +448,16 @@ internal sealed class ActivePackageSession
 
     public bool OwnsRuntimeGeneration(
         string packageId,
-        PackageRuntimeGeneration generation)
+        RuntimePackageGeneration generation)
         => _runtimeGenerationCommitted
            && _committedSessionGeneration == generation.SessionGeneration
            && OwnsPackageActivation(packageId, generation.ActivationId);
 
-    private static async Task MonitorRuntimeGenerationAsync(
+    private async Task MonitorRuntimeGenerationAsync(
         Task completion,
         string packageId,
-        PackageRuntimeGeneration generation,
-        Action<string, PackageRuntimeGeneration, Exception> generationFaulted)
+        RuntimePackageGeneration generation,
+        Action<string, RuntimePackageGeneration, Exception> generationFaulted)
     {
         try
         {
@@ -292,6 +465,10 @@ internal sealed class ActivePackageSession
         }
         catch (Exception exception)
         {
+            lock (_lifecycleSync)
+            {
+                _runtimeGenerationFaultBeforePublication ??= exception;
+            }
             generationFaulted(packageId, generation, exception);
         }
     }
@@ -385,6 +562,19 @@ internal sealed class ActivePackageSession
         return false;
     }
 
+    internal bool SetRpcReadiness(string packageId, PackageReadinessState readiness)
+    {
+        if (!_sessionPackageMap.TryGetValue(packageId, out var package)
+            || !package.IsEnabled
+            || package.Readiness is not (PackageReadinessState.Ready or PackageReadinessState.Degraded)
+            || package.Readiness == readiness)
+        {
+            return false;
+        }
+        _sessionPackageMap[packageId] = package with { Readiness = readiness };
+        return true;
+    }
+
     public string? TryResolvePackageAssetPath(string packageId, string assetPath)
     {
         if (!_packageSourceMap.TryGetValue(packageId, out var source)
@@ -475,31 +665,29 @@ internal sealed class ActivePackageSession
         return false;
     }
 
-    public async Task StopBackgroundServicesAsync(
+    public async Task StopWorkersAsync(
         ILogger logger,
         TimeSpan cleanupTimeout,
         CancellationToken cancellationToken = default)
     {
-        if (!_backgroundServicesStarted)
+        if (!_workersStarted)
         {
             return;
         }
 
-        _backgroundServicesStarted = false;
+        _workersStarted = false;
         Task[] activationOperations;
         lock (_lifecycleSync)
         {
             activationOperations = _runtimeGenerationActivationOperations.ToArray();
         }
         await Task.WhenAll(activationOperations.Select(ObserveAsync));
-        var backgroundServices = _loadedPackageMap.Values
+        var workers = _loadedPackageMap.Values
             .Reverse()
-            .SelectMany(package => package.BackgroundServices
-                .Reverse()
-                .Select(service => (package.Descriptor.PackageId, service)))
+            .Select(package => (package.Descriptor.PackageId, package.Worker))
             .ToArray();
-        await PackageSessionLifecycle.StopBackgroundServicesAsync(
-            backgroundServices,
+        await RuntimeWorkerLifecycle.StopWorkersAsync(
+            workers,
             logger,
             cleanupTimeout,
             cancellationToken,
@@ -509,18 +697,35 @@ internal sealed class ActivePackageSession
     public Task DisposeAsync()
         => DisposeAsync(DefaultCleanupTimeout);
 
+    internal Task WaitForDisposalCompletionAsync()
+        => GetOrStartDisposal();
+
+    internal void RegisterPostDisposalCleanup(Task cleanup)
+    {
+        ArgumentNullException.ThrowIfNull(cleanup);
+        lock (_lifecycleSync)
+        {
+            _postDisposalCleanupTask = _postDisposalCleanupTask.IsCompletedSuccessfully
+                ? cleanup
+                : Task.WhenAll(_postDisposalCleanupTask, cleanup);
+        }
+    }
+
     public async Task DisposeAsync(TimeSpan cleanupTimeout, CancellationToken cancellationToken = default)
     {
         var cleanup = GetOrStartDisposal();
+        Task operation = cleanup;
         try
         {
             await cleanup.WaitAsync(cleanupTimeout, cancellationToken);
+            lock (_lifecycleSync) operation = _postDisposalCleanupTask;
+            await operation.WaitAsync(cleanupTimeout, cancellationToken);
         }
         catch
         {
-            if (!cleanup.IsCompleted)
+            if (!operation.IsCompleted)
             {
-                _ = ObserveAsync(cleanup);
+                _ = ObserveAsync(operation);
             }
             throw;
         }
@@ -586,6 +791,45 @@ internal sealed class ActivePackageSession
         }
     }
 
+    private async Task DisposeWorkerStrictAsync(
+        string packageId,
+        IRuntimePackageWorker worker,
+        ILogger logger,
+        TimeSpan cleanupTimeout)
+    {
+        var disposal = worker.DisposeAsync().AsTask();
+        TrackLifecycleOperation(disposal);
+        try
+        {
+            await disposal.WaitAsync(cleanupTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Worker disposal for package {PackageId} exceeded its cleanup deadline; the worker remains quarantined",
+                packageId);
+            throw;
+        }
+    }
+
+    private void RefreshWorkerMetadata(string packageId, ActiveLoadedPackage package)
+    {
+        var schema = package.Worker.SettingsSchema;
+        if (package.Settings is PackageSettings settings)
+        {
+            settings.Schema = schema;
+        }
+        _loadedPackageMap[packageId] = package with
+        {
+            SettingsSchema = PackageProtocolMapper.ToProtocolSettingsSchema(
+                package.Descriptor.PackageId,
+                package.Descriptor.DisplayName,
+                schema),
+            CanonicalSettingsSchema = schema,
+        };
+    }
+
     private async Task DisposeCoreAsync()
     {
         List<Exception>? disposeErrors = null;
@@ -594,36 +838,16 @@ internal sealed class ActivePackageSession
         {
             try
             {
-                await DisposeServiceProviderAsync(package.ServiceProvider);
+                await package.Worker.DisposeAsync();
             }
             catch (Exception ex)
             {
                 disposeErrors ??= [];
                 disposeErrors.Add(new InvalidOperationException(
-                    $"Failed to dispose services for package '{package.Descriptor.PackageId}'.",
-                    ex));
-            }
-
-            try
-            {
-                package.LoadContext?.Unload();
-            }
-            catch (Exception ex)
-            {
-                disposeErrors ??= [];
-                disposeErrors.Add(new InvalidOperationException(
-                    $"Failed to unload package load context for '{package.Descriptor.PackageId}'.",
+                    $"Failed to dispose worker for package '{package.Descriptor.PackageId}'.",
                     ex));
             }
         }
-
-        if (_loadedPackageMap.Count > 0)
-        {
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-        }
-
-        SharedAssemblyRegistry?.Dispose();
 
         TryDeleteSessionFolder();
 
@@ -644,21 +868,7 @@ internal sealed class ActivePackageSession
         }
         catch
         {
-            // Native library finalizers may retain a shadow temporarily; stale-session GC retries later.
-        }
-    }
-
-    private static async Task DisposeServiceProviderAsync(IServiceProvider serviceProvider)
-    {
-        if (serviceProvider is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-            return;
-        }
-
-        if (serviceProvider is IDisposable disposable)
-        {
-            disposable.Dispose();
+            // Process teardown may retain a session file briefly; stale-session cleanup retries later.
         }
     }
 
@@ -672,6 +882,10 @@ internal sealed class ActivePackageSession
         {
         }
     }
+
+    private static StringComparer PathComparer { get; } = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
 
     public static ActivePackageDescriptor ToActiveDescriptor(SessionPackageDescriptor package)
         => new(

@@ -7,6 +7,7 @@ internal enum PackageOperationKind
 {
     InstallMarketplace,
     UpdateMarketplace,
+    AdoptRegistrySource,
     UpdateAll,
     InstallLocal,
     Enable,
@@ -210,6 +211,17 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
         string packagePath,
         string expectedSha256,
         bool deleteAfterUse)
+        => EnqueueLocalInstall(
+            packagePath,
+            expectedSha256,
+            deleteAfterUse,
+            capabilityConsent: null);
+
+    public BackgroundProcessSnapshot EnqueueLocalInstall(
+        string packagePath,
+        string expectedSha256,
+        bool deleteAfterUse,
+        PackageCapabilityConsent? capabilityConsent)
     {
         var displayName = Path.GetFileName(packagePath);
         BackgroundProcessSnapshot operation;
@@ -235,7 +247,10 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
                     }
                     var result = await StageCommitPackageStoreAsync(
                         runtimeApiClient,
-                        new PackageStoreStageRequest([new PackageStoreMutationRequest(PackageStoreMutationKind.Install, UploadId: upload.UploadId)]),
+                        new PackageStoreStageRequest([new PackageStoreMutationRequest(
+                            PackageStoreMutationKind.Install,
+                            UploadId: upload.UploadId,
+                            CapabilityConsent: capabilityConsent)]),
                         context.CancellationToken).ConfigureAwait(false);
                     await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package installed", "Package installed from disk.").ConfigureAwait(false);
                 });
@@ -278,6 +293,36 @@ internal sealed class PackageOperationService : IPackageOperationExecutor, IDisp
                     context.CancellationToken).ConfigureAwait(false);
 
                 await _operationFinalizer.FinishRegistryOperationAsync(context, result, "Package updated", $"{packageId} was updated to {version}.").ConfigureAwait(false);
+            });
+    }
+
+    public BackgroundProcessSnapshot EnqueueRegistrySourceAdoption(
+        string packageId,
+        string displayName,
+        Uri registryUrl)
+    {
+        return EnqueuePackageStoreOperation(
+            packageId,
+            displayName,
+            PackageOperationKind.AdoptRegistrySource,
+            $"Adopt Registry source for {displayName}",
+            canCancel: true,
+            async context =>
+            {
+                context.ReportProgress(0, $"Adopting Registry source for {displayName}...");
+                using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
+                var result = await _registryInstallService.AdoptPackageSourceAsync(
+                    packageId,
+                    registryUrl,
+                    runtimeApiClient,
+                    progress => ReportRegistryProgress(context, progress),
+                    context.CancellationToken).ConfigureAwait(false);
+
+                await _operationFinalizer.FinishRegistryOperationAsync(
+                    context,
+                    result,
+                    "Package source adopted",
+                    $"{packageId} was adopted from the Registry and updated.").ConfigureAwait(false);
             });
     }
 

@@ -1,4 +1,6 @@
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Compatibility;
 
 namespace Sunder.Cli;
 
@@ -106,9 +108,40 @@ internal sealed class PackageCommandHandler(
 
     public async Task<int> ExecuteAsync(InstallRegistryPackageCommand command, CancellationToken token)
     {
+        IReadOnlyList<PackageCapabilityConsent>? consents = null;
+        if (command.ApproveSensitiveCapabilities)
+        {
+            var plan = await runtime.ResolveRegistryPackagePlanAsync(
+                ToBatchRequest(command),
+                token).ConfigureAwait(false);
+            if (!plan.Success)
+            {
+                var failed = new RuntimeRegistryPackageChangeResult(
+                    false,
+                    RuntimeRegistryErrorCode.Conflict,
+                    plan.Errors.FirstOrDefault() ?? "Registry package preflight failed.",
+                    false,
+                    false,
+                    plan.Warnings,
+                    plan.Errors,
+                    [],
+                    plan.Items,
+                    plan.RequiredCapabilityConsents);
+                return CliRenderers.RegistryPackageChange(output, failed);
+            }
+            consents = plan.RequiredCapabilityConsents;
+            CliRenderers.CapabilityConsents(output, consents, approved: true);
+        }
         progress.Report("Runtime is resolving and applying the package transaction...");
         var result = await runtime.InstallRegistryPackageAsync(
-            new(options.RequireRegistryApiUrl().AbsoluteUri, command.PackageId, command.Version, command.Tag, AllowDowngrade: command.AllowDowngrade, Reinstall: command.Reinstall),
+            new(
+                options.RequireRegistryApiUrl().AbsoluteUri,
+                command.PackageId,
+                command.Version,
+                command.Tag,
+                AllowDowngrade: command.AllowDowngrade,
+                Reinstall: command.Reinstall,
+                CapabilityConsents: consents),
             token).ConfigureAwait(false);
         return CliRenderers.RegistryPackageChange(output, result);
     }
@@ -118,37 +151,146 @@ internal sealed class PackageCommandHandler(
         var validation = await archives.ValidatePackageAsync(command.File, token).ConfigureAwait(false);
         if (!validation.Success || string.IsNullOrWhiteSpace(validation.Manifest?.Id))
             return CliRenderers.PackageValidation(output, validation);
+        var installed = await runtime.GetInstalledPackagesAsync(token).ConfigureAwait(false);
+        var current = installed.FirstOrDefault(package => string.Equals(
+            package.PackageId,
+            validation.Manifest.Id,
+            StringComparison.OrdinalIgnoreCase));
+        var consent = CreateCapabilityConsent(validation, current);
+        if (consent is not null)
+        {
+            CliRenderers.CapabilityConsents(output, [consent], command.ApproveSensitiveCapabilities);
+            if (!command.ApproveSensitiveCapabilities)
+            {
+                output.Error(
+                    "Sensitive worker capability consent is required. Review the exact package fence above, then rerun with '--approve-sensitive-capabilities'.",
+                    "runtime.registry.consent_required");
+                return CliExitCodes.Conflict;
+            }
+        }
         progress.Report("Uploading the validated package to the Runtime...");
         var result = await runtime.ApplyLocalPackageAsync(
-            Path.GetFullPath(command.File), validation.Manifest.Id, command.AllowDowngrade, command.Reinstall, token).ConfigureAwait(false);
+            Path.GetFullPath(command.File),
+            validation.Manifest.Id,
+            command.AllowDowngrade,
+            command.Reinstall,
+            consent,
+            token).ConfigureAwait(false);
         return CliRenderers.PackageOperation(output, result);
     }
 
     public async Task<int> ExecuteAsync(UpdatePackagesCommand command, CancellationToken token)
     {
+        IReadOnlyList<PackageCapabilityConsent>? consents = null;
+        if (command.ApproveSensitiveCapabilities)
+        {
+            var preview = await runtime.UpdateRegistryPackagesAsync(
+                new RuntimeRegistryUpdateRequest(
+                    command.RegistryOrigin,
+                    command.PackageId,
+                    command.IncludePrerelease,
+                    DryRun: true),
+                token).ConfigureAwait(false);
+            if (!preview.Success)
+            {
+                return CliRenderers.RegistryPackageChange(output, preview);
+            }
+            consents = preview.RequiredCapabilityConsents;
+            CliRenderers.CapabilityConsents(output, consents, approved: true);
+        }
         progress.Report("Runtime is resolving and applying one atomic update transaction...");
         var result = await runtime.UpdateRegistryPackagesAsync(
-            new(command.RegistryOrigin, command.PackageId, command.IncludePrerelease), token).ConfigureAwait(false);
+            new(
+                command.RegistryOrigin,
+                command.PackageId,
+                command.IncludePrerelease,
+                CapabilityConsents: consents),
+            token).ConfigureAwait(false);
         return CliRenderers.RegistryPackageChange(output, result);
     }
 
     public async Task<int> ExecuteAsync(AdoptPackageSourceCommand command, CancellationToken token)
     {
+        IReadOnlyList<PackageCapabilityConsent>? consents = null;
+        if (command.ApproveSensitiveCapabilities && !command.DryRun)
+        {
+            var preview = await runtime.AdoptRegistryPackageSourceAsync(
+                ToAdoptionRequest(command, confirm: false, dryRun: true, capabilityConsents: null),
+                token).ConfigureAwait(false);
+            if (!preview.Success)
+            {
+                return CliRenderers.RegistryPackageChange(output, preview);
+            }
+            consents = preview.RequiredCapabilityConsents;
+            CliRenderers.CapabilityConsents(output, consents, approved: true);
+        }
         progress.Report(command.DryRun
             ? $"Runtime is resolving source adoption for '{command.PackageId}' without applying it..."
             : $"Runtime is adopting the Registry source for '{command.PackageId}'...");
         var result = await runtime.AdoptRegistryPackageSourceAsync(
-            new RuntimeRegistrySourceAdoptionRequest(
-                command.PackageId,
-                command.RegistryOrigin,
-                command.Tag,
-                command.Version,
-                command.IncludePrerelease,
-                command.AllowDowngrade,
-                Confirm: !command.DryRun,
-                DryRun: command.DryRun),
+            ToAdoptionRequest(
+                command,
+                confirm: !command.DryRun,
+                dryRun: command.DryRun,
+                capabilityConsents: consents),
             token).ConfigureAwait(false);
         return CliRenderers.RegistryPackageChange(output, result);
+    }
+
+    private RuntimeRegistryPackageBatchRequest ToBatchRequest(InstallRegistryPackageCommand command)
+        => new(
+            options.RequireRegistryApiUrl().AbsoluteUri,
+            [new RuntimeRegistryPackageChangeRequest(
+                command.PackageId,
+                command.Version,
+                [],
+                command.Version is null ? command.Tag : null)],
+            AllowDowngrade: command.AllowDowngrade,
+            Reinstall: command.Reinstall);
+
+    private static RuntimeRegistrySourceAdoptionRequest ToAdoptionRequest(
+        AdoptPackageSourceCommand command,
+        bool confirm,
+        bool dryRun,
+        IReadOnlyList<PackageCapabilityConsent>? capabilityConsents)
+        => new(
+            command.PackageId,
+            command.RegistryOrigin,
+            command.Tag,
+            command.Version,
+            command.IncludePrerelease,
+            command.AllowDowngrade,
+            Confirm: confirm,
+            DryRun: dryRun,
+            CapabilityConsents: capabilityConsents);
+
+    private static PackageCapabilityConsent? CreateCapabilityConsent(
+        SunderPackageArchiveValidationResult validation,
+        InstalledPackageDescriptor? current)
+    {
+        var manifest = validation.Manifest!;
+        var capabilities = (manifest.Targets ?? [])
+            .Where(static target => target is not null
+                                    && string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
+                                    && string.Equals(target.Kind, SunderPackageFormat.WorkerTargetKind, StringComparison.Ordinal))
+            .SelectMany(static target => target!.RequiredHostCapabilities ?? [])
+            .Where(static capability => string.Equals(capability, SunderSdkCapabilities.DockerEnvironmentV1, StringComparison.Ordinal))
+            .Select(static capability => capability!)
+            .Distinct(StringComparer.Ordinal)
+            .Where(capability => current?.GrantedSensitiveCapabilities.Contains(
+                capability,
+                StringComparer.Ordinal) != true)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (capabilities.Length == 0)
+        {
+            return null;
+        }
+        var manifestSha256 = validation.ContentIndex!.Files!.Single(entry => string.Equals(
+            entry?.Path,
+            SunderPackageFormat.ManifestPath,
+            StringComparison.Ordinal)).Sha256!;
+        return new PackageCapabilityConsent(manifest.Id!, manifest.Version!, manifestSha256, capabilities);
     }
 
     public async Task<int> ExecuteAsync(SetPackageEnabledCommand command, CancellationToken token)

@@ -207,6 +207,10 @@ public sealed partial class PackagesWindowViewModel
     private async Task UpdateSelectedInstalledPackageAsync()
         => await _selectedOperationCommands.UpdateSelectedInstalledPackageAsync();
 
+    [RelayCommand(CanExecute = nameof(CanAdoptSelectedInstalledPackageSource))]
+    private async Task AdoptSelectedInstalledPackageSourceAsync()
+        => await _selectedOperationCommands.AdoptSelectedInstalledPackageSourceAsync();
+
     [RelayCommand(CanExecute = nameof(CanUpdateSelectedMarketplacePackage))]
     private async Task UpdateSelectedMarketplacePackageAsync()
         => await _selectedOperationCommands.UpdateSelectedMarketplacePackageAsync();

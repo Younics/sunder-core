@@ -1,6 +1,6 @@
 # Avalonia Views
 
-> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Avalonia` `1.1.x`, Avalonia 12, package manifest V1, and Runtime protocol revision 5.
+> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Avalonia` `1.1.x`, Avalonia 12, package manifest V3, and Runtime protocol revision 8.
 
 Avalonia UI belongs to the App role. Headless packages should not reference `Sunder.Sdk.Avalonia` or Avalonia.
 
@@ -128,7 +128,7 @@ Sunder App loads `Sunder.Sdk.Avalonia` theme resources and package styles. Packa
 </Border>
 ```
 
-The [compiled quickstart view](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/QuickstartView.axaml) uses these resources.
+The [compiled quickstart view](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/Sunder.Package.Quickstart.App/QuickstartView.axaml) uses these resources.
 
 ### Resource Families
 

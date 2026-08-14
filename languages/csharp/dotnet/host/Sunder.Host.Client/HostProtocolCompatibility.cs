@@ -9,7 +9,8 @@ public static class HostProtocolCompatibility
             handshake,
             HostProtocolFeatures.RuntimeGatewayV1,
             HostProtocolFeatures.RuntimeLifecycleV1,
-            HostProtocolFeatures.DurableOperationsV1);
+            HostProtocolFeatures.DurableOperationsV1,
+            HostProtocolFeatures.RuntimeStartupDiagnosticsV1);
 
     public static string? GetIncompatibility(HostHandshakeResponse? handshake, params string[] requiredFeatures)
     {

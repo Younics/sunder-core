@@ -277,7 +277,6 @@ public sealed class PackageCallbackSessionCoordinatorTests
             "sunder-runtime-host-tests",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDirectory);
-        var assemblyPath = typeof(PackageCallbackSessionCoordinator).Assembly.Location;
         return new ActiveLoadedPackage(
             new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
             new RuntimePackageSource("test.package", PackageSourceKind.Dev, tempDirectory),
@@ -288,18 +287,13 @@ public sealed class PackageCallbackSessionCoordinatorTests
                 null,
                 null,
                 new RestrictedFileMasterKeyProtection()),
-            AuthHandler: null,
-            new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
-            {
-                [handler.CallbackHandlerId] = handler,
-            },
-            BackgroundServices: [],
-            new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageLoadContext(
-                "test.package",
-                assemblyPath,
-                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
-            EmptyTestPackageSettings.Instance);
+            new LocalPackageFileStore(Path.Combine(tempDirectory, "files")),
+            EmptyTestPackageSettings.Instance,
+            new TestRuntimePackageWorker(
+                callbackHandlers: new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [handler.CallbackHandlerId] = handler,
+                }));
     }
 
     private static PackageCallbackServer CreateServer()

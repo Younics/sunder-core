@@ -53,7 +53,7 @@ public sealed class RuntimeAppWebRpcClientTests
                     RuntimeProtocol.MinimumSupportedRevision,
                     RuntimeProtocol.MaximumSupportedRevision,
                     Guid.NewGuid(),
-                    [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AppWebRpcV1],
+                    [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.AppWebRpcV2],
                     new RuntimeProductVersionDiagnostics(
                         "Sunder.Runtime.Host",
                         "Development",

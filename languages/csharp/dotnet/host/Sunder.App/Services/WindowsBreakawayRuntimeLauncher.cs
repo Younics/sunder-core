@@ -60,6 +60,7 @@ internal sealed class WindowsBreakawayRuntimeLauncher : RuntimePersistentLaunche
         using var launchMutex = new Mutex(initiallyOwned: false, _launchMutexName);
         AcquireLaunchMutex(launchMutex, cancellationToken);
         var existingServiceDisplaced = false;
+        var candidateLaunchSubmitted = false;
         try
         {
             var jobHandle = EnsureJobHandle();
@@ -113,6 +114,7 @@ internal sealed class WindowsBreakawayRuntimeLauncher : RuntimePersistentLaunche
             ProcessInformation processInformation;
             try
             {
+                candidateLaunchSubmitted = true;
                 processInformation = CreateProcessInJob(
                     executable,
                     commandLine,
@@ -192,7 +194,9 @@ internal sealed class WindowsBreakawayRuntimeLauncher : RuntimePersistentLaunche
             }
         }
         catch (Exception exception) when (
-            existingServiceDisplaced && exception is not IHostServiceReplacementFailure)
+            existingServiceDisplaced
+            && !candidateLaunchSubmitted
+            && exception is not IHostServiceReplacementFailure)
         {
             throw HostServiceReplacementFailure.Wrap(exception);
         }

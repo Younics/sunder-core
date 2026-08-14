@@ -7,7 +7,7 @@ internal sealed record RuntimeRpcProviderRegistration(
     string ProviderId,
     string ContractId,
     string ContractVersion,
-    string ContractSha256,
+    string DescriptorSha256,
     SunderRpcContractDescriptor Contract,
     ISunderRpcServiceHandler Handler,
     SunderPackageProviderManifest Manifest);

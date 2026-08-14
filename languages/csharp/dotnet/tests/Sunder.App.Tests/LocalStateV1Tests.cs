@@ -41,53 +41,6 @@ public sealed class LocalStateV1Tests
     }
 
     [Fact]
-    public void Startup_cleanup_replaces_known_pre_schema_tester_state()
-    {
-        var root = Path.Combine(CreateTempDirectory(), "app", "v1");
-        var logDirectory = Path.Combine(root, "logs");
-        var workspaceDirectory = Path.Combine(root, "package-workspaces", "agent");
-        Directory.CreateDirectory(logDirectory);
-        Directory.CreateDirectory(workspaceDirectory);
-        File.WriteAllText(Path.Combine(logDirectory, "app.log"), "pre-schema");
-
-        TemporaryV1TesterBootstrapCleanup.EnsureInitialized(root, AppLocalState.EnsureInitialized);
-
-        AssertSchema(Path.Combine(root, "schema.json"), "sunder.app.local-state");
-        Assert.False(File.Exists(Path.Combine(root, "logs", "app.log")));
-        Assert.False(Directory.Exists(Path.Combine(root, "package-workspaces", "agent")));
-        Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(root)!, ".v1.pre-schema-cleanup.*"));
-    }
-
-    [Fact]
-    public void Startup_cleanup_rejects_unknown_pre_schema_content_without_modifying_it()
-    {
-        var root = Path.Combine(CreateTempDirectory(), "app", "v1");
-        Directory.CreateDirectory(root);
-        var unknownPath = Path.Combine(root, "unknown.data");
-        File.WriteAllText(unknownPath, "keep");
-
-        Assert.Throws<InvalidDataException>(
-            () => TemporaryV1TesterBootstrapCleanup.EnsureInitialized(root, AppLocalState.EnsureInitialized));
-
-        Assert.Equal("keep", File.ReadAllText(unknownPath));
-        Assert.False(File.Exists(Path.Combine(root, "schema.json")));
-    }
-
-    [Fact]
-    public async Task Startup_cleanup_serializes_concurrent_initialization()
-    {
-        var root = Path.Combine(CreateTempDirectory(), "app", "v1");
-        Directory.CreateDirectory(Path.Combine(root, "cache", "images"));
-        File.WriteAllText(Path.Combine(root, "cache", "images", "cached.bin"), "pre-schema");
-
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(
-            () => TemporaryV1TesterBootstrapCleanup.EnsureInitialized(root, AppLocalState.EnsureInitialized))));
-
-        AssertSchema(Path.Combine(root, "schema.json"), "sunder.app.local-state");
-        Assert.False(File.Exists(Path.Combine(root, "cache", "images", "cached.bin")));
-    }
-
-    [Fact]
     public async Task Incompatible_metadata_blocks_startup_and_reset_without_deletion()
     {
         var runtimeRoot = Path.Combine(CreateTempDirectory(), "runtime", "v1");

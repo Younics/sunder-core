@@ -76,6 +76,31 @@ internal sealed class RuntimeHealthProbe : IDisposable
     public async Task<bool> IsRuntimeHealthyAsync(Uri runtimeUrl, CancellationToken cancellationToken)
         => await CanConnectAsync(runtimeUrl, cancellationToken);
 
+    internal async Task<HostRuntimeStatus?> TryGetHostStatusAsync(
+        Uri runtimeUrl,
+        CancellationToken cancellationToken)
+    {
+        if (!HasMatchingConnection(runtimeUrl))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(2));
+            return await _hostManagement.GetStatusAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<bool> TryEnsureSupervisedRuntimeStartedAsync(
         Uri runtimeUrl,
         CancellationToken cancellationToken)

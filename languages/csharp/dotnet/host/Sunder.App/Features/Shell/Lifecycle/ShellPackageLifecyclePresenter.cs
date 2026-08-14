@@ -14,7 +14,8 @@ internal sealed class ShellPackageLifecyclePresenter(
     Action<string> setSyncStatusText,
     Action<bool, IReadOnlySet<string>?> rebuildRailCollections,
     Action persistShellState,
-    Action<IReadOnlySet<string>>? removeRetainedPackageViews = null)
+    Action<IReadOnlySet<string>>? removeRetainedPackageViews = null,
+    Action<IReadOnlySet<string>>? refreshPackageMetadata = null)
 {
     public ShellPackageLifecyclePresentation PrepareLifecycleChanges(
         IReadOnlyList<ActivePackageDescriptor> activePackages)
@@ -45,6 +46,27 @@ internal sealed class ShellPackageLifecyclePresenter(
         setSyncStatusText(presentation.Snapshot.SyncStatusText);
         rebuildRailCollections(true, stabilizedViewIds);
         persistShellState();
+    }
+
+    public void ApplyPackageMetadata(IReadOnlyList<ActivePackageDescriptor> activePackages)
+    {
+        var packages = activePackages.ToDictionary(
+            static package => package.PackageId,
+            StringComparer.OrdinalIgnoreCase);
+        var impactedPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (viewId, view) in viewsById.ToArray())
+        {
+            if (packages.TryGetValue(view.PackageId, out var package)
+                && view.Readiness != package.Readiness)
+            {
+                viewsById[viewId] = view with { Readiness = package.Readiness };
+                impactedPackageIds.Add(view.PackageId);
+            }
+        }
+        if (impactedPackageIds.Count > 0)
+        {
+            refreshPackageMetadata?.Invoke(impactedPackageIds);
+        }
     }
 
     public bool RemovePackageViewsFromShell(string packageId)

@@ -181,10 +181,10 @@ jobs:
 
           namespace PackagedBuildSmoke;
 
-          public sealed class PackageModule : ISunderRuntimePackageModule
+          public sealed class PackageModule : ISunderAppPackageModule
           {
-              public void ConfigureRuntimeServices(IServiceCollection services, IPackageContext context) { }
-              public void RegisterRuntimeContributions(ISunderRuntimeContributionRegistry registry, IServiceProvider services) { }
+              public void ConfigureAppServices(IServiceCollection services, IPackageContext context) { }
+              public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services) { }
           }
           '@ | Set-Content -Encoding utf8 $source
 
@@ -232,7 +232,7 @@ jobs:
 
           [assembly: SunderPackage(Id = "test.packaged.worker", Name = "Packaged Worker Smoke")]
 
-          await SunderWorker.RunAsync(new SunderWorkerOptions([]));
+          await SunderWorker.RunAsync(_ => new SunderWorkerOptions([]));
           '@ | Set-Content -Encoding utf8 $workerSource
 
           dotnet restore $workerProject --no-cache --packages $workerPackages --source $feed --source https://api.nuget.org/v3/index.json
@@ -279,8 +279,32 @@ jobs:
       - name: Restore worker Host interoperability test
         run: dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
 
+      - name: Package exact current-RID worker apphost
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $archive = Join-Path $env:RUNNER_TEMP "test.worker.v3.executable.1.0.0.sunderpkg"
+          dotnet msbuild languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV3Executable/WorkerV3Executable.csproj `
+            -t:PackSunderPackage `
+            -p:Configuration=Release `
+            -p:RuntimeIdentifier=${{ matrix.rid }} `
+            -p:ContinuousIntegrationBuild=true `
+            -p:SunderPackageOutputPath=$archive
+
       - name: Build, launch, activate, and stop exact worker apphost
+        env:
+          SUNDER_DOTNET_WORKER_ARCHIVE_PATH: ${{ runner.temp }}/test.worker.v3.executable.1.0.0.sunderpkg
+          SUNDER_WORKER_RELEASE_METRICS_PATH: ${{ github.workspace }}/artifacts/worker-v3/dotnet-worker-${{ matrix.rid }}.json
         run: dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj -c Release --no-restore -p:GeneratePackageOnBuild=false --filter FullyQualifiedName~WorkerSdkPackagedExecutable
+
+      - name: Upload native worker release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-worker-v3-dotnet-evidence-${{ matrix.rid }}
+          path: artifacts/worker-v3/dotnet-worker-${{ matrix.rid }}.json
+          if-no-files-found: error
+          retention-days: 7
 
   storage-tests:
     name: Package storage tests (${{ matrix.os }})

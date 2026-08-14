@@ -82,8 +82,6 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 Guid.NewGuid().ToString("N"));
             try
             {
-                PackageContentIndexer.Write(devPackagePath);
-
                 var stagingValidation = SunderPackageArchiveInspector
                     .ValidateExtractedPackageAsync(devPackagePath)
                     .GetAwaiter()

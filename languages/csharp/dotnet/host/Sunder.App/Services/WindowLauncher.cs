@@ -21,6 +21,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly SunderUpdateService _updateService;
     private readonly BackgroundProcessQueueService _backgroundProcessQueue;
     private readonly PackageOperationService _packageOperationService;
+    private readonly RegistryPackageInstallService _registryPackageInstallService;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task> _waitUntilPackagePresentationAppliedAsync;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>> _waitForPackagePresentationAsync;
     private readonly SettingsWindowFactory _settingsWindowFactory;
@@ -75,11 +76,13 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 : Task.FromResult(PackagePresentationResult.Unavailable(
                     "Sunder is running in the Core Shell without a live Runtime presentation."))
             : runtimeEventSubscription.WaitForPresentationAsync;
+        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageCapabilitiesAsync);
         _packageOperationService = new PackageOperationService(
             _backgroundProcessQueue,
             _runtimeApiClientFactory,
             _waitUntilPackagePresentationAppliedAsync,
             _notificationCenter,
+            registryInstallService: _registryPackageInstallService,
             waitForPresentationAsync: _waitForPackagePresentationAsync);
     }
 
@@ -275,7 +278,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private StacksWindow CreateStacksWindow()
     {
-        var window = _stacksWindowFactory.Create(_waitUntilPackagePresentationAppliedAsync);
+        var window = _stacksWindowFactory.Create(
+            _waitUntilPackagePresentationAppliedAsync,
+            _registryPackageInstallService);
 
         window.Closed += (_, _) =>
         {
@@ -287,6 +292,24 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
         return window;
     }
+
+    private Task<bool> ConfirmPackageCapabilitiesAsync(
+        IReadOnlyList<PackageCapabilityConsent> requirements,
+        CancellationToken cancellationToken)
+        => _uiDispatcher.InvokeAsync(async () =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var owner = (Window?)_packagesWindow
+                        ?? _stacksWindow
+                        ?? (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+            if (owner is null)
+            {
+                return false;
+            }
+            var dialog = new PackageCapabilityConsentWindow(
+                new PackageCapabilityConsentViewModel(requirements));
+            return await dialog.ShowDialog<bool>(owner);
+        }).WaitAsync(cancellationToken);
 
     private DeveloperLogWindow CreateDeveloperLogWindow()
     {
@@ -355,7 +378,40 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 detachAuxiliaryPackageViews: DetachSettingsWindowPackageView).ConfigureAwait(false);
         }
 
+        await ApplyPackagesWindowSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
         await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task ApplyPackageMetadataSnapshotAsync(
+        RuntimePackageSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_mainWindowViewModel is not null)
+        {
+            await _mainWindowViewModel.ApplyPackageMetadataSnapshotAsync(snapshot, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        await ApplyPackagesWindowSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        await RefreshSettingsWindowPackageSectionsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplyPackagesWindowSnapshotAsync(
+        RuntimePackageSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        if (_packagesWindow?.DataContext is not PackagesWindowViewModel viewModel)
+        {
+            return;
+        }
+        if (_uiDispatcher.CheckAccess())
+        {
+            await viewModel.ApplyPackageSnapshotAsync(snapshot, cancellationToken);
+        }
+        else
+        {
+            await _uiDispatcher.InvokeAsync(() => viewModel.ApplyPackageSnapshotAsync(snapshot, cancellationToken));
+        }
     }
 
     private async Task RefreshSettingsWindowPackageSectionsAsync(CancellationToken cancellationToken = default)

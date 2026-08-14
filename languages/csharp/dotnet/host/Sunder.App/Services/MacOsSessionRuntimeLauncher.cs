@@ -12,12 +12,10 @@ namespace Sunder.App.Services;
 internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBase
 {
     private const string DefaultLabel = "dev.sunder.host";
-    private const string LegacyLabel = "dev.sunder.runtime";
     private static readonly TimeSpan ReconciliationTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ReconciliationPollInterval = TimeSpan.FromMilliseconds(50);
     private readonly Func<string, IReadOnlyList<string>, CancellationToken, Task<HostServiceCommandResult>> _runAsync;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
-    private readonly string _legacyLaunchAgentPath;
     private readonly string _launchAgentPath;
     private readonly string _reconciliationLockPath;
     private readonly string _domain;
@@ -26,7 +24,6 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
 
     public MacOsSessionRuntimeLauncher(
         Func<string, IReadOnlyList<string>, CancellationToken, Task<HostServiceCommandResult>>? runAsync = null,
-        string? legacyLaunchAgentPath = null,
         string? launchAgentPath = null,
         uint? userId = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
@@ -34,11 +31,6 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
     {
         _runAsync = runAsync ?? RuntimeLauncherProcess.RunResultAsync;
         _delayAsync = delayAsync ?? Task.Delay;
-        _legacyLaunchAgentPath = legacyLaunchAgentPath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Library",
-            "LaunchAgents",
-            $"{LegacyLabel}.plist");
         _label = string.IsNullOrWhiteSpace(label) ? DefaultLabel : label;
         _launchAgentPath = Path.GetFullPath(launchAgentPath ?? GetDefaultLaunchAgentPath());
         _reconciliationLockPath = $"{_launchAgentPath}.lock";
@@ -57,8 +49,6 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
         ValidateStartInfo(startInfo);
         using var reconciliationLock = await AcquireReconciliationLockAsync(cancellationToken)
             .ConfigureAwait(false);
-        await RemoveLegacyServiceAsync(cancellationToken).ConfigureAwait(false);
-
         var loaded = await IsLoadedAsync(_serviceTarget, cancellationToken).ConfigureAwait(false);
         if (loaded && !replaceExisting)
         {
@@ -74,6 +64,7 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
         }
 
         var previousDefinition = TryReadExistingDefinition();
+        var candidateLaunchSubmitted = false;
         try
         {
             if (loaded)
@@ -94,6 +85,7 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
                     ["enable", _serviceTarget],
                     cancellationToken)
                 .ConfigureAwait(false);
+            candidateLaunchSubmitted = true;
             var bootstrap = await _runAsync(
                     "/bin/launchctl",
                     ["bootstrap", _domain, _launchAgentPath],
@@ -108,7 +100,8 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
         }
         catch (Exception exception)
         {
-            if (!await TryRestoreDefinitionAsync(previousDefinition, loaded).ConfigureAwait(false)
+            if (!candidateLaunchSubmitted
+                && !await TryRestoreDefinitionAsync(previousDefinition, loaded).ConfigureAwait(false)
                 && loaded)
             {
                 throw HostServiceReplacementFailure.Wrap(exception);
@@ -265,33 +258,6 @@ internal sealed class MacOsSessionRuntimeLauncher : RuntimePersistentLauncherBas
             _label,
             processId,
             definitionIdentity);
-    }
-
-    private async Task RemoveLegacyServiceAsync(CancellationToken cancellationToken)
-    {
-        var legacyTarget = $"{_domain}/{LegacyLabel}";
-        if (await IsLoadedAsync(legacyTarget, cancellationToken).ConfigureAwait(false))
-        {
-            await _runAsync(
-                    "/bin/launchctl",
-                    ["bootout", legacyTarget],
-                    cancellationToken)
-                .ConfigureAwait(false);
-            await WaitForAbsentAsync(legacyTarget, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (!File.Exists(_legacyLaunchAgentPath))
-        {
-            return;
-        }
-        var legacyDefinition = new FileInfo(_legacyLaunchAgentPath);
-        if (legacyDefinition.LinkTarget is not null
-            || (legacyDefinition.Attributes & FileAttributes.ReparsePoint) != 0)
-        {
-            AppSessionLog.WriteInfo("Preserved an unsafe legacy Sunder LaunchAgent definition.");
-            return;
-        }
-        File.Delete(_legacyLaunchAgentPath);
     }
 
     private async Task<bool> IsLoadedAsync(string serviceTarget, CancellationToken cancellationToken)

@@ -29,6 +29,9 @@ public sealed partial class RuntimeApiClient
     public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken cancellationToken = default)
         => _management.UpdateRegistryPackagesAsync(request, cancellationToken);
 
+    public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken cancellationToken = default)
+        => _management.AdoptRegistryPackageSourceAsync(request, cancellationToken);
+
     public Task<RegistryPackageStarResponse> SetRegistryPackageStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken = default)
         => _management.SetRegistryPackageStarAsync(request, cancellationToken);
 

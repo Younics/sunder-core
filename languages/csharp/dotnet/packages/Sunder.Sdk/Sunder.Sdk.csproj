@@ -10,7 +10,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk</Title>
-    <Description>Public contracts and abstractions for authoring Sunder packages, including lifecycle, settings, storage, logging, callbacks, authentication, Runtime operations, and package metadata.</Description>
+    <Description>Public contracts and abstractions for authoring Sunder packages, including App lifecycle, settings, storage, logging, callbacks, authentication, RPC, and package metadata.</Description>
     <PackageTags>sunder;package;plugin;sdk;extensions</PackageTags>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>

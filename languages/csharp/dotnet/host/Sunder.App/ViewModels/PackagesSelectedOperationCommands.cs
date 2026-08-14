@@ -89,6 +89,19 @@ internal sealed class PackagesSelectedOperationCommands(
         await operationCommands.UpdateInstalledPackageAsync(update, getSelectedInstalledPackage()?.DisplayName ?? update.PackageId);
     }
 
+    public async Task AdoptSelectedInstalledPackageSourceAsync()
+    {
+        var selectedPackage = getSelectedInstalledPackage();
+        if (selectedPackage?.CanAdoptRegistrySource != true)
+        {
+            return;
+        }
+
+        await operationCommands.AdoptRegistrySourceAsync(
+            selectedPackage.PackageId,
+            selectedPackage.DisplayName);
+    }
+
     public async Task UpdateSelectedMarketplacePackageAsync()
     {
         var selectedPackage = getSelectedMarketplacePackage();

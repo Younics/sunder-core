@@ -41,7 +41,8 @@ internal sealed class PackageStoreStageManager(
                     mutation.ArchiveFilePath ?? string.Empty,
                     selected?.IsEnabled ?? true,
                     cancellationToken,
-                    mutation.Provenance);
+                    mutation.Provenance,
+                    mutation.ConsentManifestSha256);
                 if (!preparation.Success || preparation.Mutation is null)
                 {
                     return FailResult(preparation.Failure
@@ -68,6 +69,24 @@ internal sealed class PackageStoreStageManager(
                     return Fail($"Package '{archive.InstalledRecord.PackageId}' is already installed.");
                 }
 
+                var consentError = PackageSensitiveCapabilityPolicy.AuthorizeCandidate(
+                    archive,
+                    selected,
+                    mutation.CapabilityConsent,
+                    out var capabilityGrants);
+                if (consentError is not null)
+                {
+                    SunderPackageArchiveInstaller.TryDeleteDirectory(archive.StagingPath);
+                    return Fail(consentError);
+                }
+                archive = archive with
+                {
+                    InstalledRecord = archive.InstalledRecord with
+                    {
+                        CapabilityGrants = capabilityGrants,
+                    },
+                };
+
                 if (!prepared.TryAdd(archive.InstalledRecord.PackageId, archive))
                 {
                     SunderPackageArchiveInstaller.TryDeleteDirectory(archive.StagingPath);
@@ -88,7 +107,10 @@ internal sealed class PackageStoreStageManager(
 
                     archive = archive with
                     {
-                        InstalledRecord = archive.InstalledRecord with { IsEnabled = selected!.IsEnabled },
+                        InstalledRecord = archive.InstalledRecord with
+                        {
+                            IsEnabled = selected!.IsEnabled,
+                        },
                     };
                     prepared[archive.InstalledRecord.PackageId] = archive;
                     messages.Add($"Updated package '{archive.InstalledRecord.Name}' from {selected.Version} to {archive.InstalledRecord.Version}.");

@@ -6,9 +6,64 @@ namespace Sunder.Runtime.Host.Infrastructure.Storage;
 
 internal sealed partial class JsonPackageKeyValueStore
 {
+    internal Task<IReadOnlyList<string>> ListPhysicalKeysForMigrationAsync(
+        CancellationToken cancellationToken = default)
+        => _document.ExecuteAsync<IReadOnlyList<string>>(transaction =>
+        {
+            var canonicalContents = transaction.Read();
+            if (canonicalContents is null) return [];
+
+            var sourceContents = canonicalContents;
+            StorageFailureMarker? marker = null;
+            try
+            {
+                marker = TryReadMarker(canonicalContents);
+                if (marker is not null)
+                {
+                    if (!string.Equals(marker.FailureKind, "structural-corruption", StringComparison.Ordinal)
+                        || !string.Equals(marker.QuarantineProtection, "opaque-copy", StringComparison.Ordinal))
+                    {
+                        throw CreateRecoveryException(canonicalContents, transaction.FilePath);
+                    }
+                    sourceContents = transaction.ReadRecoveryQuarantine(marker);
+                }
+                return _serializer.Deserialize(
+                        sourceContents,
+                        transaction.FilePath,
+                        enforcePackageKeyValidation: false)
+                    .Values.Keys
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch (PackageStorageRecoveryRequiredException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (PackageStorageExceptionClassifier.IsStructural(exception))
+            {
+                if (marker is not null)
+                {
+                    throw CreateRecoveryException(canonicalContents, transaction.FilePath);
+                }
+                throw FailClosed(transaction, canonicalContents, "structural-corruption", exception);
+            }
+        }, cancellationToken);
+
     public Task MigrateKeysAsync(
         IReadOnlyList<PackageStorageKeyMigration> migrations,
         CancellationToken cancellationToken = default)
+        => MigrateKeysCoreAsync(migrations, expectedPhysicalKeys: null, cancellationToken);
+
+    internal Task MigrateKeysAsync(
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
+        IReadOnlyList<string> expectedPhysicalKeys,
+        CancellationToken cancellationToken = default)
+        => MigrateKeysCoreAsync(migrations, expectedPhysicalKeys, cancellationToken);
+
+    private Task MigrateKeysCoreAsync(
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
+        IReadOnlyList<string>? expectedPhysicalKeys,
+        CancellationToken cancellationToken)
     {
         PackageStorageKeyMigrationEngine.ValidateRules(migrations);
         return _document.ExecuteAsync(transaction =>
@@ -38,6 +93,9 @@ internal sealed partial class JsonPackageKeyValueStore
                     sourceContents,
                     transaction.FilePath,
                     enforcePackageKeyValidation: false);
+                PackageStorageKeyMigrationEngine.EnsurePhysicalKeysUnchanged(
+                    state.Values.Keys,
+                    expectedPhysicalKeys);
                 var result = PackageStorageKeyMigrationEngine.Apply(state.Values, migrations);
                 if (!result.Changed)
                 {
@@ -97,9 +155,101 @@ internal sealed partial class JsonPackageKeyValueStore
 
 internal sealed partial class JsonPackageSecretsStore
 {
+    internal Task<IReadOnlyList<string>> ListPhysicalKeysForMigrationAsync(
+        CancellationToken cancellationToken = default)
+        => _document.ExecuteAsync<IReadOnlyList<string>>(transaction =>
+        {
+            var canonicalContents = transaction.Read();
+            if (canonicalContents is null) return [];
+
+            byte[]? retainedContents = null;
+            byte[]? encryptedDocumentContents = null;
+            EncryptedPackageSecrets? retainedEncrypted = null;
+            EncryptedPackageSecrets? encrypted = null;
+            byte[]? plaintext = null;
+            StorageFailureMarker? marker = null;
+            try
+            {
+                marker = TryReadSecretsMarker(canonicalContents);
+                encryptedDocumentContents = canonicalContents;
+                if (marker is not null)
+                {
+                    if (!string.Equals(marker.FailureKind, "structural-corruption", StringComparison.Ordinal)
+                        || marker.QuarantineProtection is not ("aes-gcm-master-key" or "restricted-raw"))
+                    {
+                        throw CreateSecretsRecoveryException(canonicalContents, transaction.FilePath);
+                    }
+                    retainedContents = transaction.ReadRecoveryQuarantine(marker);
+                    if (string.Equals(marker.QuarantineProtection, "aes-gcm-master-key", StringComparison.Ordinal))
+                    {
+                        retainedEncrypted = _serializer.DeserializeQuarantine(retainedContents);
+                        encryptedDocumentContents = _encryption.DecryptQuarantine(retainedEncrypted);
+                    }
+                    else
+                    {
+                        encryptedDocumentContents = retainedContents;
+                    }
+                }
+
+                encrypted = _serializer.DeserializeEncrypted(encryptedDocumentContents, transaction.FilePath);
+                plaintext = _encryption.Decrypt(encrypted);
+                return new PackageSecretsSerializer(enforcePackageKeyValidation: false)
+                    .DeserializePlaintext(plaintext)
+                    .Values.Keys
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch (PackageStorageRecoveryRequiredException)
+            {
+                throw;
+            }
+            catch (CryptographicException exception)
+            {
+                if (marker is not null)
+                {
+                    throw CreateSecretsRecoveryException(canonicalContents, transaction.FilePath);
+                }
+                throw FailClosed(transaction, canonicalContents, "authentication-failure", exception);
+            }
+            catch (Exception exception) when (PackageStorageExceptionClassifier.IsStructural(exception))
+            {
+                if (marker is not null)
+                {
+                    throw CreateSecretsRecoveryException(canonicalContents, transaction.FilePath);
+                }
+                throw FailClosed(transaction, canonicalContents, "structural-corruption", exception);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(canonicalContents);
+                if (retainedContents is not null) CryptographicOperations.ZeroMemory(retainedContents);
+                if (encryptedDocumentContents is not null
+                    && !ReferenceEquals(encryptedDocumentContents, canonicalContents)
+                    && !ReferenceEquals(encryptedDocumentContents, retainedContents))
+                {
+                    CryptographicOperations.ZeroMemory(encryptedDocumentContents);
+                }
+                if (retainedEncrypted is not null) PackageSecretsEncryption.Zero(retainedEncrypted);
+                if (encrypted is not null) PackageSecretsEncryption.Zero(encrypted);
+                if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }, cancellationToken);
+
     public Task MigrateKeysAsync(
         IReadOnlyList<PackageStorageKeyMigration> migrations,
         CancellationToken cancellationToken = default)
+        => MigrateKeysCoreAsync(migrations, expectedPhysicalKeys: null, cancellationToken);
+
+    internal Task MigrateKeysAsync(
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
+        IReadOnlyList<string> expectedPhysicalKeys,
+        CancellationToken cancellationToken = default)
+        => MigrateKeysCoreAsync(migrations, expectedPhysicalKeys, cancellationToken);
+
+    private Task MigrateKeysCoreAsync(
+        IReadOnlyList<PackageStorageKeyMigration> migrations,
+        IReadOnlyList<string>? expectedPhysicalKeys,
+        CancellationToken cancellationToken)
     {
         PackageStorageKeyMigrationEngine.ValidateRules(migrations);
         return _document.ExecuteAsync(transaction =>
@@ -144,6 +294,9 @@ internal sealed partial class JsonPackageSecretsStore
                 plaintext = _encryption.Decrypt(encrypted);
                 var unvalidatedSerializer = new PackageSecretsSerializer(enforcePackageKeyValidation: false);
                 var secrets = unvalidatedSerializer.DeserializePlaintext(plaintext);
+                PackageStorageKeyMigrationEngine.EnsurePhysicalKeysUnchanged(
+                    secrets.Values.Keys,
+                    expectedPhysicalKeys);
                 var result = PackageStorageKeyMigrationEngine.Apply(secrets.Values, migrations);
                 if (!result.Changed)
                 {
@@ -237,6 +390,18 @@ internal sealed partial class JsonPackageSecretsStore
 
 internal static class PackageStorageKeyMigrationEngine
 {
+    internal static void EnsurePhysicalKeysUnchanged(
+        IEnumerable<string> currentKeys,
+        IReadOnlyList<string>? expectedKeys)
+    {
+        if (expectedKeys is null) return;
+        if (!currentKeys.Order(StringComparer.Ordinal).SequenceEqual(expectedKeys, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Package storage keys changed while a dynamic migration was being resolved.");
+        }
+    }
+
     internal static void ValidateRules(IReadOnlyList<PackageStorageKeyMigration>? migrations)
     {
         ArgumentNullException.ThrowIfNull(migrations);

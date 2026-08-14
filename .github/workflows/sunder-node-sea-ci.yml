@@ -79,6 +79,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: languages/typescript/node/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
       - name: Install exact packageManager npm
         env:
           NPM_VERSION: ${{ needs.typescript.outputs.npm_version }}
@@ -92,10 +95,25 @@ jobs:
         run: npm run sea:build -- --rid ${{ matrix.rid }} --allow-unsigned-windows
       - name: Native protocol-handshake smoke
         run: npm run sea:smoke -- --rid ${{ matrix.rid }}
+      - name: Package exact current-RID SEA leaf
+        run: npm run sea:package -- --discovery-root fixtures/sea-smoke/dist/targets --leaf fixtures/sea-smoke/dist/targets/${{ matrix.rid }}
+      - name: Restore Runtime Host interoperability tests
+        run: dotnet restore ../../csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
+      - name: Run exact SEA through the real Runtime Host
+        env:
+          SUNDER_NODE_SEA_PACKAGE_PATH: ${{ github.workspace }}/languages/typescript/node/fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
+          SUNDER_NODE_SEA_LEAF_PATH: ${{ github.workspace }}/languages/typescript/node/fixtures/sea-smoke/dist/targets/${{ matrix.rid }}
+          SUNDER_WORKER_RELEASE_METRICS_PATH: ${{ github.workspace }}/artifacts/worker-v3/node-sea-${{ matrix.rid }}.json
+        run: dotnet test ../../csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~CrossLanguageWorkerRuntimeHostTests --disable-build-servers
       - uses: actions/upload-artifact@v4
         with:
           name: sunder-sea-leaf-${{ matrix.rid }}
           path: languages/typescript/node/fixtures/sea-smoke/dist/targets/${{ matrix.rid }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sunder-worker-v3-node-sea-evidence-${{ matrix.rid }}
+          path: artifacts/worker-v3/node-sea-${{ matrix.rid }}.json
           if-no-files-found: error
 
   universal-package:
@@ -138,7 +156,7 @@ jobs:
           for rid in win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64; do
             args+=(--leaf "$PWD/artifacts/sea-leaves/sunder-sea-leaf-$rid")
           done
-          node packages/package-tool/dist/cli.js package --project fixtures/sea-smoke "${args[@]}"
+          node packages/package-tool/dist/cli.js package --project fixtures/sea-smoke --discovery-root "$PWD/artifacts/sea-leaves" "${args[@]}"
           unzip -t fixtures/sea-smoke/dist/sunder.sea.smoke.1.0.0.sunderpkg
       - name: Validate universal package with .NET inspector
         env:

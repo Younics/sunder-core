@@ -47,7 +47,8 @@ internal sealed class AppWebPackageAdapter(
                 cancellationToken).ConfigureAwait(false);
             var contracts = AppWebRpcContractCatalog.Load(
                 preparedSource.Folder,
-                preparedSource.Manifest);
+                preparedSource.Manifest,
+                preparedSource.ContentIndex);
             var manifestPath = Path.Combine(
                 preparedSource.Folder,
                 SunderPackageFormat.ManifestPath.Replace('/', Path.DirectorySeparatorChar));

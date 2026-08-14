@@ -25,12 +25,26 @@ internal interface IPackageOperationExecutor
         string displayName,
         string version);
 
+    BackgroundProcessSnapshot EnqueueRegistrySourceAdoption(
+        string packageId,
+        string displayName,
+        Uri registryUrl);
+
     BackgroundProcessSnapshot EnqueueUpdateAll();
 
     BackgroundProcessSnapshot EnqueueLocalInstall(
         string packagePath,
         string expectedSha256,
         bool deleteAfterUse);
+
+    BackgroundProcessSnapshot EnqueueLocalInstall(
+        string packagePath,
+        string expectedSha256,
+        bool deleteAfterUse,
+        PackageCapabilityConsent? capabilityConsent)
+        => capabilityConsent is null
+            ? EnqueueLocalInstall(packagePath, expectedSha256, deleteAfterUse)
+            : throw new NotSupportedException("This package operation test executor does not support sensitive capability consent.");
 
     BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName);
 

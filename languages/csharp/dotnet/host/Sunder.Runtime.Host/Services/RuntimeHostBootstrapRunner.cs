@@ -28,7 +28,7 @@ internal static class RuntimeHostBootstrapRunner
             var details = result.Errors.Count > 0
                 ? string.Join(Environment.NewLine, result.Errors)
                 : result.Message ?? "The Runtime rejected the startup packages.";
-            sessions.MarkFailed(details, result.Warnings, result.Errors);
+            sessions.MarkFailed(RuntimeErrorCodes.PackageValidation, details, result.Warnings, result.Errors);
             app.Logger.LogError("Runtime package bootstrap failed: {Details}", details);
         }
         catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
@@ -40,7 +40,7 @@ internal static class RuntimeHostBootstrapRunner
         }
         catch (Exception exception)
         {
-            sessions.MarkFailed(exception.Message, errors: [exception.Message]);
+            sessions.MarkFailed(RuntimeErrorCodes.Internal, exception.Message, errors: [exception.Message]);
             app.Logger.LogError(exception, "Runtime package bootstrap failed");
         }
     }

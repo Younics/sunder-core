@@ -1,6 +1,6 @@
 # Data And Logging
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 5.
+> **Applies to:** Sunder SDK `1.1.x`, package manifest V3, .NET 10, and Runtime protocol revision 8.
 
 Sunder separates user settings, opaque state, files, local-path workspaces, secrets, and logs. Choose the narrowest capability that matches the data.
 
@@ -68,22 +68,29 @@ State and file APIs are thread-safe. Mutations are atomic: cancellation before c
 
 ### Migrating Legacy Keys
 
-Runtime state and secret stores also implement `IPackageStorageKeyMigrator`. At package startup, before ordinary access to a store, declare all legacy physical-key shapes owned by that package:
+Worker V3 runs declared state and secret migrations automatically before activation. Declare every legacy physical-key shape in the immutable worker options:
 
 ```csharp
-var migrator = context.Storage.State as IPackageStorageKeyMigrator
-    ?? throw new NotSupportedException("Package storage migration is unavailable.");
-
-await migrator.MigrateKeysAsync(
-[
-    PackageStorageKeyMigration.OpaqueId(
-        "workspace-bindings:",
-        ":config",
-        "workspace-bindings.config",
-        destinationVersion: 2),
-    PackageStorageKeyMigration.Exact("docker.images:v1", "docker.images.v1"),
-], cancellationToken);
+return new SunderWorkerOptions(providers)
+{
+    StateMigrations =
+    [
+        PackageStorageKeyMigration.OpaqueId(
+            "workspace-bindings:",
+            ":config",
+            "workspace-bindings.config",
+            destinationVersion: 2),
+        PackageStorageKeyMigration.Exact("docker.images:v1", "docker.images.v1"),
+    ],
+    OnBeforeStorageMigrations = async (preparation, cancellationToken) =>
+    {
+        var liveKeys = await preparation.ListStateKeysAsync("workspace-bindings.", cancellationToken);
+        // Derive in-memory routing for DynamicCleanup without mutating persistent data.
+    },
+};
 ```
+
+`OnBeforeStorageMigrations` receives the exact committed activation and session generation plus read-only `GetStateValueAsync`, `ContainsStateKeyAsync`, and `ListStateKeysAsync` operations. It runs after every process commits but before any declared migration or activation callback. Normal state access, all mutations, settings, files, secrets, and RPC remain unavailable during this barrier.
 
 `OpaqueId` extracts the exact non-empty text between the legacy prefix and suffix, then derives the destination with `PackageStorageKeyFactory`. `Exact` handles fixed legacy keys. Rules and matching use ordinal comparison. `DynamicCleanup` is reserved for bounded package-owned key grammars where deleted entities or crash leftovers cannot be enumerated from live metadata. Its key-only resolver must return `NoMatch` for anything outside that grammar, `Delete` for recognized obsolete entries, or `Rewrite` for a current destination.
 
@@ -99,29 +106,32 @@ App and Runtime workspace roots are different and never cross host APIs. The roo
 
 ## Settings
 
-Managed Runtime modules register at most one schema through their contribution registry:
+Worker V3 advertises at most one schema through its immutable options:
 
 ```csharp
-registry.RegisterSettingsSchema(new PackageSettingsSchema(
-    summary: "Quickstart settings.",
-    sections:
-    [
-        new PackageSettingsSection(
-            sectionId: "general",
-            title: "General",
-            description: null,
-            fields:
-            [
-                new PackageSettingsField(
-                    key: "greeting.enabled",
-                    label: "Enable greeting",
-                    kind: PackageSettingsFieldKind.Boolean,
-                    defaultValue: "true")
-            ])
-    ]));
+return new SunderWorkerOptions(providers)
+{
+    SettingsSchema = new PackageSettingsSchema(
+        summary: "Quickstart settings.",
+        sections:
+        [
+            new PackageSettingsSection(
+                sectionId: "general",
+                title: "General",
+                description: null,
+                fields:
+                [
+                    new PackageSettingsField(
+                        key: "greeting.enabled",
+                        label: "Enable greeting",
+                        kind: PackageSettingsFieldKind.Boolean,
+                        defaultValue: "true")
+                ])
+        ])
+};
 ```
 
-Worker V2 targets instead assign the same `PackageSettingsSchema` to `SunderWorkerV2Options.SettingsSchema` in the configuration callback passed to `SunderWorkerV2.RunAsync`. The schema is advertised with the worker's immutable composition and cannot change after `worker.ready`; no Runtime module or `RegisterSettingsSchema` call is used in the worker process.
+The schema is advertised with the worker's immutable composition and cannot change after `worker.ready`.
 
 Package id and display name come from the activating manifest. A schema must have at least one section; every section must have at least one field. Section ids and field keys use the portable key grammar. Section ids are unique, and field keys are unique across the entire schema, using ordinal case-sensitive comparison.
 
@@ -167,7 +177,7 @@ await context.Logging.Events.InformationAsync(
     cancellationToken);
 ```
 
-Runtime writes separate daily `runtime-YYYY-MM-DD.log` and `events-YYYY-MM-DD.log` files and retains seven days by default. Logging is thread-safe and best effort: an I/O failure disables that writer rather than failing package activation or execution. Worker V2 routes both logging APIs through a dedicated bounded Host-call lane, drains lifecycle logs before shutdown acknowledgement, and bounds each entry to 64 scalar attributes and five exception entries. Managed modules and Worker V1 have no per-file or aggregate package-log quota, so every package should still avoid high-volume loops.
+Runtime writes separate daily `runtime-YYYY-MM-DD.log` and `events-YYYY-MM-DD.log` files and retains seven days by default. Logging is thread-safe and best effort: an I/O failure disables that writer rather than failing package activation or execution. Worker V3 routes both logging APIs through a dedicated bounded Host-call lane, drains lifecycle logs before shutdown acknowledgement, and bounds each entry to 64 scalar attributes and five exception entries. Packages should still avoid high-volume loops.
 
 Runtime structured attribute values are redacted when the attribute key contains a normalized sensitive fragment such as `apikey`, `authorization`, `cookie`, `password`, `refresh`, `secret`, or `token`. This heuristic does not sanitize messages, exception text/stack traces, event names, categories, or unknown sensitive keys. Never rely on it as a secret boundary.
 
@@ -195,7 +205,7 @@ Oversized/truncated entries are marked. Runtime discovers and tails files; App n
 | Null required argument | `ArgumentNullException`. |
 | Invalid key, prefix, path, value, settings value, unreadable write stream, or oversized write | `ArgumentException`. |
 | Existing/returned file exceeds 16 MiB or Runtime returns contract-invalid data | `InvalidDataException`. |
-| Host filesystem failure | `IOException` or `UnauthorizedAccessException` in managed Runtime code; a sanitized `unavailable` RPC error in Worker V2. |
+| Host filesystem failure | A sanitized `unavailable` Worker RPC error. |
 | Cancellation before commit/read completion | `OperationCanceledException`. |
 | Undeclared/secret setting or required setting deletion | `ArgumentException` with the setting reason. |
 | Runtime-backed App data unavailable | Authenticated Runtime request failure; do not assume an App-local fallback. |

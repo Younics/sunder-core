@@ -5,24 +5,23 @@ namespace Sunder.Runtime.Contracts;
 public static class RuntimeProtocol
 {
     public const string Identity = "dev.sunder.runtime";
-    public const int CurrentRevision = 5;
-    public const int MinimumSupportedRevision = 5;
-    public const int MaximumSupportedRevision = 5;
+    public const int CurrentRevision = 8;
+    public const int MinimumSupportedRevision = 8;
+    public const int MaximumSupportedRevision = 8;
 }
 
 public static class RuntimeProtocolFeatures
 {
     public const string VersionedApiV1 = "api.v1";
-    public const string PackageRuntimeOperationsV1 = "package-runtime-operations.v1";
-    public const string PackageRuntimeStreamEnvelopesV1 = "package-runtime-stream-envelopes.v1";
     public const string PackageSessionDrainingV1 = "package-session-draining.v1";
     public const string AtomicPackageSnapshotV1 = "atomic-package-snapshot.v1";
     public const string PackageStageStatusV1 = "package-stage-status.v1";
     public const string DevPackageOwnerLeasesV1 = "dev-package-owner-leases.v1";
     public const string TargetAwarePackageSnapshotsV1 = "target-aware-package-snapshots.v1";
-    public const string SchemaFirstRpcV1 = "schema-first-rpc.v1";
-    public const string RpcPermissionsV1 = "rpc-permissions.v1";
-    public const string AppWebRpcV1 = "app-web-rpc.v1";
+    public const string StartupDiagnosticsV1 = "startup-diagnostics.v1";
+    public const string SchemaFirstRpcV2 = "schema-first-rpc.v2";
+    public const string RpcPermissionsV2 = "rpc-permissions.v2";
+    public const string AppWebRpcV2 = "app-web-rpc.v2";
 }
 
 public sealed record RuntimeProductVersionDiagnostics(
@@ -48,12 +47,3 @@ public sealed record RuntimeHandshakeResponse(
         init => _supportedFeatures = RuntimeContractCollections.Freeze(value);
     }
 }
-
-public static class PackageRuntimeStreamFrameTypes
-{
-    public const string Event = "event";
-    public const string Completed = "completed";
-    public const string Error = "error";
-}
-
-public sealed record PackageRuntimeStreamError(string Code, string Message);

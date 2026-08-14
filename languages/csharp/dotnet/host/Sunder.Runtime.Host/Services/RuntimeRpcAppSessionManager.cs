@@ -10,6 +10,7 @@ internal interface IRuntimeRpcCallerActivation
 {
     string PackageId { get; }
     string PackageVersion { get; }
+    string Role { get; }
     string ManifestSha256 { get; }
     PackageSourceKind? SourceKind { get; }
     IReadOnlyDictionary<string, SunderRpcContractDescriptor> RpcContracts { get; }
@@ -258,6 +259,7 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
     public string SessionId { get; set; } = string.Empty;
     public string PackageId { get; }
     public string PackageVersion { get; }
+    public string Role => SunderPackageFormat.AppHostRole;
     public string ManifestSha256 { get; }
     public PackageSourceKind? SourceKind => _source.Kind;
     public IReadOnlyDictionary<string, SunderRpcContractDescriptor> RpcContracts { get; }
@@ -356,7 +358,7 @@ internal static class RuntimeRpcPackageMetadata
                     out var physicalPath,
                     out _)
                 || !indexedFiles.TryGetValue(physicalPath.ToString(), out var indexed)
-                || !string.Equals(indexed.Sha256, bundle.Sha256, StringComparison.Ordinal))
+                || indexed is null)
             {
                 throw new InvalidDataException("Package RPC contract metadata is invalid.");
             }
@@ -367,18 +369,45 @@ internal static class RuntimeRpcPackageMetadata
             }
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
             var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            var descriptor = SunderRpcContractDescriptor.Parse(bytes);
-            if (!string.Equals(hash, bundle.Sha256, StringComparison.Ordinal)
-                || !string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal)
-                || !string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal)
-                || !string.Equals(descriptor.Sha256, bundle.Sha256, StringComparison.Ordinal))
+            if (indexed.Size != bytes.LongLength
+                || !string.Equals(hash, indexed.Sha256, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
-                    $"Package RPC contract descriptor '{relativePath}' failed its identity fence.");
+                    $"Package RPC contract descriptor '{relativePath}' failed its content-index integrity check.");
             }
+            var descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            ValidateContractDescriptor(bundle, descriptor, relativePath.ToString());
             contracts.Add(PackageSessionPreparer.ContractKey(descriptor.ContractId, descriptor.Version), descriptor);
         }
         return contracts;
+    }
+
+    internal static void ValidateContractDescriptor(
+        SunderPackageContractBundleManifest bundle,
+        SunderRpcContractDescriptor descriptor,
+        string descriptorPath)
+    {
+        if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2)
+        {
+            throw new InvalidDataException(
+                $"Package RPC contract descriptor '{descriptorPath}' must use descriptorVersion {SunderRpcProtocol.DescriptorVersionV2}.");
+        }
+        if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal)
+            || !string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Package RPC contract descriptor '{descriptorPath}' failed its exact contract identity fence.");
+        }
+        if (!string.Equals(descriptor.Sha256, bundle.DescriptorSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Package RPC contract descriptor '{descriptorPath}' failed its descriptorSha256 fence.");
+        }
+        if (!string.Equals(descriptor.AbiSha256, bundle.AbiSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Package RPC contract descriptor '{descriptorPath}' failed its abiSha256 fence.");
+        }
     }
 
     public static bool TargetEquals(PackageTargetDescriptor left, PackageTargetDescriptor right)

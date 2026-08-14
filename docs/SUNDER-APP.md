@@ -122,7 +122,7 @@ When `--dev-package` is used:
 2. Runtime boots its installed package set independently of App startup arguments.
 3. After connecting to the warm Runtime, the App acquires an invocation-owned dev lease and atomically replaces that owner's complete folder/watch set before fetching its initial package snapshot.
 4. The runtime host shadow-materializes and validates the selected Runtime package content.
-5. The runtime host activates each selected Runtime target by loading a managed module or starting a supervised worker process, including exact Worker V2 targets, and reports active descriptors.
+5. The runtime host activates each selected Runtime target by loading a managed module or starting a supervised worker process, including exact Worker V3 targets, and reports active descriptors.
 6. The app downloads generation-scoped package UI snapshots without inspecting the dev directories.
 7. The app activates app-side package modules and registers package UI contributions.
 
@@ -212,12 +212,15 @@ Current package UI actions include:
 - install from Registry
 - install local `.sunderpkg` files
 - update installed packages
+- explicitly adopt a Registry source for an unmanaged installed package
 - enable installed packages
 - disable installed packages
 - uninstall installed packages
 - inspect package readiness and faults
 
-Registry browsing uses remote Registry APIs. Local installed state always comes from `Sunder.Runtime.Host`.
+Registry browsing uses remote Registry APIs. Local installed state always comes from `Sunder.Runtime.Host`. Marketplace search and version details remain historical inspection calls. Install, update, Stack preview, and dependency resolution delegate to Runtime, which supplies its own bounded Manifest V3 and Worker V3 Registry compatibility profile with the current exact RID; the App does not author or override that profile.
+
+Current unmanaged packages retain their explicit provenance, including `Unknown`; Sunder never guesses that local bytes came from the configured Registry. Select **Adopt source & update** to explicitly bind an unmanaged package to that Registry's `latest` tag. Dependency planning may replace related packages together, but source adoption remains explicit.
 
 ## Build Output Locks
 

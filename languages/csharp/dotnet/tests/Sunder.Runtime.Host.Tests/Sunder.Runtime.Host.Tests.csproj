@@ -10,13 +10,16 @@
     <ProjectReference Include="..\..\host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj"
                       ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerExecutable\WorkerExecutable.csproj"
+    <ProjectReference Include="..\Sunder.Runtime.Host.InteropWorker\Sunder.Runtime.Host.InteropWorker.csproj"
                       ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV2Executable\WorkerV2Executable.csproj"
+    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV3Executable\WorkerV3Executable.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\..\specs\worker\v3\conformance\corpus.json"
+          Link="WorkerV3Conformance\corpus.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

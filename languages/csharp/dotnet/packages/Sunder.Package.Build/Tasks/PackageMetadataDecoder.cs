@@ -47,7 +47,7 @@ internal sealed class PackageMetadataDecoder(
 
             var packageAttribute = packageAttributes[0];
             var moduleShape = PackageModuleShapeReader.Read(assemblyPath);
-            var moduleShapeErrors = moduleShape.Validate();
+            var moduleShapeErrors = moduleShape.Validate(PackageHostRoleMetadataValue.App);
             if (moduleShapeErrors.Count > 0)
             {
                 foreach (var error in moduleShapeErrors)
@@ -61,7 +61,7 @@ internal sealed class PackageMetadataDecoder(
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Name)) ?? string.Empty,
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Summary)),
                 GetNamedString(packageAttribute, nameof(SunderPackageAttribute.Icon)),
-                PackageHostRoleMetadata.ToImplementedRoles(moduleShape.Roles),
+                PackageHostRoleMetadata.ToImplementedRoles(moduleShape.Roles & PackageHostRoleMetadataValue.App),
                 dependencyExtractor.Extract(attributes),
                 capabilityInference.Infer(assemblyPath));
         }

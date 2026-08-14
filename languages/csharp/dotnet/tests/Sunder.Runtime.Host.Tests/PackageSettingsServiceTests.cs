@@ -117,21 +117,6 @@ public sealed class PackageSettingsServiceTests
     }
 
     [Fact]
-    public void RuntimeContributionRegistry_RejectsMultipleSettingsSchemas()
-    {
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var registry = new RuntimePackageContributionRegistry(
-            services,
-            "test.package");
-        registry.RegisterSettingsSchema(CreateSdkSchema());
-
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => registry.RegisterSettingsSchema(CreateSdkSchema()));
-
-        Assert.Contains("more than one settings schema", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void CanonicalSettingsField_RejectsInvalidKindAtConstruction()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new Sunder.Sdk.Settings.PackageSettingsField(
@@ -261,22 +246,15 @@ public sealed class PackageSettingsServiceTests
         JsonPackageSecretsStore? secretsStore = null)
     {
         var root = CreateTempDirectory();
-        var assemblyPath = typeof(PackageSettingsService).Assembly.Location;
         return new ActiveLoadedPackage(
             new ActivePackageDescriptor("test.package", "Test Package", "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready, []),
             new RuntimePackageSource("test.package", PackageSourceKind.Dev, root),
             schema,
             new JsonPackageKeyValueStore(Path.Combine(root, "state.json")),
             secretsStore ?? new JsonPackageSecretsStore(Path.Combine(root, "secrets.json")),
-            null,
-            new Dictionary<string, IPackageCallbackHandler>(StringComparer.OrdinalIgnoreCase),
-            [],
-            new ServiceCollection().BuildServiceProvider(),
-            new RuntimePackageLoadContext(
-                "test.package",
-                assemblyPath,
-                new RuntimeSharedAssemblyRegistry([Path.GetDirectoryName(assemblyPath)!])),
-            settings)
+            new LocalPackageFileStore(Path.Combine(root, "files")),
+            settings,
+            new TestRuntimePackageWorker())
         {
             CanonicalSettingsSchema = CreateCanonicalSchema(requiredSecret),
         };

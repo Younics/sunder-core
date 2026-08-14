@@ -1,4 +1,5 @@
 using Sunder.Sdk.Rpc;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -15,6 +16,7 @@ internal sealed class RuntimeRpcInvocationAuthority(
     RuntimeRpcContentAuthority contentAuthority,
     bool ownsContentAuthority,
     CancellationToken invocationCancellation,
+    RuntimeRpcPackageActivation providerActivation,
     TimeProvider? timeProvider = null) : ISunderRpcInvocationAuthority
 {
     private readonly CancellationTokenSource _revocation =
@@ -150,10 +152,17 @@ internal sealed class RuntimeRpcInvocationAuthority(
 
     private void ValidateActivation()
     {
-        using var lease = sessions.AcquireLease();
+        using var lease = providerActivation.AllowsPrePublicationLease
+            ? sessions.AcquirePackageActivationLease(
+                providerPackageId,
+                new RuntimePackageGeneration(
+                    providerEndpoint.ActivationId,
+                    sessionGeneration))
+            : sessions.AcquireLease();
         if (lease.Generation != sessionGeneration
             || sessions.GetLoadedPackage(lease, providerPackageId)?.RuntimeActivationId != providerEndpoint.ActivationId
-            || !catalog.TryGetActiveEndpoint(
+            || !catalog.TryGetEndpoint(
+                providerActivation,
                 new SunderRpcEndpointReference(providerEndpoint.EndpointReference),
                 out var provider,
                 out _)

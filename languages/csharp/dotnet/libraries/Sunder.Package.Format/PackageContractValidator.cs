@@ -8,17 +8,27 @@ internal static class PackageContractValidator
     public static void Validate(
         SunderPackageManifest manifest,
         IReadOnlyDictionary<string, string> physicalFiles,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        bool validateDescriptorPayload = true)
     {
-        var localContracts = ValidateBundles(manifest.ContractBundles, physicalFiles, errors);
-        ValidateUses(manifest.UsesContracts, localContracts, errors);
-        ValidateProviders(manifest, localContracts, errors);
+        var localContracts = ValidateBundles(
+            manifest.ContractBundles,
+            physicalFiles,
+            errors,
+            validateDescriptorPayload);
+        var targetRoles = (manifest.Targets ?? [])
+            .Where(static target => target is not null && SunderPackageTargetKey.TryCreate(target.Role, target.Rid, out _))
+            .Select(static target => target!.Role!)
+            .ToHashSet(StringComparer.Ordinal);
+        ValidateUses(manifest.UsesContracts, localContracts, targetRoles, errors);
+        ValidateProviders(manifest.Provides, localContracts, targetRoles, errors);
     }
 
     private static IReadOnlyDictionary<string, LocalContract> ValidateBundles(
         IReadOnlyList<SunderPackageContractBundleManifest?>? bundles,
         IReadOnlyDictionary<string, string> physicalFiles,
-        ICollection<string> errors)
+        ICollection<string> errors,
+        bool validateDescriptorPayload)
     {
         if (bundles is { Count: > SunderPackageFormat.MaxContractBundles })
         {
@@ -26,6 +36,8 @@ internal static class PackageContractValidator
         }
 
         var contracts = new Dictionary<string, LocalContract>(StringComparer.Ordinal);
+        var bundleKeys = new HashSet<string>(StringComparer.Ordinal);
+        var descriptorPaths = new ArchivePathRegistry();
         foreach (var bundle in (bundles ?? []).Take(SunderPackageFormat.MaxContractBundles))
         {
             if (bundle is null)
@@ -44,82 +56,130 @@ internal static class PackageContractValidator
             {
                 errors.Add($"Contract '{bundle.ContractId ?? "unknown"}' version '{bundle.Version}' must be strict SemVer 2.0.");
             }
-            if (!PackageContentSignatureValidator.IsLowercaseSha256(bundle.Sha256))
+            if (!PackageContentSignatureValidator.IsLowercaseSha256(bundle.DescriptorSha256))
             {
-                errors.Add($"Contract bundle '{bundle.ContractId ?? "unknown"}' must declare a lowercase SHA-256 hash.");
+                errors.Add($"Contract bundle '{bundle.ContractId ?? "unknown"}' must declare a lowercase descriptorSha256.");
+            }
+            if (!PackageContentSignatureValidator.IsLowercaseSha256(bundle.AbiSha256))
+            {
+                errors.Add($"Contract bundle '{bundle.ContractId ?? "unknown"}' must declare a lowercase abiSha256.");
+            }
+            if (!SunderPackageFormat.IsContractExposure(bundle.Exposure))
+            {
+                errors.Add($"Contract bundle '{bundle.ContractId ?? "unknown"}' declares invalid exposure '{bundle.Exposure}'.");
             }
 
-            if (!PackageArchivePathValidator.TryParse(
+            if (PackageArchivePathValidator.TryParse(
                     bundle.DescriptorPath,
                     $"contract '{bundle.ContractId ?? "unknown"}' descriptorPath",
                     errors,
                     out var descriptorPath,
                     required: true))
             {
-                continue;
+                var logical = descriptorPath.ToString();
+                try
+                {
+                    descriptorPaths.Register(descriptorPath, isDirectory: false);
+                }
+                catch (InvalidDataException exception)
+                {
+                    errors.Add($"Contract descriptorPath '{logical}' must be portable and unique: {exception.Message}");
+                }
+
+                if (validateDescriptorPayload)
+                {
+                    ValidateDescriptor(bundle, logical, physicalFiles, errors);
+                }
             }
-            var logical = descriptorPath.ToString();
-            var physicalPath = SunderPackageFormat.SharedPayloadRoot + logical;
-            if (!physicalFiles.TryGetValue(physicalPath, out var filePath))
+
+            var duplicateKey = false;
+            if (bundle.ContractId is not null && bundle.Version is not null)
             {
-                errors.Add($"Contract descriptor '{logical}' must exist physically at '{physicalPath}'.");
-                continue;
-            }
-            var length = new FileInfo(filePath).Length;
-            if (length <= 0 || length > SunderPackageFormat.MaxContractDescriptorBytes)
-            {
-                errors.Add($"Contract descriptor '{logical}' must be non-empty and {SunderPackageFormat.MaxContractDescriptorBytes} bytes or smaller.");
-                continue;
-            }
-            SunderRpcContractDescriptor descriptor;
-            try
-            {
-                descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(filePath));
-            }
-            catch (Exception exception) when (exception is SunderRpcDescriptorException
-                                                   or IOException
-                                                   or UnauthorizedAccessException)
-            {
-                errors.Add($"Contract descriptor '{logical}' is invalid: {exception.Message}");
-                continue;
-            }
-            if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal))
-            {
-                errors.Add(
-                    $"Contract descriptor '{logical}' contractId '{descriptor.ContractId}' does not match bundle contractId '{bundle.ContractId}'.");
-            }
-            if (!string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal))
-            {
-                errors.Add(
-                    $"Contract descriptor '{logical}' version '{descriptor.Version}' does not match bundle version '{bundle.Version}'.");
-            }
-            if (PackageContentSignatureValidator.IsLowercaseSha256(bundle.Sha256)
-                && !string.Equals(descriptor.Sha256, bundle.Sha256, StringComparison.Ordinal))
-            {
-                errors.Add($"Contract descriptor '{logical}' SHA-256 mismatch.");
-            }
-            if (validId && validVersion)
-            {
-                var key = ContractKey(bundle.ContractId!, bundle.Version!);
-                if (!contracts.TryAdd(
-                        key,
-                        new LocalContract(
-                            bundle.ContractId!,
-                            bundle.Version!,
-                            bundle.Sha256 ?? string.Empty,
-                            descriptor)))
+                duplicateKey = !bundleKeys.Add(ContractKey(bundle.ContractId, bundle.Version));
+                if (duplicateKey)
                 {
                     errors.Add($"Contract bundle '{bundle.ContractId}' version '{bundle.Version}' is declared more than once.");
                 }
+            }
+
+            if (validId && validVersion && !duplicateKey)
+            {
+                contracts.Add(
+                    ContractKey(bundle.ContractId!, bundle.Version!),
+                    new LocalContract(
+                        bundle.DescriptorSha256 ?? string.Empty,
+                        bundle.AbiSha256 ?? string.Empty,
+                        bundle.Exposure ?? string.Empty));
             }
         }
 
         return contracts;
     }
 
+    private static void ValidateDescriptor(
+        SunderPackageContractBundleManifest bundle,
+        string logicalPath,
+        IReadOnlyDictionary<string, string> physicalFiles,
+        ICollection<string> errors)
+    {
+        var physicalPath = SunderPackageFormat.SharedPayloadRoot + logicalPath;
+        if (!physicalFiles.TryGetValue(physicalPath, out var filePath))
+        {
+            errors.Add($"Contract descriptor '{logicalPath}' must exist physically at '{physicalPath}'.");
+            return;
+        }
+
+        var length = new FileInfo(filePath).Length;
+        if (length <= 0 || length > SunderPackageFormat.MaxContractDescriptorBytes)
+        {
+            errors.Add($"Contract descriptor '{logicalPath}' must be non-empty and {SunderPackageFormat.MaxContractDescriptorBytes} bytes or smaller.");
+            return;
+        }
+
+        SunderRpcContractDescriptor descriptor;
+        try
+        {
+            descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(filePath));
+        }
+        catch (Exception exception) when (exception is SunderRpcDescriptorException
+                                               or IOException
+                                               or UnauthorizedAccessException)
+        {
+            errors.Add($"Contract descriptor '{logicalPath}' is invalid: {exception.Message}");
+            return;
+        }
+        if (descriptor.DescriptorVersion != SunderRpcProtocol.DescriptorVersionV2)
+        {
+            errors.Add(
+                $"Contract descriptor '{logicalPath}' uses descriptorVersion {descriptor.DescriptorVersion}; package manifest V{SunderPackageFormat.CurrentManifestVersion} supports only descriptorVersion {SunderRpcProtocol.DescriptorVersionV2}.");
+            return;
+        }
+        if (!string.Equals(descriptor.ContractId, bundle.ContractId, StringComparison.Ordinal))
+        {
+            errors.Add(
+                $"Contract descriptor '{logicalPath}' contractId '{descriptor.ContractId}' does not match bundle contractId '{bundle.ContractId}'.");
+        }
+        if (!string.Equals(descriptor.Version, bundle.Version, StringComparison.Ordinal))
+        {
+            errors.Add(
+                $"Contract descriptor '{logicalPath}' version '{descriptor.Version}' does not match bundle version '{bundle.Version}'.");
+        }
+        if (PackageContentSignatureValidator.IsLowercaseSha256(bundle.DescriptorSha256)
+            && !string.Equals(descriptor.Sha256, bundle.DescriptorSha256, StringComparison.Ordinal))
+        {
+            errors.Add($"Contract descriptor '{logicalPath}' descriptorSha256 mismatch.");
+        }
+        if (PackageContentSignatureValidator.IsLowercaseSha256(bundle.AbiSha256)
+            && !string.Equals(descriptor.AbiSha256, bundle.AbiSha256, StringComparison.Ordinal))
+        {
+            errors.Add($"Contract descriptor '{logicalPath}' abiSha256 mismatch.");
+        }
+    }
+
     private static void ValidateUses(
         IReadOnlyList<SunderPackageContractUseManifest?>? uses,
         IReadOnlyDictionary<string, LocalContract> localContracts,
+        IReadOnlySet<string> targetRoles,
         ICollection<string> errors)
     {
         if (uses is { Count: > SunderPackageFormat.MaxContractUses })
@@ -135,32 +195,56 @@ internal static class PackageContractValidator
                 errors.Add("Package contract use entry is null.");
                 continue;
             }
-            if (!PackageId.TryParse(use.ContractId, out _))
+            var validRole = SunderPackageFormat.IsHostRole(use.Role);
+            if (!validRole)
+            {
+                errors.Add($"Contract use '{use.ContractId ?? "unknown"}' declares unknown role '{use.Role}'.");
+            }
+            else if (!targetRoles.Contains(use.Role!))
+            {
+                errors.Add($"Contract use '{use.ContractId ?? "unknown"}' role '{use.Role}' has no package target.");
+            }
+
+            var validId = PackageId.TryParse(use.ContractId, out _);
+            if (!validId)
             {
                 errors.Add($"Used contract id '{use.ContractId}' must use lowercase dot-separated ASCII identifiers.");
             }
-            else if (!seen.Add(use.ContractId!))
+            if (use.Role is not null
+                && use.ContractId is not null
+                && !seen.Add(RoleKey(use.Role, use.ContractId)))
             {
-                errors.Add($"Contract use '{use.ContractId}' is declared more than once.");
+                errors.Add($"Contract use '{use.ContractId}' is declared more than once for role '{use.Role}'.");
             }
-            if (!PackageVersionRange.TryParse(use.VersionRange, out var versionRange))
+
+            var validVersion = SemanticVersion.TryParse(use.ContractVersion, out _);
+            if (!validVersion)
             {
-                errors.Add($"Contract use '{use.ContractId ?? "unknown"}' has unsupported versionRange '{use.VersionRange}'.");
+                errors.Add($"Contract use '{use.ContractId ?? "unknown"}' contractVersion '{use.ContractVersion}' must be strict SemVer 2.0.");
             }
-            else if (use.ContractId is not null
-                     && !localContracts.Values.Any(contract =>
-                         string.Equals(contract.ContractId, use.ContractId, StringComparison.Ordinal)
-                         && SemanticVersion.TryParse(contract.Version, out var version)
-                         && versionRange.IsSatisfiedBy(version)))
+            if (!PackageContentSignatureValidator.IsLowercaseSha256(use.AbiSha256))
             {
-                errors.Add(
-                    $"Contract use '{use.ContractId}' range '{use.VersionRange}' requires a matching local contract bundle.");
+                errors.Add($"Contract use '{use.ContractId ?? "unknown"}' must declare a lowercase abiSha256.");
             }
             if (use.Required is null)
             {
                 errors.Add($"Contract use '{use.ContractId ?? "unknown"}' must declare required.");
             }
             ValidateActions(use, errors);
+
+            if (validId && validVersion)
+            {
+                if (!localContracts.TryGetValue(
+                        ContractKey(use.ContractId!, use.ContractVersion!),
+                        out var localContract))
+                {
+                    errors.Add($"Contract use '{use.ContractId}' requires an exact matching local contract bundle.");
+                }
+                else if (!string.Equals(localContract.AbiSha256, use.AbiSha256, StringComparison.Ordinal))
+                {
+                    errors.Add($"Contract use '{use.ContractId}' abiSha256 does not match its local contract bundle.");
+                }
+            }
         }
     }
 
@@ -191,20 +275,16 @@ internal static class PackageContractValidator
     }
 
     private static void ValidateProviders(
-        SunderPackageManifest manifest,
+        IReadOnlyList<SunderPackageProviderManifest?>? providers,
         IReadOnlyDictionary<string, LocalContract> localContracts,
+        IReadOnlySet<string> targetRoles,
         ICollection<string> errors)
     {
-        var providers = manifest.Provides;
         if (providers is { Count: > SunderPackageFormat.MaxProviders })
         {
             errors.Add($"Package manifest declares {providers.Count} providers; the limit is {SunderPackageFormat.MaxProviders}.");
         }
 
-        var targetRoles = (manifest.Targets ?? [])
-            .Where(static target => target is not null && SunderPackageTargetKey.TryCreate(target.Role, target.Rid, out _))
-            .Select(static target => target!.Role!)
-            .ToHashSet(StringComparer.Ordinal);
         var seenProviders = new HashSet<string>(StringComparer.Ordinal);
         foreach (var provider in (providers ?? []).Take(SunderPackageFormat.MaxProviders))
         {
@@ -213,47 +293,79 @@ internal static class PackageContractValidator
                 errors.Add("Package provider entry is null.");
                 continue;
             }
-            if (!PackageId.TryParse(provider.ProviderId, out _))
+            var validProviderId = PackageId.TryParse(provider.ProviderId, out _);
+            if (!validProviderId)
             {
                 errors.Add($"Provider id '{provider.ProviderId}' must use lowercase dot-separated ASCII identifiers.");
             }
-            else if (!seenProviders.Add(provider.ProviderId + "\0" + provider.Role))
+            if (provider.Role is not null
+                && provider.ProviderId is not null
+                && !seenProviders.Add(RoleKey(provider.Role, provider.ProviderId)))
             {
                 errors.Add($"Provider id '{provider.ProviderId}' is declared more than once for role '{provider.Role}'.");
             }
-            if (!PackageId.TryParse(provider.ContractId, out _))
+
+            var validContractId = PackageId.TryParse(provider.ContractId, out _);
+            if (!validContractId)
             {
                 errors.Add($"Provider contract id '{provider.ContractId}' must use lowercase dot-separated ASCII identifiers.");
             }
-            if (!SemanticVersion.TryParse(provider.ContractVersion, out _))
+            var validVersion = SemanticVersion.TryParse(provider.ContractVersion, out _);
+            if (!validVersion)
             {
                 errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' contractVersion '{provider.ContractVersion}' must be strict SemVer 2.0.");
             }
-            if (!PackageContentSignatureValidator.IsLowercaseSha256(provider.ContractSha256))
+            if (!PackageContentSignatureValidator.IsLowercaseSha256(provider.DescriptorSha256))
             {
-                errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' must declare a lowercase contractSha256.");
+                errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' must declare a lowercase descriptorSha256.");
+            }
+            if (!PackageContentSignatureValidator.IsLowercaseSha256(provider.AbiSha256))
+            {
+                errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' must declare a lowercase abiSha256.");
             }
             if (!SunderPackageFormat.IsHostRole(provider.Role))
             {
                 errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' declares unknown role '{provider.Role}'.");
             }
+            else if (provider.Role == SunderPackageFormat.AppHostRole)
+            {
+                errors.Add(
+                    $"Provider '{provider.ProviderId ?? "unknown"}' declares role 'app'. App-role providers are not supported because App provider registration and serving are not available.");
+            }
             else if (!targetRoles.Contains(provider.Role!))
             {
                 errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' role '{provider.Role}' has no package target.");
             }
+            if (!SunderPackageFormat.IsProviderAudience(provider.Audience))
+            {
+                errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' declares invalid audience '{provider.Audience}'.");
+            }
 
-            if (provider.ContractId is not null && provider.ContractVersion is not null)
+            if (validContractId && validVersion)
             {
                 if (!localContracts.TryGetValue(
-                        ContractKey(provider.ContractId, provider.ContractVersion),
+                        ContractKey(provider.ContractId!, provider.ContractVersion!),
                         out var localContract))
                 {
                     errors.Add(
-                        $"Provider '{provider.ProviderId ?? "unknown"}' requires a matching local contract bundle.");
+                        $"Provider '{provider.ProviderId ?? "unknown"}' requires an exact matching local contract bundle.");
                 }
-                else if (!string.Equals(localContract.Sha256, provider.ContractSha256, StringComparison.Ordinal))
+                else
                 {
-                    errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' contractSha256 does not match its local contract bundle.");
+                    if (!string.Equals(localContract.DescriptorSha256, provider.DescriptorSha256, StringComparison.Ordinal))
+                    {
+                        errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' descriptorSha256 does not match its local contract bundle.");
+                    }
+                    if (!string.Equals(localContract.AbiSha256, provider.AbiSha256, StringComparison.Ordinal))
+                    {
+                        errors.Add($"Provider '{provider.ProviderId ?? "unknown"}' abiSha256 does not match its local contract bundle.");
+                    }
+                    if (provider.Audience == SunderPackageFormat.PublicProviderAudience
+                        && localContract.Exposure != SunderPackageFormat.PublicContractExposure)
+                    {
+                        errors.Add(
+                            $"Provider '{provider.ProviderId ?? "unknown"}' with public audience requires public contract exposure.");
+                    }
                 }
             }
         }
@@ -261,9 +373,10 @@ internal static class PackageContractValidator
 
     private static string ContractKey(string contractId, string version) => contractId + "\0" + version;
 
+    private static string RoleKey(string role, string id) => role + "\0" + id;
+
     private sealed record LocalContract(
-        string ContractId,
-        string Version,
-        string Sha256,
-        SunderRpcContractDescriptor Descriptor);
+        string DescriptorSha256,
+        string AbiSha256,
+        string Exposure);
 }

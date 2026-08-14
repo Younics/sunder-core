@@ -89,13 +89,20 @@ internal sealed class BoundedReplayFeed<T>(int replayCapacity, int subscriberCap
             }
 
             var historyGap = HasHistoryGap(afterSequenceId);
+            var pending = historyGap
+                ? []
+                : _replay.Where(entry => entry.SequenceId > afterSequenceId).ToArray();
+            if (pending.Length > subscriberCapacity)
+            {
+                historyGap = true;
+            }
             if (historyGap && createGapSnapshot is not null)
             {
                 channel.Writer.TryWrite(createGapSnapshot(_sequenceId));
             }
             else if (!historyGap)
             {
-                foreach (var entry in _replay.Where(entry => entry.SequenceId > afterSequenceId))
+                foreach (var entry in pending)
                 {
                     if (!channel.Writer.TryWrite(entry.Item))
                     {

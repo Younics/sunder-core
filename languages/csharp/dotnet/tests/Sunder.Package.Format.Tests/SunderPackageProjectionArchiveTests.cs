@@ -57,7 +57,7 @@ public sealed class SunderPackageProjectionArchiveTests
         {
             "shared" => new[] { "payload/shared/global.txt" },
             "app" => ["payload/app/shared/common.txt", "payload/app/win-x64/bin/app.dll"],
-            _ => ["payload/runtime/linux-x64/bin/runtime.dll", "payload/runtime/shared/common.txt"],
+            _ => ["payload/runtime/linux-x64/bin/runtime", "payload/runtime/shared/common.txt"],
         };
         Assert.Equal(expected, result.ContentIndex!.Files!.Select(static entry => entry.Path));
         Assert.Equal(expected, result.ExtractedProjection.PayloadPaths.Select(static path => path.ToString()));
@@ -147,7 +147,9 @@ public sealed class SunderPackageProjectionArchiveTests
                     ContractId = "example.contract",
                     Version = "1.0.0",
                     DescriptorPath = "contracts/example.json",
-                    Sha256 = SunderRpcContractDescriptor.Parse(contract).Sha256,
+                    DescriptorSha256 = SunderRpcContractDescriptor.Parse(contract).Sha256,
+                    AbiSha256 = SunderRpcContractDescriptor.Parse(contract).AbiSha256,
+                    Exposure = SunderPackageFormat.PublicContractExposure,
                 },
             ]);
         var fixture = await CreatePackageAsync(
@@ -162,6 +164,176 @@ public sealed class SunderPackageProjectionArchiveTests
         AssertSuccess(result);
         Assert.Empty(result.Manifest!.Targets!);
         Assert.Equal("payload/shared/contracts/example.json", Assert.Single(result.ContentIndex!.Files!).Path);
+    }
+
+    [Fact]
+    public async Task WriterAndInspector_ValidateRpcMetadataWithoutDescriptorBytesInRoleProjection()
+    {
+        var contract = CreateContractDescriptor("example.role.projection", "1.0.0");
+        var parsed = SunderRpcContractDescriptor.Parse(contract);
+        var manifest = CreateManifest(
+            [CreateTarget("runtime", "linux-x64", "worker", "bin/runtime")],
+            [CreateContractBundle(contract, "contracts/role.json")],
+            [
+                new SunderPackageContractUseManifest
+                {
+                    Role = "runtime",
+                    ContractId = parsed.ContractId,
+                    ContractVersion = parsed.Version,
+                    AbiSha256 = parsed.AbiSha256,
+                    Required = true,
+                    Actions = ["invoke"],
+                },
+            ],
+            [
+                new SunderPackageProviderManifest
+                {
+                    ProviderId = "example.role.provider",
+                    Role = "runtime",
+                    ContractId = parsed.ContractId,
+                    ContractVersion = parsed.Version,
+                    DescriptorSha256 = parsed.Sha256,
+                    AbiSha256 = parsed.AbiSha256,
+                    Audience = SunderPackageFormat.OwnerProviderAudience,
+                },
+            ]);
+        var fixture = await CreatePackageAsync(
+            manifest,
+            new Dictionary<string, byte[]>
+            {
+                ["payload/shared/contracts/role.json"] = contract,
+                ["payload/runtime/linux-x64/bin/runtime"] = [1, 2, 3],
+            });
+        var archivePath = await WriteProjectionAsync(
+            fixture,
+            SunderPackageProjectionKey.Runtime("linux-x64"),
+            "rpc-role");
+        var staging = Path.Combine(fixture.Root, "rpc-role-staging");
+
+        var result = await SunderPackageProjectionArchiveInspector.ExtractAndValidateAsync(archivePath, staging);
+
+        AssertSuccess(result);
+        Assert.DoesNotContain(result.ContentIndex!.Files!, static entry =>
+            entry.Path == "payload/shared/contracts/role.json");
+        Assert.False(File.Exists(ToFilePath(staging, "payload/shared/contracts/role.json")));
+    }
+
+    [Theory]
+    [InlineData("shared", null, "use-abi")]
+    [InlineData("app", "win-x64", "use-abi")]
+    [InlineData("runtime", "linux-x64", "use-abi")]
+    [InlineData("shared", null, "use-build-metadata")]
+    [InlineData("app", "win-x64", "use-build-metadata")]
+    [InlineData("runtime", "linux-x64", "use-build-metadata")]
+    [InlineData("shared", null, "provider-hash")]
+    [InlineData("app", "win-x64", "provider-hash")]
+    [InlineData("runtime", "linux-x64", "provider-hash")]
+    [InlineData("shared", null, "provider-audience")]
+    [InlineData("app", "win-x64", "provider-audience")]
+    [InlineData("runtime", "linux-x64", "provider-audience")]
+    public async Task Inspector_ValidatesRpcMetadataForEveryProjection(
+        string kind,
+        string? rid,
+        string invalidField)
+    {
+        var fixture = await CreateRpcPackageAsync();
+        var key = new SunderPackageProjectionKey(kind, rid);
+        var original = await WriteProjectionAsync(fixture, key, $"rpc-{kind}-{invalidField}");
+        var tampered = await MutateProjectionAsync(
+            fixture.Root,
+            original,
+            $"rpc-{kind}-{invalidField}-tampered",
+            staging => MutateJson(staging, SunderPackageProjectionFormat.ManifestPath, json =>
+            {
+                switch (invalidField)
+                {
+                    case "use-abi":
+                        json["usesContracts"]![0]!["abiSha256"] = new string('0', 64);
+                        break;
+                    case "use-build-metadata":
+                        json["usesContracts"]![0]!["contractVersion"] = "1.0.0+other";
+                        break;
+                    case "provider-hash":
+                        json["provides"]![0]!["descriptorSha256"] = new string('0', 64);
+                        break;
+                    default:
+                        json["provides"]![0]!["audience"] = "Public";
+                        break;
+                }
+            }));
+
+        var result = await InspectAsync(
+            fixture.Root,
+            tampered,
+            $"rpc-{kind}-{invalidField}-result");
+
+        Assert.False(result.Success);
+        var expectedError = invalidField switch
+        {
+            "use-abi" => "Contract use 'example.projection.rpc' abiSha256",
+            "use-build-metadata" => "requires an exact matching local contract bundle",
+            "provider-hash" => "Provider 'example.projection.provider' descriptorSha256",
+            _ => "invalid audience 'Public'",
+        };
+        Assert.Contains(result.Errors, error => error.Contains(expectedError, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Inspector_SharedProjectionRejectsV1DescriptorPayload()
+    {
+        var fixture = await CreateRpcPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Shared, "rpc-v1-descriptor");
+        var tampered = await MutateProjectionAsync(
+            fixture.Root,
+            original,
+            "rpc-v1-descriptor-tampered",
+            staging => WriteFile(
+                staging,
+                "payload/shared/contracts/rpc.json",
+                CreateV1ContractDescriptor("example.projection.rpc", "1.0.0+source")));
+
+        var result = await InspectAsync(fixture.Root, tampered, "rpc-v1-descriptor-result");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error =>
+            error.Contains("descriptorVersion 1", StringComparison.Ordinal)
+            && error.Contains("supports only descriptorVersion 2", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("sha256")]
+    [InlineData("versionRange")]
+    [InlineData("contractSha256")]
+    public async Task Inspector_RejectsV1RpcFieldsInProjectionManifest(string oldField)
+    {
+        var fixture = await CreateRpcPackageAsync();
+        var original = await WriteProjectionAsync(
+            fixture,
+            SunderPackageProjectionKey.Runtime("linux-x64"),
+            "rpc-old-field-" + oldField);
+        var tampered = await MutateProjectionAsync(
+            fixture.Root,
+            original,
+            "rpc-old-field-tampered-" + oldField,
+            staging => MutateJson(staging, SunderPackageProjectionFormat.ManifestPath, json =>
+            {
+                var declaration = oldField switch
+                {
+                    "sha256" => json["contractBundles"]![0]!.AsObject(),
+                    "versionRange" => json["usesContracts"]![0]!.AsObject(),
+                    _ => json["provides"]![0]!.AsObject(),
+                };
+                declaration[oldField] = oldField == "versionRange" ? "1.0.0" : new string('0', 64);
+            }));
+
+        var result = await InspectAsync(
+            fixture.Root,
+            tampered,
+            "rpc-old-field-result-" + oldField);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error =>
+            error.Contains("Failed to parse projection metadata", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -215,6 +387,35 @@ public sealed class SunderPackageProjectionArchiveTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error => error.Contains("manifest SHA-256", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Inspector_RejectsRuntimeTargetMissingWorkerV3Capability()
+    {
+        var fixture = await CreateDefaultPackageAsync();
+        var original = await WriteProjectionAsync(fixture, SunderPackageProjectionKey.Runtime("linux-x64"), "runtime-capability");
+        var tampered = await MutateProjectionAsync(fixture.Root, original, "runtime-capability-tampered", staging =>
+        {
+            MutateJson(staging, SunderPackageProjectionFormat.ManifestPath, json =>
+            {
+                var runtimeTarget = json["targets"]!.AsArray()
+                    .Select(static node => node!.AsObject())
+                    .Single(target => target["role"]!.GetValue<string>() == "runtime"
+                                      && target["rid"]!.GetValue<string>() == "linux-x64");
+                runtimeTarget["requiredHostCapabilities"] = new JsonArray(
+                    runtimeTarget["requiredHostCapabilities"]!.AsArray()
+                        .Where(static node => node!.GetValue<string>() != "worker-protocol.v3")
+                        .Select(static node => JsonValue.Create(node!.GetValue<string>()))
+                        .ToArray());
+            });
+        });
+
+        var result = await InspectAsync(fixture.Root, tampered, "runtime-capability-result");
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            result.Errors,
+            error => error.Contains("must require Host capability 'worker-protocol.v3'", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -487,8 +688,8 @@ public sealed class SunderPackageProjectionArchiveTests
             [
                 CreateTarget("app", "win-x64", "avalonia", "bin/app.dll"),
                 CreateTarget("app", "linux-x64", "avalonia", "bin/app.dll"),
-                CreateTarget("runtime", "linux-x64", "dotnet", "bin/runtime.dll"),
-                CreateTarget("runtime", "win-x64", "dotnet", "bin/runtime.dll"),
+                CreateTarget("runtime", "linux-x64", "worker", "bin/runtime"),
+                CreateTarget("runtime", "win-x64", "worker", "bin/runtime.exe"),
             ]);
         return await CreatePackageAsync(
             manifest,
@@ -499,8 +700,51 @@ public sealed class SunderPackageProjectionArchiveTests
                 ["payload/app/win-x64/bin/app.dll"] = [1, 2, 3],
                 ["payload/app/linux-x64/bin/app.dll"] = [4, 5, 6],
                 ["payload/runtime/shared/common.txt"] = "runtime-common"u8.ToArray(),
-                ["payload/runtime/linux-x64/bin/runtime.dll"] = [7, 8, 9],
-                ["payload/runtime/win-x64/bin/runtime.dll"] = [10, 11, 12],
+                ["payload/runtime/linux-x64/bin/runtime"] = [7, 8, 9],
+                ["payload/runtime/win-x64/bin/runtime.exe"] = [10, 11, 12],
+            });
+    }
+
+    private static async Task<PackageFixture> CreateRpcPackageAsync()
+    {
+        var descriptor = CreateContractDescriptor("example.projection.rpc", "1.0.0+source");
+        var parsed = SunderRpcContractDescriptor.Parse(descriptor);
+        var manifest = CreateManifest(
+            [
+                CreateTarget("app", "win-x64", "avalonia", "bin/app.dll"),
+                CreateTarget("runtime", "linux-x64", "worker", "bin/runtime"),
+            ],
+            [CreateContractBundle(descriptor, "contracts/rpc.json")],
+            [
+                new SunderPackageContractUseManifest
+                {
+                    Role = "runtime",
+                    ContractId = parsed.ContractId,
+                    ContractVersion = parsed.Version,
+                    AbiSha256 = parsed.AbiSha256,
+                    Required = true,
+                    Actions = ["discover", "invoke"],
+                },
+            ],
+            [
+                new SunderPackageProviderManifest
+                {
+                    ProviderId = "example.projection.provider",
+                    Role = "runtime",
+                    ContractId = parsed.ContractId,
+                    ContractVersion = parsed.Version,
+                    DescriptorSha256 = parsed.Sha256,
+                    AbiSha256 = parsed.AbiSha256,
+                    Audience = SunderPackageFormat.OwnerProviderAudience,
+                },
+            ]);
+        return await CreatePackageAsync(
+            manifest,
+            new Dictionary<string, byte[]>
+            {
+                ["payload/shared/contracts/rpc.json"] = descriptor,
+                ["payload/app/win-x64/bin/app.dll"] = [1, 2, 3],
+                ["payload/runtime/linux-x64/bin/runtime"] = [4, 5, 6],
             });
     }
 
@@ -610,17 +854,21 @@ public sealed class SunderPackageProjectionArchiveTests
 
     private static SunderPackageManifest CreateManifest(
         IReadOnlyList<SunderPackageTargetManifest?> targets,
-        IReadOnlyList<SunderPackageContractBundleManifest?>? contractBundles = null)
+        IReadOnlyList<SunderPackageContractBundleManifest?>? contractBundles = null,
+        IReadOnlyList<SunderPackageContractUseManifest?>? usesContracts = null,
+        IReadOnlyList<SunderPackageProviderManifest?>? provides = null)
         => new()
         {
             ArchiveFormatVersion = 1,
-            ManifestVersion = 1,
+            ManifestVersion = 3,
             Id = "test.projection",
             Name = "Projection Test Package",
             Summary = "Canonical projection archive test package.",
             Version = "1.2.3",
             Targets = targets,
             ContractBundles = contractBundles,
+            UsesContracts = usesContracts,
+            Provides = provides,
         };
 
     private static SunderPackageTargetManifest CreateTarget(
@@ -634,9 +882,11 @@ public sealed class SunderPackageProjectionArchiveTests
             Rid = rid,
             Kind = kind,
             EntryPoint = entryPoint,
-            TargetFramework = "net10.0",
-            SdkVersion = "1.0.0",
-            RequiredHostCapabilities = ["core.v1"],
+            TargetFramework = kind == SunderPackageFormat.WorkerTargetKind ? "node24" : "net10.0",
+            SdkVersion = role == SunderPackageFormat.RuntimeHostRole ? "1.1.0" : "1.0.0",
+            RequiredHostCapabilities = role == SunderPackageFormat.RuntimeHostRole
+                ? ["core.v1", "rpc.v2", "sdk-baseline-1-1.v1", "worker-protocol.v3"]
+                : ["core.v1"],
         };
 
     private static SunderPackageContentIndexEntry CreateIndexEntry(string root, string path)
@@ -661,7 +911,23 @@ public sealed class SunderPackageProjectionArchiveTests
     private static string Hash(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
-    private static byte[] CreateContractDescriptor(string contractId, string version)
+    private static SunderPackageContractBundleManifest CreateContractBundle(
+        byte[] descriptor,
+        string descriptorPath)
+    {
+        var parsed = SunderRpcContractDescriptor.Parse(descriptor);
+        return new SunderPackageContractBundleManifest
+        {
+            ContractId = parsed.ContractId,
+            Version = parsed.Version,
+            DescriptorPath = descriptorPath,
+            DescriptorSha256 = parsed.Sha256,
+            AbiSha256 = parsed.AbiSha256,
+            Exposure = SunderPackageFormat.PublicContractExposure,
+        };
+    }
+
+    private static byte[] CreateV1ContractDescriptor(string contractId, string version)
         => System.Text.Encoding.UTF8.GetBytes($$"""
             {
               "descriptorVersion": 1,
@@ -676,6 +942,43 @@ public sealed class SunderPackageProjectionArchiveTests
                   "responseSchema": { "$ref": "#/$defs/Response" }
                 }]
               }],
+              "$defs": {
+                "Request": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "Response": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                }
+              }
+            }
+            """);
+
+    private static byte[] CreateContractDescriptor(string contractId, string version)
+        => System.Text.Encoding.UTF8.GetBytes($$"""
+            {
+              "descriptorVersion": 2,
+              "contractId": "{{contractId}}",
+              "version": "{{version}}",
+              "errors": {},
+              "services": {
+                "service": {
+                  "methods": {
+                    "call": {
+                      "kind": "unary",
+                      "idempotency": "none",
+                      "errors": [],
+                      "requestSchema": { "$ref": "#/$defs/Request" },
+                      "responseSchema": { "$ref": "#/$defs/Response" }
+                    }
+                  }
+                }
+              },
               "$defs": {
                 "Request": {
                   "type": "object",

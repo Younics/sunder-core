@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import {
-  canonicalizeDescriptor,
+  SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR,
+  canonicalRpcAbiProjectionBytes,
+  canonicalRpcDescriptorBytes,
   generateTypeScriptBindings,
   isPackageId,
   isSemanticVersion,
   parseRpcContractDescriptor,
-  type JsonValue,
-  type RpcContractDescriptor,
+  type RpcContractDescriptorV2,
   type TypeScriptGeneratorOptions,
 } from "@sunder/sdk";
 
@@ -24,7 +25,9 @@ export interface RegistryContractFetchRequest {
 export interface RegistryContractDescriptorMetadata {
   readonly contractId: string;
   readonly version: string;
-  readonly sha256: string;
+  readonly descriptorSha256: string;
+  readonly abiSha256: string;
+  readonly exposure: "public";
   readonly size: number;
   readonly descriptorDownloadUrl: string;
   readonly firstPublisherPackageId: string;
@@ -34,7 +37,7 @@ export interface RegistryContractDescriptorMetadata {
 
 export interface FetchedRegistryContract {
   readonly metadata: RegistryContractDescriptorMetadata;
-  readonly descriptor: RpcContractDescriptor;
+  readonly descriptor: RpcContractDescriptorV2;
   readonly canonicalBytes: Uint8Array;
 }
 
@@ -89,17 +92,29 @@ export async function fetchRegistryContract(
   }
   const canonicalBytes = await readBounded(descriptorResponse, metadata.size);
   if (canonicalBytes.byteLength !== metadata.size) throw new TypeError("Registry contract descriptor size does not match metadata.");
-  const actualSha256 = createHash("sha256").update(canonicalBytes).digest("hex");
-  if (actualSha256 !== metadata.sha256) throw new TypeError("Registry contract descriptor SHA-256 does not match metadata.");
+  const actualDescriptorSha256 = createHash("sha256").update(canonicalBytes).digest("hex");
+  if (actualDescriptorSha256 !== metadata.descriptorSha256) {
+    throw new TypeError("Registry contract descriptor SHA-256 does not match metadata.");
+  }
   const entityTag = descriptorResponse.headers.get("etag");
-  if (entityTag !== null && entityTag !== `"${metadata.sha256}"`) throw new TypeError("Registry contract descriptor ETag does not match metadata.");
+  if (entityTag !== null && entityTag !== `"${metadata.descriptorSha256}"`) {
+    throw new TypeError("Registry contract descriptor ETag does not match metadata.");
+  }
 
   const descriptor = parseRpcContractDescriptor(canonicalBytes);
+  if (descriptor.descriptorVersion !== 2) throw new TypeError("Registry contract descriptor must use descriptorVersion 2.");
   if (descriptor.contractId !== metadata.contractId || descriptor.version !== metadata.version) {
     throw new TypeError("Registry contract descriptor identity does not match metadata.");
   }
-  const reparsedCanonical = new TextEncoder().encode(canonicalizeDescriptor(descriptor as unknown as JsonValue));
+  const reparsedCanonical = canonicalRpcDescriptorBytes(descriptor);
   if (!bytesEqual(canonicalBytes, reparsedCanonical)) throw new TypeError("Registry contract descriptor response is not canonical.");
+  const actualAbiSha256 = createHash("sha256")
+    .update(SUNDER_RPC_V2_ABI_DOMAIN_SEPARATOR, "utf8")
+    .update(canonicalRpcAbiProjectionBytes(descriptor))
+    .digest("hex");
+  if (actualAbiSha256 !== metadata.abiSha256) {
+    throw new TypeError("Registry contract ABI SHA-256 does not match metadata.");
+  }
   return { metadata, descriptor, canonicalBytes };
 }
 
@@ -110,7 +125,11 @@ export async function fetchRegistryContractBindings(
   const fetched = await fetchRegistryContract(request);
   return {
     ...fetched,
-    bindings: generateTypeScriptBindings(fetched.descriptor, generatorOptions),
+    bindings: generateTypeScriptBindings(fetched.descriptor, {
+      ...generatorOptions,
+      descriptorSha256: fetched.metadata.descriptorSha256,
+      abiSha256: fetched.metadata.abiSha256,
+    }),
   };
 }
 
@@ -157,8 +176,14 @@ function parseMetadata(
   if (metadata.contractId !== expectedContractId || metadata.version !== expectedVersion) {
     throw new TypeError("Registry contract metadata identity does not match the request.");
   }
-  if (typeof metadata.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(metadata.sha256)) {
-    throw new TypeError("Registry contract metadata SHA-256 is invalid.");
+  if (typeof metadata.descriptorSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(metadata.descriptorSha256)) {
+    throw new TypeError("Registry contract metadata descriptor SHA-256 is invalid.");
+  }
+  if (typeof metadata.abiSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(metadata.abiSha256)) {
+    throw new TypeError("Registry contract metadata ABI SHA-256 is invalid.");
+  }
+  if (metadata.exposure !== "public") {
+    throw new TypeError("Registry contract metadata exposure must be public.");
   }
   if (!Number.isSafeInteger(metadata.size) || metadata.size === undefined || metadata.size < 1 || metadata.size > MAXIMUM_DESCRIPTOR_BYTES) {
     throw new TypeError("Registry contract metadata size is invalid.");

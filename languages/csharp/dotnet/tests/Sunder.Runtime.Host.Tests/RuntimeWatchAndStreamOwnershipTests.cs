@@ -27,6 +27,23 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     }
 
     [Fact]
+    public async Task RuntimeEvents_ReconnectBacklogLargerThanSubscriberBufferFallsBackToSnapshot()
+    {
+        var events = new RuntimeEventStreamService();
+        for (var index = 0; index < RuntimeEventStreamService.SubscriberCapacity + 1; index++)
+        {
+            events.PublishOperationPhase(RuntimeOperationPhase.DevReloadDebounce, [$"package.{index}"]);
+        }
+
+        await using var subscription = events.Subscribe(afterSequenceId: 0);
+        var item = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(subscription.HistoryGap);
+        Assert.Equal(RuntimeEventKind.Snapshot, item.Kind);
+        Assert.Equal(events.GetSnapshot().SequenceId, item.SequenceId);
+    }
+
+    [Fact]
     public async Task RuntimeEvents_SlowClientIsDisconnectedAtBoundedCapacity()
     {
         var events = new RuntimeEventStreamService();

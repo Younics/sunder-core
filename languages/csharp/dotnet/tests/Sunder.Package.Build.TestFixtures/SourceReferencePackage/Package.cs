@@ -1,6 +1,5 @@
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Runtime;
 using Sunder.Sdk.Storage;
 
 [assembly: SunderPackage(
@@ -16,9 +15,7 @@ public static class PackageMarker
 
     public static PackageStorageKeyMigration? StorageMigration => null;
 
-    public static PackageRuntimeInvocationException? RuntimeFailure => null;
-
     public static IPackageViewNavigationPreparationTarget? NavigationPreparation => null;
 }
 
-public sealed class FixturePackageModule : ISunderRuntimePackageModule;
+public sealed class FixturePackageModule : ISunderAppPackageModule;

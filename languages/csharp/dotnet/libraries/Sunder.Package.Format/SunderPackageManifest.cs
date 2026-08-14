@@ -109,17 +109,29 @@ public sealed class SunderPackageContractBundleManifest
     [JsonPropertyName("descriptorPath")]
     public string? DescriptorPath { get; init; }
 
-    [JsonPropertyName("sha256")]
-    public string? Sha256 { get; init; }
+    [JsonPropertyName("descriptorSha256")]
+    public string? DescriptorSha256 { get; init; }
+
+    [JsonPropertyName("abiSha256")]
+    public string? AbiSha256 { get; init; }
+
+    [JsonPropertyName("exposure")]
+    public string? Exposure { get; init; }
 }
 
 public sealed class SunderPackageContractUseManifest
 {
+    [JsonPropertyName("role")]
+    public string? Role { get; init; }
+
     [JsonPropertyName("contractId")]
     public string? ContractId { get; init; }
 
-    [JsonPropertyName("versionRange")]
-    public string? VersionRange { get; init; }
+    [JsonPropertyName("contractVersion")]
+    public string? ContractVersion { get; init; }
+
+    [JsonPropertyName("abiSha256")]
+    public string? AbiSha256 { get; init; }
 
     [JsonPropertyName("required")]
     public bool? Required { get; init; }
@@ -133,15 +145,21 @@ public sealed class SunderPackageProviderManifest
     [JsonPropertyName("providerId")]
     public string? ProviderId { get; init; }
 
+    [JsonPropertyName("role")]
+    public string? Role { get; init; }
+
     [JsonPropertyName("contractId")]
     public string? ContractId { get; init; }
 
     [JsonPropertyName("contractVersion")]
     public string? ContractVersion { get; init; }
 
-    [JsonPropertyName("contractSha256")]
-    public string? ContractSha256 { get; init; }
+    [JsonPropertyName("descriptorSha256")]
+    public string? DescriptorSha256 { get; init; }
 
-    [JsonPropertyName("role")]
-    public string? Role { get; init; }
+    [JsonPropertyName("abiSha256")]
+    public string? AbiSha256 { get; init; }
+
+    [JsonPropertyName("audience")]
+    public string? Audience { get; init; }
 }

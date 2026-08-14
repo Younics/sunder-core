@@ -20,10 +20,14 @@ internal sealed class RegistryPackageArtifactDownloader(
     public async Task<ContentUploadDescriptor> DownloadAsync(
         Uri origin,
         RegistryPackageInstallPlanItem item,
+        IReadOnlyList<RegistryPackageTargetRequest> selectedTargets,
         IReadOnlyList<string> trustedArtifactOrigins,
         CancellationToken cancellationToken)
     {
-        ValidateArtifactInventory(item);
+        ValidateArtifactInventory(
+            item,
+            selectedTargets,
+            PackageTargetSelection.GetCurrentRuntimeIdentifier());
         var allowedOrigins = BuildAllowedOrigins(origin, trustedArtifactOrigins);
         var temporaryRoot = Path.Combine(
             Path.GetTempPath(),
@@ -67,6 +71,8 @@ internal sealed class RegistryPackageArtifactDownloader(
                 projections.Add(inspection);
             }
 
+            ValidateProjectionSourceIdentity(item, projections);
+            ValidatePlanTargets(item, projections[0].Manifest!);
             var composedPath = await ComposePackageAsync(
                 temporaryRoot,
                 item,
@@ -170,7 +176,9 @@ internal sealed class RegistryPackageArtifactDownloader(
                 .Where(target => target is not null && selectedTargets.Contains((target.Role!, target.Rid!)))
                 .ToArray(),
             ContractBundles = sourceManifest.ContractBundles,
-            UsesContracts = sourceManifest.UsesContracts,
+            UsesContracts = (sourceManifest.UsesContracts ?? [])
+                .Where(use => use is not null && selectedRoles.Contains(use.Role!))
+                .ToArray(),
             Provides = (sourceManifest.Provides ?? [])
                 .Where(provider => provider is not null && selectedRoles.Contains(provider.Role!))
                 .ToArray(),
@@ -241,24 +249,85 @@ internal sealed class RegistryPackageArtifactDownloader(
         return archivePath;
     }
 
-    private static void ValidateArtifactInventory(RegistryPackageInstallPlanItem item)
+    private static void ValidateArtifactInventory(
+        RegistryPackageInstallPlanItem item,
+        IReadOnlyList<RegistryPackageTargetRequest> selectedTargets,
+        string currentRid)
     {
-        if (item.Artifacts.Count is <= 0 or > SunderPackageFormat.MaxTargets + 1)
+        if (item.Targets is null
+            || item.Targets.Count > SunderPackageFormat.MaxTargets)
         {
             throw new InvalidDataException(
-                $"Package '{item.PackageId}' has an invalid projection artifact count.");
+                $"Package '{item.PackageId}' has an invalid install-plan target inventory.");
         }
+
+        var targetKeys = new List<SunderPackageTargetKey>(item.Targets.Count);
+        var uniqueTargetKeys = new HashSet<SunderPackageTargetKey>();
+        foreach (var target in item.Targets)
+        {
+            if (target is null
+                || !SunderPackageTargetKey.TryCreate(target.Role, target.Rid, out var key)
+                || target.RequiredHostCapabilities is null
+                || !uniqueTargetKeys.Add(key))
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' install-plan targets must be a complete inventory of unique exact targets.");
+            }
+            targetKeys.Add(key);
+        }
+
+        var selectedKeys = new HashSet<SunderPackageTargetKey>();
+        foreach (var selected in selectedTargets)
+        {
+            if (selected is null
+                || !SunderPackageTargetKey.TryCreate(selected.Role, selected.Rid, out var key)
+                || !string.Equals(key.Rid, currentRid, StringComparison.Ordinal)
+                || !selectedKeys.Add(key))
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' selected install-plan targets must be unique exact targets for current RID '{currentRid}'.");
+            }
+
+            if (!targetKeys.Any(target => string.Equals(target.Role, key.Role, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+            if (!uniqueTargetKeys.Contains(key))
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' install-plan selected target '{key}' is missing from its target metadata inventory.");
+            }
+        }
+
+        var selectedProjectionKeys = selectedKeys
+            .Where(key => targetKeys.Any(target => string.Equals(target.Role, key.Role, StringComparison.Ordinal)))
+            .OrderBy(static key => ProjectionOrder(key.Role))
+            .ThenBy(static key => key.Rid, StringComparer.Ordinal)
+            .Select(static key => new RegistryPackageProjectionKey(key.Role, key.Rid));
+        var expectedKeys = selectedProjectionKeys
+            .Prepend(new RegistryPackageProjectionKey(SunderPackageProjectionFormat.SharedKind, null))
+            .ToArray();
+        if (item.Artifacts is null
+            || item.Artifacts.Count != expectedKeys.Length
+            || item.Artifacts.Count > SunderPackageFormat.MaxTargets + 1
+            || item.Artifacts.Any(static artifact => artifact is null))
+        {
+            throw new InvalidDataException(
+                $"Package '{item.PackageId}' install-plan projection artifacts must contain exactly shared plus every selected current-RID role projection.");
+        }
+
+        var actualKeys = item.Artifacts
+            .Select(static artifact => new RegistryPackageProjectionKey(artifact.Kind, artifact.Rid))
+            .ToArray();
         var ordered = item.Artifacts
             .OrderBy(artifact => ProjectionOrder(artifact.Kind))
             .ThenBy(artifact => artifact.Rid, StringComparer.Ordinal)
             .ToArray();
         if (!item.Artifacts.SequenceEqual(ordered)
-            || item.Artifacts[0].Kind != SunderPackageProjectionFormat.SharedKind
-            || item.Artifacts[0].Rid is not null
-            || item.Artifacts.Select(ProjectionKey).Distinct(StringComparer.Ordinal).Count() != item.Artifacts.Count)
+            || !actualKeys.SequenceEqual(expectedKeys))
         {
             throw new InvalidDataException(
-                $"Package '{item.PackageId}' projection artifacts are not unique and canonically ordered with shared first.");
+                $"Package '{item.PackageId}' install-plan projection artifacts must exactly match shared plus its canonically ordered selected role projections for current RID '{currentRid}'.");
         }
     }
 
@@ -286,6 +355,77 @@ internal sealed class RegistryPackageArtifactDownloader(
                 $"Package '{item.PackageId}' projection '{ProjectionKey(artifact)}' does not match the Registry descriptor.");
         }
     }
+
+    private static void ValidateProjectionSourceIdentity(
+        RegistryPackageInstallPlanItem item,
+        IReadOnlyList<SunderPackageProjectionArchiveValidationResult> projections)
+    {
+        var expected = projections[0].Descriptor!;
+        foreach (var projection in projections.Skip(1))
+        {
+            if (!string.Equals(
+                    projection.Descriptor!.SourceArchiveSha256,
+                    expected.SourceArchiveSha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' projections do not share the same sourceArchiveSha256.");
+            }
+            if (!string.Equals(
+                    projection.Descriptor.ManifestSha256,
+                    expected.ManifestSha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' projections do not share the same manifestSha256.");
+            }
+        }
+    }
+
+    private static void ValidatePlanTargets(
+        RegistryPackageInstallPlanItem item,
+        SunderPackageManifest manifest)
+    {
+        var sourceTargets = SunderPackageTargetResolver.EnumerateTargets(manifest);
+        if (sourceTargets.Count != item.Targets.Count)
+        {
+            throw new InvalidDataException(
+                $"Package '{item.PackageId}' install-plan target inventory does not exactly match the projection source manifest.");
+        }
+
+        foreach (var planned in item.Targets)
+        {
+            var key = new SunderPackageTargetKey(planned.Role, planned.Rid);
+            if (!SunderPackageTargetResolver.TryResolveTarget(manifest, key, out var source)
+                || source is null
+                || !TargetMatches(planned, source))
+            {
+                throw new InvalidDataException(
+                    $"Package '{item.PackageId}' install-plan target '{key}' does not exactly match the projection source manifest.");
+            }
+        }
+    }
+
+    private static bool TargetMatches(
+        RegistryPackageTarget planned,
+        SunderPackageTargetManifest source)
+        => string.Equals(planned.Role, source.Role, StringComparison.Ordinal)
+           && string.Equals(planned.Rid, source.Rid, StringComparison.Ordinal)
+           && string.Equals(planned.Kind, source.Kind, StringComparison.Ordinal)
+           && string.Equals(planned.EntryPoint, source.EntryPoint, StringComparison.Ordinal)
+           && string.Equals(planned.TargetFramework, source.TargetFramework, StringComparison.Ordinal)
+           && string.Equals(planned.SdkVersion, source.SdkVersion, StringComparison.Ordinal)
+           && (planned.RequiredHostCapabilities ?? []).SequenceEqual(
+               (source.RequiredHostCapabilities ?? []).Select(static capability => capability!),
+               StringComparer.Ordinal)
+           && planned.Views.SequenceEqual(
+               (source.Views ?? []).Where(static view => view is not null).Select(static view => new RegistryPackageWebView(
+                   view!.ViewId!,
+                   view.DisplayName!,
+                   view.Route!,
+                   view.Icon,
+                   view.DefaultPlacement!,
+                   view.ShowInHotbar!.Value)));
 
     private static IReadOnlySet<string> BuildAllowedOrigins(
         Uri registryOrigin,

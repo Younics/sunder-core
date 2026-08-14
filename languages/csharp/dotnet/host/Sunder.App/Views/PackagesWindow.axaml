@@ -291,6 +291,11 @@
                 IsEnabled="{Binding CanDisableSelectedPackage}"
                 IsVisible="{Binding ShowDisableSelectedPackage}" />
         <Button Classes="primary-action"
+                Command="{Binding AdoptSelectedInstalledPackageSourceCommand}"
+                Content="Adopt source &amp; update"
+                IsEnabled="{Binding CanAdoptSelectedInstalledPackageSource}"
+                IsVisible="{Binding ShowAdoptSelectedInstalledPackageSource}" />
+        <Button Classes="primary-action"
                 Command="{Binding UpdateSelectedInstalledPackageCommand}"
                 Content="Update"
                 IsEnabled="{Binding CanUpdateSelectedInstalledPackage}"

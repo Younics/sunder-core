@@ -1,0 +1,697 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sunder.dev/specs/rpc/v2/descriptor.schema.json",
+  "title": "Sunder RPC V2 contract descriptor",
+  "description": "Structural schema for descriptorVersion 2. README.md contains additional lexical, graph, uniqueness, ordering, union, and hashing requirements.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "descriptorVersion",
+    "contractId",
+    "version",
+    "errors",
+    "services",
+    "$defs"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "descriptorVersion": {
+      "const": 2
+    },
+    "contractId": {
+      "$ref": "#/$defs/contractId"
+    },
+    "version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "errors": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/memberId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/errorDeclaration"
+      }
+    },
+    "services": {
+      "$ref": "#/$defs/serviceCollection"
+    },
+    "$defs": {
+      "$ref": "#/$defs/definitionsMap"
+    }
+  },
+  "$defs": {
+    "contractId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:\\.[a-z0-9]+)*$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "memberId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "definitionName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "annotation": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "collectionBound": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "propertyBound": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 256
+    },
+    "localReferenceString": {
+      "type": "string",
+      "minLength": 9,
+      "maxLength": 136,
+      "pattern": "^#/\\$defs/[A-Za-z0-9._-]{1,128}$"
+    },
+    "errorDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "errorReferenceList": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/memberId"
+      }
+    },
+    "serviceCollection": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "#/$defs/memberId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/service"
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["methods"],
+      "properties": {
+        "methods": {
+          "$ref": "#/$defs/methodCollection"
+        }
+      }
+    },
+    "methodCollection": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 512,
+      "propertyNames": {
+        "$ref": "#/$defs/memberId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/method"
+      }
+    },
+    "method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "idempotency",
+        "errors",
+        "requestSchema"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["unary", "server-stream"]
+        },
+        "idempotency": {
+          "enum": ["none", "idempotent"]
+        },
+        "errors": {
+          "$ref": "#/$defs/errorReferenceList"
+        },
+        "requestSchema": {
+          "$ref": "#/$defs/referenceSchema"
+        },
+        "responseSchema": {
+          "$ref": "#/$defs/referenceSchema"
+        },
+        "eventSchema": {
+          "$ref": "#/$defs/referenceSchema"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "unary"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["responseSchema"],
+            "properties": {
+              "responseSchema": true,
+              "eventSchema": false
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "server-stream"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["eventSchema"],
+            "properties": {
+              "responseSchema": false,
+              "eventSchema": true
+            }
+          }
+        }
+      ]
+    },
+    "definitionsMap": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/definitionName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/schema"
+      }
+    },
+    "schema": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/referenceSchema"
+        },
+        {
+          "$ref": "#/$defs/unionSchema"
+        },
+        {
+          "$ref": "#/$defs/recordSchema"
+        },
+        {
+          "$ref": "#/$defs/mapSchema"
+        },
+        {
+          "$ref": "#/$defs/arraySchema"
+        },
+        {
+          "$ref": "#/$defs/stringSchema"
+        },
+        {
+          "$ref": "#/$defs/integerSchema"
+        },
+        {
+          "$ref": "#/$defs/numberSchema"
+        },
+        {
+          "$ref": "#/$defs/booleanSchema"
+        },
+        {
+          "$ref": "#/$defs/nullSchema"
+        },
+        {
+          "$ref": "#/$defs/uuidSchema"
+        },
+        {
+          "$ref": "#/$defs/utcDateTimeSchema"
+        },
+        {
+          "$ref": "#/$defs/contentReferenceSchema"
+        }
+      ]
+    },
+    "referenceSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["$ref"],
+      "properties": {
+        "$ref": {
+          "$ref": "#/$defs/localReferenceString"
+        }
+      }
+    },
+    "unionSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oneOf"],
+      "properties": {
+        "oneOf": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/schema"
+          }
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "recordSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "properties",
+        "required",
+        "additionalProperties"
+      ],
+      "properties": {
+        "type": {
+          "const": "object"
+        },
+        "properties": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema"
+          }
+        },
+        "required": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": {
+          "const": false
+        },
+        "minProperties": {
+          "$ref": "#/$defs/propertyBound"
+        },
+        "maxProperties": {
+          "$ref": "#/$defs/propertyBound"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "mapSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "additionalProperties",
+        "propertyNames",
+        "minProperties",
+        "maxProperties"
+      ],
+      "properties": {
+        "type": {
+          "const": "object"
+        },
+        "properties": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "required": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "additionalProperties": {
+          "$ref": "#/$defs/schema"
+        },
+        "propertyNames": {
+          "$ref": "#/$defs/stringSchema"
+        },
+        "minProperties": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "maxProperties": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "arraySchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "items", "minItems", "maxItems"],
+      "properties": {
+        "type": {
+          "const": "array"
+        },
+        "items": {
+          "$ref": "#/$defs/schema"
+        },
+        "minItems": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "maxItems": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "stringSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "minLength", "maxLength"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "minLength": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "maxLength": {
+          "$ref": "#/$defs/collectionBound"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "const": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "not": {
+        "type": "object",
+        "required": ["enum", "const"],
+        "properties": {
+          "enum": true,
+          "const": true
+        }
+      }
+    },
+    "integerSchema": {
+      "type": "object",
+      "$ref": "#/$defs/numericSchemaBase",
+      "properties": {
+        "type": {
+          "const": "integer"
+        }
+      }
+    },
+    "numberSchema": {
+      "type": "object",
+      "$ref": "#/$defs/numericSchemaBase",
+      "properties": {
+        "type": {
+          "const": "number"
+        }
+      }
+    },
+    "numericSchemaBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["integer", "number"]
+        },
+        "minimum": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "maximum": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "exclusiveMinimum": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "exclusiveMaximum": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safeInteger"
+          }
+        },
+        "const": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["minimum"],
+              "properties": {
+                "minimum": true
+              }
+            },
+            {
+              "type": "object",
+              "required": ["exclusiveMinimum"],
+              "properties": {
+                "exclusiveMinimum": true
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["maximum"],
+              "properties": {
+                "maximum": true
+              }
+            },
+            {
+              "type": "object",
+              "required": ["exclusiveMaximum"],
+              "properties": {
+                "exclusiveMaximum": true
+              }
+            }
+          ]
+        },
+        {
+          "not": {
+            "type": "object",
+            "required": ["enum", "const"],
+            "properties": {
+              "enum": true,
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "booleanSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "boolean"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "boolean"
+          }
+        },
+        "const": {
+          "type": "boolean"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "not": {
+        "type": "object",
+        "required": ["enum", "const"],
+        "properties": {
+          "enum": true,
+          "const": true
+        }
+      }
+    },
+    "nullSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "null"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "null"
+          }
+        },
+        "const": {
+          "type": "null"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      },
+      "not": {
+        "type": "object",
+        "required": ["enum", "const"],
+        "properties": {
+          "enum": true,
+          "const": true
+        }
+      }
+    },
+    "uuidSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "logicalType"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "logicalType": {
+          "const": "uuid"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "utcDateTimeSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "logicalType"],
+      "properties": {
+        "type": {
+          "const": "string"
+        },
+        "logicalType": {
+          "const": "utc-date-time"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    },
+    "contentReferenceSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "logicalType"],
+      "properties": {
+        "type": {
+          "const": "object"
+        },
+        "logicalType": {
+          "const": "content-reference"
+        },
+        "title": {
+          "$ref": "#/$defs/annotation"
+        },
+        "description": {
+          "$ref": "#/$defs/annotation"
+        }
+      }
+    }
+  }
+}
